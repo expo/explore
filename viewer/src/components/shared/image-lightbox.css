@@ -1,0 +1,84 @@
+/* Full-window image view: a dark scrim, the image as large as fits, and quiet controls. */
+.image-lightbox {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: #edeef0;
+  background: rgb(8 8 10 / 0.88);
+  outline: none;
+}
+.image-lightbox[open] {
+  display: flex;
+  flex-direction: column;
+}
+.image-lightbox::backdrop { background: rgb(0 0 0 / 0.4); }
+.image-lightbox-bar {
+  display: flex;
+  height: 56px;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px;
+}
+.image-lightbox-label {
+  display: inline-flex;
+  height: 24px;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 0.1);
+  font-size: 12px;
+  font-weight: 600;
+}
+.image-lightbox-position {
+  color: rgb(237 238 240 / 0.6);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.image-lightbox-close,
+.image-lightbox-step {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-radius: 50%;
+  color: #edeef0;
+  background: rgb(255 255 255 / 0.06);
+  cursor: pointer;
+}
+.image-lightbox-close > svg,
+.image-lightbox-step > svg { width: 18px; height: 18px; }
+.image-lightbox-close:hover,
+.image-lightbox-step:hover:not(:disabled) { background: rgb(255 255 255 / 0.14); }
+.image-lightbox-step:disabled { opacity: 0.3; cursor: default; }
+.image-lightbox-close:focus-visible,
+.image-lightbox-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.image-lightbox-stage {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 0 24px 32px;
+}
+.image-lightbox-stage > img {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 12px;
+  object-fit: contain;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.5);
+}

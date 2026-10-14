@@ -1,0 +1,752 @@
+import { createHash, randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createCiAgentSession, type CiAgentSession, type CiAgentSessionConfig } from "../capture/agent/session.js";
+import { createLocalCiAgentSession } from "../capture/agent/session-local.js";
+import type { CiAgentProviderName } from "../capture/agent/provider.js";
+import { AGENT_DEVICE_VERSION, CONTROLLER_SESSION, baseEnvironment, isRecord } from "../capture/common.js";
+import { controllerData, defaultRunner, openedSimulatorDevice } from "../capture/controller.js";
+import type { CommandRequest, CommandResult } from "../capture/run.js";
+import { executeCaptureSetup } from "../capture/setup-actions.js";
+import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, assertSimulatorSessionIdentity, assertSimulatorStopped, readSimulatorDotenvHandoff,
+  assertAttachedSimulatorSession, resolveAttachedSimulatorSession, simulatorOsVersion, simulatorStartFailure, type ActiveSimulatorRuntime, type SimulatorConnection } from "../capture/simulator.js";
+import { DEFAULT_ANDROID_DEVICE } from "../config/explore-config.js";
+import { createExplorationInputs } from "../config/exploration-inputs.js";
+import { ExploreStore, getCoverage } from "../map/store.js";
+import { whoamiAccounts } from "../report/preview-deploy.js";
+import { CiError, serializeCiError, toCiError } from "../shared/ci-errors.js";
+import { packageBin } from "../shared/package-paths.js";
+import { assertDecodedPng, type DecodedFrame } from "../shared/png-evidence.js";
+import { CONTRACT, type ExploreMap, type Platform } from "../types.js";
+import { assertEmulatorCompatible, extractIosBundle, inspectArchive, type ArchiveKind, type InspectedArchive, readArchiveIcon } from "./archive.js";
+import { runBlackBoxExploration, type BlackBoxExplorerResult, type BlackBoxFrame, SYSTEM_DIALOG_PACKAGES } from "./explorer.js";
+
+export const DEFAULT_IOS_DEVICE = "iPhone 17 Pro";
+export const DEFAULT_BINARY_PROJECT = "expo-explore";
+export const DEFAULT_MODELS: Record<CiAgentProviderName, string> = { anthropic: "claude-sonnet-4-5", openai: "gpt-6.1-sol" };
+export const BINARY_LIMITS = { maxDurationMinutes: 15, maxScreens: 40, maxActions: 150 } as const;
+
+export type BinaryExploreOptions = {
+  archive: string;
+  output: string;
+  platform?: Platform;
+  device?: string;
+  bundleId?: string;
+  launchUrl?: string;
+  hints?: string;
+  allowDestructive?: readonly string[];
+  maxDurationMinutes?: number;
+  maxScreens?: number;
+  maxActions?: number;
+  provider?: CiAgentProviderName;
+  model?: string;
+  /** EAS account that owns the simulator session (and the hosted report); defaults to the token's primary account. */
+  owner?: string;
+  /** EAS project slug the sessions run under; created on first use. */
+  project?: string;
+  environment?: NodeJS.ProcessEnv;
+  runner?: typeof defaultRunner;
+  createSession?: (config: CiAgentSessionConfig, options: { env: NodeJS.ProcessEnv; auth: ModelAuth }) => CiAgentSession;
+  progress?: (message: string) => void;
+  now?: () => number;
+};
+
+export type BinaryExploreResult = {
+  outputDirectory: string;
+  mapPath: string;
+  archive: Omit<InspectedArchive, "path"> & { path: string };
+  session: { id: string; platform: Platform; device: string; owner: string; project: string };
+  runtime: ActiveSimulatorRuntime;
+  model: { provider: CiAgentProviderName; model: string; auth: "local-login" | "api-key" };
+  exploration: BlackBoxExplorerResult;
+  durationMs: number;
+};
+
+/** The daemon refuses a second session on a busy device; the caller's own `agent-device` session (from install/open) is reused instead. */
+function daemonSessions(runner: typeof defaultRunner, connection: SimulatorConnection, work: string, platform: Platform, environment: NodeJS.ProcessEnv): { name: string; device: string }[] {
+  try {
+    const result = runner({ command: packageBin("agent-device", "agent-device"), args: ["session", "list", "--json"], cwd: work, timeoutMs: 60_000,
+      environment: { ...baseEnvironment(environment), AGENT_DEVICE_DAEMON_BASE_URL: connection.daemonBaseUrl, AGENT_DEVICE_DAEMON_AUTH_TOKEN: connection.daemonAuthToken } });
+    const data = controllerData(result.stdout, "session list");
+    const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    return sessions.flatMap(item => isRecord(item) && item.platform === platform && typeof item.name === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(item.name)
+      ? [{ name: item.name, device: typeof item.device === "string" ? item.device : "" }] : []);
+  } catch { return []; }
+}
+
+const SYSTEM_APP_PREFIXES = ["com.apple.", "com.android.", "com.google.android.", "android"];
+const appIdPattern = /^[A-Za-z0-9._-]{1,256}$/;
+const appIdOf = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const id = (/\(([^()]+)\)\s*$/.exec(value.trim())?.[1] ?? value).trim();
+  return appIdPattern.test(id) && !SYSTEM_APP_PREFIXES.some(prefix => id === prefix || id.startsWith(prefix)) ? id : undefined;
+};
+
+/** `agent-device appstate` says the app under test is no longer in front: another app (the launcher is a system app, so the id is compared as reported, not through `appIdOf`) or a non-app surface. */
+/** What `agent-device appstate` reported in front of the app under test, for a launch-blocked report: "com.foo.bar is in front" or "the device shows its home surface". */
+export function describeForeground(state: Record<string, unknown>): string {
+  const raw = state.appBundleId ?? state.packageName ?? state.package ?? state.appId;
+  const foreground = typeof raw === "string" ? (/\(([^()]+)\)\s*$/.exec(raw.trim())?.[1] ?? raw).trim() : undefined;
+  const surface = typeof state.surface === "string" && state.surface !== "app" ? state.surface : undefined;
+  if (surface) return foreground ? `the device shows its ${surface} surface (appstate names ${foreground})` : `the device shows its ${surface} surface`;
+  return foreground ? `${foreground} is in front` : "the snapshot shows another app";
+}
+
+export function leftForeground(state: Record<string, unknown>, bundleId: string): boolean {
+  const raw = state.appBundleId ?? state.packageName ?? state.package ?? state.appId;
+  const foreground = typeof raw === "string" ? (/\(([^()]+)\)\s*$/.exec(raw.trim())?.[1] ?? raw).trim() : undefined;
+  if (foreground && SYSTEM_DIALOG_PACKAGES.has(foreground)) return false;
+  return (typeof state.surface === "string" && state.surface !== "app") || (!!foreground && foreground !== bundleId);
+}
+
+/** Android draws runtime-permission prompts from its own package; the app under test is still running underneath, and the prompt's buttons are in the snapshot for the model. */
+
+/** `agent-device apps` lists "Name (bundle.id)" strings or objects; the display name labels the report when no archive carries one. */
+function listInstalled(run: (args: string[]) => Record<string, unknown> | undefined, controllerSession: string | undefined): { bundleId: string | undefined; name: string | undefined }[] {
+  const listed = run(["apps", ...(controllerSession ? ["--session", controllerSession] : [])]);
+  return (Array.isArray(listed?.apps) ? listed.apps : []).map((item: unknown) => {
+    const raw = isRecord(item) ? item.id ?? item.bundleId ?? item.packageName : item;
+    const label = isRecord(item) ? item.name ?? item.label : typeof item === "string" ? /^(.*\S)\s*\([^()]+\)\s*$/.exec(item.trim())?.[1] : undefined;
+    return { bundleId: appIdOf(raw), name: typeof label === "string" && label.trim() ? label.trim() : undefined };
+  });
+}
+
+const named = (apps: { bundleId: string | undefined; name: string | undefined }[], bundleId: string) => {
+  const name = apps.find(app => app.bundleId === bundleId)?.name;
+  return name ? { name } : {};
+};
+
+/** Finds the app to explore when the caller named none: the one the session has in the foreground, else the only user-installed app. */
+export function resolveSessionApp(runner: typeof defaultRunner, connection: SimulatorConnection, work: string, platform: Platform, device: string, controllerSession: string | undefined, environment: NodeJS.ProcessEnv): { bundleId: string; name?: string } {
+  const run = (args: string[]): Record<string, unknown> | undefined => {
+    try {
+      const result = runner({ command: packageBin("agent-device", "agent-device"), args: [...args, ...(platform === "ios" ? ["--device", device] : []), "--platform", platform, "--json"], cwd: work, timeoutMs: 60_000,
+        environment: { ...baseEnvironment(environment), AGENT_DEVICE_DAEMON_BASE_URL: connection.daemonBaseUrl, AGENT_DEVICE_DAEMON_AUTH_TOKEN: connection.daemonAuthToken } });
+      return controllerData(result.stdout, args[0]!);
+    } catch { return undefined; }
+  };
+  if (controllerSession) {
+    const state = run(["appstate", "--session", controllerSession]);
+    const foreground = state && (state.state === undefined || state.state === "runningForeground") && (state.surface === undefined || state.surface === "app")
+      ? appIdOf(state.appBundleId ?? state.packageName ?? state.package ?? state.appId) : undefined;
+    if (foreground) return { bundleId: foreground, ...named(listInstalled(run, controllerSession), foreground) };
+  }
+  const apps = listInstalled(run, controllerSession);
+  const installed = [...new Set(apps.flatMap(app => app.bundleId ?? []))];
+  if (installed.length === 1) return { bundleId: installed[0]!, ...named(apps, installed[0]!) };
+  throw binaryError("BUNDLE_ID_REQUIRED", installed.length ? `Several apps are installed on the session (${installed.join(", ")}) and none is open.` : "No app is open on the session and the installed apps could not be listed.",
+    "Pass --bundle-id with the app's bundle identifier (iOS) or package name (Android).", { installed });
+}
+
+/**
+ * App-test inputs: each {{secret:NAME}} in the hints names an environment variable whose value Explore types for the
+ * model. Read before any session starts, so a missing one costs nothing.
+ */
+export function hintInputs(hints: string | undefined, environment: NodeJS.ProcessEnv): ReturnType<typeof createExplorationInputs> {
+  try { return createExplorationInputs({ instructions: hints ?? "", environment }); }
+  catch (error) {
+    if (!(error instanceof CiError) || !error.code.startsWith("EXPLORATION_SECRET_")) throw error;
+    const name = typeof error.details?.secretName === "string" ? error.details.secretName : "NAME";
+    throw new CiError({ code: error.code, stage: "preflight", message: error.message, ...(error.details ? { details: error.details } : {}),
+      nextAction: error.code === "EXPLORATION_SECRET_REFERENCE_INVALID"
+        ? "Write each input in --hints as {{secret:NAME}} with an uppercase environment variable name that is not a provider, Expo, or CI credential."
+        : `Set ${name} in the environment that runs Explore (export ${name}=…) to the single-line test value, then rerun.` });
+  }
+}
+
+function validatedLimits(options: Pick<BinaryExploreOptions, "maxDurationMinutes" | "maxScreens" | "maxActions">) {
+  const limits = { maxDurationMinutes: options.maxDurationMinutes ?? BINARY_LIMITS.maxDurationMinutes, maxScreens: options.maxScreens ?? BINARY_LIMITS.maxScreens, maxActions: options.maxActions ?? BINARY_LIMITS.maxActions };
+  for (const [name, value] of Object.entries(limits)) if (!Number.isSafeInteger(value) || value < 1 || value > 1000) throw binaryError("EXPLORE_LIMIT_INVALID", `${name} must be an integer between 1 and 1000.`, "Correct the budget flag and rerun.");
+  return limits;
+}
+
+function binaryError(code: string, message: string, nextAction: string, details?: Record<string, unknown>): CiError {
+  return new CiError({ code, stage: "session", message, nextAction, ...(details ? { details } : {}) });
+}
+
+type ModelAuth = "local-login" | "api-key";
+type ModelSessionOptions = Pick<BinaryExploreOptions, "provider" | "model" | "createSession">;
+
+function modelSession(provider: CiAgentProviderName, auth: ModelAuth, options: ModelSessionOptions, environment: NodeJS.ProcessEnv) {
+  const config = { provider, model: options.model ?? DEFAULT_MODELS[provider] };
+  const session = options.createSession ? options.createSession(config, { env: environment, auth })
+    : auth === "api-key" ? createCiAgentSession(config, { env: environment }) : createLocalCiAgentSession(config, { env: environment });
+  return { session, provider, model: config.model, auth };
+}
+
+/** Local `claude`/`codex` login unless an API key is present; preflight proves access before a simulator is paid for. */
+export function selectModelSession(options: ModelSessionOptions, environment: NodeJS.ProcessEnv) {
+  const provider: CiAgentProviderName = options.provider ?? (environment.OPENAI_API_KEY?.trim() && !environment.ANTHROPIC_API_KEY?.trim() ? "openai" : "anthropic");
+  const keyName = provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
+  return modelSession(provider, environment[keyName]?.trim() ? "api-key" : "local-login", options, environment);
+}
+
+/**
+ * With --provider or --model, only that choice is tried. Otherwise every model access this shell has is tried
+ * in turn (API keys, then the local claude and codex logins) and the first that passes preflight runs.
+ */
+export async function preflightModelSession(options: ModelSessionOptions, environment: NodeJS.ProcessEnv, say: (message: string) => void) {
+  const candidates = options.provider || options.model ? [selectModelSession(options, environment)] : [
+    ...(["anthropic", "openai"] as const).filter(provider => environment[provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"]?.trim())
+      .map(provider => modelSession(provider, "api-key", options, environment)),
+    modelSession("anthropic", "local-login", options, environment),
+    modelSession("openai", "local-login", options, environment),
+  ];
+  let firstError: unknown;
+  for (const [index, candidate] of candidates.entries()) {
+    say(`checking ${candidate.provider} ${candidate.model} (${candidate.auth === "api-key" ? "API key" : "local login"})`);
+    try {
+      await candidate.session.preflight();
+      return candidate;
+    } catch (error) {
+      firstError ??= error;
+      if (index < candidates.length - 1) say(`${candidate.provider} ${candidate.auth === "api-key" ? "API key" : "local login"} unavailable (${error instanceof Error ? error.message : String(error)}); trying the next`);
+    }
+  }
+  throw firstError;
+}
+
+export type SessionExploreOptions = Omit<BinaryExploreOptions, "archive" | "bundleId" | "owner" | "project"> & {
+  /** App to explore; defaults to the app in the foreground, else the only user-installed app. */
+  bundleId?: string;
+  /** EAS Simulator session id; defaults to EAS_SIMULATOR_SESSION_ID (or the dotenv file's). */
+  session?: string;
+  /** `.env.eas-simulator` written by `eas simulator:start --out-config-type dotenv`; otherwise the AGENT_DEVICE_DAEMON_* variables are used. */
+  envFile?: string;
+  appName?: string;
+  version?: string;
+};
+
+export type SessionExploreResult = Omit<BinaryExploreResult, "archive" | "session"> & {
+  app: { name: string; bundleId: string; platform: Platform; version?: string };
+  session: { id: string; platform: Platform; device: string; name: string; url?: string };
+};
+
+export type ConnectedSessionExploration = {
+  connection: SimulatorConnection;
+  platform: Platform;
+  device: string;
+  bundleId: string;
+  app: { name: string; version?: string };
+  /** Omitted when the app is already on the device (explore:session). */
+  install?: { path: string; kind: ArchiveKind };
+  work: string;
+  runner: typeof defaultRunner;
+  environment: NodeJS.ProcessEnv;
+  secrets: readonly string[];
+  inputs: ReturnType<typeof createExplorationInputs>;
+  say: (message: string) => void;
+  now: () => number;
+  limits: { maxDurationMinutes: number; maxScreens: number; maxActions: number };
+  store: ExploreStore;
+  map: ExploreMap;
+  model: { session: CiAgentSession };
+  /** `eas simulator:get --json` for the attached session; descriptive (OS version) only. */
+  sessionJson: () => string;
+  /** agent-device session name on the daemon; explore:session reuses the caller's session so the device is not "in use" by another. */
+  controllerSession?: string;
+  launchUrl?: string;
+  hints?: string;
+  allowDestructive?: readonly string[];
+  /** URL schemes the app registers; `open` is confined to them when known (iOS archives), otherwise to any custom scheme. */
+  urlSchemes?: readonly string[];
+  /** The app's icon from the archive for the Viewer header. */
+  appIcon?: Buffer;
+};
+
+/** Drives an agent-device daemon we already hold a connection to: optional install, open, then the model-led exploration. */
+export async function exploreConnectedSession(ctx: ConnectedSessionExploration): Promise<{ runtime: ActiveSimulatorRuntime; exploration: BlackBoxExplorerResult }> {
+  const { connection, platform, device, bundleId, app, install, work, runner, environment, secrets, inputs, say, now, limits, store, map, model, sessionJson, launchUrl, hints, allowDestructive } = ctx;
+  const controllerSession = ctx.controllerSession ?? CONTROLLER_SESSION;
+  const controllerConfig = join(work, "agent-device.json");
+  await writeFile(controllerConfig, "{}\n", { flag: "wx", mode: 0o400 });
+  const controllerEnvironment = { ...baseEnvironment(environment), AGENT_DEVICE_CONFIG: controllerConfig, AGENT_DEVICE_DAEMON_BASE_URL: connection.daemonBaseUrl,
+    AGENT_DEVICE_DAEMON_AUTH_TOKEN: connection.daemonAuthToken, AGENT_DEVICE_SESSION: controllerSession, AGENT_DEVICE_SESSION_LOCK: "reject", AGENT_DEVICE_PLATFORM: platform };
+  const agentDevice = packageBin("agent-device", "agent-device");
+  const deviceArgs = platform === "ios" ? ["--device", device] : [];
+  const controller = (args: string[], timeoutMs = 90_000): CommandResult => {
+    // Session flags go before a `--` separator so model-chosen text (`type -h`, a URL, a label) is never read as a flag.
+    const separator = args.indexOf("--");
+    const flags = separator === -1 ? args : args.slice(0, separator), positionals = separator === -1 ? [] : args.slice(separator);
+    const request: CommandRequest = { command: agentDevice, args: [...flags, "--session", controllerSession, ...deviceArgs, "--platform", platform, ...positionals], cwd: work, environment: controllerEnvironment, timeoutMs };
+    return retryWhileBusy(() => runner(request), sleepSync);
+  };
+  const failureText = (error: unknown): string => lastLine(redactSecrets(error instanceof Error ? error.message : String(error), secrets)).slice(0, 400);
+  const version = runner({ command: agentDevice, args: ["--version"], cwd: work, environment: controllerEnvironment, timeoutMs: 30_000 }).stdout.trim();
+  if (version !== AGENT_DEVICE_VERSION) throw binaryError("EXPLORE_TOOLS_MISSING", `agent-device ${AGENT_DEVICE_VERSION} is required (found ${version || "none"}).`, "Reinstall @expo/explore.");
+
+  if (install) {
+    say(`installing ${install.kind === "android-apk" ? "the APK" : "the app"} on session ${connection.sessionId}`);
+    try { controller(["install", install.path, "--json"], 15 * 60_000); }
+    catch (error) { throw binaryError("APP_INSTALL_FAILED", `agent-device could not install the app: ${failureText(error)}`, "Check that the archive is a simulator build for this platform and under the size limit, then rerun.", { sessionId: connection.sessionId }); }
+  }
+  const opened = controller(["open", bundleId, "--level", "full", "--json"], 2 * 60_000);
+  const openedDevice = openedSimulatorDevice(opened.stdout, bundleId, "initial app open", platform, controllerSession);
+  const data = controllerData(opened.stdout, "initial app open");
+  const deviceData = data.device && typeof data.device === "object" ? data.device as Record<string, unknown> : {};
+  const observed = (key: string): string => { const value = deviceData[key] ?? data[key]; return typeof value === "string" && value.trim() ? value : "unknown"; };
+  const runtime = { provider: "eas-simulator", controller: "agent-device", controllerPackageVersion: AGENT_DEVICE_VERSION, easCliVersion: "unknown", platform, controllerDeviceId: openedDevice.deviceId,
+    deviceModel: openedDevice.deviceModel, osVersion: observed("osVersion"), locale: observed("locale"), orientation: observed("orientation") === "landscape" ? "landscape" : "portrait",
+    colorScheme: observed("colorScheme") === "dark" ? "dark" : "light" } as ActiveSimulatorRuntime;
+  try { runtime.osVersion = await simulatorOsVersion(sessionJson(), runtime.controllerDeviceId, fetch, platform); } catch { /* descriptive only */ }
+  map.run.deviceId = runtime.controllerDeviceId;
+  map.run.environment = { deviceModel: runtime.deviceModel, osVersion: runtime.osVersion, locale: runtime.locale, orientation: runtime.orientation, colorScheme: runtime.colorScheme };
+  map.run.status = "exploring";
+  await store.initialize(map, false);
+  say(`app is open on ${runtime.deviceModel} (${platform === "ios" ? "iOS" : "Android"} ${runtime.osVersion}); exploring`);
+
+  const deadlineMs = now() + limits.maxDurationMinutes * 60_000;
+  let frames = 0;
+  const snapshotData = (): { nodes: Record<string, unknown>[]; refsGeneration?: number } => {
+    let result: CommandResult;
+    try { result = controller(["snapshot", "--force-full", "--level", "full", "--json"], 120_000); }
+    catch (error) { throw binaryError("OBSERVATION_FAILED", `The accessibility snapshot failed: ${failureText(error)}`, "The app may have left the foreground; Explore reopens it."); }
+    const value = controllerData(result.stdout, "snapshot");
+    if (!Array.isArray(value.nodes) || value.nodes.length > 20_000) throw binaryError("OBSERVATION_FAILED", "The controller did not return an accessibility snapshot.", "Retry the observation.");
+    // Android snapshots include the status bar (com.android.systemui's clock, battery, …): not part of the app, and a clock tick is not a new screen.
+    const nodes = value.nodes.filter((node): node is Record<string, unknown> => !!node && typeof node === "object" && !foreignNode(node, bundleId));
+    return { nodes, ...(typeof value.refsGeneration === "number" ? { refsGeneration: value.refsGeneration } : {}) };
+  };
+  const snapshot = (): Record<string, unknown>[] => snapshotData().nodes;
+  // A tree read mid-transition (a sheet half presented, a screen still sliding in) hashes to a screen that never
+  // exists at rest; wait until two consecutive reads agree before the caller identifies the destination.
+  const settled = async (): Promise<Record<string, unknown>[] | undefined> => {
+    try {
+      let previous = snapshot();
+      let previousKey = JSON.stringify(previous);
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const next = snapshot();
+        const nextKey = JSON.stringify(next);
+        if (nextKey === previousKey) return next;
+        previous = next;
+        previousKey = nextKey;
+      }
+      return previous;
+    } catch { return undefined; /* observe() reports a lost foreground app itself. */ }
+  };
+  const reopen = (): void => { controller(["open", bundleId, "--level", "full", "--json"], 2 * 60_000); };
+  // iOS refuses a snapshot once the app is gone; Android happily returns the launcher's tree, so the foreground app is asked for.
+  const foregroundState = (): Record<string, unknown> | undefined => {
+    try { return controllerData(controller(["appstate", "--json"], 60_000).stdout, "appstate"); }
+    catch { return undefined; }
+  };
+  const foregroundElsewhere = (): boolean => { const state = foregroundState(); return state ? leftForeground(state, bundleId) : false; };
+  const observe = async (includeImage: boolean): Promise<BlackBoxFrame> => {
+    let nodes: Record<string, unknown>[];
+    let leftApp = false;
+    try { nodes = snapshot(); }
+    catch {
+      // A transient controller failure (adb "device offline" mid-animation on EAS Android) is retried once before Explore assumes the app left the foreground.
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      try { nodes = snapshot(); } catch { reopen(); leftApp = true; nodes = snapshot(); }
+    }
+    if (!leftApp && foregroundElsewhere()) {
+      reopen();
+      leftApp = true;
+      // The tree right after a relaunch is the splash or an empty root; give the first screen a moment to render.
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      nodes = snapshot();
+    }
+    let capturedAt = new Date(now()).toISOString();
+    if (!includeImage) return { nodes, capturedAt, ...(leftApp ? { leftApp } : {}) };
+    const path = join(work, `frame-${++frames}.png`);
+    try {
+      // The tree is read before the screenshot. When the app moves between the two (Keeper's modal mounts its button a beat
+      // after its text; its dismissed biometric prompt navigates a second later), the pair would describe two states and the
+      // card a screen that never exists at rest: re-read after the shot, and when the tree changed, settle and shoot again.
+      for (let round = 0; ; round += 1) {
+        try { controller(["screenshot", path, "--normalize-status-bar", "--level", "full", "--json"], 120_000); }
+        catch (error) { return { nodes, capturedAt, imageUnavailable: { code: "SCREENSHOT_FAILED", message: failureText(error).slice(0, 300) } }; }
+        if (round === 2) break;
+        let after: Record<string, unknown>[];
+        try { after = snapshot(); } catch { break; }
+        if (JSON.stringify(after) === JSON.stringify(nodes)) break;
+        nodes = (await settled()) ?? after;
+        capturedAt = new Date(now()).toISOString();
+      }
+      const png = await readFile(path);
+      assertDecodedPng(png, "Exploration screenshot");
+      if (png.length > 10 * 1024 * 1024) return { nodes, capturedAt, imageUnavailable: { code: "SCREENSHOT_TOO_LARGE", message: "The screenshot exceeded 10 MB." } };
+      if (solidColour(png)) return { nodes, capturedAt, imageUnavailable: { code: "SCREENSHOT_BLANK", message: BLANK_SCREENSHOT_MESSAGE }, ...(leftApp ? { leftApp } : {}) };
+      return { nodes, capturedAt, frameId: randomUUID(), png, imageSha256: createHash("sha256").update(png).digest("hex"), width: png.readUInt32BE(16), height: png.readUInt32BE(20), ...(leftApp ? { leftApp } : {}) };
+    } finally { await rm(path, { force: true }); }
+  };
+  const setupOptions = { command: async (args: string[]) => { const result = controller(guardPositionals([...args, "--json"]), 120_000); return controllerData(result.stdout, args[0] ?? "command"); },
+    open: async (url: string) => { assertAppUrl(url, ctx.urlSchemes); const result = controller(["open", "--json", "--", url], 120_000); return controllerData(result.stdout, "open"); },
+    snapshot: async () => ({ truncated: false, ...snapshotData() }), readinessAttempts: 3, postActionObservation: "caller" as const };
+  if (launchUrl) { say(`opening ${launchUrl}`); await setupOptions.open(launchUrl); }
+  // A build that crashes on launch is reported as such instead of costing the model a round of "app is not running" errors.
+  // iOS appstate keeps naming the session's app after it dies, so the snapshot (which refuses a dead app) is the test.
+  let blockedAtLaunch: BlackBoxExplorerResult | undefined;
+  let goneReason = "";
+  // One appstate read decides and describes the foreground, so the reason names what was actually in front (the app relaunching in a crash loop answers differently a second later).
+  const gone = (): boolean => {
+    try { snapshot(); } catch (error) { goneReason = `the snapshot failed: ${(error as Error).message}`; return true; }
+    const state = foregroundState();
+    goneReason = state && leftForeground(state, bundleId) ? describeForeground(state) : "";
+    return goneReason !== "";
+  };
+  const settle = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 4000));
+  await settle();
+  if (gone()) {
+    say(`the app is not in the foreground a few seconds after it was opened (${goneReason}); opening it again`);
+    reopen();
+    await settle();
+    if (gone()) {
+      const reason = `${app.name} exited within seconds of being opened, twice in a row, so nothing could be explored: this build does not stay running on ${runtime.deviceModel} (${runtime.osVersion}); ${goneReason}.`;
+      map.gaps.push({ id: `gap_${randomUUID().slice(0, 8)}`, kind: "coverage", status: "open", message: reason, createdAt: new Date(now()).toISOString() });
+      say("exploration blocked: the app does not stay running");
+      blockedAtLaunch = { stopReason: "blocked", summary: reason, screens: 0, observations: 0, actions: 0, turns: 0 };
+    }
+  }
+  const exploration = blockedAtLaunch ?? await runBlackBoxExploration({ session: model.session, store, map, app: { name: app.name, bundleId, platform, ...(app.version ? { version: app.version } : {}) },
+    inputs, ...(hints ? { hints: hints } : {}), ...(launchUrl ? { launchUrl: launchUrl } : {}), ...(allowDestructive ? { allowDestructive: allowDestructive } : {}), ...(ctx.appIcon ? { appIcon: ctx.appIcon } : {}),
+    deadlineMs, maxScreens: limits.maxScreens, maxActions: limits.maxActions, maxTurns: limits.maxActions * 3 + limits.maxScreens * 2 + 20, now, observe, progress: say,
+    act: async action => {
+      const perform = async () => {
+        if (action.action === "tap" && "frameId" in action) {
+          const frame = await observe(false);
+          const bounds = frameBounds(frame.nodes);
+          controller(["press", String(Math.round(action.x * bounds.width)), String(Math.round(action.y * bounds.height)), "--level", "full", "--json"], 120_000);
+        } else if (action.action === "back") {
+          // Onboarding steps, tabs and sheets have no back control; the platform gesture (iOS edge swipe, Android back) still works.
+          try { controller(["back", "--in-app", "--level", "full", "--json"], 120_000); }
+          catch (error) {
+            if (!(error instanceof Error) || !/in-app back control is not available/.test(error.message)) throw error;
+            controller(["back", "--system", "--level", "full", "--json"], 120_000);
+          }
+        }
+        else if (action.action === "dismiss-keyboard") await dismissKeyboard();
+        else if (action.action === "type") controller(["type", "--level", "full", "--json", "--", action.text], 120_000);
+        else await executeCaptureSetup([action], setupOptions);
+        if (action.action !== "wait") await settled();
+      };
+      const dismissKeyboard = async () => {
+        try { controller(["keyboard", "dismiss", "--level", "full", "--json"], 120_000); return; }
+        catch (error) { if (!(error instanceof Error) || !/Unable to dismiss the iOS keyboard/.test(error.message)) throw error; }
+        // The iOS keyboard has no dismiss key and agent-device never taps the background; its return key (next/done/go) closes it without touching the app.
+        const nodes = (await observe(false)).nodes;
+        // In a multi-line editor the return key inserts a newline instead of ending editing.
+        const multiline = nodes.some(node => /text-?view/i.test(String(node.type ?? "")));
+        const key = multiline ? undefined : nodes.find(node => /key$/i.test(String(node.type ?? "")) && KEYBOARD_RETURN_KEY.test(String(node.label ?? "")));
+        const rect = key?.rect as { x: number; y: number; width: number; height: number } | undefined;
+        if (!rect) throw binaryError("KEYBOARD_DISMISS_UNAVAILABLE", multiline ? "The keyboard cannot be dismissed from a multi-line editor: its return key inserts a newline." : "The keyboard cannot be dismissed: it has neither a dismiss nor a return key.", "Tap one of the app's own controls that is not behind the keyboard (Cancel, Done, Close), or go back.");
+        controller(["press", String(Math.round(rect.x + rect.width / 2)), String(Math.round(rect.y + rect.height / 2)), "--level", "full", "--json"], 120_000);
+      };
+      try {
+        try { await perform(); }
+        catch (error) {
+          // A control under the keyboard: close the keyboard and tap once more.
+          if (!(error instanceof Error) || !/behind the visible keyboard/.test(error.message)) throw error;
+          await dismissKeyboard(); await settled(); await perform();
+        }
+      } catch (error) {
+        // The message is recorded in the map and shown to the model; it must not carry the daemon token.
+        if (error instanceof CiError) throw error;
+        throw new Error(failureText(error));
+      }
+    } });
+  // "complete" is reserved for a run with no pending frontier or open gaps; a model that finishes early is "partial".
+  // The map schema allows stopReason only on partial/failed runs.
+  map.run.status = exploration.stopReason === "model-error" ? "failed"
+    : exploration.stopReason === "finished" && getCoverage(map).completion.eligible ? "complete" : "partial";
+  if (map.run.status === "complete") delete map.run.stopReason; else map.run.stopReason = exploration.stopReason;
+  map.run.completedAt = new Date(now()).toISOString();
+  await store.write(map);
+  if (exploration.stopReason === "model-error") throw toCiError(exploration.error, { code: "EXPLORATION_FAILED", stage: "exploration", nextAction: "Inspect the model error and rerun." });
+  return { runtime, exploration };
+}
+
+/** Explores an app already installed on a session the caller started; the session is left running. */
+export async function runSessionExploration(options: SessionExploreOptions): Promise<SessionExploreResult> {
+  const startedAt = Date.now();
+  const now = options.now ?? Date.now;
+  const say = options.progress ?? (() => {});
+  const environment = options.environment ?? process.env;
+  const runner = options.runner ?? defaultRunner;
+  const limits = validatedLimits(options);
+  const inputs = hintInputs(options.hints, environment);
+  if (options.bundleId !== undefined && !appIdPattern.test(options.bundleId)) throw binaryError("BUNDLE_ID_INVALID", `${options.bundleId} is not a bundle or package id.`, "Pass --bundle-id with the app's bundle identifier (iOS) or package name (Android).");
+  let connection: SimulatorConnection;
+  try { connection = await resolveAttachedSimulatorSession(environment, options.envFile, options.session); }
+  catch (error) {
+    throw binaryError("SESSION_NOT_PROVIDED", `No EAS Simulator session connection was found: ${error instanceof Error ? error.message : String(error)}`,
+      "Start one with `eas simulator:start --type agent-device --out-config-type dotenv` and run explore:session in that directory (or pass --env-file / set EAS_SIMULATOR_SESSION_ID, AGENT_DEVICE_DAEMON_BASE_URL and AGENT_DEVICE_DAEMON_AUTH_TOKEN).");
+  }
+  if (!environment.EXPO_TOKEN?.trim() && !environment.EXPO_SESSION_SECRET?.trim() && !(await easLoggedIn(runner, environment))) {
+    throw binaryError("EXPO_LOGIN_REQUIRED", "No EAS login was found.", "Run `eas login` or set EXPO_TOKEN, then rerun explore:session.");
+  }
+  const work = await realpath(await mkdtemp(join(tmpdir(), "expo-explore-session-")));
+  const easEnvironment = { ...baseEnvironment(environment), ...(environment.EXPO_TOKEN ? { EXPO_TOKEN: environment.EXPO_TOKEN } : {}), ...(environment.HOME ? { HOME: environment.HOME } : {}), CI: "1", EXPO_NO_TELEMETRY: "1" };
+  const easBin = packageBin("eas-cli", "eas");
+  await lstat(easBin).catch(() => { throw binaryError("EXPLORE_TOOLS_MISSING", "The EAS CLI that Explore pins is not installed.", "Reinstall @expo/explore with optional dependencies."); });
+  // `eas simulator:get` insists on a project directory even though the session id is global; a placeholder is enough (no `eas init`).
+  await writeFile(join(work, "package.json"), JSON.stringify({ name: DEFAULT_BINARY_PROJECT, version: "0.0.0", private: true }), { mode: 0o600 });
+  await writeFile(join(work, "app.json"), JSON.stringify({ expo: { name: DEFAULT_BINARY_PROJECT, slug: DEFAULT_BINARY_PROJECT } }), { mode: 0o600 });
+  const sessionJson = (): string => runner({ command: process.execPath, args: [easBin, "simulator:get", "--id", connection.sessionId, "--json", "--non-interactive"], cwd: work, environment: easEnvironment, timeoutMs: 2 * 60_000 }).stdout;
+  let primaryError: unknown;
+  let runtime: ActiveSimulatorRuntime | undefined;
+  let exploration: BlackBoxExplorerResult | undefined;
+  let session: SessionExploreResult["session"] | undefined;
+  let platform: Platform = options.platform ?? "ios";
+  let device = options.device ?? "";
+  const app = { name: options.appName ?? options.bundleId ?? "app", bundleId: options.bundleId ?? "app", ...(options.version ? { version: options.version } : {}) };
+  const secrets = [environment.EXPO_TOKEN ?? "", connection.daemonAuthToken, ...inputs.values].filter(Boolean);
+  const map: ExploreMap = { contract: CONTRACT, revision: 0, run: { id: randomUUID(), name: app.name, platform, controller: "agent-device", exploration: "black-box", bundleId: app.bundleId, status: "draft",
+    createdAt: new Date(now()).toISOString(), updatedAt: new Date(now()).toISOString(), build: { ...(app.version ? { version: app.version } : {}), source: "unknown" }, environment: {}, limits },
+    artifacts: [], screens: [], variants: [], observations: [], elements: [], actionAttempts: [], transitions: [], journeys: [], frontier: [], gaps: [] };
+  try {
+    say(`checking EAS Simulator session ${connection.sessionId}`);
+    let info: ReturnType<typeof assertAttachedSimulatorSession>;
+    try { info = assertAttachedSimulatorSession(sessionJson(), connection, options.platform); }
+    catch (error) {
+      throw binaryError("SESSION_UNAVAILABLE", `EAS Simulator session ${connection.sessionId} cannot be explored: ${lastLine(redactSecrets(error instanceof Error ? error.message : String(error), secrets))}`,
+        "Check `eas simulator:list`; the session must be in progress, of type agent-device, and match the connection you passed.", { sessionId: connection.sessionId });
+    }
+    platform = info.platform;
+    const candidates = daemonSessions(runner, connection, work, platform, environment).filter(item => !device || item.device === device);
+    const devices = new Set(candidates.map(item => item.device));
+    if (devices.size > 1) throw binaryError("SESSION_DEVICE_AMBIGUOUS", `The session has agent-device sessions on several devices (${[...devices].join(", ")}).`, "Pass --device with the one the app is installed on.", { devices: [...devices] });
+    const existing = candidates[0];
+    if (existing) say(`reusing agent-device session "${existing.name}" on ${existing.device}`);
+    device = device || existing?.device || (platform === "ios" ? DEFAULT_IOS_DEVICE : DEFAULT_ANDROID_DEVICE);
+    if (!options.bundleId) {
+      const resolved = resolveSessionApp(runner, connection, work, platform, device, existing?.name, environment);
+      app.bundleId = resolved.bundleId;
+      if (!options.appName) app.name = resolved.name ?? app.bundleId;
+      map.run.bundleId = app.bundleId;
+      map.run.name = app.name;
+      say(`exploring ${app.bundleId} (pass --bundle-id to choose another app)`);
+    }
+    map.run.platform = platform;
+    map.run.environment = { deviceModel: device };
+    session = { id: connection.sessionId, platform, device, name: info.name, ...(info.deviceRunSessionUrl ? { url: info.deviceRunSessionUrl } : {}) };
+
+    const model = await preflightModelSession(options, environment, say);
+    const outputDirectory = await realpath(await mkdir(options.output, { recursive: true }).then(() => options.output));
+    const store = new ExploreStore(outputDirectory);
+    if (await store.exists()) throw binaryError("OUTPUT_NOT_EMPTY", `${outputDirectory} already holds an Explore map.`, "Pass an empty --output directory.");
+
+    ({ runtime, exploration } = await exploreConnectedSession({ connection, platform, device, bundleId: app.bundleId, app, work, runner, environment, secrets, inputs, say, now, limits, store, map, model, sessionJson,
+      ...(existing ? { controllerSession: existing.name } : {}),
+      ...(options.launchUrl ? { launchUrl: options.launchUrl } : {}), ...(options.hints ? { hints: options.hints } : {}), ...(options.allowDestructive ? { allowDestructive: options.allowDestructive } : {}) }));
+    return { outputDirectory, mapPath: store.mapPath, app: { ...app, platform }, session, runtime, model: { provider: model.provider, model: model.model, auth: model.auth }, exploration, durationMs: Date.now() - startedAt };
+  } catch (error) {
+    primaryError = toCiError(error, { code: "EXPLORE_SESSION_FAILED", stage: "exploration", nextAction: "Inspect the diagnostic, correct the failing prerequisite, and rerun explore:session. The session was left running." });
+    throw primaryError;
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+}
+
+export async function runBinaryExploration(options: BinaryExploreOptions): Promise<BinaryExploreResult> {
+  const startedAt = Date.now();
+  const now = options.now ?? Date.now;
+  const say = options.progress ?? (() => {});
+  const environment = options.environment ?? process.env;
+  const runner = options.runner ?? defaultRunner;
+  const limits = validatedLimits(options);
+  const inputs = hintInputs(options.hints, environment);
+  say("inspecting the archive");
+  const archive = await inspectArchive(options.archive);
+  assertEmulatorCompatible(archive);
+  if (options.platform && options.platform !== archive.platform) throw binaryError("ARCHIVE_PLATFORM_MISMATCH", `The archive is an ${archive.platform} build but --platform ${options.platform} was requested.`, "Drop --platform or pass a matching archive.");
+  if (!environment.EXPO_TOKEN?.trim() && !environment.EXPO_SESSION_SECRET?.trim() && !(await easLoggedIn(runner, environment))) {
+    throw binaryError("EXPO_LOGIN_REQUIRED", "No EAS login was found.", "Run `eas login` or set EXPO_TOKEN, then rerun explore:binary.");
+  }
+  const platform = archive.platform;
+  const bundleId = options.bundleId ?? archive.bundleId;
+  const device = options.device ?? (platform === "ios" ? DEFAULT_IOS_DEVICE : DEFAULT_ANDROID_DEVICE);
+  say(`${archive.appName} ${archive.version ?? ""} (${bundleId}, ${platform}, ${(archive.bytes / 1048576).toFixed(0)} MB, sha256 ${archive.sha256.slice(0, 12)})`);
+  if (archive.missingLibs?.length) say(`warning: lib/x86_64 lacks ${archive.missingLibs.slice(0, 4).join(", ")}${archive.missingLibs.length > 4 ? ` and ${archive.missingLibs.length - 4} more` : ""} that another ABI ships; the app may stop with UnsatisfiedLinkError on the emulator`);
+
+  const model = await preflightModelSession(options, environment, say);
+
+  const outputDirectory = await realpath(await mkdir(options.output, { recursive: true }).then(() => options.output));
+  const store = new ExploreStore(outputDirectory);
+  if (await store.exists()) throw binaryError("OUTPUT_NOT_EMPTY", `${outputDirectory} already holds an Explore map.`, "Pass an empty --output directory.");
+  const work = await realpath(await mkdtemp(join(tmpdir(), "expo-explore-binary-")));
+  const easEnvironment = { ...baseEnvironment(environment), ...(environment.EXPO_TOKEN ? { EXPO_TOKEN: environment.EXPO_TOKEN } : {}), ...(environment.HOME ? { HOME: environment.HOME } : {}), CI: "1", EXPO_NO_TELEMETRY: "1" };
+  const easBin = packageBin("eas-cli", "eas");
+  await lstat(easBin).catch(() => { throw binaryError("EXPLORE_TOOLS_MISSING", "The EAS CLI that Explore pins is not installed.", "Reinstall @expo/explore with optional dependencies."); });
+  const eas = (args: string[], timeoutMs = 5 * 60_000): CommandResult & { status: number } => {
+    try { return { ...runner({ command: process.execPath, args: [easBin, ...args], cwd: work, environment: easEnvironment, timeoutMs }), status: 0 }; }
+    catch (error) { return { stdout: "", stderr: error instanceof Error ? error.message : String(error), status: 1 }; }
+  };
+  let sessionId: string | undefined;
+  let primaryError: unknown;
+  let runtime: ActiveSimulatorRuntime | undefined;
+  let exploration: BlackBoxExplorerResult | undefined;
+  let owner = options.owner ?? "";
+  const project = options.project ?? DEFAULT_BINARY_PROJECT;
+  const map: ExploreMap = { contract: CONTRACT, revision: 0, run: { id: randomUUID(), name: archive.appName, platform, controller: "agent-device", exploration: "black-box", bundleId, status: "draft",
+    createdAt: new Date(now()).toISOString(), updatedAt: new Date(now()).toISOString(),
+    build: { ...(archive.version ? { version: archive.version } : {}), ...(archive.buildNumber ? { number: archive.buildNumber } : {}), hash: archive.sha256, source: "local" },
+    environment: { deviceModel: device }, limits }, artifacts: [], screens: [], variants: [], observations: [], elements: [], actionAttempts: [], transitions: [], journeys: [], frontier: [], gaps: [] };
+  try {
+    let installPath = archive.path;
+    if (archive.kind === "ios-tgz" || archive.kind === "ios-ipa") { say("unpacking the iOS bundle"); installPath = await extractIosBundle(archive, join(work, "bundle")); }
+
+    if (!owner) {
+      const who = eas(["whoami"], 60_000);
+      owner = who.status === 0 ? whoamiAccounts(who.stdout)[0] ?? "" : "";
+      if (!owner) throw binaryError("EXPO_LOGIN_REQUIRED", "EAS did not report an account for this login.", "Run `eas login` (or set EXPO_TOKEN) and rerun, or pass --owner.");
+    }
+    await writeFile(join(work, "package.json"), JSON.stringify({ name: project, version: "0.0.0", private: true }), { mode: 0o600 });
+    await writeFile(join(work, "app.json"), JSON.stringify({ expo: { name: project, slug: project, owner, web: { output: "server" } } }), { mode: 0o600 });
+    const init = eas(["init", "--force", "--non-interactive", "--json"], 2 * 60_000);
+    const appJson = JSON.parse(await readFile(join(work, "app.json"), "utf8")) as { expo?: { extra?: { eas?: { projectId?: string } } } };
+    const projectId = appJson.expo?.extra?.eas?.projectId;
+    if (init.status !== 0 || !projectId) throw binaryError("EXPLORE_PROJECT_FAILED", `EAS could not create or link @${owner}/${project}: ${lastLine(init.stderr || init.stdout)}`,
+      "Give this login permission to create projects under the owner, or pass --project with an existing slug.", { owner, project });
+    const projectIdentity = { name: project, slug: project, owner, projectId };
+
+    say(`starting an EAS Simulator session (${device}, ${limits.maxDurationMinutes} min)`);
+    const sessionName = `explore-binary-${createHash("sha256").update(`${archive.sha256}:${map.run.id}`).digest("hex").slice(0, 16)}`;
+    const dotenvPath = join(work, SIMULATOR_DOTENV_FILE_NAME);
+    await writeFile(dotenvPath, SIMULATOR_DOTENV_HEADER, { flag: "wx", mode: 0o600 });
+    let startError: unknown;
+    try {
+      const started = eas(["simulator:start", "--name", sessionName, "--platform", platform, "--device", device, "--type", "agent-device", "--package-version", AGENT_DEVICE_VERSION,
+        "--max-duration-minutes", String(limits.maxDurationMinutes + 5), "--out-config-type", "dotenv", "--non-interactive"], 20 * 60_000);
+      if (started.status !== 0) throw new Error(started.stderr || started.stdout || "eas simulator:start failed");
+    } catch (error) { startError = error; }
+    const handoff = await readSimulatorDotenvHandoff(dotenvPath);
+    const secrets = [environment.EXPO_TOKEN ?? "", ...(handoff.connection ? [handoff.connection.daemonAuthToken] : []), ...inputs.values].filter(Boolean);
+    const startFailure = startError ? simulatorStartFailure(startError, secrets) : undefined;
+    if (handoff.sessionId) {
+      try { assertSimulatorSessionIdentity(eas(["simulator:get", "--id", handoff.sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout, handoff.sessionId, sessionName, projectIdentity, handoff.connection, platform); }
+      catch (error) { throw new CiError({ code: "SESSION_HANDOFF_UNVERIFIED", stage: "session", message: "The EAS handoff could not prove ownership of the exact simulator session. The private handoff was preserved.",
+        nextAction: "Inspect the EAS session list; confirm ownership before stopping the reported session.", details: { handoffDirectory: work, reportedSessionId: handoff.sessionId, ...(startFailure ? { startFailure } : {}) }, cause: error }); }
+      sessionId = handoff.sessionId;
+    }
+    if (!sessionId) throw new CiError({ code: startFailure ? "SIMULATOR_START_FAILED" : "SESSION_HANDOFF_UNVERIFIED", stage: "session",
+      message: startFailure ? `EAS simulator:start failed: ${startFailure.message}` : "EAS did not provide a verifiable simulator session.",
+      nextAction: "Inspect the EAS start failure and session list; verify a session's exact ID and ownership before cleanup.", details: { handoffDirectory: work, ...(startFailure ? { startFailure } : {}) }, cause: startError });
+    if (startFailure) throw new CiError({ code: "SIMULATOR_START_FAILED", stage: "session", message: `EAS simulator:start failed after the session was verified: ${startFailure.message}`,
+      nextAction: "Inspect the start failure; Explore stops the verified session before returning.", details: { sessionId, startFailure }, cause: startError });
+    if (handoff.validationError) throw handoff.validationError;
+    if (!handoff.connection) throw new Error("Simulator handoff is missing its controller connection");
+    await rm(dotenvPath, { force: true });
+    const appIcon = await readArchiveIcon(archive);
+    ({ runtime, exploration } = await exploreConnectedSession({ connection: handoff.connection, platform, device, bundleId, ...(appIcon ? { appIcon } : {}), app: { name: archive.appName, ...(archive.version ? { version: archive.version } : {}) },
+      install: { path: installPath, kind: archive.kind }, work, runner, environment, secrets, inputs, say, now, limits, store, map, model, urlSchemes: archive.urlSchemes,
+      sessionJson: () => eas(["simulator:get", "--id", handoff.connection!.sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout,
+      ...(options.launchUrl ? { launchUrl: options.launchUrl } : {}), ...(options.hints ? { hints: options.hints } : {}), ...(options.allowDestructive ? { allowDestructive: options.allowDestructive } : {}) }));
+  } catch (error) {
+    primaryError = toCiError(error, { code: "EXPLORE_BINARY_FAILED", stage: "exploration", nextAction: "Inspect the diagnostic, correct the failing prerequisite, and rerun explore:binary." });
+  } finally {
+    if (sessionId) {
+      try {
+        say(`stopping simulator session ${sessionId}`);
+        assertSimulatorStopped(eas(["simulator:stop", "--id", sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout, sessionId);
+        await rm(work, { recursive: true, force: true });
+      } catch (error) {
+        throw new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup", message: "The exact EAS session could not be confirmed stopped.", nextAction: `Stop EAS Simulator session ${sessionId} (eas simulator:stop --id ${sessionId}) and verify its status.`,
+          details: { sessionId, ...(primaryError ? { originalFailure: serializeCiError(primaryError, { secrets: [environment.EXPO_TOKEN ?? "", ...inputs.values] }) } : {}) }, cause: error });
+      }
+    } else await rm(work, { recursive: true, force: true });
+  }
+  if (primaryError) throw primaryError;
+  return { outputDirectory, mapPath: store.mapPath, archive, session: { id: sessionId!, platform, device, owner, project }, runtime: runtime!,
+    model: { provider: model.provider, model: model.model, auth: model.auth }, exploration: exploration!, durationMs: Date.now() - startedAt };
+}
+
+function lastLine(text: string): string { return text.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? ""; }
+function redactSecrets(text: string, secrets: readonly string[]): string { return secrets.reduce((value, secret) => secret ? value.split(secret).join("[REDACTED]") : value, text); }
+
+async function easLoggedIn(runner: typeof defaultRunner, environment: NodeJS.ProcessEnv): Promise<boolean> {
+  try {
+    const bin = packageBin("eas-cli", "eas");
+    await lstat(bin);
+    runner({ command: process.execPath, args: [bin, "whoami"], cwd: tmpdir(), environment: { ...baseEnvironment(environment), ...(environment.HOME ? { HOME: environment.HOME } : {}), CI: "1", EXPO_NO_TELEMETRY: "1" }, timeoutMs: 60_000 });
+    return true;
+  } catch { return false; }
+}
+
+/** Schemes the OS routes to a browser, the store, Settings, or another app: opening one hands the session away from the app under test. */
+const SYSTEM_URL_SCHEMES = /^(https?|ftp|file|javascript|data|blob|mailto|tel|telprompt|facetime(-audio)?|sms|mms|imessage|itms(-apps|-services|-beta)?|macappstore|app-settings|prefs|shortcuts|maps|music|videos|photos-redirect|x-apple-[a-z-]+|market|intent|content|android-app|geo|package):$/i;
+
+/** The model may only open app-owned URLs; an https page or a store link would hand the session to another app. */
+const RUNNER_BUSY = /still finishing a previous command/i;
+const sleepSync = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+
+/**
+ * After a command overruns its watchdog (an accessibility capture of a heavy animation, say) the iOS runner refuses
+ * the next ones until it has wound down. That is a wait, not a failed action: retry until it answers or the budget ends.
+ */
+export function retryWhileBusy<T>(run: () => T, pause: (ms: number) => void, budgetMs = 90_000, stepMs = 5_000, clock: () => number = Date.now): T {
+  const started = clock();
+  for (;;) {
+    try { return run(); }
+    catch (error) {
+      if (!RUNNER_BUSY.test(error instanceof Error ? error.message : String(error)) || clock() - started >= budgetMs) throw error;
+      pause(stepMs);
+    }
+  }
+}
+
+export function assertAppUrl(url: string, appSchemes: readonly string[] = []): void {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { throw binaryError("AGENT_URL_INVALID", `Not a URL: ${url}`, "Pass a custom-scheme app URL."); }
+  if (SYSTEM_URL_SCHEMES.test(parsed.protocol)) throw binaryError("AGENT_URL_NOT_ALLOWED", `${parsed.protocol} URLs leave the app; only the app's own URL schemes are allowed.`, "Use the app's own URL scheme.");
+  const scheme = parsed.protocol.slice(0, -1).toLowerCase();
+  if (appSchemes.length && !appSchemes.includes(scheme)) {
+    throw binaryError("AGENT_URL_NOT_ALLOWED", `${parsed.protocol} is not a URL scheme this app registers (${appSchemes.join(", ")}).`, "Use one of the app's own URL schemes.");
+  }
+}
+
+export const BLANK_SCREENSHOT_MESSAGE = "The app blocks screen capture on this screen (Android FLAG_SECURE), so its screenshot came back blank.";
+
+/** A capture-protected screen comes back as a single flat colour (black on Android); every 97th pixel is enough to tell. */
+export function solidColour(png: Buffer): boolean {
+  let frame: DecodedFrame;
+  try { frame = createRequire(import.meta.url.replace(/\?.*$/, ""))("pngjs").PNG.sync.read(png, { checkCRC: false }) as DecodedFrame; }
+  catch { return false; }
+  const { data } = frame;
+  if (data.length < 4) return false;
+  for (let offset = 0; offset + 3 < data.length; offset += 4 * 97) {
+    if (data[offset] !== data[0] || data[offset + 1] !== data[1] || data[offset + 2] !== data[2]) return false;
+  }
+  return true;
+}
+
+/** Setup commands whose last positional is free text (`fill <ref> <text>`, `type <text>`): move the flags ahead of a `--` separator. */
+export function guardPositionals(args: readonly string[]): string[] {
+  if (args[0] !== "fill" && args[0] !== "type") return [...args];
+  const flags: string[] = [], positionals: string[] = [args[0]];
+  for (let index = 1; index < args.length; index++) {
+    const arg = args[index]!;
+    if (arg === "--level" || arg === "--settle") { flags.push(arg, args[++index] ?? ""); continue; }
+    if (arg.startsWith("--") && positionals.length === 1 + (args[0] === "fill" ? 2 : 1)) { flags.push(arg); continue; }
+    positionals.push(arg);
+  }
+  return [positionals[0]!, ...flags, "--", ...positionals.slice(1)];
+}
+
+const KEYBOARD_RETURN_KEY = /^(return|next|done|go|continue|join)$/i;
+
+/** A node that is not the app's UI: another package drew it (Android's system UI over the app), or it is Explore's own route marker, which an app
+ * instrumented for PR runs renders as a 2x2 hidden text. */
+export function foreignNode(node: Record<string, unknown>, bundleId: string): boolean {
+  if (node.identifier === "expo-explore-observer") return true;
+  if (typeof node.bundleId !== "string" || node.bundleId === "" || node.bundleId === bundleId) return false;
+  // A runtime permission prompt ("Allow RoboSats to send you notifications?") is drawn by the permission controller over the
+  // app, and the app's own window is not in the snapshot while it is up. Its nodes are the screen: without them the tree is
+  // empty, a "Screen 1" with no controls is minted, and the model cannot see Allow / Don't allow.
+  return !SYSTEM_DIALOG_PACKAGES.has(node.bundleId);
+}
+
+function frameBounds(nodes: readonly Record<string, unknown>[]): { width: number; height: number } {
+  let width = 0, height = 0;
+  for (const node of nodes) {
+    const rect = node.rect && typeof node.rect === "object" ? node.rect as Record<string, unknown> : undefined;
+    if (!rect || typeof rect.x !== "number" || typeof rect.width !== "number" || typeof rect.y !== "number" || typeof rect.height !== "number") continue;
+    width = Math.max(width, rect.x + rect.width); height = Math.max(height, rect.y + rect.height);
+  }
+  if (!width || !height) throw binaryError("AGENT_COORDINATE_INVALID", "The screen size is unknown; use a labelled control instead of coordinates.", "Tap by label or identifier.");
+  return { width, height };
+}

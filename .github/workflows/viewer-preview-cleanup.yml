@@ -1,0 +1,83 @@
+name: Viewer preview cleanup
+
+# Deletes the pr-<number> EAS Hosting alias that viewer-preview.yml deployed, a week after the pull request closed,
+# so links in merged pull requests keep working for a while and the expo-public account's aliases do not pile up.
+# Each run looks at pull requests closed 7 to 30 days ago; an alias that is already gone, or was never deployed,
+# counts as deleted. The pull request's preview comment then says the preview was deleted, so its links are not
+# mistaken for a broken deploy.
+#
+# Needs the same EXPO_TOKEN repository secret as viewer-preview.yml.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: viewer-preview-cleanup
+  cancel-in-progress: false
+
+env:
+  PROJECT: explore-viewer-pr
+  OWNER: expo-public
+  MARKER: "<!-- explore-viewer-preview -->"
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  cleanup:
+    name: Delete the aliases of closed pull requests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - name: Delete the aliases
+        shell: bash
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          closed_before="$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          closed_after="$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          numbers="$(gh pr list --repo "$GITHUB_REPOSITORY" --state closed --limit 500 --json number,closedAt \
+            --jq ".[] | select(.closedAt < \"$closed_before\" and .closedAt > \"$closed_after\") | .number")"
+          if [[ -z "$numbers" ]]; then echo "No pull request closed 7 to 30 days ago." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+
+          eas="$GITHUB_WORKSPACE/node_modules/.bin/eas"
+          work="$RUNNER_TEMP/preview-project"
+          mkdir -p "$work" && cd "$work"
+          echo "{\"name\":\"$PROJECT\",\"version\":\"0.0.0\",\"private\":true}" > package.json
+          echo "{\"expo\":{\"name\":\"$PROJECT\",\"slug\":\"$PROJECT\",\"owner\":\"$OWNER\"}}" > app.json
+          "$eas" init --force --non-interactive
+
+          # Leads the pull request's preview comment with a note that the preview is gone, once.
+          mark_deleted() {
+            local comment body rest
+            comment="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$1/comments" \
+              --jq "[.[] | select(.body | startswith(\"$MARKER\"))][0] | select(. != null) | {id, body}" | head -1)"
+            [[ -n "$comment" ]] || return 0
+            body="$(jq -r .body <<< "$comment")"
+            if grep -q '^> \*\*This preview was deleted' <<< "$body"; then return 0; fi
+            rest="$(tail -n +2 <<< "$body" | grep -v '^> \*\*The preview of ' || true)"
+            printf '%s\n%s\n\n%s\n' "$MARKER" \
+              "> **This preview was deleted on $(date -u +%Y-%m-%d)**, a week after the pull request closed. The links below no longer open." \
+              "$rest" > "$RUNNER_TEMP/comment.md"
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$(jq -r .id <<< "$comment")" -F "body=@$RUNNER_TEMP/comment.md" > /dev/null
+            marked+=("#$1")
+          }
+
+          deleted=(); absent=(); marked=()
+          for number in $numbers; do
+            if output="$("$eas" deploy:alias:delete "pr-$number" --non-interactive 2>&1)"; then
+              deleted+=("pr-$number")
+            elif grep -q "No hosting deployment alias with the name" <<< "$output"; then
+              absent+=("pr-$number")
+            else
+              echo "$output"; exit 1
+            fi
+            mark_deleted "$number"
+          done
+          echo "Deleted: ${deleted[*]:-none}. Already gone: ${absent[*]:-none}. Comments updated: ${marked[*]:-none}." >> "$GITHUB_STEP_SUMMARY"

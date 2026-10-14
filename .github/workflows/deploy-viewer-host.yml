@@ -1,0 +1,39 @@
+name: Deploy the hosted Viewer
+
+# Deploys viewer-host (the central explore-viewer EAS Hosting app behind explore-preview.expo.app)
+# to production on every push to main. The export step is the same one CI verifies on pull
+# requests, so main only deploys what already passed review.
+#
+# Needs the EXPO_TOKEN repository secret: an EAS access token (Expo account settings → Access
+# tokens, ideally for a robot user) for the expo-public account that owns the explore-viewer project.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-viewer-host
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to EAS Hosting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+        with:
+          viewer-host: "true"
+      - uses: ./.github/actions/playwright
+      - name: Export and verify the hosted Viewer
+        run: npm run build:hosting
+      - name: Deploy to production
+        working-directory: viewer-host
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        # A pinned standalone eas-cli: the one in the repository's optional dependencies is for
+        # capture and may be absent or incomplete on a runner.
+        run: npx --yes eas-cli@24.12.1 deploy --prod --environment production --export-dir dist --non-interactive

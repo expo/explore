@@ -1,0 +1,435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://expo.dev/schemas/explore/build-comparison.v1.schema.json",
+  "title": "Expo Explore reviewed build comparison v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "baselineBuildId",
+    "currentBuildId",
+    "baselineRunId",
+    "currentRunId",
+    "baselineRevision",
+    "currentRevision",
+    "entries"
+  ],
+  "properties": {
+    "contract": {
+      "const": "expo.explore.build-comparison.v1"
+    },
+    "baselineBuildId": {
+      "$ref": "#/$defs/id"
+    },
+    "currentBuildId": {
+      "$ref": "#/$defs/id"
+    },
+    "baselineRunId": {
+      "$ref": "#/$defs/id"
+    },
+    "currentRunId": {
+      "$ref": "#/$defs/id"
+    },
+    "baselineRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "currentRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "id": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "idArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "representativePair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baselineObservationId",
+        "currentObservationId",
+        "confidence",
+        "rationale"
+      ],
+      "properties": {
+        "baselineObservationId": {
+          "$ref": "#/$defs/id"
+        },
+        "currentObservationId": {
+          "$ref": "#/$defs/id"
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        },
+        "rationale": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "relationship",
+        "status",
+        "baselineScreenIds",
+        "currentScreenIds",
+        "baselineRepresentativeObservationIds",
+        "currentRepresentativeObservationIds",
+        "representativePairs",
+        "confidence",
+        "rationale"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "relationship": {
+          "enum": [
+            "one-to-one",
+            "split",
+            "merge",
+            "added",
+            "removed"
+          ]
+        },
+        "status": {
+          "enum": [
+            "added",
+            "modified",
+            "removed",
+            "unchanged",
+            "needs-review",
+            "source-affected",
+            "not-compared"
+          ]
+        },
+        "changeSummary": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "baselineScreenIds": {
+          "$ref": "#/$defs/idArray"
+        },
+        "currentScreenIds": {
+          "$ref": "#/$defs/idArray"
+        },
+        "baselineRepresentativeObservationIds": {
+          "$ref": "#/$defs/idArray"
+        },
+        "currentRepresentativeObservationIds": {
+          "$ref": "#/$defs/idArray"
+        },
+        "representativePairs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/representativePair"
+          }
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        },
+        "rationale": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "relationship": {
+                "const": "one-to-one"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "modified",
+                  "unchanged",
+                  "needs-review",
+                  "source-affected",
+                  "not-compared"
+                ]
+              },
+              "baselineScreenIds": {
+                "minItems": 1,
+                "maxItems": 1
+              },
+              "currentScreenIds": {
+                "minItems": 1,
+                "maxItems": 1
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "modified",
+                        "unchanged"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "baselineRepresentativeObservationIds": {
+                      "minItems": 1
+                    },
+                    "currentRepresentativeObservationIds": {
+                      "minItems": 1
+                    },
+                    "representativePairs": {
+                      "minItems": 1
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "relationship": {
+                "const": "split"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "modified",
+                  "needs-review",
+                  "source-affected",
+                  "not-compared"
+                ]
+              },
+              "baselineScreenIds": {
+                "minItems": 1,
+                "maxItems": 1
+              },
+              "currentScreenIds": {
+                "minItems": 2
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "modified",
+                        "unchanged"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "baselineRepresentativeObservationIds": {
+                      "minItems": 1
+                    },
+                    "currentRepresentativeObservationIds": {
+                      "minItems": 2
+                    },
+                    "representativePairs": {
+                      "minItems": 2
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "relationship": {
+                "const": "merge"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "modified",
+                  "needs-review",
+                  "source-affected",
+                  "not-compared"
+                ]
+              },
+              "baselineScreenIds": {
+                "minItems": 2
+              },
+              "currentScreenIds": {
+                "minItems": 1,
+                "maxItems": 1
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "modified",
+                        "unchanged"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "baselineRepresentativeObservationIds": {
+                      "minItems": 2
+                    },
+                    "currentRepresentativeObservationIds": {
+                      "minItems": 1
+                    },
+                    "representativePairs": {
+                      "minItems": 2
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "relationship": {
+                "const": "added"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "added",
+                  "needs-review",
+                  "source-affected",
+                  "not-compared"
+                ]
+              },
+              "baselineScreenIds": {
+                "maxItems": 0
+              },
+              "currentScreenIds": {
+                "minItems": 1
+              },
+              "baselineRepresentativeObservationIds": {
+                "maxItems": 0
+              },
+              "representativePairs": {
+                "maxItems": 0
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "const": "added"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "currentRepresentativeObservationIds": {
+                      "minItems": 1
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "relationship": {
+                "const": "removed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "removed",
+                  "needs-review",
+                  "source-affected",
+                  "not-compared"
+                ]
+              },
+              "baselineScreenIds": {
+                "minItems": 1
+              },
+              "currentScreenIds": {
+                "maxItems": 0
+              },
+              "currentRepresentativeObservationIds": {
+                "maxItems": 0
+              },
+              "representativePairs": {
+                "maxItems": 0
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "const": "removed"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "baselineRepresentativeObservationIds": {
+                      "minItems": 1
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

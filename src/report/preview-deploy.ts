@@ -1,0 +1,601 @@
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, relative, resolve, sep } from "node:path";
+import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter, configure } from "@zip.js/zip.js";
+import { publishCiReportComment, readCiReportInput, type CiReportInput } from "./artifact.js";
+import { reviewChangeCount, reviewDevice } from "./pr-comment-body.js";
+import type { ExplorePlatform } from "../config/explore-config.js";
+import { CiError, toCiError } from "../shared/ci-errors.js";
+import { TOOL_ROOT, packageBin } from "../shared/package-paths.js";
+
+/**
+ * `ci:deploy`: publish one token-gated EAS Hosting deployment for a packaged review.
+ *
+ * The deployment is the prebuilt preview export of viewer-host (routes `/p/[token]`, see viewer-host/README.md)
+ * plus the report ZIP encrypted with a key that only the deployment's Worker environment holds. The Worker
+ * serves the Viewer and the decrypted report at `/p/<token>` and answers 404 to everything else; after
+ * `expiresAt` (if any) the token page says the link expired. Deployments are never deleted automatically. The report job already published the GitHub artifact links, so a failed deployment leaves
+ * the comment on the download-and-drop flow.
+ */
+export type CommandRunner = (command: string, args: readonly string[], options: { cwd: string; env: NodeJS.ProcessEnv })
+  => { status: number | null; stdout: string; stderr: string };
+
+export type PreviewReportInput = {
+  /** Set by the matrix workflows; the preview then serves this report at report.zip?platform=<platform>. */
+  platform?: ExplorePlatform;
+  inputPath: string;
+  /** The `ci:report` output directory: review.json and assets/. */
+  reportPath: string;
+  artifactUrl: string;
+};
+
+export type PreviewDeployOptions = (PreviewReportInput | {
+  /** One report per platform from the same run, sealed into one deployment behind one token. */
+  reports: PreviewReportInput[];
+}) & {
+  environment?: NodeJS.ProcessEnv;
+  transport?: typeof fetch;
+  run?: CommandRunner;
+  /** Pause between `eas deploy` attempts; tests replace it so retries take no real time. */
+  sleep?: (milliseconds: number) => Promise<void>;
+  /** The preview export (client/ and server/); defaults to the one shipped in this package. */
+  exportPath?: string;
+  now?: () => number;
+  random?: (bytes: number) => Uint8Array;
+  /** Called with the URL token before it appears in any output, so CI can mask it. */
+  onSecret?: (secret: string) => void;
+  /** Milliseconds to keep re-checking a fresh deployment before giving up. */
+  verifyTimeoutMs?: number;
+};
+
+export type PreviewDeployResult = {
+  previewUrl: string;
+  /** ISO instant, or null when the link does not expire. */
+  expiresAt: string | null;
+  deploymentId: string;
+  deploymentUrl: string;
+  project: string;
+  owner: string;
+  /** The first (or only) report's archive, as before; `reports` lists every platform's. */
+  reportSha256: string;
+  reportBytes: number;
+  reports: Array<{ platform?: ExplorePlatform; artifactUrl: string; reportSha256: string; reportBytes: number }>;
+  headSha: string;
+};
+
+export const PREVIEW_EXPORT_PATH = join(TOOL_ROOT, "dist", "hosting-preview");
+const CIPHER_AAD = "expo-explore-preview/1";
+const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
+const MAX_REPORT_BYTES = 256 * 1024 * 1024;
+const ZIP_DATE = new Date("2000-01-01T00:00:00Z");
+
+function base32(bytes: Uint8Array): string {
+  let bits = 0; let value = 0; let out = "";
+  for (const byte of bytes) {
+    value = (value << 8) | byte; bits += 8;
+    while (bits >= 5) { out += BASE32[(value >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if (bits > 0) out += BASE32[(value << (5 - bits)) & 31];
+  return out;
+}
+
+const defaultRun: CommandRunner = (command, args, options) => spawnSync(command, args, {
+  cwd: options.cwd, env: options.env, encoding: "utf8", timeout: 15 * 60_000, maxBuffer: 16 * 1024 * 1024,
+});
+
+function deployError(code: string, message: string, nextAction: string, extra: { retryable?: boolean; details?: Record<string, unknown>; cause?: unknown } = {}): CiError {
+  return new CiError({ code, stage: "publication", message, nextAction, ...extra });
+}
+
+function lastLine(text: string): string {
+  return text.trim().split("\n").map(line => line.trim()).filter(Boolean).at(-1) ?? "";
+}
+
+const DEPLOY_ATTEMPTS = 3;
+/** eas: "This account has reached the limit of 5 aliases from the Free plan." */
+const ALIAS_LIMIT = /reached the limit of \d+ aliases[^\n]*/;
+const DEPLOY_RETRY_DELAYS_MS = [5_000, 15_000] as const;
+
+/** The tail of what a command printed, stderr first, without the EXPO_TOKEN should eas ever echo it. */
+function commandOutput(result: ReturnType<CommandRunner>, token: string | undefined): string {
+  const lines = `${result.stderr}\n${result.stdout}`.split("\n").map(line => line.trimEnd()).filter(Boolean);
+  const tail = lines.slice(-30).join("\n");
+  return token ? tail.split(token).join("***") : tail;
+}
+
+/** `eas whoami` has no JSON output; its account list is one `• name (Role: …)` line per account. */
+export function whoamiAccounts(stdout: string): string[] {
+  const accounts = stdout.split("\n").map(line => /^\s*[•*-]\s+([a-z0-9][a-z0-9_-]*)(?:\s+\(Role: [^)]*\))?\s*$/.exec(line)?.[1]).filter((name): name is string => !!name);
+  if (accounts.length) return accounts;
+  const single = /^\s*([a-z0-9][a-z0-9_-]*)\s*$/.exec(stdout.trim().split("\n").at(-1) ?? "")?.[1];
+  return single ? [single] : [];
+}
+
+/** The dedicated preview project: `report.preview.project`, or `<repository name>-explore`. */
+export function previewProjectSlug(repository: string, configured?: string): string {
+  if (configured) return configured;
+  const name = repository.split("/")[1]?.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") ?? "";
+  const slug = `${name.slice(0, 50).replace(/-+$/, "") || "app"}-explore`;
+  return slug;
+}
+
+/** Report files a sealed ZIP may carry at its root: a PR review or a standalone exploration report. */
+const REPORT_FILE_NAMES = ["review.json", "exploration.json"] as const;
+
+/** Deterministic ZIP of the report directory: review.json or exploration.json plus assets/<sha256>.png|mp4, like GitHub's artifact download. */
+export async function zipReportDirectory(reportPath: string): Promise<Uint8Array> {
+  configure({ useWebWorkers: false });
+  const root = await realpath(resolve(reportPath));
+  const files: string[] = [];
+  async function walk(directory: string): Promise<void> {
+    for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) { await walk(path); continue; }
+      if (!(await lstat(path)).isFile()) throw new Error(`Report contains a non-regular file: ${relative(root, path)}`);
+      files.push(path);
+    }
+  }
+  await walk(root);
+  const names = files.map(path => relative(root, path).split(sep).join("/"));
+  const reportFile = REPORT_FILE_NAMES.find(name => names.includes(name));
+  if (!reportFile || names.some(name => name !== reportFile && !/^assets\/[a-f0-9]{64}\.(png|mp4)$/.test(name))) {
+    throw new Error("Report directory must contain review.json (or exploration.json) and assets/<sha256>.png or .mp4 only");
+  }
+  const writer = new ZipWriter(new Uint8ArrayWriter(), { lastModDate: ZIP_DATE, extendedTimestamp: false, zip64: false });
+  let total = 0;
+  for (const [index, path] of files.entries()) {
+    const bytes = new Uint8Array(await readFile(path));
+    total += bytes.byteLength;
+    if (total > MAX_REPORT_BYTES) throw new Error("Report exceeds the 256 MiB hosted preview limit");
+    await writer.add(names[index]!, new Uint8ArrayReader(bytes), { level: names[index] === reportFile ? 6 : 0 });
+  }
+  return writer.close();
+}
+
+/** iv (12 bytes) || AES-256-GCM ciphertext || tag, authenticated with the preview AAD; what the Worker decrypts. */
+export function sealReport(plain: Uint8Array, key: Uint8Array, iv: Uint8Array): Uint8Array {
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(Buffer.from(CIPHER_AAD));
+  const body = Buffer.concat([cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
+  return new Uint8Array(Buffer.concat([iv, body]));
+}
+
+/** Fails fast when the Viewer export that hosted reports need is not installed, so a run does not explore for minutes before learning it cannot upload. */
+export async function assertHostingExport(exportPath: string = PREVIEW_EXPORT_PATH): Promise<void> {
+  await assertExport(resolve(exportPath));
+}
+
+async function assertExport(exportPath: string): Promise<void> {
+  for (const path of ["client/viewer/index.html", "server/_expo/routes.json"]) {
+    try { if (!(await lstat(join(exportPath, path))).isFile()) throw new Error(); }
+    catch { throw deployError("PREVIEW_EXPORT_MISSING", `The hosted preview export is missing ${path}`,
+      "Reinstall @expo/explore; the release tarball ships dist/hosting-preview. In a checkout, run npm run build:hosting:preview."); }
+  }
+}
+
+type SealedReport = { entry: PreviewReportInput; input: CiReportInput; zip: Uint8Array; sha256: string; file: string };
+
+function previewError(code: string, message: string, nextAction: string): CiError { return new CiError({ code, stage: "preflight", message, nextAction }); }
+
+/** The worker's EXPLORE_PREVIEW_REPORTS entries, in the order the workflow lists platforms; also what reports.json must echo. */
+export function previewReportListing(reports: ReadonlyArray<Pick<SealedReport, "entry" | "input" | "file">>, reportDirectory: string) {
+  return reports.map(report => {
+    const changes = reviewChangeCount(report.input.commentState);
+    const device = reviewDevice(report.input.commentState).replace(/[#<>\u0000-\u001f\u007f]/g, "").trim().slice(0, 120);
+    return { platform: report.entry.platform!, path: `/_report/${reportDirectory}/${report.file}`,
+      ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) };
+  });
+}
+
+export async function deployPreview(options: PreviewDeployOptions): Promise<PreviewDeployResult> {
+  const environment = options.environment ?? process.env; const transport = options.transport ?? fetch;
+  const run = options.run ?? defaultRun; const now = options.now ?? Date.now; const random = options.random ?? (bytes => new Uint8Array(randomBytes(bytes)));
+  const entries: PreviewReportInput[] = "reports" in options ? options.reports
+    : [{ inputPath: options.inputPath, reportPath: options.reportPath, artifactUrl: options.artifactUrl }];
+  if (!entries.length) throw previewError("PREVIEW_REPORTS_MISSING", "There is no platform report to deploy",
+    "Pass --inputs and --reports directories holding one explore-capture and one explore-review artifact per platform.");
+  const multi = entries.some(entry => entry.platform !== undefined);
+  if (multi && (entries.some(entry => !entry.platform) || new Set(entries.map(entry => entry.platform)).size !== entries.length)) {
+    throw previewError("PREVIEW_REPORTS_INVALID", "Each report of a multi-platform preview must name a distinct platform", "Deploy one report per platform of the same run.");
+  }
+  const inputs: Array<{ entry: PreviewReportInput; input: CiReportInput }> = [];
+  for (const entry of entries) inputs.push({ entry, input: await readCiReportInput(entry.inputPath) });
+  const first = inputs[0]!.input; const review = first.publicReview; const pr = review.pullRequest;
+  if (!first.preview) throw new CiError({ code: "PREVIEW_NOT_CONFIGURED", stage: "preflight",
+    message: "This review did not request a hosted preview", nextAction: "Set report.preview.hosting: eas in .expo-explore/config.yaml, or remove the deploy job." });
+  if (!environment.EXPO_TOKEN?.trim()) throw new CiError({ code: "EXPO_TOKEN_MISSING", stage: "preflight",
+    message: "EXPO_TOKEN is required to deploy a hosted preview", nextAction: "Pass the EXPO_TOKEN secret to the deploy job; it must be able to create projects in the app's Expo account." });
+  if (!environment.GITHUB_TOKEN?.trim()) throw new CiError({ code: "GITHUB_TOKEN_MISSING", stage: "preflight",
+    message: "GITHUB_TOKEN is required to publish the preview link", nextAction: "Pass GITHUB_TOKEN to the deploy job with Actions read and PR comment write permissions." });
+  if (pr.origin === "local") throw new Error("Local reports cannot be deployed as hosted previews");
+  for (const { input } of inputs.slice(1)) {
+    const other = input.publicReview;
+    if (!input.preview || other.pullRequest.origin === "local" || other.pullRequest.repository !== pr.repository || other.pullRequest.number !== pr.number
+      || other.pullRequest.head.sha !== pr.head.sha || other.runId !== review.runId || other.runAttempt !== review.runAttempt) {
+      throw previewError("PREVIEW_REPORTS_MISMATCH", "The platform reports do not come from the same review run", "Deploy only the reports this workflow run produced for the same PR head.");
+    }
+  }
+  const exportPath = resolve(options.exportPath ?? PREVIEW_EXPORT_PATH);
+  await assertExport(exportPath);
+
+  const reports: SealedReport[] = [];
+  for (const { entry, input } of inputs) {
+    let zip: Uint8Array;
+    try { zip = await zipReportDirectory(entry.reportPath); }
+    catch (error) { throw toCiError(error, { code: "REPORT_ZIP_FAILED", stage: "export",
+      nextAction: "Pass the ci:report output directory downloaded from this run's explore-review artifact." }); }
+    reports.push({ entry, input, zip, sha256: createHash("sha256").update(zip).digest("hex"), file: multi ? `${entry.platform}.zip.enc` : "report.zip.enc" });
+  }
+
+  const reportDirectory = base32(random(10));
+  const expiresAt = first.preview.expiresAfterDays === null ? null : now() + first.preview.expiresAfterDays * 86_400_000;
+  const project = previewProjectSlug(pr.repository, first.preview.project);
+  const listing = multi ? previewReportListing(reports, reportDirectory) : undefined;
+  let hosted: Awaited<ReturnType<typeof deploySealedReports>>;
+  try {
+    hosted = await deploySealedReports({
+    reports: reports.map(report => ({ zip: report.zip, sha256: report.sha256, file: report.file, query: multi ? `?platform=${report.entry.platform}` : "" })),
+    reportDirectory, ...(listing ? { listing } : {}), project, ...(first.preview.owner ? { owner: first.preview.owner } : {}),
+    ownerHint: "Set report.preview.owner in .expo-explore/config.yaml to the account that should hold the preview project.",
+    projectHint: "Give EXPO_TOKEN's account permission to create projects, or set report.preview.project to an existing project it can deploy to.",
+    expiresAt, exportPath, environment, run, transport, now, random, ...(options.sleep ? { sleep: options.sleep } : {}), ...(options.onSecret ? { onSecret: options.onSecret } : {}),
+    verifyTimeoutMs: options.verifyTimeoutMs ?? 180_000 });
+  } catch (error) {
+    // The report job's comment says the report is deploying; it must now offer the download-and-drop flow instead.
+    for (const report of reports) {
+      try {
+        await publishCiReportComment({ inputPath: report.entry.inputPath, artifactUrl: report.entry.artifactUrl, environment, transport,
+          ...(report.entry.platform ? { platform: report.entry.platform } : {}), previewFailed: true });
+      } catch { /* the deployment failure is the one to report */ }
+    }
+    throw error;
+  }
+  const previewUrl = hosted.previewUrl;
+  {
+    let headSha = pr.head.sha;
+    for (const report of reports) {
+      const published = await publishCiReportComment({ inputPath: report.entry.inputPath, artifactUrl: report.entry.artifactUrl, environment, transport,
+        ...(report.entry.platform ? { platform: report.entry.platform } : {}), preview: { url: previewUrl, expiresAt } });
+      headSha = published.headSha;
+    }
+    return { previewUrl, expiresAt: expiresAt === null ? null : new Date(expiresAt).toISOString(), deploymentId: hosted.deploymentId, deploymentUrl: hosted.deploymentUrl,
+      project, owner: hosted.owner, reportSha256: reports[0]!.sha256, reportBytes: reports[0]!.zip.byteLength,
+      reports: reports.map(report => ({ ...(report.entry.platform ? { platform: report.entry.platform } : {}), artifactUrl: report.entry.artifactUrl,
+        reportSha256: report.sha256, reportBytes: report.zip.byteLength })), headSha };
+  }
+}
+
+type HostedReportInput = { zip: Uint8Array; sha256: string; file: string; query: string };
+export type HostedDeployment = { previewUrl: string; expiresAt: string | null; deploymentId: string; deploymentUrl: string; aliasUrl?: string; project: string; owner: string };
+
+/** EAS Hosting alias names: lowercase slugs, as `eas deploy --alias` normalises them. */
+export const HOSTING_ALIAS = /^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$/;
+/** The `/p/<token>` segment the Worker gates on (viewer-host PREVIEW_TOKEN). */
+export const HOSTED_TOKEN = /^[a-z2-7]{32}$/;
+
+/**
+ * Seal the report ZIPs, deploy the exported Viewer around them to EAS Hosting, and verify the live bytes.
+ * Shared by the PR preview (`ci:deploy`) and standalone exploration reports; it knows nothing about GitHub.
+ */
+async function deploySealedReports(options: {
+  reports: HostedReportInput[]; reportDirectory: string; listing?: ReturnType<typeof previewReportListing>; project: string; owner?: string;
+  ownerHint: string; projectHint: string; expiresAt: number | null; exportPath: string; environment: NodeJS.ProcessEnv; run: typeof defaultRun;
+  transport: typeof fetch; now: () => number; random: (bytes: number) => Uint8Array; onSecret?: (secret: string) => void; verifyTimeoutMs: number;
+  /** `eas deploy --alias`: a fixed host that always serves the newest deployment, for links that must not change between runs. */
+  alias?: string;
+  /** A caller-chosen `/p/<token>`; with `alias`, the hosted link is identical from one run to the next. */
+  token?: string;
+  sleep?: (milliseconds: number) => Promise<void>;
+}): Promise<HostedDeployment> {
+  const { reports, reportDirectory, listing, project, environment, run, transport, now, random, expiresAt } = options;
+  const token = options.token ?? base32(random(20)); const key = random(32);
+  options.onSecret?.(token);
+  // `eas deploy` reads the sealed .env through @expo/env, where any variable already in its own environment wins,
+  // even an empty one: an inherited EXPLORE_PREVIEW_* would replace the sealed value and every route would 404.
+  const easEnvironment = { ...Object.fromEntries(Object.entries(environment).filter(([name]) => !name.startsWith("EXPLORE_PREVIEW_"))),
+    CI: "1", EXPO_NO_TELEMETRY: "1" };
+  // Run the pinned CLI through this Node binary: the deploy job has no node on PATH for spawned shebang scripts to rely on.
+  let eas: string;
+  try { eas = packageBin("eas-cli", "eas"); await lstat(eas); }
+  catch { throw deployError("EXPLORE_TOOLS_MISSING", "The EAS CLI that Explore pins is not installed.", "Reinstall @expo/explore with optional dependencies in the deploy job."); }
+  const work = await mkdtemp(join(tmpdir(), "explore-preview-"));
+  try {
+    await cp(options.exportPath, join(work, "dist"), { recursive: true });
+    const sealedDirectory = join(work, "dist", "client", "_report", reportDirectory);
+    await mkdir(sealedDirectory, { recursive: true });
+    for (const report of reports) await writeFile(join(sealedDirectory, report.file), sealReport(report.zip, key, random(12)));
+    await writeFile(join(work, ".env"), [
+      `EXPLORE_PREVIEW_TOKEN=${token}`,
+      `EXPLORE_PREVIEW_KEY=${Buffer.from(key).toString("base64")}`,
+      ...(expiresAt === null ? [] : [`EXPLORE_PREVIEW_EXPIRES_AT=${new Date(expiresAt).toISOString()}`]),
+      listing ? `EXPLORE_PREVIEW_REPORTS=${JSON.stringify(listing)}` : `EXPLORE_PREVIEW_REPORT=/_report/${reportDirectory}/${reports[0]!.file}`,
+      "",
+    ].join("\n"), { mode: 0o600 });
+
+    const who = run(process.execPath, [eas, "whoami"], { cwd: work, env: easEnvironment });
+    const accounts = who.status === 0 ? whoamiAccounts(who.stdout) : [];
+    if (!accounts.length) throw deployError("EAS_NOT_AUTHENTICATED", "The EAS CLI could not sign in with EXPO_TOKEN.",
+      "Use a valid EXPO_TOKEN for a robot user of the app's Expo account.", { details: { stderr: lastLine(who.stderr) } });
+    const owner = options.owner ?? (accounts.length === 1 ? accounts[0]! : undefined);
+    if (!owner || !accounts.includes(owner)) throw deployError("PREVIEW_OWNER_AMBIGUOUS",
+      owner ? `EXPO_TOKEN has no access to the Expo account ${owner}.` : `EXPO_TOKEN can deploy to several Expo accounts: ${accounts.join(", ")}.`,
+      options.ownerHint, { details: { accounts } });
+    await writeFile(join(work, "package.json"), JSON.stringify({ name: project, version: "0.0.0", private: true }));
+    await writeFile(join(work, "app.json"), JSON.stringify({ expo: { name: `${project}`, slug: project, owner, web: { output: "server" } } }));
+    const init = run(process.execPath, [eas, "init", "--force", "--non-interactive", "--json"], { cwd: work, env: easEnvironment });
+    if (init.status !== 0) throw deployError("PREVIEW_PROJECT_FAILED", `EAS could not create or link the preview project @${owner}/${project}: ${lastLine(init.stderr || init.stdout)}`,
+      options.projectHint, { details: { project, owner } });
+    const hostedOrigin = (value: string | undefined): URL | undefined => {
+      const url = value ? new URL(value) : undefined;
+      return url && url.protocol === "https:" && url.hostname.endsWith(".expo.app") && url.pathname === "/" ? url : undefined;
+    };
+    // `eas deploy` is one upload plus a few API calls; an API error on one attempt ("GraphQL request failed") is resent
+    // with a pause rather than failing the job, and every attempt's output goes to the job log, since eas only prints
+    // the error's detail above its last line.
+    const sleep = options.sleep ?? ((milliseconds: number) => new Promise<void>(done => setTimeout(done, milliseconds)));
+    let deploy!: ReturnType<CommandRunner>;
+    let deployment: { url?: string; identifier?: string; aliases?: Array<{ url?: string; name?: string }> } = {};
+    let deploymentUrl: URL | undefined;
+    for (let attempt = 1; attempt <= DEPLOY_ATTEMPTS; attempt += 1) {
+      deploy = run(process.execPath, [eas, "deploy", "--json", "--non-interactive", "--export-dir", "dist", ...(options.alias ? ["--alias", options.alias] : [])], { cwd: work, env: easEnvironment });
+      deployment = {};
+      try { deployment = JSON.parse(deploy.stdout.slice(deploy.stdout.indexOf("{"))) as typeof deployment; } catch { /* reported below */ }
+      deploymentUrl = hostedOrigin(deployment.url);
+      if (deploy.status === 0 && deploymentUrl && /^[a-z0-9]{1,32}$/.test(deployment.identifier ?? "")) break;
+      // An account at its alias quota rejects every attempt the same way, and each attempt has already created a deployment.
+      const aliasLimit = ALIAS_LIMIT.exec(deploy.stderr || deploy.stdout);
+      if (aliasLimit) {
+        throw deployError("PREVIEW_ALIAS_LIMIT", `EAS Hosting could not assign the alias ${options.alias}: ${aliasLimit[0]}`,
+          `Delete the aliases of closed pull requests on @${owner}/${project} (eas deploy:alias:delete pr-<n> --non-interactive) or raise the account's plan, then rerun the deploy job.`,
+          { retryable: false, details: { project, owner, alias: options.alias, output: commandOutput(deploy, environment.EXPO_TOKEN) } });
+      }
+      process.stderr.write(`eas deploy attempt ${attempt} of ${DEPLOY_ATTEMPTS} failed (exit ${deploy.status}):\n${commandOutput(deploy, environment.EXPO_TOKEN)}\n`);
+      if (attempt < DEPLOY_ATTEMPTS) await sleep(DEPLOY_RETRY_DELAYS_MS[attempt - 1] ?? DEPLOY_RETRY_DELAYS_MS.at(-1)!);
+    }
+    if (!deploymentUrl) {
+      throw deployError("PREVIEW_DEPLOY_FAILED", `EAS Hosting deployment failed ${DEPLOY_ATTEMPTS} times: ${lastLine(deploy.stderr || deploy.stdout)}`,
+        "Check the EAS Hosting status for the preview project and rerun the deploy job; the eas output of every attempt is in the job log.",
+        { retryable: true, details: { project, owner, attempts: DEPLOY_ATTEMPTS, output: commandOutput(deploy, environment.EXPO_TOKEN) } });
+    }
+    const aliasUrl = options.alias ? hostedOrigin(deployment.aliases?.find(candidate => candidate.name === options.alias)?.url) : undefined;
+    if (options.alias && !aliasUrl) {
+      throw deployError("PREVIEW_DEPLOY_FAILED", `EAS Hosting deployed ${deploymentUrl.origin} but did not report the alias ${options.alias}.`,
+        "Check the deployment's aliases in the EAS Hosting dashboard and rerun.", { retryable: true, details: { project, owner, alias: options.alias } });
+    }
+    const verify = (origin: string, alias = false) => verifyDeployment({ origin, token, transport, now, timeoutMs: options.verifyTimeoutMs, alias,
+      reports: reports.map(report => ({ query: report.query, sha256: report.sha256, bytes: report.zip.byteLength })),
+      ...(listing ? { listing: JSON.stringify(listing.map(({ path: _path, ...rest }) => rest)) } : {}) });
+    const seconds = (milliseconds: number) => `${Math.round(milliseconds / 1000)} s after eas deploy returned`;
+    const served = await verify(deploymentUrl.origin);
+    process.stderr.write(`Deployment ${deploymentUrl.origin} serves this run's report (${seconds(served.liveAfterMs)}).\n`);
+    // The alias moves to the new deployment after the deployment itself is live — usually within seconds, but it has
+    // taken longer than the whole budget (every verification failure of 2026-10-14 was the alias, with the deployment
+    // serving in 1 s). The deployment is verified and immutable, so when the alias is still behind the pull request
+    // links the deployment instead of failing the job; the alias catches up on its own and the next push relinks it.
+    let linkOrigin = deploymentUrl.origin;
+    if (aliasUrl) {
+      try {
+        const alias = await verify(aliasUrl.origin, true);
+        process.stderr.write(`Alias ${aliasUrl.origin} serves it too (${seconds(alias.liveAfterMs)}).\n`);
+        linkOrigin = aliasUrl.origin;
+      } catch (error) {
+        if ((error as { code?: string }).code !== "PREVIEW_ALIAS_BEHIND") throw error;
+        process.stderr.write(`::warning::${(error as Error).message} The pull request links the deployment ${deploymentUrl.origin} instead.\n`);
+      }
+    }
+    const previewUrl = `${linkOrigin}/p/${token}`;
+    return { previewUrl, expiresAt: expiresAt === null ? null : new Date(expiresAt).toISOString(), deploymentId: deployment.identifier!, deploymentUrl: deploymentUrl.origin,
+      ...(aliasUrl ? { aliasUrl: aliasUrl.origin } : {}), project, owner };
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+}
+
+export type ExplorationDeployOptions = {
+  /** The `explore:binary` report directory (exploration.json plus assets/). */
+  reportPath: string;
+  project: string;
+  owner?: string;
+  /** Days until the hosted link stops serving the report; null never expires. */
+  expiresAfterDays: number | null;
+  exportPath?: string;
+  environment?: NodeJS.ProcessEnv;
+  run?: typeof defaultRun;
+  sleep?: (milliseconds: number) => Promise<void>;
+  transport?: typeof fetch;
+  now?: () => number;
+  random?: (bytes: number) => Uint8Array;
+  onSecret?: (secret: string) => void;
+  verifyTimeoutMs?: number;
+  /** EAS Hosting alias for the deployment (`eas deploy --alias`): one host per app that always serves the newest run. */
+  alias?: string;
+  /** A fixed `/p/<token>` (32 base32 characters); with `alias` the link never changes between runs. */
+  token?: string;
+};
+
+/** Host a standalone exploration report: no pull request, no GitHub token, the same sealed ZIP and token-gated Viewer as PR previews. */
+export async function deployExplorationReport(options: ExplorationDeployOptions): Promise<HostedDeployment & { reportSha256: string; reportBytes: number }> {
+  const environment = options.environment ?? process.env;
+  if (!environment.EXPO_TOKEN?.trim() && !environment.EXPO_SESSION_SECRET?.trim() && !environment.HOME) throw new CiError({ code: "EXPO_LOGIN_REQUIRED", stage: "preflight",
+    message: "An EAS login is required to host the report", nextAction: "Run `eas login` or set EXPO_TOKEN, then rerun with --upload." });
+  if (!/^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$/.test(options.project)) throw previewError("PREVIEW_PROJECT_INVALID", `Invalid EAS project slug: ${options.project}`, "Pass --project as a lowercase slug such as expo-explore.");
+  if (options.alias !== undefined && !HOSTING_ALIAS.test(options.alias)) throw previewError("PREVIEW_ALIAS_INVALID", `Invalid EAS Hosting alias: ${options.alias}`, "Pass --alias as a lowercase slug such as bluesky.");
+  if (options.token !== undefined && !HOSTED_TOKEN.test(options.token)) throw previewError("PREVIEW_TOKEN_INVALID", "EXPLORE_PREVIEW_TOKEN must be 32 characters of a-z and 2-7.", "Generate one with `openssl rand 20 | base32 | tr A-Z a-z` and set EXPLORE_PREVIEW_TOKEN, or unset it for a random token.");
+  const exportPath = resolve(options.exportPath ?? PREVIEW_EXPORT_PATH);
+  await assertExport(exportPath);
+  let zip: Uint8Array;
+  try { zip = await zipReportDirectory(options.reportPath); }
+  catch (error) { throw toCiError(error, { code: "REPORT_ZIP_FAILED", stage: "export", nextAction: "Pass the report directory explore:binary wrote." }); }
+  const random = options.random ?? (bytes => new Uint8Array(randomBytes(bytes)));
+  const now = options.now ?? Date.now;
+  const sha256 = createHash("sha256").update(zip).digest("hex");
+  const hosted = await deploySealedReports({ reports: [{ zip, sha256, file: "report.zip.enc", query: "" }], reportDirectory: base32(random(10)), project: options.project,
+    ...(options.owner ? { owner: options.owner } : {}), ownerHint: "Pass --owner with the Expo account that should host the report.",
+    projectHint: "Give this EAS login permission to create projects under the owner, or pass --project with an existing slug.",
+    expiresAt: options.expiresAfterDays === null ? null : now() + options.expiresAfterDays * 86_400_000, exportPath, environment, run: options.run ?? defaultRun, ...(options.sleep ? { sleep: options.sleep } : {}),
+    transport: options.transport ?? fetch, now, random, ...(options.onSecret ? { onSecret: options.onSecret } : {}), verifyTimeoutMs: options.verifyTimeoutMs ?? 180_000,
+    ...(options.alias ? { alias: options.alias } : {}), ...(options.token ? { token: options.token } : {}) });
+  return { ...hosted, reportSha256: sha256, reportBytes: zip.byteLength };
+}
+
+export type FixturePreviewOptions = {
+  /** Report ZIPs as a hosted preview serves them from report.zip, one per platform, with what the platform switch says of each. */
+  reports: Array<{ platform: ExplorePlatform; zipPath: string; changes?: number; device?: string }>;
+  project: string;
+  owner?: string;
+  alias: string;
+  /** The `/p/<token>` to keep; a new one is drawn when absent. */
+  token?: string;
+  exportPath?: string;
+  environment?: NodeJS.ProcessEnv;
+  run?: CommandRunner;
+  sleep?: (milliseconds: number) => Promise<void>;
+  transport?: typeof fetch;
+  now?: () => number;
+  random?: (bytes: number) => Uint8Array;
+  onSecret?: (secret: string) => void;
+  verifyTimeoutMs?: number;
+};
+
+/**
+ * Host fixed reports behind a fixed alias with this checkout's Viewer: the Explore repository's own pull requests
+ * preview their Viewer changes on real data. No GitHub token, no expiry; each run replaces what the alias serves.
+ */
+export async function deployFixturePreview(options: FixturePreviewOptions): Promise<HostedDeployment> {
+  const environment = options.environment ?? process.env;
+  if (!environment.EXPO_TOKEN?.trim() && !environment.EXPO_SESSION_SECRET?.trim() && !environment.HOME) throw new CiError({ code: "EXPO_LOGIN_REQUIRED", stage: "preflight",
+    message: "An EAS login is required to deploy the Viewer preview", nextAction: "Run `eas login` or set EXPO_TOKEN." });
+  if (!HOSTING_ALIAS.test(options.alias)) throw previewError("PREVIEW_ALIAS_INVALID", `Invalid EAS Hosting alias: ${options.alias}`, "Pass --alias as a lowercase slug such as pr-123.");
+  if (options.token !== undefined && !HOSTED_TOKEN.test(options.token)) throw previewError("PREVIEW_TOKEN_INVALID", "The preview token must be 32 characters of a-z and 2-7.", "Pass the /p/<token> segment of the previous preview link, or none for a new one.");
+  if (!options.reports.length || new Set(options.reports.map(report => report.platform)).size !== options.reports.length) {
+    throw previewError("PREVIEW_REPORTS_INVALID", "A fixture preview needs one report per platform", "Pass each platform's report ZIP once.");
+  }
+  const exportPath = resolve(options.exportPath ?? PREVIEW_EXPORT_PATH);
+  await assertExport(exportPath);
+  const random = options.random ?? (bytes => new Uint8Array(randomBytes(bytes)));
+  const reportDirectory = base32(random(10));
+  const reports = await Promise.all(options.reports.map(async report => {
+    const zip = new Uint8Array(await readFile(report.zipPath));
+    return { ...report, zip, sha256: createHash("sha256").update(zip).digest("hex"), file: `${report.platform}.zip.enc` };
+  }));
+  const listing = reports.map(report => ({ platform: report.platform, path: `/_report/${reportDirectory}/${report.file}`,
+    ...(report.changes === undefined ? {} : { changes: report.changes }), ...(report.device ? { device: report.device } : {}) }));
+  return deploySealedReports({
+    reports: reports.map(report => ({ zip: report.zip, sha256: report.sha256, file: report.file, query: `?platform=${report.platform}` })),
+    reportDirectory, listing, project: options.project, ...(options.owner ? { owner: options.owner } : {}),
+    ownerHint: "Pass --owner with the Expo account that holds the preview project.",
+    projectHint: "Give EXPO_TOKEN's account permission to create projects, or pass --project with an existing slug.",
+    expiresAt: null, exportPath, environment, run: options.run ?? defaultRun, ...(options.sleep ? { sleep: options.sleep } : {}), transport: options.transport ?? fetch, now: options.now ?? Date.now, random,
+    ...(options.onSecret ? { onSecret: options.onSecret } : {}), verifyTimeoutMs: options.verifyTimeoutMs ?? 180_000, alias: options.alias,
+    ...(options.token ? { token: options.token } : {}) });
+}
+
+const ARTIFACT_DIRECTORY = /^explore-(capture|review)-\d+-\d+-(ios|android)$/;
+
+/**
+ * The fan-in deploy job's inputs: actions/download-artifact puts each explore-capture-<run>-<attempt>-<platform>
+ * directory under --inputs and each explore-review-… directory under --reports. Pairs them by platform and
+ * looks up each report artifact's URL on the run, since matrix jobs cannot hand their artifact URLs forward.
+ */
+export async function collectPlatformReports(options: { inputsPath: string; reportsPath: string; environment?: NodeJS.ProcessEnv; transport?: typeof fetch }): Promise<PreviewReportInput[]> {
+  const environment = options.environment ?? process.env; const transport = options.transport ?? fetch;
+  const directories = async (root: string, kind: "capture" | "review") => {
+    const found = new Map<ExplorePlatform, string>();
+    for (const name of (await readdir(root)).sort()) {
+      const match = ARTIFACT_DIRECTORY.exec(name);
+      if (!match || match[1] !== kind) continue;
+      if (found.has(match[2] as ExplorePlatform)) throw previewError("PREVIEW_REPORTS_INVALID", `Several ${kind} artifacts for ${match[2]} were downloaded`,
+        "Download only this run attempt's artifacts into the --inputs and --reports directories.");
+      found.set(match[2] as ExplorePlatform, join(root, name));
+    }
+    return found;
+  };
+  const inputs = await directories(options.inputsPath, "capture"); const reports = await directories(options.reportsPath, "review");
+  if (!inputs.size) throw previewError("PREVIEW_REPORTS_MISSING", "No explore-capture-<run>-<attempt>-<platform> artifact was downloaded",
+    "Download this run's explore-capture artifacts into the --inputs directory before ci:deploy.");
+  const entries: PreviewReportInput[] = [];
+  for (const [platform, inputDirectory] of inputs) {
+    const reportPath = reports.get(platform);
+    if (!reportPath) throw previewError("PREVIEW_REPORTS_INCOMPLETE", `The ${platform} capture has no report artifact to deploy`,
+      "Rerun the workflow; the report job for that platform did not upload its explore-review artifact.");
+    entries.push({ platform, inputPath: join(inputDirectory, "report-input.json"), reportPath, artifactUrl: "" });
+  }
+  const review = (await readCiReportInput(entries[0]!.inputPath)).publicReview;
+  if (review.pullRequest.origin === "local") throw new Error("Local reports cannot be deployed as hosted previews");
+  const repository = review.pullRequest.repository;
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || !/^\d+$/.test(review.runId) || !/^\d+$/.test(review.runAttempt)) {
+    throw previewError("REPORT_INPUT_INVALID", "The report input does not name a GitHub run", "Use the report-input.json produced by this run's capture job.");
+  }
+  for (const entry of entries) {
+    const name = `explore-review-${review.runId}-${review.runAttempt}-${entry.platform}`;
+    const url = `https://api.github.com/repos/${repository}/actions/runs/${review.runId}/artifacts?per_page=100&name=${encodeURIComponent(name)}`;
+    const response = await transport(url, { headers: { accept: "application/vnd.github+json", authorization: `Bearer ${environment.GITHUB_TOKEN ?? ""}`,
+      "x-github-api-version": "2022-11-28" }, signal: AbortSignal.timeout(60_000) });
+    const body = response.ok ? await response.json() as { artifacts?: Array<{ id?: unknown; name?: unknown; expired?: unknown }> } : undefined;
+    const artifact = body?.artifacts?.find(candidate => candidate.name === name && candidate.expired !== true);
+    if (!artifact || typeof artifact.id !== "number" || !Number.isSafeInteger(artifact.id) || artifact.id <= 0) {
+      throw deployError("REPORT_ARTIFACT_MISSING", `The run has no artifact named ${name} (HTTP ${response.status}).`,
+        "Rerun the workflow so every platform's report job uploads its artifact before the deploy job runs.", { retryable: true });
+    }
+    entry.artifactUrl = `https://github.com/${repository}/actions/runs/${review.runId}/artifacts/${artifact.id}`;
+  }
+  return entries;
+}
+
+/** The deployment must serve the Viewer and the exact reports at the token, and nothing anywhere else. */
+async function verifyDeployment(check: { origin: string; token: string; reports: Array<{ query: string; sha256: string; bytes: number }>; listing?: string;
+  transport: typeof fetch; now: () => number; timeoutMs: number; alias?: boolean }): Promise<{ liveAfterMs: number }> {
+  const get = async (path: string, accept = "*/*") => {
+    try {
+      return await check.transport(`${check.origin}${path}`, { redirect: "error", cache: "no-store", signal: AbortSignal.timeout(60_000),
+        headers: { accept } });
+    } catch (error) {
+      throw deployError("PREVIEW_VERIFY_FAILED", "The hosted preview could not be reached after deployment.",
+        "Check EAS Hosting availability and rerun the deploy job.", { retryable: true, cause: error });
+    }
+  };
+  const started = check.now();
+  let liveAfterMs = 0;
+  for (;;) {
+    // A browser's request: the token page negotiates, and anything that does not ask for HTML gets the Markdown index.
+    const shell = await get(`/p/${check.token}`, "text/html");
+    if (shell.status === 200 && (shell.headers.get("content-type") ?? "").startsWith("text/html")) { liveAfterMs = check.now() - started; break; }
+    const waitedMs = check.now() - started;
+    if (waitedMs > check.timeoutMs) {
+      // An alias that does not serve the token page yet still points at an earlier deployment; the deployment itself not serving is a failed deployment.
+      if (check.alias) throw deployError("PREVIEW_ALIAS_BEHIND", `The alias ${check.origin} still answers HTTP ${shell.status} ${Math.round(waitedMs / 1000)} s after eas deploy returned.`,
+        "Nothing to do: the alias catches up on its own, and the next push verifies it again.", { retryable: true, details: { origin: check.origin, status: shell.status, waitedMs } });
+      throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview did not become available (HTTP ${shell.status}).`,
+        "Rerun the deploy job; if the deployment keeps failing verification, inspect it in the EAS Hosting dashboard.", { retryable: true, details: { origin: check.origin, status: shell.status, waitedMs } });
+    }
+    await new Promise(done => setTimeout(done, 3_000));
+  }
+  const api = await get(`/p/${check.token}/api/v1`);
+  if (api.status !== 200 || !(api.headers.get("content-type") ?? "").startsWith("application/json")) {
+    throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview did not answer the agent API (HTTP ${api.status}).`, "Rerun the deploy job; if the deployment keeps failing verification, inspect it in the EAS Hosting dashboard.", { retryable: true });
+  }
+  for (const expected of check.reports) {
+    const report = await get(`/p/${check.token}/report.zip${expected.query}`);
+    const bytes = report.status === 200 ? new Uint8Array(await report.arrayBuffer()) : new Uint8Array();
+    if (report.status !== 200 || bytes.byteLength !== expected.bytes || createHash("sha256").update(bytes).digest("hex") !== expected.sha256) {
+      throw deployError("PREVIEW_VERIFY_FAILED", "The hosted preview did not serve the exact report that was deployed.",
+        "Rerun the deploy job; the deployment's sealed key or ciphertext did not match.", { details: { status: report.status, report: expected.query } });
+    }
+  }
+  if (check.listing !== undefined) {
+    const list = await get(`/p/${check.token}/reports.json`);
+    const body = list.status === 200 ? await list.text() : "";
+    if (list.status !== 200 || body !== check.listing) throw deployError("PREVIEW_VERIFY_FAILED", "The hosted preview did not list the platforms that were deployed.",
+      "Rerun the deploy job; the deployment's report listing did not match.", { details: { status: list.status } });
+  }
+  const other = check.token.endsWith("a") ? `${check.token.slice(0, -1)}b` : `${check.token.slice(0, -1)}a`;
+  for (const path of ["/", `/p/${other}`, `/p/${other}/report.zip`, `/p/${check.token}/viewer/index.html`]) {
+    const response = await get(path);
+    if (response.status !== 404) throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview answered HTTP ${response.status} without a valid token at ${path}.`,
+      "Do not share this deployment; delete it in the EAS Hosting dashboard and report the issue to Explore.", { details: { path, status: response.status } });
+  }
+  return { liveAfterMs };
+}
+

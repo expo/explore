@@ -1,0 +1,248 @@
+/* The Screens page: a document that scrolls under the floating pill and above the toolbar. */
+.screens-page {
+  --screens-right-inset: 0px;
+  --screens-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  /* The tree lines up under the app pill; the cards take the rest of the width. */
+  padding: calc(var(--chrome-top) + var(--chrome-height) + 20px) calc(var(--screens-right-inset) + 28px) 120px var(--canvas-chrome-inline-inset);
+  overscroll-behavior: contain;
+  /* A card scrolled into view centres in the band the pill and the bottom toolbar leave clear. */
+  scroll-padding-block: calc(var(--chrome-top) + var(--chrome-height)) calc(var(--canvas-visible-bottom-inset, 0px) + 72px * var(--ui-scale));
+  color: var(--text);
+  background: var(--screen);
+}
+.screens-page .path,
+.screens-tree .path { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.screens-filter { display: flex; gap: 6px; }
+.screens-chip {
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 13px;
+  border-radius: 999px;
+  color: var(--secondary);
+  background: var(--element);
+  font-size: 13px;
+  font-weight: 500;
+}
+.screens-chip[aria-pressed="true"] { color: var(--text); background: var(--selected); }
+.screens-chip-count { color: var(--tertiary); font-variant-numeric: tabular-nums; }
+
+.screens-body { display: flex; align-items: flex-start; gap: 32px; }
+
+/* ── Side: the tree, Changed / All at its head ── */
+.screens-side {
+  position: sticky;
+  top: 0;
+  display: flex;
+  width: 236px;
+  max-height: calc(100vh - var(--chrome-top) - var(--chrome-height) - 40px);
+  flex: none;
+  flex-direction: column;
+  gap: 10px;
+}
+.screens-tree {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 12px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--side-panel-surface);
+}
+.screens-tree > h2 {
+  margin: 0;
+  padding: 4px 8px 10px;
+  color: var(--tertiary);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.screens-tree ul { margin: 0; padding: 0; list-style: none; }
+/* Changed / All filter the tree and the grid alike, so they sit in the tree's head as one segmented control,
+   beside the button that folds or unfolds every folder. */
+.screens-tree-head { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; }
+.screens-tree-head > .screens-filter {
+  flex: 1;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--element);
+}
+.screens-tree-fold-all {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  margin-left: auto;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--secondary);
+  background: transparent;
+}
+.screens-tree-fold-all:hover { color: var(--text); background: var(--panel-hover); }
+.screens-tree-fold-all > svg { width: 16px; height: 16px; }
+.screens-tree-head > .screens-filter .screens-chip {
+  height: 28px;
+  flex: 1;
+  justify-content: center;
+  border-radius: 7px;
+  background: transparent;
+}
+.screens-tree-head > .screens-filter .screens-chip[aria-pressed="true"] { background: var(--selected); }
+.screens-tree-row {
+  display: flex;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px calc(8px + var(--tree-depth, 0) * 12px);
+  border-radius: 6px;
+  color: var(--secondary);
+  background: transparent;
+  font-size: 13px;
+  text-align: left;
+}
+button.screens-tree-row:hover { color: var(--text); background: var(--panel-hover); }
+.screens-tree-row[aria-current="true"] { color: var(--text); background: var(--selected); }
+.screens-tree-row.tab .screens-tree-label { color: var(--text); font-weight: 600; }
+.screens-tree-row.folder { color: var(--tertiary); }
+.screens-tree-row.filtered { opacity: 0.45; }
+.screens-tree-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screens-tree-label.path { font-size: 12px; }
+.screens-tree-kind { color: var(--accent); font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+.screens-tree-dot { width: 7px; height: 7px; flex: none; border-radius: 4px; }
+/* Every row keeps a slot for the chevron, so labels line up whether or not a row folds. */
+.screens-tree-twisty { display: grid; width: 12px; height: 12px; flex: none; margin-right: -2px; place-items: center; color: var(--tertiary); }
+.screens-tree-twisty > svg { width: 12px; height: 12px; stroke-width: 2.25; transition: transform 140ms ease; }
+.screens-tree-row[aria-expanded="true"] > .screens-tree-twisty > svg { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .screens-tree-twisty > svg { transition: none; } }
+/* A screen with screens under it: the row picks the screen, a button over its chevron folds the rest. */
+.screens-tree-parent { position: relative; }
+.screens-tree-toggle {
+  position: absolute;
+  top: 0;
+  left: calc(2px + var(--tree-depth, 0) * 12px);
+  width: 22px;
+  height: 28px;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.screens-tree-dot[class*="diff-"] { background: var(--diff); }
+.screens-tree-dot.elsewhere { background: color-mix(in srgb, var(--modified) 50%, transparent); }
+.screens-tree-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 12px 8px 4px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--tertiary);
+  font-size: 12px;
+}
+.screens-tree-legend > span { display: flex; align-items: center; gap: 8px; }
+
+/* ── Sections ── */
+/* Sections flow side by side and wrap, each as wide as its cards: a folder of one or two screens
+   sits beside the next instead of holding a whole row, and a large one wraps within the width. */
+.screens-sections { display: flex; min-width: 0; flex: 1; flex-wrap: wrap; align-content: flex-start; align-items: flex-start; gap: 44px 56px; }
+.screens-section { min-width: 0; max-width: 100%; flex: 0 1 auto; scroll-margin-top: 16px; }
+/* The first row of headings centres on the sidebar's Changed / All control, not on the panel's top edge. */
+.screens-page:not(.phone) .screens-sections { padding-top: 19px; }
+/* A section heading is the folder's name in the UI face, a size above the cards; its path sits underneath in small
+   monospace, so it never reads like a screen's route on a card. */
+.screens-section-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  margin-bottom: 18px;
+}
+.screens-section-head h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.25; }
+.screens-section-head > span { color: var(--tertiary); font-size: 12px; line-height: 1.35; }
+/* Card titles step down a weight here, under the section headings, and start at the card's left edge
+   under them, with the status pill beneath the title rather than centred on the frame. */
+.screens-cell .screen-node-heading { justify-content: flex-start; padding-inline: 0; }
+.screens-cell .screen-node-title,
+.screens-cell .screen-path-text.screen-node-title { font-weight: 500; text-align: left; }
+.screens-cell .screen-screenshot-card .diff-label { left: 14px; transform: translate(0, -50%); }
+.screens-grid { display: flex; flex-wrap: wrap; gap: 28px 20px; }
+/* One width for every card, wide enough for a 28-character route in mono on every platform's fonts. */
+.screens-page:not(.phone) .screens-cell { width: 240px; flex: none; }
+.screens-cell { position: relative; display: flex; min-width: 0; flex-direction: column; gap: 4px; scroll-margin: 24px; transition: opacity 180ms ease; }
+.screens-cell.dimmed { opacity: var(--dim-out); }
+.screens-cell .screen-screenshot-card { gap: 8px; }
+.screens-cell .screen-node-image img { width: 100%; }
+.screens-cell-via { overflow: hidden; color: var(--tertiary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.screens-cell-elsewhere { color: var(--modified); font-size: 11px; font-weight: 600; }
+
+/* ── Phone ── */
+/* The space under the top bar is a block, not padding: both engines inset a sticky child's rest
+   position by the scroll container's padding, which pushed the section bar a bar's height too low. */
+.screens-page.phone { padding: 0 0 calc(92px + env(safe-area-inset-bottom)); scroll-padding-block-end: calc(92px + env(safe-area-inset-bottom)); }
+.screens-page.phone::before { content: ""; display: block; height: calc(var(--chrome-top) + var(--chrome-height) + 10px); }
+.screens-page.phone .screens-head { padding: 4px 16px 0; }
+.screens-page.phone .screens-chip { height: 34px; font-size: var(--phone-subhead-size); }
+.screens-jump {
+  position: sticky;
+  /* Above the cards' status pills and open hints (z-index 2), which scroll under it. */
+  z-index: 5;
+  /* It sticks just under the phone's top bar. */
+  top: calc(var(--chrome-top) + var(--chrome-height) + 1px);
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  margin-top: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--screen);
+  scrollbar-width: none;
+}
+.screens-jump::-webkit-scrollbar { display: none; }
+.screens-jump-chip {
+  display: inline-flex;
+  height: 30px;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  color: var(--secondary);
+  background: transparent;
+  font-size: var(--phone-subhead-mono-size, 12px);
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.screens-jump-chip.tree { border-color: transparent; color: var(--text); background: var(--element); font-weight: 600; }
+.screens-jump-chip > svg { width: 14px; height: 14px; }
+.screens-jump-chip .path { font-family: var(--screens-mono); }
+.screens-page.phone .screens-body { display: block; margin: 0; }
+/* Sections flow side by side, as on desktop, so a section of one screen leaves no empty row. Every
+   card takes a fraction of the page width, so cards from neighbouring sections share columns. */
+.screens-page.phone .screens-sections { container-type: inline-size; gap: 32px 12px; padding: 20px 16px 0; }
+.screens-page.phone .screens-section { scroll-margin-top: calc(var(--chrome-top) + var(--chrome-height) + 64px); }
+.screens-page.phone .screens-grid { gap: 28px 12px; }
+.screens-page.phone .screens-cell { --columns: 2; width: calc((100cqw - (var(--columns) - 1) * 12px) / var(--columns)); flex: none; }
+@container (min-width: 500px) { .screens-page.phone .screens-cell { --columns: 3; } }
+@container (min-width: 680px) { .screens-page.phone .screens-cell { --columns: 4; } }
+/* A header never widens its section past its cards; a long path breaks after a slash instead. */
+.screens-page.phone .screens-section-head { gap: 2px; contain: inline-size; }
+.screens-page.phone .screens-cell .screen-path-text.screen-node-title,
+.screens-page.phone .screens-cell .screen-node-title { font-size: var(--phone-caption-size); line-height: var(--phone-caption-leading); }
+.screens-page.phone .screens-cell .diff-label { font-size: var(--phone-micro-size); line-height: var(--phone-micro-leading); }
+.screens-page.phone :is(.screens-cell-via, .screens-cell-elsewhere) { font-size: var(--phone-micro-size); }
+.screens-page.phone .screens-section-head h2 { font-size: var(--phone-headline-size); }
+.screens-page.phone .screens-section-head > span { font-size: var(--phone-caption-size); }
+.screens-tree.phone { position: static; width: auto; max-height: none; padding: 0; border: 0; background: transparent; }
+.screens-tree.phone .screens-tree-row { min-height: 34px; font-size: var(--phone-body-size); }
+.screens-tree.phone .screens-tree-label.path { font-size: var(--phone-body-mono-size); }
+.screens-tree.phone .screens-tree-kind { font-size: var(--phone-micro-size); }

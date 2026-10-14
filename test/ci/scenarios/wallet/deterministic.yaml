@@ -1,0 +1,109 @@
+# Deterministic Explore config shared by every wallet scenario. Labels and identifiers come from
+# test/ci/apps/wallet/src and its README.
+mode: deterministic
+app:
+  name: Wallet
+  platform: ios
+  bundleId: com.expo-explore.example.wallet
+  easProfile: explore
+  scheme: explore-example-wallet
+navigation:
+  provider: expo-router
+device:
+  name: iPhone 17
+exploration:
+  scope: all
+capture:
+  maxMinutes: 30
+  maxActions: 300
+parameters:
+  # The splash and the transfer loading state move on by themselves; hold keeps them on screen.
+  /:
+    hold: 'true'
+  /send/amount:
+    to: alex
+  # Amounts are minor units: 2500 is 25.00.
+  /send/review:
+    to: alex
+    amount: '2500'
+  /send/processing:
+    to: alex
+    amount: '2500'
+    hold: 'true'
+  # tx-0011 is a seeded transfer (Dinner split to Sam Okafor) that every new account has.
+  /send/success:
+    tx: tx-0011
+  /send/failed:
+    reason: declined
+    to: dana
+    amount: '2500'
+  /transactions/[id]:
+    id: tx-0011
+  # card-1 is the virtual card (•••• 4242) that every new account has.
+  /cards/[id]:
+    id: card-1
+
+# Setup enters the prerequisites through normal controls. A route that a step lands on is captured
+# there, so the order decides each screen's state:
+# - signed out: onboarding and the auth forms (a signed-in visit to an auth form goes to Home);
+# - Free plan: Home right after sign-up, and the paywall before subscribing;
+# - Premium: the subscription screen, then Cancel Premium returns the account to Free, so every
+#   other screen is captured on the Free plan.
+# Nothing here grants a permission or changes the appearance. Capture opens every other route by its
+# link, and none asks iOS for anything when it opens: Nearby ATMs, Scan to pay, Your contacts,
+# Notifications and Privacy & permissions ask only when a button is pressed, so they are captured in
+# their unasked state (the explore profile keeps ATMs and the scanner on their explainers even when
+# access was allowed), and Appearance is captured on System.
+setup:
+  - action: open
+    url: explore-example-wallet://onboarding
+    ready: { identifier: onboarding-start, enabled: true }
+  # Opened directly so the same step works whether or not a features step exists.
+  - action: open
+    url: explore-example-wallet://onboarding/currency
+    ready: { identifier: currency-continue, enabled: true }
+  # Continue finishes onboarding and opens the empty sign-up form.
+  - action: tap
+    identifier: currency-continue
+    ready: { identifier: auth-name }
+  - action: open
+    url: explore-example-wallet://auth/sign-in
+    ready: { label: Welcome back }
+  # Filled by a scenario's setup.yaml: signed-out screens that only its head has (the local CI
+  # harness replaces this entry before Explore reads the config; it is empty for most scenarios).
+  - include: signed-out
+  - action: open
+    url: explore-example-wallet://auth/sign-up
+    ready: { label: Create your account }
+  # Public synthetic values from the app README; the account exists only in this sandbox.
+  - action: fill
+    identifier: auth-name
+    text: Review User
+  - action: fill
+    identifier: auth-email
+    text: reviewer@example.test
+  - action: fill
+    identifier: auth-password
+    text: WalletReview123!
+  # Capture declines the iOS Save Password prompt itself.
+  - action: tap
+    identifier: auth-submit
+    ready: { identifier: home-balance }
+  - action: open
+    url: explore-example-wallet://paywall
+    ready: { identifier: paywall-subscribe, enabled: true }
+  - action: tap
+    identifier: paywall-subscribe
+    ready: { identifier: paywall-done, enabled: true }
+  - action: tap
+    identifier: paywall-done
+    ready: { identifier: home-balance }
+  - action: open
+    url: explore-example-wallet://subscription
+    ready: { identifier: subscription-cancel, enabled: true }
+  - action: tap
+    identifier: subscription-cancel
+    ready: { identifier: cancel-confirm, enabled: true }
+  - action: tap
+    identifier: cancel-confirm
+    ready: { identifier: subscription-upgrade, enabled: true }

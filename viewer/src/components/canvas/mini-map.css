@@ -1,0 +1,99 @@
+.canvas-minimap-shell {
+  position: absolute;
+  z-index: 18;
+  width: 168px;
+  height: 112px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 9px;
+  background: var(--canvas-minimap-background);
+  box-shadow: var(--shadow-md);
+  contain: layout paint;
+  pointer-events: none;
+  view-transition-name: canvas-minimap;
+  --canvas-minimap-background: color-mix(in srgb, var(--surface) 94%, transparent);
+  --canvas-minimap-mask: color-mix(in srgb, var(--screen) 70%, transparent);
+  --canvas-minimap-mask-stroke: color-mix(in srgb, var(--accent) 70%, var(--border));
+  --canvas-minimap-viewport-fill: color-mix(in srgb, var(--accent) 6%, transparent);
+  --canvas-minimap-group-fill: color-mix(in srgb, var(--canvas-group) 54%, transparent);
+  --canvas-minimap-group-stroke: color-mix(in srgb, var(--graph-line-soft) 58%, transparent);
+  --canvas-minimap-node-fill: var(--graph-line-soft);
+  --canvas-minimap-node-stroke: var(--graph-line);
+}
+
+:root[data-theme="dark"] .canvas-minimap-shell {
+  border-color: color-mix(in srgb, var(--border) 88%, var(--secondary));
+  --canvas-minimap-background: color-mix(in srgb, var(--subtle) 86%, var(--surface));
+  --canvas-minimap-mask: color-mix(in srgb, #000000 48%, transparent);
+  --canvas-minimap-mask-stroke: color-mix(in srgb, var(--accent) 76%, var(--border));
+  --canvas-minimap-viewport-fill: color-mix(in srgb, var(--accent) 8%, transparent);
+  --canvas-minimap-group-fill: color-mix(in srgb, var(--graph-line-soft) 45%, var(--secondary));
+  --canvas-minimap-group-stroke: color-mix(in srgb, var(--secondary) 76%, var(--graph-line));
+  --canvas-minimap-node-fill: color-mix(in srgb, var(--secondary) 70%, var(--graph-line-soft));
+  --canvas-minimap-node-stroke: color-mix(in srgb, var(--secondary) 82%, var(--graph-line));
+}
+
+.canvas-minimap-shell > .canvas-minimap.react-flow__panel {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.canvas-minimap-shell > .canvas-minimap.react-flow__panel:active { cursor: grabbing; }
+
+.canvas-minimap .react-flow__minimap-svg {
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-minimap .canvas-minimap-node--group {
+  opacity: 0.22;
+}
+
+.canvas-minimap .canvas-minimap-node--group.selected {
+  opacity: 0.58;
+}
+
+.canvas-minimap .canvas-minimap-node--item {
+  opacity: 0.82;
+}
+
+.canvas-minimap .canvas-minimap-node--item.selected {
+  opacity: 1;
+}
+
+:root[data-theme="dark"] .canvas-minimap .canvas-minimap-node--group { opacity: 0.34; }
+:root[data-theme="dark"] .canvas-minimap .canvas-minimap-node--item { opacity: 0.96; }
+:root[data-theme="dark"] .canvas-minimap .canvas-minimap-node--item.selected { opacity: 1; }
+
+.canvas-minimap-visible-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.canvas-minimap-visible-mask path {
+  fill: var(--canvas-minimap-mask);
+}
+
+.canvas-minimap-visible-viewport {
+  fill: var(--canvas-minimap-viewport-fill);
+  stroke: var(--canvas-minimap-mask-stroke);
+}
+
+@media (max-width: 899px) {
+  .canvas-minimap-shell {
+    width: 128px;
+    height: 84px;
+  }
+}

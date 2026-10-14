@@ -1,0 +1,4 @@
+{
+  "description": "Screen 390x844\n[button] \"Continue\" identifier=continue-button x=0.041 y=0.095 width=0.918 height=0.057 interactive\n[textfield] \"Email address\" identifier=email-field x=0.041 y=0.171 width=0.918 height=0.057 interactive\n[text] \"Welcome back\" x=0.041 y=0.249 width=0.564 height=0.028",
+  "source": "ios-axruntime"
+}

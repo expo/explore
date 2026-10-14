@@ -1,0 +1,115 @@
+/* ── Changed areas drawn over a screenshot ─────────────────────────────── */
+
+.visual-change-outlines {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+}
+.visual-change-outline {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px solid var(--modified);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--modified) 6%, transparent);
+  transition: box-shadow 120ms ease, background-color 120ms ease;
+}
+.visual-change-outline.active {
+  background: color-mix(in srgb, var(--modified) 22%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--modified) 35%, transparent);
+}
+.visual-change-outlines.has-active .visual-change-outline:not(.active) { opacity: 0.35; }
+
+/* The status-bar band CI does not compare: blurred out, explained by its tooltip on hover. */
+.visual-status-bar-band {
+  position: absolute;
+  z-index: 1;
+  inset: 0 0 auto 0;
+  background: rgba(127, 127, 127, 0.08);
+  cursor: help;
+  pointer-events: auto;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  transition: background 120ms ease;
+}
+.visual-status-bar-band:hover { background: rgba(127, 127, 127, 0.2); }
+.visual-home-indicator-band { inset: auto 0 0 0; }
+
+/* ── Swipe: one frame, Before left of the divider and After right of it ─── */
+
+.visual-swipe {
+  --swipe-handle-size: 28px;
+  position: relative;
+  overflow: hidden;
+  width: min(100%, calc(60vh * var(--swipe-aspect)), calc(540px * var(--swipe-aspect)));
+  align-self: center;
+  aspect-ratio: var(--swipe-aspect);
+  border-radius: 9px;
+  background: var(--subtle);
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+.visual-swipe::after {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+}
+.visual-swipe > img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+.visual-swipe-before { clip-path: inset(0 calc(100% - var(--swipe-position)) 0 0); }
+.visual-swipe .visual-change-outline { background: transparent; border-style: dashed; }
+.visual-swipe-divider {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: var(--swipe-position);
+  width: 2px;
+  background: var(--modified);
+  transform: translateX(-1px);
+  outline: none;
+}
+.visual-swipe-handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  width: var(--swipe-handle-size);
+  height: var(--swipe-handle-size);
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #0b0c0e;
+  background: var(--modified);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.35);
+  transform: translate(-50%, -50%);
+}
+.visual-swipe-handle > svg { width: 16px; height: 16px; }
+.visual-swipe-divider:focus-visible { outline: none; }
+.visual-swipe-divider:focus-visible .visual-swipe-handle { box-shadow: 0 0 0 3px var(--accent); }
+.visual-swipe-label {
+  position: absolute;
+  z-index: 2;
+  bottom: 10px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  color: #edeef0;
+  background: rgb(17 17 19 / 0.82);
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.visual-swipe-label.before { left: 10px; }
+.visual-swipe-label.after { right: 10px; }

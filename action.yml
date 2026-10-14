@@ -1,0 +1,162 @@
+name: Expo Explore review
+description: Capture a source-driven iOS review with deterministic or agent navigation for Expo Router or React Navigation.
+author: Expo
+branding:
+  icon: map
+  color: blue
+inputs:
+  base_project:
+    description: Path to the exact base checkout's application directory, with dependencies installed.
+    required: true
+  head_project:
+    description: Path to the exact head checkout's application directory, with dependencies installed.
+    required: true
+  pull_request:
+    description: Path to trusted current PR metadata containing repository, number, base.sha and head.sha.
+    required: true
+  config:
+    description: Configuration path relative to the head application directory.
+    default: .expo-explore/config.yaml
+  output:
+    description: Fresh absolute output directory strictly inside runner.temp, outside both application checkouts; symlink ancestors are not allowed.
+    required: true
+  expo_token:
+    description: Expo credential for the selected EAS project.
+    required: true
+  openai_api_key:
+    description: OpenAI API credential when agent mode selects OpenAI.
+    default: ""
+  anthropic_api_key:
+    description: Anthropic API credential when agent mode selects Anthropic.
+    default: ""
+  anthropic_workspace_id:
+    description: Optional Anthropic workspace ID for an API key that is not scoped to a workspace.
+    required: false
+    default: ""
+  confirm_trusted_source:
+    description: Confirm the exact application commits are trusted to receive build credentials.
+    required: true
+outputs:
+  report_input:
+    description: Input to ci:report for packaging the captured review.
+    value: ${{ steps.capture.outputs.report_input }}
+  output:
+    description: Absolute capture output directory.
+    value: ${{ steps.capture.outputs.output }}
+runs:
+  using: composite
+  steps:
+    - name: Check runner and source trust
+      id: preflight
+      shell: bash
+      env:
+        CONFIRM_TRUSTED_SOURCE: ${{ inputs.confirm_trusted_source }}
+        HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        BASE_REPOSITORY: ${{ github.repository }}
+        AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        OUTPUT: ${{ inputs.output }}
+        RUNNER_TEMP_DIRECTORY: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        if [[ "$(uname -s)" != Linux ]]; then
+          echo '::error title=UNSUPPORTED_RUNNER::EAS Simulator capture requires Linux. Use an Ubuntu runner.'; exit 1
+        fi
+        if [[ "$CONFIRM_TRUSTED_SOURCE" != true ]]; then
+          echo '::error title=SOURCE_NOT_TRUSTED::Review the exact source commits and set confirm_trusted_source to true.'; exit 1
+        fi
+        if [[ -n "$HEAD_REPOSITORY" && "$HEAD_REPOSITORY" != "$BASE_REPOSITORY" ]]; then
+          echo '::error title=FORK_CAPTURE_DENIED::Fork PRs cannot receive capture credentials. Use a reviewed same-repository branch.'; exit 1
+        fi
+        case "$AUTHOR_ASSOCIATION" in
+          ''|COLLABORATOR|MEMBER|OWNER) ;;
+          *) echo '::error title=SOURCE_NOT_TRUSTED::Only trusted repository collaborators may run credentialed capture.'; exit 1 ;;
+        esac
+        node --input-type=module - "$OUTPUT" "$RUNNER_TEMP_DIRECTORY" <<'NODE'
+        import { lstat, realpath } from 'node:fs/promises';
+        import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+        const [output, declaredTemporary] = process.argv.slice(2);
+        const invalid = () => {
+          console.error('::error title=INVALID_OUTPUT_PATH::Set output to a fresh absolute directory strictly inside runner.temp, with no symlink ancestors.'); process.exit(1);
+        };
+        if (!output || !declaredTemporary || !isAbsolute(output) || !isAbsolute(declaredTemporary) || /[\u0000-\u001f\u007f]/.test(output)) invalid();
+        const temporary = await realpath(declaredTemporary);
+        for (const destination of [output, `${output}-consistency`]) {
+          const canonical = resolve(destination);
+          const root = [resolve(declaredTemporary), temporary].find(candidate => {
+            const path = relative(candidate, canonical);
+            return path && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+          });
+          if (!root) invalid();
+          let cursor = temporary;
+          const segments = relative(root, canonical).split(sep);
+          for (const [index, segment] of segments.entries()) {
+            cursor = join(cursor, segment);
+            let info;
+            try { info = await lstat(cursor); }
+            catch (error) { if (error.code === 'ENOENT') break; throw error; }
+            if (info.isSymbolicLink() || !info.isDirectory() || index === segments.length - 1) invalid();
+          }
+        }
+        const [major, minor] = process.versions.node.split('.').map(Number);
+        if (major < 24 || (major === 24 && minor < 12)) {
+          console.error('::error title=NODE_VERSION_UNSUPPORTED::Install Node.js 24.12 or newer before using this action.'); process.exit(1);
+        }
+        NODE
+    - name: Build the pinned Explore CLI
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        npm ci --omit=dev --include=optional --ignore-scripts
+        npm run build:cli
+    - name: Verify deterministic source planning
+      shell: bash
+      env:
+        TOOLS: ${{ github.action_path }}
+        BASE_PROJECT: ${{ inputs.base_project }}
+        HEAD_PROJECT: ${{ inputs.head_project }}
+        PR_METADATA: ${{ inputs.pull_request }}
+        CONFIG: ${{ inputs.config }}
+        OUTPUT: ${{ inputs.output }}
+      run: |
+        set -euo pipefail
+        BASE_SHA="$(node -e 'const fs=require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).base.sha)' "$PR_METADATA")"
+        HEAD_SHA="$(node -e 'const fs=require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).head.sha)' "$PR_METADATA")"
+        node "$TOOLS/dist/cli.js" source:verify \
+          --base-project "$BASE_PROJECT" --head-project "$HEAD_PROJECT" \
+          --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --config "$CONFIG" --output "${OUTPUT}-consistency"
+    - name: Capture review
+      id: capture
+      shell: bash
+      env:
+        TOOLS: ${{ github.action_path }}
+        BASE_PROJECT: ${{ inputs.base_project }}
+        HEAD_PROJECT: ${{ inputs.head_project }}
+        PR_METADATA: ${{ inputs.pull_request }}
+        CONFIG: ${{ inputs.config }}
+        OUTPUT: ${{ inputs.output }}
+        GITHUB_TOKEN: ${{ github.token }}
+        EXPO_TOKEN: ${{ inputs.expo_token }}
+        OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        ANTHROPIC_WORKSPACE_ID: ${{ inputs.anthropic_workspace_id }}
+      run: |
+        set -euo pipefail
+        node "$TOOLS/dist/cli.js" capture:review \
+          --base-project "$BASE_PROJECT" --head-project "$HEAD_PROJECT" \
+          --pull-request "$PR_METADATA" --config "$CONFIG" --output "$OUTPUT"
+        echo "report_input=$OUTPUT/report-input.json" >> "$GITHUB_OUTPUT"
+        echo "output=$OUTPUT" >> "$GITHUB_OUTPUT"
+    - name: Stop retained capture sessions
+      if: always() && steps.preflight.outcome == 'success'
+      timeout-minutes: 5
+      shell: bash
+      env:
+        TOOLS: ${{ github.action_path }}
+        OUTPUT: ${{ inputs.output }}
+        EXPO_TOKEN: ${{ inputs.expo_token }}
+      run: |
+        set -euo pipefail
+        if [[ ! -e "$OUTPUT/head-session" && ! -L "$OUTPUT/head-session" && ! -e "$OUTPUT/base-session" && ! -L "$OUTPUT/base-session" ]]; then exit 0; fi
+        node "$TOOLS/scripts/cleanup-ci-sessions.mjs" --eas "$TOOLS/node_modules/.bin/eas" \
+          --session-file "$OUTPUT/head-session" --session-file "$OUTPUT/base-session"

@@ -1,0 +1,5 @@
+Application "Euxy"
+@e1 [button] "Continue" identifier=continue-button x=16 y=80 width=358 height=48
+@e2 [textfield] "Email address" identifier=email-field x=16 y=144 width=358 height=48
+@e3 [text] "Welcome back"
+@e4 [button] "Use temporary reference" id=@e4 x=16 y=208 width=358 height=48

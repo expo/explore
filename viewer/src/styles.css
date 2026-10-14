@@ -1,0 +1,2394 @@
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/inter-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/inter-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  font-optical-sizing: auto;
+  --screen: #fcfcfd;
+  --surface: #ffffff;
+  --subtle: #f9f9fb;
+  --element: #f0f0f3;
+  --hover: #e8e8ec;
+  --selected: #e0e1e6;
+  --text: #1c2024;
+  --secondary: #60646c;
+  --tertiary: #6f727c;
+  --border: #cdced6;
+  --border-subtle: #d9d9e0;
+  --accent: #0588f0;
+  --accent-strong: #0d74ce;
+  --accent-soft: #e6f4fe;
+  --success: #218358;
+  --success-soft: #e6f6eb;
+  --warning: #ab6400;
+  --warning-soft: #fff7c2;
+  --danger: #ce2c31;
+  --danger-soft: #feebec;
+  --purple: #8145b5;
+  --purple-soft: #f7edfe;
+  /* Modified is orange in both themes, as in the PR comment (🟧). Yellow means "needs review". */
+  --modified: #ea580c;
+  --modified-soft: #ffefd6;
+  --graph-dot: #d9d9e0;
+  --graph-line: #8b8d98;
+  --graph-line-soft: #c5c7ce;
+  --button-primary: #000000;
+  --button-primary-hover: #60646c;
+  --button-primary-text: #ffffff;
+  --button-accent: #0588f0;
+  --button-accent-hover: #0074d4;
+  --button-accent-text: #ffffff;
+  --panel-line: #ececef;
+  /* Segmented controls: a track a shade below the panel and a thumb a shade above it, so the
+     selected option reads at a glance in either theme rather than blending into the panel. */
+  --segment-track: #eceded;
+  --segment-thumb: #ffffff;
+  --panel-hover: #f4f4f6;
+  /* Both side panels and their collapsed chrome are one shell surface. Keeping this token
+     derived means it follows either theme without letting the two sides drift apart. */
+  --side-panel-surface: color-mix(in srgb, var(--surface) 60%, var(--element));
+  /* Menus, pickers, tooltips and toasts float above the panels. In the light theme that is plain
+     white; the dark theme lifts them a step above the panels and cards instead of dropping them to
+     the near-black page surface, so a popup reads as part of the chrome it opened from. */
+  /* Cards inside the side panels sit a step above the panel. */
+  --card: var(--surface);
+  --card-line: var(--panel-line);
+  --card-hover: var(--panel-hover);
+  /* Modal dialogs: white in light, the side panels' surface in dark (as Settings already is). */
+  --dialog: var(--surface);
+  --popover: var(--surface);
+  --popover-line: var(--panel-line);
+  --popover-hover: var(--panel-hover);
+  --popover-active: var(--element);
+  --popover-shadow: var(--shadow-md);
+  /* Detached editor chrome shares a fine ambient ring plus a short downward lift. The ring keeps
+     the top edge legible over a white canvas while the restrained blur avoids a floating-card fog. */
+  --floating-chrome-shadow:
+    0 0 0 1px rgba(15, 23, 42, 0.06),
+    0 2px 5px rgba(15, 23, 42, 0.12),
+    0 8px 20px rgba(15, 23, 42, 0.08);
+  /* How far an item the Changes filter does not cover falls back. Low enough to read as
+     background at a glance, high enough that the canvas keeps its shape. */
+  --dim-out: 0.35;
+  --hover-recede: 0.6;
+  --shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.025), 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 10px 20px rgba(0, 0, 0, 0.1), 0 3px 6px rgba(0, 0, 0, 0.05);
+
+  /* Icon-button scale. Three sizes on one glyph-to-container ratio (~0.57) — the
+     ratio Material 3 uses for its icon buttons (24dp glyph in a 40dp target), held
+     at the tighter end a dense editor UI wants. Every icon control on the page
+     picks one of these three and nothing else:
+       lg — persistent primary targets that stand alone (panel toggles, canvas toolbar)
+       md — the default: panel headers, dialog headers, floating canvas actions
+       sm — secondary controls packed into dense rows and composers
+     Apple's HIG asks for a comfortable pointer target, so anything drawn below
+     28px still claims a 28px one through the .icon-hit pad. */
+  /* Set from the window size (utils/ui-scale.ts): 1 on ordinary windows, up to 1.25 on large ones. */
+  --ui-scale: 1;
+  --icon-btn-lg: 36px;
+  --icon-glyph-lg: 20px;
+  --icon-btn-md: 32px;
+  --icon-glyph-md: 18px;
+  --icon-btn-sm: 26px;
+  --icon-glyph-sm: 15px;
+  --icon-hit-min: 32px;
+  /* Chevrons, carets and status glyphs that sit inline next to text. */
+  --icon-glyph-inline: 14px;
+  /* Floating canvas chrome shares a y=30px center line. The collapsed inspector joins the
+     camera controls into one compact toolbar. Reserve space for the visible actions only. */
+  --floating-chrome-top: 14px;
+  --floating-chrome-height: 42px;
+  --canvas-chrome-inline-inset: 12px;
+  --right-float-edge: 12px;
+  --right-float-width: calc(var(--icon-btn-md) + 6px);
+  --left-collapsed-pill-width: 420px;
+  --left-collapsed-pill-height: var(--floating-chrome-height);
+  --left-collapsed-pill-top: var(--floating-chrome-top);
+  /* The floating chrome's own top edge and height grow with --ui-scale. What sits inside each
+     piece is zoomed by the same factor, so it keeps using the unscaled sizes above. */
+  --chrome-top: calc(var(--floating-chrome-top) * var(--ui-scale));
+  --chrome-height: calc(var(--floating-chrome-height) * var(--ui-scale));
+  /* Canvas documents and view-specific chrome enter as one composition. The incoming canvas and
+     any companion chrome must share these values so neither appears to lead the other. */
+  --canvas-view-exit-duration: 180ms;
+  --canvas-view-enter-duration: 200ms;
+  --canvas-view-enter-delay: 20ms;
+  --canvas-view-exit-easing: cubic-bezier(0.4, 0, 1, 1);
+  --canvas-view-enter-easing: ease-in-out;
+  /* The bottom bar resizes with the same timing as the canvas it switches. */
+  --toolbar-motion: 220ms;
+  --toolbar-easing: ease-in-out;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --screen: #0c0d0e;
+  --surface: #111113;
+  --subtle: #18191b;
+  --element: #212225;
+  --hover: #272a2d;
+  --selected: #2e3135;
+  --text: #edeef0;
+  --secondary: #b0b4ba;
+  --tertiary: #8e929b;
+  --border: #43484e;
+  --border-subtle: #363a3f;
+  --accent: #70b8ff;
+  --accent-strong: #c2e6ff;
+  --accent-soft: #0d2847;
+  --success: #3dd68c;
+  --success-soft: #132d21;
+  --warning: #ffca16;
+  --warning-soft: #302008;
+  --danger: #ff9592;
+  --danger-soft: #3b1219;
+  --purple: #d19dff;
+  --purple-soft: #301c3b;
+  --modified: #ff9a3c;
+  --modified-soft: #331e0b;
+  --graph-dot: #212225;
+  --graph-line: #696e77;
+  --graph-line-soft: #3f4349;
+  --button-primary: #ffffff;
+  --button-primary-hover: #d9d9e0;
+  --button-primary-text: #111113;
+  --button-accent: #3b82f6;
+  --button-accent-hover: #5b9bf8;
+  --button-accent-text: #ffffff;
+  --panel-line: #202124;
+  --segment-track: #191b1d;
+  --segment-thumb: #303336;
+  --panel-hover: #1c1d20;
+  --card: color-mix(in srgb, var(--element) 65%, var(--side-panel-surface));
+  --card-line: color-mix(in srgb, var(--border-subtle) 55%, transparent);
+  --card-hover: var(--hover);
+  --dialog: var(--side-panel-surface);
+  --popover: color-mix(in srgb, var(--element) 75%, var(--subtle));
+  --popover-line: #2c2f33;
+  --popover-hover: var(--hover);
+  --popover-active: var(--selected);
+  --popover-shadow: 0 12px 28px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --floating-chrome-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 2px 5px rgba(0, 0, 0, 0.36),
+    0 8px 22px rgba(0, 0, 0, 0.3);
+  --shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 10px 20px rgba(0, 0, 0, 0.25), 0 3px 6px rgba(0, 0, 0, 0.25);
+}
+
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; }
+/* iPhone Safari inflates text in blocks it judges text-heavy (the Changes menu's route list
+   rendered at ~22px from a 13px rule); every size here is set on purpose. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { margin: 0; overflow: hidden; background: var(--screen); color: var(--text); font-size: 14px; line-height: 1.6; }
+button, input, select { font: inherit; color: inherit; font-optical-sizing: auto; }
+button { border: 0; }
+button, select { cursor: pointer; }
+:focus:not(:focus-visible) { outline: 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Icon-only controls acknowledge keyboard focus with a quiet surface shift, not a border ring.
+   Keep this class-based: DOM-shape selectors such as svg:only-child also match buttons whose
+   visible label is a text node (for example Play and Stop). */
+:is(
+  .panel-logo-button,
+  button.icon-button,
+  button.toolbar-button,
+  button.camera-action-button,
+  button.variant-arrow,
+  button.panel-search-clear
+):focus-visible {
+  outline: 0 !important;
+  outline-offset: 0 !important;
+  border-color: transparent !important;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-hover)) !important;
+  box-shadow: none !important;
+  filter: brightness(1.08);
+}
+/* A selected control already communicates its state through colour/background. Keep this after
+   the icon-only rule so selected icon actions retain the stronger active-state feedback. */
+button:is(.active, .selected, [aria-pressed="true"], [aria-selected="true"], [aria-current]):focus-visible {
+  outline: 0 !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
+  filter: brightness(1.16);
+}
+code {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-optical-sizing: auto;
+}
+
+.app-shell { position: relative; display: flex; height: 100%; min-width: 320px; isolation: isolate; background: var(--screen); }
+.app-content {
+  position: relative;
+  z-index: 0;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.canvas-view-content {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+  view-transition-name: canvas-view-content;
+}
+
+/* Only the canvas document moves between peer views. View-specific companion chrome may fade as
+   a separate participant; persistent chrome stays anchored while the outgoing snapshot makes
+   room for the next view in the toolbar's left-to-right order. */
+:root[data-canvas-transition-direction]::view-transition-old(root) {
+  animation: none;
+  opacity: 0;
+}
+:root[data-canvas-transition-direction]::view-transition-new(root) {
+  animation: none;
+  opacity: 1;
+}
+:root[data-canvas-transition-direction]::view-transition-group(canvas-view-content) {
+  overflow: clip;
+}
+:root[data-canvas-transition-direction]::view-transition-image-pair(canvas-view-content) {
+  overflow: clip;
+  isolation: isolate;
+}
+:root[data-canvas-transition-direction]::view-transition-group(canvas-minimap) {
+  z-index: 22;
+  animation: none;
+}
+:root[data-canvas-transition-direction]::view-transition-group(app-pill),
+:root[data-canvas-transition-direction]::view-transition-group(canvas-camera-controls),
+:root[data-canvas-transition-direction]::view-transition-group(canvas-toolbar),
+:root[data-canvas-transition-direction]::view-transition-group(right-floating-controls) {
+  z-index: 101;
+  animation: none;
+}
+:root[data-canvas-transition-direction]::view-transition-image-pair(canvas-minimap),
+:root[data-canvas-transition-direction]::view-transition-image-pair(app-pill),
+:root[data-canvas-transition-direction]::view-transition-image-pair(canvas-camera-controls),
+:root[data-canvas-transition-direction]::view-transition-image-pair(canvas-toolbar),
+:root[data-canvas-transition-direction]::view-transition-image-pair(right-floating-controls) {
+  isolation: isolate;
+}
+:root[data-canvas-transition-direction]::view-transition-old(canvas-view-content),
+:root[data-canvas-transition-direction]::view-transition-new(canvas-view-content),
+:root[data-canvas-transition-direction]::view-transition-old(canvas-minimap),
+:root[data-canvas-transition-direction]::view-transition-new(canvas-minimap),
+:root[data-canvas-transition-direction]::view-transition-old(canvas-camera-controls),
+:root[data-canvas-transition-direction]::view-transition-new(canvas-camera-controls),
+:root[data-canvas-transition-direction]::view-transition-old(canvas-toolbar),
+:root[data-canvas-transition-direction]::view-transition-old(phone-top-actions),
+:root[data-canvas-transition-direction]::view-transition-new(canvas-toolbar),
+:root[data-canvas-transition-direction]::view-transition-new(phone-top-actions),
+:root[data-canvas-transition-direction]::view-transition-old(right-floating-controls),
+:root[data-canvas-transition-direction]::view-transition-new(right-floating-controls) {
+  mix-blend-mode: normal;
+}
+:root[data-canvas-transition-direction="forward"]::view-transition-old(canvas-view-content) {
+  animation: canvas-view-exit-left var(--canvas-view-exit-duration) var(--canvas-view-exit-easing) both;
+}
+:root[data-canvas-transition-direction="forward"]::view-transition-new(canvas-view-content) {
+  animation: canvas-view-enter-right var(--canvas-view-enter-duration) var(--canvas-view-enter-easing) var(--canvas-view-enter-delay) both;
+}
+:root[data-canvas-transition-direction="backward"]::view-transition-old(canvas-view-content) {
+  animation: canvas-view-exit-right var(--canvas-view-exit-duration) var(--canvas-view-exit-easing) both;
+}
+:root[data-canvas-transition-direction="backward"]::view-transition-new(canvas-view-content) {
+  animation: canvas-view-enter-left var(--canvas-view-enter-duration) var(--canvas-view-enter-easing) var(--canvas-view-enter-delay) both;
+}
+:root[data-canvas-transition-direction]::view-transition-old(canvas-minimap) {
+  animation: canvas-chrome-crossfade-out var(--canvas-view-enter-duration) linear both;
+}
+:root[data-canvas-transition-direction]::view-transition-new(canvas-minimap) {
+  animation: canvas-chrome-crossfade-in var(--canvas-view-enter-duration) linear both;
+}
+:root[data-canvas-transition-direction]::view-transition-old(app-pill),
+:root[data-canvas-transition-direction]::view-transition-old(canvas-camera-controls),
+:root[data-canvas-transition-direction]::view-transition-old(canvas-toolbar),
+:root[data-canvas-transition-direction]::view-transition-old(right-floating-controls) {
+  animation: none;
+  opacity: 0;
+}
+:root[data-canvas-transition-direction]::view-transition-new(app-pill),
+:root[data-canvas-transition-direction]::view-transition-new(canvas-camera-controls),
+:root[data-canvas-transition-direction]::view-transition-new(canvas-toolbar),
+:root[data-canvas-transition-direction]::view-transition-new(right-floating-controls) {
+  animation: none;
+  opacity: 1;
+}
+
+@keyframes canvas-view-exit-left {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(-16px); }
+}
+@keyframes canvas-view-enter-right {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes canvas-view-exit-right {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(16px); }
+}
+@keyframes canvas-view-enter-left {
+  from { opacity: 0; transform: translateX(-20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-canvas-transition-direction]::view-transition-old(canvas-view-content) {
+    animation: canvas-view-fade-out 90ms linear both;
+  }
+  :root[data-canvas-transition-direction]::view-transition-new(canvas-view-content) {
+    animation: canvas-view-fade-in 120ms linear both;
+  }
+}
+
+@keyframes canvas-view-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes canvas-view-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes canvas-chrome-crossfade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes canvas-chrome-crossfade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.connection-canvas-surface {
+  position: absolute;
+  inset: 0;
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.expo-logo { width: 62px; height: 18px; flex: none; color: var(--text); }
+.expo-mark { width: 20px; height: 18px; flex: none; color: var(--text); transform: scale(0.9); }
+/* The default icon button: md container, md glyph. The svg rule is what actually
+   settles the glyph size — lucide writes width/height attributes, and CSS outranks
+   them, so a component can never drift off the scale by passing its own `size`. */
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--icon-btn-md);
+  height: var(--icon-btn-md);
+  flex: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--secondary);
+  background: transparent;
+}
+.icon-button > svg { width: var(--icon-glyph-md); height: var(--icon-glyph-md); flex: none; }
+/* A disabled button does not answer the pointer: no hover fill or border, no press. */
+.icon-button:hover:not(:disabled) { color: var(--text); border-color: var(--border-subtle); background: var(--hover); }
+.icon-button:active:not(:disabled), .button:active:not(:disabled) { transform: scale(0.98); }
+.spinning { animation: spin 800ms linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* The canvas is the document, not chrome. Its content tokens are scoped here so the light map
+   stays paper-white while the dark map sits in the same surface family as the side panels. */
+.graph-canvas {
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  --screen: #ffffff;
+  --surface: #ffffff;
+  --subtle: #f5f5f6;
+  --element: #ececee;
+  --hover: #e8e8ec;
+  --text: #1c2024;
+  --secondary: #60646c;
+  --tertiary: #6f727c;
+  --border: #cdced6;
+  --border-subtle: #d9d9e0;
+  --panel-hover: #f0f0f2;
+  --graph-dot: #e4e4e7;
+  --graph-line: #8b8d98;
+  --graph-line-soft: #c5c7ce;
+  /* One flat fill for a group — no border, no second tone inside it. */
+  --canvas-group: #f5f5f6;
+  color: var(--text);
+  background: var(--screen);
+}
+:root[data-theme="dark"] .graph-canvas {
+  --screen: #111113;
+  --surface: #111113;
+  --subtle: #18191b;
+  --element: #212225;
+  --hover: #272a2d;
+  --text: #edeef0;
+  --secondary: #b0b4ba;
+  --tertiary: #8e929b;
+  --border: #43484e;
+  --border-subtle: #363a3f;
+  --panel-hover: #1c1d20;
+  --graph-dot: #2d3035;
+  --graph-line: #696e77;
+  --graph-line-soft: #3f4349;
+  --canvas-group: #18191b;
+}
+/* The canvas is a fixed map: dragging anywhere pans, while clicking an object selects it. */
+.graph-canvas .canvas-tool-pan,
+.graph-canvas .canvas-tool-pan .react-flow__pane { cursor: url("/cursors/hand.svg") 12 12, grab; }
+.graph-canvas .canvas-tool-pan:active,
+.graph-canvas .canvas-tool-pan .react-flow__pane:active { cursor: url("/cursors/hand-closed.svg") 12 12, grabbing; }
+.graph-canvas .canvas-tool-pan :is(
+  .screen-node,
+  .semantic-summary-node
+),
+.graph-canvas .canvas-tool-pan :is(
+  .screen-node,
+  .semantic-summary-node
+):active { cursor: url("/cursors/arrow.svg") 6 6, default; }
+.graph-canvas .react-flow__edge-text { paint-order: stroke; }
+.graph-canvas .react-flow__edge-label { pointer-events: none; }
+.graph-canvas .transition-edge-hitarea { cursor: pointer; pointer-events: stroke; }
+.graph-canvas .transition-edge-path { transition: stroke 100ms ease, stroke-width 100ms ease, opacity 140ms ease; }
+.graph-canvas .graph-edge-secondary { opacity: 0.72; }
+.graph-canvas .graph-edge-dimmed { opacity: 0.14; }
+.graph-canvas .graph-edge-active { opacity: 1; }
+.graph-canvas .react-flow__node { transition: opacity 180ms ease, filter 180ms ease; }
+.graph-canvas .canvas-focus-animating .react-flow__node { transition: none; }
+/* Focus: what the chosen state does not cover only steps back, so the map is still readable. */
+.graph-canvas .react-flow__node.graph-node-muted { opacity: var(--dim-out); --map-card-opacity: var(--dim-out); }
+/* A route-selected screenshot stays visually anchored while the surrounding screenshots recede.
+   They fade as focus dims them, by opacity alone: a filter would grey the card's opaque backing.
+   Summary cards retain their normal contrast so the selected screen's semantic context is legible. */
+.map-canvas.screen-selection-active .react-flow__node-screen:not(.selected) {
+  opacity: var(--dim-out);
+  --map-card-opacity: var(--dim-out);
+}
+.map-canvas.screen-selection-active .react-flow__node-screen:not(.selected):hover,
+.map-canvas.screen-selection-active .react-flow__node-screen:not(.selected):focus-within {
+  opacity: 1;
+  --map-card-opacity: 1;
+}
+/* Hover isolates the subject and its directly incident transitions. These selectors come after
+   diff focus so the pointer's immediate context is always the strongest signal. */
+.graph-canvas .react-flow__node.graph-node-hover-related {
+  opacity: 1;
+  --map-card-opacity: 1;
+  filter: none;
+}
+/* Re-layout: the canvas blinks out whole — nodes, edges and labels together — so the graph can
+   change shape and the camera can cut unseen, then comes straight back. Both transitions live
+   inside their class, so once the sequence ends the stylesheet owns opacity again. */
+.graph-canvas .canvas-relayout-out .react-flow__viewport { opacity: 0; transition: opacity 80ms ease-in; }
+.graph-canvas .canvas-relayout-in .react-flow__viewport { opacity: 1; transition: opacity 120ms ease-out; }
+.screen-screenshot-card {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+}
+/* The slot is the positioned parent of the connection handles: React Flow places them on its
+   edges, which are the screenshot's edges, never the heading's. */
+.screen-screenshot-slot {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+/* The screenshot's positioned diff frame paints after the leading handle in tree order; lift
+   both handles over the image while the diff label (z-index 2) still covers them. */
+.screen-screenshot-slot > .react-flow__handle { z-index: 1; }
+.screen-screenshot-target {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  text-align: inherit;
+}
+.screen-node {
+  width: 184px;
+  height: 420px;
+  cursor: grab;
+}
+.screen-node:active { cursor: grabbing; }
+.screen-node-heading { display: flex; min-height: 20px; flex: none; align-items: flex-start; justify-content: center; gap: 6px; padding: 0 4px; }
+.screen-node-title {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  flex: 1;
+  color: var(--text);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  line-height: 1.4;
+  /* One line: the card's height is fixed, so a wrapped route would take it from the screenshot.
+     The title attribute keeps the whole route. */
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.screen-path-text {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+.screen-path-text:hover { color: var(--accent-strong); }
+.screen-path-text:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.screen-path-text.screen-node-title {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  color: var(--text);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.35;
+  text-align: center;
+}
+.screen-node-image {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  transition: box-shadow 120ms ease, border-color 120ms ease;
+}
+.screen-node-image img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--subtle);
+  box-sizing: border-box;
+  object-fit: contain;
+  transition: box-shadow 120ms ease, border-color 120ms ease;
+}
+/* A screen without a screenshot, or whose screenshot could not be read, frames its placeholder
+   where an image of --screenshot-width x --screenshot-height would sit under the rules above:
+   contained in the slot inside its border, never enlarged. It lines up with the screenshots
+   beside it, and a failed screenshot keeps the frame it waited in. */
+.screen-node-image:has(> .image-placeholder) { container-type: size; }
+.screen-node-image > .image-placeholder {
+  --frame-border: 1px;
+  display: flex;
+  box-sizing: content-box;
+  width: min(
+    100cqw - 2 * var(--frame-border),
+    (100cqh - 2 * var(--frame-border)) * var(--screenshot-width) / var(--screenshot-height),
+    var(--screenshot-width) * 1px
+  );
+  height: min(
+    100cqh - 2 * var(--frame-border),
+    (100cqw - 2 * var(--frame-border)) * var(--screenshot-height) / var(--screenshot-width),
+    var(--screenshot-height) * 1px
+  );
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+  border: var(--frame-border) solid var(--border-subtle);
+  border-radius: 14px;
+  color: var(--tertiary);
+  background: var(--subtle);
+  font-size: 10px;
+  text-align: center;
+  transition: box-shadow 120ms ease, border-color 120ms ease;
+}
+/* Hover and selection draw a 3px ring in the accent colour: the 1px border recoloured plus a 2px
+   shadow outside it, so the image keeps its size (a thicker border would shrink the picture inside
+   its box). Changed screens keep their own colour at the same weight: the diff rules below win on
+   specificity. */
+.screen-node-image:hover img,
+.screen-screenshot-card.selected .screen-node-image img { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.screen-node-image:hover > .image-placeholder,
+.screen-screenshot-card.selected .screen-node-image > .image-placeholder { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.canvas-active-frame {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.canvas-active-frame::after {
+  content: "";
+  position: absolute;
+  z-index: 4;
+  inset: -3px;
+  border: 2px solid transparent;
+  border-radius: 17px;
+  pointer-events: none;
+}
+/* Selection needs no ring: the canvas dims every other screen. The highlight ring stays for the
+   transient pointer-over state that panels project onto the canvas. */
+.canvas-active-frame.is-highlighted::after {
+  border-color: var(--accent);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.graph-handle {
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--surface);
+  background: var(--graph-line);
+  box-shadow: none;
+  opacity: 0.9;
+  pointer-events: none;
+}
+/* A screen's handles are ports on its frame: they take the frame colour, whether that is the
+   status colour of a changed screen or the accent of a hovered or selected one, and a ring in
+   the canvas colour keeps them legible as connection points on the border. */
+.screen-screenshot-card { --screen-frame: var(--graph-line); }
+.screen-screenshot-card:has(.screen-node-image:hover),
+.screen-screenshot-card.selected,
+.screen-screenshot-card.highlighted { --screen-frame: var(--accent); }
+.screen-screenshot-card:is(.diff-added, .diff-modified, .diff-removed) { --screen-frame: var(--diff); }
+.screen-screenshot-slot > .graph-handle {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--screen);
+  background: var(--screen-frame);
+  opacity: 1;
+}
+
+/* Hover is transient canvas state. One container class dims the field; only the symmetric
+   difference of related nodes/edges receives a class, avoiding a React commit across the graph.
+   The hovered screen and the screens it connects to stay as they are; the rest recede a little,
+   enough to read the neighbourhood without losing the map. */
+.connection-canvas-surface.canvas-hovering .react-flow__node-screen {
+  opacity: var(--hover-recede);
+  --map-card-opacity: var(--hover-recede);
+  transition: opacity 90ms ease;
+}
+.connection-canvas-surface.canvas-hovering .react-flow__node-screen.graph-node-hover-related,
+.connection-canvas-surface.canvas-hovering .react-flow__node-screen.graph-node-hover-subject {
+  opacity: 1;
+  --map-card-opacity: 1;
+}
+.connection-canvas-surface.canvas-hovering .react-flow__edge { opacity: 0.3; }
+.connection-canvas-surface.canvas-hovering .react-flow__edge.graph-edge-hover-related { opacity: 1; }
+.connection-canvas-surface.canvas-hovering .graph-edge-hover-related .transition-edge-path {
+  stroke: var(--accent) !important;
+  stroke-width: 2.2 !important;
+  stroke-dasharray: none !important;
+}
+
+/* Semantic Map: an area is a meaningful destination, never an anonymous "X states" step. */
+.semantic-summary-node {
+  position: relative;
+  display: grid;
+  width: 220px;
+  height: 118px;
+  grid-template-columns: 50px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 14px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 96%, var(--accent));
+  box-shadow: var(--shadow-sm);
+  text-align: left;
+  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+.react-flow__node-summary { z-index: 6 !important; }
+/* An area that holds changed screens says so before it is opened: one count per status. */
+.semantic-summary-changes {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 4px;
+}
+.semantic-summary-change {
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px 0 4px;
+  border-radius: 6px;
+  color: var(--diff);
+  background: var(--diff-soft);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.semantic-summary-change > svg { width: 12px; height: 12px; stroke-width: 3; }
+.semantic-summary-change-dot { width: 7px; height: 7px; margin: 0 2px; border-radius: 50%; background: currentColor; }
+.semantic-summary-node.has-changes { border-color: color-mix(in srgb, var(--modified) 45%, var(--border)); }
+.semantic-summary-node:hover {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+  background: color-mix(in srgb, var(--surface) 91%, var(--accent));
+  box-shadow: var(--shadow-md);
+}
+.semantic-summary-node:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  outline-offset: 3px;
+  border-color: var(--accent);
+}
+/* The open area stays in the grid as the selected card instead of leaving a hole. */
+.semantic-summary-node.is-current {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--surface) 88%, var(--accent));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), var(--shadow-sm);
+}
+.semantic-summary-node.is-current .semantic-summary-copy small { color: var(--accent-strong); }
+.semantic-summary-visual {
+  display: grid;
+  width: 50px;
+  height: 94px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  color: var(--tertiary);
+  background: var(--subtle);
+}
+.semantic-summary-visual img {
+  display: block;
+  width: 42px;
+  height: 88px;
+  object-fit: contain;
+}
+.semantic-summary-visual svg { width: 20px; height: 20px; }
+.semantic-summary-copy { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.semantic-summary-copy strong {
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.semantic-summary-copy span { color: var(--secondary); font-size: 10px; line-height: 1.35; }
+.semantic-summary-copy small { color: var(--accent-strong); font-size: 9px; font-weight: 650; line-height: 1.3; }
+
+/* Map screens retain the original inspectable phone frame. Semantic hierarchy reduces how many
+   screens are present; it must not make the screens themselves unreadable. */
+.map-surface .screen-node {
+  width: 184px;
+  height: 420px;
+  gap: 14px;
+}
+.map-surface .screen-node-heading { min-height: 20px; padding: 0 4px; }
+.map-surface .screen-node-title { font-size: 13px; line-height: 1.35; }
+.map-surface .screen-node-image { border-radius: 14px; }
+.map-surface .react-flow__node-screen {
+  z-index: 2 !important;
+  opacity: 1 !important;
+  background: var(--screen);
+  border-radius: 14px;
+}
+/* Fade the card contents over an opaque backing so dimmed screenshots still cover connectors. */
+.map-surface .react-flow__node-screen > .canvas-active-frame {
+  opacity: var(--map-card-opacity, 1);
+  transition: inherit;
+}
+.map-surface .react-flow__node-screen.selected,
+.map-surface .react-flow__node-screen:hover { z-index: 4 !important; }
+.map-surface .react-flow__edge { transition: opacity 90ms ease; }
+/* React Flow puts the edge z-index on its ancestor SVG. Bound the entire edge layer below the
+   node layer so selected edges and their arrowheads cannot paint over screenshot cards. */
+.map-surface .react-flow__edges { z-index: 0; }
+.map-surface .react-flow__edges > svg { z-index: 0 !important; }
+.map-surface .react-flow__nodes { z-index: 1; }
+
+/* React Flow raises edges between children above their parent group so the group background does
+   not hide them. Keep the image-bearing child nodes one layer higher in every canvas: connectors
+   remain visible on the group surface but can never paint across a screenshot. */
+.react-flow__node-screenTile { z-index: 2 !important; }
+.map-surface .react-flow__edges,
+.map-surface .react-flow__edgelabel-renderer {
+  opacity: 1;
+  transition: opacity 220ms cubic-bezier(0.42, 0, 0.58, 1);
+}
+.map-surface .transition-edge-hitarea { pointer-events: none; }
+.map-surface .transition-edge-hitarea[data-navigation-provenance="source"] { pointer-events: stroke; }
+
+/* Projection tabs describe the same map at a different level. Nodes that survive the change
+   keep their identity and glide to the new layout. One semantic representative may cross a
+   hierarchy boundary; other unmatched objects crossfade in place. Edges hide while endpoints
+   travel so they never detach. */
+.map-canvas.canvas-projection-animating .react-flow__node { pointer-events: none !important; }
+.map-canvas.canvas-projection-animating .react-flow__node:is(.canvas-node-moving, .canvas-node-exit) {
+  transition:
+    transform 200ms cubic-bezier(0.42, 0, 0.58, 1),
+    opacity 200ms cubic-bezier(0.42, 0, 0.58, 1);
+}
+.map-canvas .react-flow__node:is(.canvas-node-moving, .canvas-node-enter, .canvas-node-exit) > * {
+  transform-origin: center;
+  transition:
+    opacity 200ms cubic-bezier(0.42, 0, 0.58, 1),
+    transform 200ms cubic-bezier(0.42, 0, 0.58, 1);
+}
+.map-canvas .react-flow__node.canvas-node-moving > * {
+  opacity: 1;
+  transform: scale(var(--projection-scale, 1));
+}
+.map-canvas .react-flow__node.canvas-node-enter > * { opacity: 0; transform: scale(0.96); }
+.map-surface .react-flow__node-screen:is(.canvas-node-enter, .canvas-node-exit) { background: transparent; }
+.map-canvas .react-flow__node.canvas-node-exit {
+  pointer-events: none !important;
+}
+.map-canvas .react-flow__node.canvas-node-exit > * { opacity: 0; transform: scale(0.96); }
+.map-canvas .react-flow__node.projection-fade-only:is(.canvas-node-enter, .canvas-node-exit) > * {
+  transform: scale(var(--projection-scale, 1));
+}
+.map-canvas .react-flow__node.projection-fade-only:is(.canvas-node-moving, .canvas-node-exit) > * {
+  transition-delay: var(--projection-delay, 0ms), 0ms;
+}
+.map-canvas.canvas-projection-animating .react-flow__edges,
+.map-canvas.canvas-projection-animating .react-flow__edgelabel-renderer {
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: 0ms;
+}
+
+/* Hovering a screenshot says what a click does: it opens the screen in the Inspector. The hint
+   sits in the middle of the screenshot, so it is always on the image whatever the slot's shape.
+   With a pointer, an already selected screen is in the Inspector. On a phone's map the first tap
+   only selects, so the hint sits on the selected screen and says what the next tap does. */
+.screen-screenshot-target { cursor: pointer; }
+.screen-open-hint {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px 6px 9px;
+  border-radius: 999px;
+  color: #fff;
+  background: rgb(17 17 19 / 0.82);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.25);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+.screen-open-hint > svg { width: 14px; height: 14px; flex: none; }
+.screen-open-hint-short { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .screen-screenshot-card:not(.selected) .screen-screenshot-target:hover .screen-open-hint {
+    display: inline-flex;
+    animation: screen-open-hint-in 140ms ease-out;
+  }
+}
+@media (hover: none) {
+  .phone-layout .map-canvas .screen-screenshot-card.selected .screen-open-hint {
+    display: inline-flex;
+    animation: screen-open-hint-in 140ms ease-out;
+  }
+  /* Phone map screens are narrow, so the hint is one word there and stays on the screenshot. */
+  .phone-layout .map-canvas .screen-open-hint-long { display: none; }
+  .phone-layout .map-canvas .screen-open-hint-short { display: inline; }
+}
+@keyframes screen-open-hint-in { from { opacity: 0; transform: translate(-50%, -40%); } }
+@media (prefers-reduced-motion: reduce) { .screen-open-hint { animation: none !important; } }
+
+.screen-screenshot-target:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  outline-offset: 3px;
+  border-radius: 14px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .semantic-summary-node,
+  .screen-node-image,
+  .graph-canvas .react-flow__node,
+  .graph-canvas .transition-edge-path { transition: none; }
+  .map-canvas.canvas-projection-animating .react-flow__node:is(.canvas-node-moving, .canvas-node-exit),
+  .map-surface .react-flow__edge,
+  .map-surface .react-flow__edges,
+  .map-surface .react-flow__edgelabel-renderer { transition: none; }
+  .map-canvas .react-flow__node:is(.canvas-node-moving, .canvas-node-enter, .canvas-node-exit) > * {
+    transition: none;
+  }
+}
+
+.canvas-empty { display: flex; align-items: center; justify-content: center; padding: 40px; }
+
+/* ── Canvas toolbar ─────────────────────────────────────────────────────── */
+
+.canvas-toolbar {
+  position: fixed;
+  z-index: 10;
+  bottom: calc(var(--canvas-visible-bottom-inset, 0px) + 14px * var(--ui-scale));
+  left: 50%;
+  display: flex;
+  /* At left: 50% the bar would shrink to half the window; it keeps its own width instead. */
+  width: max-content;
+  padding: calc(6px * var(--ui-scale));
+  border: 1px solid var(--panel-line);
+  border-radius: calc(14px * var(--ui-scale));
+  background: var(--surface);
+  box-shadow: var(--floating-chrome-shadow);
+  transform: translateX(-50%);
+  view-transition-name: canvas-toolbar;
+}
+.canvas-toolbar-inner { display: flex; align-items: center; gap: 2px; zoom: var(--ui-scale); }
+.toolbar-group { display: flex; align-items: center; gap: 2px; }
+.toolbar-divider {
+  width: 1px;
+  height: 26px;
+  flex: none;
+  margin: 0 3px;
+  background: var(--panel-line);
+}
+.toolbar-button {
+  display: flex;
+  width: var(--icon-btn-lg);
+  height: var(--icon-btn-lg);
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--tertiary);
+  background: transparent;
+  transition: color 120ms ease, background 120ms ease;
+}
+.toolbar-button > svg { width: var(--icon-glyph-lg); height: var(--icon-glyph-lg); flex: none; }
+.toolbar-button:hover { color: var(--secondary); background: var(--panel-hover); }
+.toolbar-button.active { color: var(--text); background: var(--element); }
+.toolbar-button:active { transform: scale(0.98); }
+.toolbar-button:disabled { opacity: 0.35; pointer-events: none; }
+/* Section buttons size to their content and every section shows its name (.labelled). The name
+   sits on a 0fr → 1fr grid track, so a narrow window can fold it away without a guessed width. */
+.toolbar-button:has(> .toolbar-view-label) { width: auto; min-width: var(--icon-btn-lg); padding: 0 8px; }
+.toolbar-view-label {
+  display: grid;
+  grid-template-columns: 0fr;
+  margin: 0;
+  opacity: 0;
+  filter: blur(4px);
+  font-size: 14px;
+  font-weight: 600;
+  transition:
+    grid-template-columns var(--toolbar-motion) var(--toolbar-easing),
+    margin var(--toolbar-motion) var(--toolbar-easing),
+    opacity 120ms ease,
+    filter 120ms ease;
+}
+.toolbar-view-label > span { min-width: 0; overflow: hidden; white-space: nowrap; }
+.toolbar-button.labelled .toolbar-view-label {
+  grid-template-columns: 1fr;
+  margin: 0 4px 0 7px;
+  opacity: 1;
+  filter: blur(0);
+  transition:
+    grid-template-columns var(--toolbar-motion) var(--toolbar-easing),
+    margin var(--toolbar-motion) var(--toolbar-easing),
+    opacity 170ms ease-in-out calc(var(--toolbar-motion) * 0.35),
+    filter 170ms ease-in-out calc(var(--toolbar-motion) * 0.35);
+}
+/* Compare's count of changed screens rides on its button's corner. */
+.toolbar-button:has(> .toolbar-badge) { position: relative; }
+.toolbar-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 9px;
+  /* Light theme's deep orange takes white text, as the Modified pill does; dark theme's light
+     orange takes dark text. */
+  color: #fff;
+  background: var(--modified);
+  box-shadow: 0 0 0 2px var(--surface);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+:root[data-theme="dark"] .toolbar-badge { color: #0c0d0e; }
+/* Reduced motion: the bar takes its new width at once; only the names fade, without the blur. */
+@media (prefers-reduced-motion: reduce) {
+  .toolbar-view-label,
+  .toolbar-button.labelled .toolbar-view-label { filter: none; transition: opacity 120ms ease-out; }
+}
+/* Narrow windows: the open section keeps its icon and drops its name. */
+@media (max-width: 600px) {
+  .toolbar-button.labelled .toolbar-view-label { grid-template-columns: 0fr; margin: 0; opacity: 0; }
+}
+/* The opening camera is calculated from real canvas dimensions. Keep the provisional 0,0
+   viewport out of sight, then reveal the already-fitted canvas without a first-load flight. */
+.canvas-camera-initializing .react-flow__viewport { visibility: hidden; }
+
+/* ── Right panel ────────────────────────────────────────────────────────── */
+
+.right-panel {
+  position: relative;
+  z-index: 100;
+  display: flex;
+  flex: none;
+  width: 400px;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--panel-line);
+  background: var(--side-panel-surface);
+  container-type: inline-size;
+  /* On large windows the whole Inspector grows with the floating chrome. */
+  zoom: var(--ui-scale);
+  /* Two Diff previews, their 8px gap, and the 14px side insets must fit this same width. */
+  --inspector-shared-preview-max-width: calc((100cqw - 36px) / 2);
+}
+/* When minimised, the inspector actions join the camera controls as one floating toolbar. */
+.right-float {
+  position: fixed;
+  z-index: 100;
+  top: var(--chrome-top);
+  right: var(--right-float-edge);
+  width: calc(var(--right-float-width) * var(--ui-scale));
+  height: var(--chrome-height);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: calc(3px * var(--ui-scale));
+  border: 0;
+  border-radius: 0 calc(8px * var(--ui-scale)) calc(8px * var(--ui-scale)) 0;
+  background: var(--side-panel-surface);
+  box-shadow: none;
+  /* No backdrop blur: the surface is opaque, and a blurred backdrop leaves this toolbar's view
+     transition snapshot stale, so a button that moves into its place paints late. */
+  view-transition-name: right-floating-controls;
+}
+.right-float > * { zoom: var(--ui-scale); }
+.right-float .icon-button.active { color: var(--text); background: var(--element); }
+.right-float .icon-button[disabled] { color: var(--border); cursor: default; background: transparent; }
+.right-float .icon-button:hover {
+  border-color: transparent;
+  background: var(--panel-hover);
+}
+.right-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  /* The panel is a docked column, so the row centres in its own height rather than offsetting to
+     the floating toolbar's centre line, which left a lopsided gap above the title. */
+  height: 48px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--panel-line);
+}
+.right-head-group { display: flex; align-items: center; gap: 2px; }
+/* Highlight changes on, as in Compare: the active fill and the outline colour on its icon. */
+.right-head .inspector-highlight[aria-pressed="true"]:not(:disabled) { color: var(--text); background: var(--element); }
+.right-head .inspector-highlight[aria-pressed="true"]:not(:disabled) > svg { color: var(--modified); }
+.right-head .icon-button.active { color: var(--text); background: var(--element); }
+.right-head .icon-button[disabled] { color: var(--border); cursor: default; background: transparent; }
+
+/* Canvas zoom read-out and its menu. */
+.zoom-anchor { position: relative; display: flex; }
+.zoom-button {
+  display: inline-flex;
+  height: var(--icon-btn-md);
+  min-width: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: var(--secondary);
+  background: transparent;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.zoom-button > svg { width: 12px; height: 12px; flex: none; }
+.zoom-button:hover:not([disabled]) { color: var(--text); background: var(--panel-hover); }
+.zoom-button[aria-expanded="true"] { color: var(--text); background: var(--element); }
+.zoom-button[disabled] { color: var(--border); cursor: default; }
+.zoom-anchor .menu-popover { right: 0; left: auto; min-width: 220px; }
+.camera-action-button {
+  display: inline-flex;
+  width: var(--icon-btn-md);
+  height: var(--icon-btn-md);
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--secondary);
+  background: transparent;
+}
+.camera-action-button > svg { width: var(--icon-glyph-md); height: var(--icon-glyph-md); flex: none; }
+.camera-action-button:hover:not([disabled]) { color: var(--text); background: var(--panel-hover); }
+.camera-action-button[disabled] { color: var(--border); cursor: default; }
+.canvas-camera-controls {
+  position: absolute;
+  z-index: 20;
+  top: var(--chrome-top);
+  right: calc(var(--canvas-visible-right-inset, 0px) + 8px);
+  display: inline-flex;
+  height: var(--chrome-height);
+  align-items: center;
+  gap: 0;
+  padding: 1px;
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(8px * var(--ui-scale));
+  color: var(--text);
+  background: var(--side-panel-surface);
+  box-shadow: var(--floating-chrome-shadow);
+  /* No backdrop blur, as on .right-float: with it, entering Compare painted full screen late. */
+  view-transition-name: canvas-camera-controls;
+}
+.canvas-camera-controls.inspector-collapsed {
+  right: calc(
+    var(--canvas-visible-right-inset, 0px) +
+    var(--right-float-edge) + var(--right-float-width) * var(--ui-scale) - 1px
+  );
+  border: 0;
+  border-radius: calc(8px * var(--ui-scale)) 0 0 calc(8px * var(--ui-scale));
+  box-shadow: none;
+}
+.canvas-camera-controls.inspector-collapsed::before {
+  position: absolute;
+  z-index: -1;
+  top: 0;
+  right: calc((var(--right-float-width) * var(--ui-scale) - 1px) * -1);
+  bottom: 0;
+  left: 0;
+  border-radius: calc(8px * var(--ui-scale));
+  box-shadow: var(--floating-chrome-shadow);
+  content: "";
+  pointer-events: none;
+}
+.canvas-camera-controls .camera-action-button,
+.canvas-camera-controls .zoom-button {
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.canvas-camera-controls .camera-action-button:hover:not([disabled]),
+.canvas-camera-controls .zoom-button:hover:not([disabled]) {
+  background: var(--panel-hover);
+}
+.canvas-camera-controls .zoom-button[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--element);
+}
+.canvas-camera-controls-inner { display: flex; height: var(--floating-chrome-height); align-items: center; zoom: var(--ui-scale); }
+.camera-control-divider {
+  width: 1px;
+  height: 16px;
+  flex: none;
+  background: var(--border-subtle);
+}
+.canvas-camera-controls.inspector-collapsed .camera-control-divider { display: none; }
+.canvas-camera-controls .zoom-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.right-scroll-shell { flex: 1; }
+.right-scroll { display: flex; width: 100%; flex-direction: column; }
+.inspector { flex: 1; }
+.inspector-empty { flex: 1; justify-content: center; min-height: 180px; }
+/* The Inspector's empty state is the whole panel, so it reads at body size, not as a footnote. */
+.inspector-empty > svg { width: 28px; height: 28px; }
+.inspector-empty strong { margin: 12px 0 6px; font-size: 15px; font-weight: 600; }
+.inspector-empty span { max-width: 260px; font-size: 13px; line-height: 1.5; }
+
+/* One row: the screen name, then the view switcher pinned to the right as icons. */
+.inspector-mode-copy { display: flex; min-width: 0; flex: 1; align-items: center; gap: 8px; }
+/* The Inspector's status is a lead-in to the route, as in Compare's header: a dot, or + or −, in
+   the status colour (StatusGlyph). */
+.inspector-diff-status.status-glyph { width: 10px; height: 10px; }
+.inspector-diff-status.status-glyph > svg { width: 11px; height: 11px; stroke-width: 3; }
+.inspector-screen-path {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inspector .session-preview-frame {
+  display: flex;
+  justify-content: center;
+  margin: 14px 14px 20px;
+}
+.inspector .session-preview-frame .inspector-preview { margin: 0; }
+/* The carousel must span the frame so its preview resolves the same shared width as Diff. */
+.inspector .session-preview-frame .screen-variant-carousel { flex: 1 1 auto; }
+/* Every block in the body shares the header's 14px inset; nothing steps outside it. */
+.inspector-diff-visual {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 14px 20px;
+}
+.inspector-open-compare {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  color: var(--secondary);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+}
+.inspector-open-compare:hover { color: var(--text); background: var(--panel-hover); }
+.inspector-open-compare > svg { width: 14px; height: 14px; }
+.inspector-diff-compare {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 8px;
+}
+.inspector-diff-figure {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  width: min(100%, var(--inspector-diff-preview-width-vh), var(--inspector-diff-preview-width-max), var(--inspector-shared-preview-max-width));
+  max-width: min(var(--inspector-diff-preview-width-vh), var(--inspector-diff-preview-width-max), var(--inspector-shared-preview-max-width));
+  flex-basis: min(var(--inspector-diff-preview-width-vh), var(--inspector-diff-preview-width-max), var(--inspector-shared-preview-max-width));
+  flex-grow: 0;
+  flex-shrink: 1;
+  margin: 0;
+}
+/* Before and After are named above each side; the pair needs no arrow between them. */
+.inspector-diff-caption {
+  margin: 0 0 6px;
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+}
+.inspector-diff-preview {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  aspect-ratio: var(--inspector-diff-aspect-ratio);
+  align-items: center;
+  justify-content: center;
+}
+.inspector-diff-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 9px;
+  background: var(--subtle);
+  object-fit: cover;
+}
+/* The frame line is drawn over the screenshot's edge, not inside its box, so the image fills
+   the frame instead of letterboxing behind its own border. */
+.inspector-diff-preview:has(> img)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  pointer-events: none;
+}
+/* View and Copy appear over a hovered or focused screenshot. The overlay dims the screenshot
+   with one dark scrim in both themes, so the light ghost buttons read on any capture instead
+   of borrowing the toolbar chrome. The group stays shown while Copied or Failed feedback is up. */
+.inspector-diff-actions {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: rgb(12 12 14 / 0.4);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+/* Opacity alone hides the group: the buttons keep their place in the tab order, so focusing one
+   reveals the group and the lightbox can hand focus back to View after it closes. */
+.inspector-diff-preview:hover .inspector-diff-actions,
+.inspector-diff-preview:focus-within .inspector-diff-actions,
+.inspector-diff-actions[data-feedback] {
+  opacity: 1;
+}
+/* A screenshot that is still loading or could not be read has nothing to view or copy. */
+.inspector-diff-preview:has(> img[data-screenshot-state="loading"], > .screenshot-placeholder) .inspector-diff-actions {
+  display: none;
+}
+/* One soft tool group in the page's floating chrome: hairline, 12px radius, padded surface,
+   quiet labels that darken on hover. The scrim behind it supplies the contrast. */
+.inspector-diff-action-group {
+  display: inline-flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--panel-line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--floating-chrome-shadow);
+  pointer-events: auto;
+}
+.inspector-diff-action {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--secondary);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+.inspector-diff-action:hover { color: var(--text); background: var(--panel-hover); }
+.inspector-diff-action:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.inspector-diff-action svg { width: var(--icon-glyph-sm); height: var(--icon-glyph-sm); flex: none; }
+.inspector-diff-action[data-state="copied"] { color: var(--success); }
+.inspector-diff-action[data-state="failed"] { color: var(--danger); }
+/* A side that does not exist in that build is an empty dashed outline, not a filled card. */
+.inspector-diff-placeholder {
+  width: 100%;
+  height: 100%;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  box-sizing: border-box;
+  background: transparent;
+}
+.inspector-diff-summary {
+  padding: 0 14px 20px;
+  background: transparent;
+}
+/* Section titles sit one step under the 15px route heading and clearly above the 11px body. */
+.inspector-diff-summary h3 {
+  min-height: 24px;
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 24px;
+  text-wrap: balance;
+}
+.inspector-diff-summary .what-changed-context { margin-bottom: 8px; }
+.inspector-diff-summary p,
+.what-changed-item {
+  max-width: none;
+  margin: 0;
+  color: var(--secondary);
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+.what-changed-list {
+  display: grid;
+  gap: 2px;
+  margin: 0 -4px;
+  padding: 0;
+  list-style: none;
+}
+.what-changed-item {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 6px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 7px;
+  padding: 3px 4px;
+  border-radius: 5px;
+  background: transparent;
+  text-align: left;
+}
+.what-changed-bullet {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  transform: translateY(-1px);
+}
+.what-changed-more {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  padding: 0 5px;
+  border-radius: 5px;
+  color: var(--secondary);
+  background: transparent;
+  font-size: 10px;
+  font-weight: 500;
+}
+.what-changed-more:hover { color: var(--text); background: var(--panel-hover); }
+.what-changed-more svg { width: 12px; height: 12px; transition: transform 120ms ease; }
+.what-changed-more[aria-expanded="true"] svg { transform: rotate(180deg); }
+.screen-variant-carousel { display: flex; min-width: 0; flex-direction: column; gap: 10px; }
+.variant-stage {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 26px minmax(0, 1fr) 26px;
+  align-items: center;
+  gap: 6px;
+}
+.variant-preview { justify-self: center; }
+.variant-preview.has-image-ratio {
+  width: min(100%, var(--preview-width-vh), var(--preview-width-max), var(--inspector-shared-preview-max-width));
+  height: auto;
+}
+.variant-arrow {
+  display: inline-flex;
+  width: 26px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  color: var(--secondary);
+  background: transparent;
+}
+.variant-arrow svg { width: 18px; height: 18px; }
+.variant-arrow:hover:not([disabled]) { color: var(--text); background: var(--panel-hover); }
+.variant-arrow:focus-visible {
+  outline: 0;
+  border-color: transparent;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-hover));
+  box-shadow: none;
+  filter: brightness(1.08);
+}
+.variant-arrow[disabled] { color: var(--border); cursor: default; }
+.variant-thumbnails {
+  display: flex;
+  min-width: 0;
+  justify-content: safe center;
+  gap: 7px;
+  overflow-x: auto;
+  padding: 5px 5px 8px;
+  scroll-padding-inline: 5px;
+  scrollbar-width: thin;
+}
+.variant-thumbnail {
+  display: flex;
+  width: 54px;
+  height: 70px;
+  flex: 0 0 54px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 3px;
+  border: 2px solid var(--border-subtle);
+  border-radius: 7px;
+  color: var(--tertiary);
+  background: var(--subtle);
+  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+.variant-thumbnail:hover { border-color: var(--border); background: var(--panel-hover); }
+.variant-thumbnail:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.variant-thumbnail[aria-selected="true"] {
+  border-color: var(--accent);
+  background: var(--subtle);
+  box-shadow: none;
+}
+.variant-thumbnail img {
+  width: 100%;
+  height: 100%;
+  border-radius: 3px;
+  object-fit: contain;
+  transition: opacity 120ms ease, filter 120ms ease;
+}
+.variant-thumbnail[aria-selected="false"] img {
+  opacity: var(--dim-out);
+  filter: saturate(0.42) brightness(0.88);
+}
+.variant-thumbnail svg { width: 16px; height: 16px; }
+.inspector .inspector-section { margin: 0; padding: 0 14px 20px; }
+.inspector .section-title { min-height: 24px; margin-bottom: 6px; }
+.inspector .section-title h3 { color: var(--text); font-size: 13px; font-weight: 700; letter-spacing: -0.01em; line-height: 24px; }
+/* An empty Transition list is one quiet line under its title, not a centred filler block. */
+.inspector .transition-section.is-empty { flex: none; }
+.inspector .transition-section .inline-empty { display: block; flex: none; padding: 2px 0 0; color: var(--tertiary); font-size: 11px; line-height: 1.55; text-align: left; }
+
+/* ── Toggle group ───────────────────────────────────────────────────────── */
+
+.toggle-group { position: relative; display: flex; width: 100%; }
+.toggle-pill { padding: 3px; border: 1px solid var(--panel-line); border-radius: 8px; background: var(--segment-track); }
+.toggle-row { display: flex; width: 100%; gap: 2px; }
+.toggle-row .tooltip-anchor { flex: 1 1 0; min-width: 0; }
+.toggle-row .tooltip-anchor .toggle-button { width: 100%; }
+/* The active layer: same labels, active colours, clipped to the active option. */
+/* One continuous block carries the active background; the buttons inside stay transparent
+   so the clip reveals a single moving highlight rather than each button's own box. */
+.toggle-overlay {
+  position: absolute;
+  inset: 3px;
+  width: auto;
+  border-radius: 6px;
+  background: var(--segment-thumb);
+  pointer-events: none;
+  transition: clip-path 260ms cubic-bezier(0.2, 0, 0, 1);
+}
+.toggle-overlay .toggle-button { color: var(--text); background: transparent; }
+.toggle-overlay .toggle-count { color: var(--secondary); }
+.toggle-button {
+  display: inline-flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 4px;
+  border-radius: 6px;
+  color: var(--secondary);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: normal;
+  transition: color 120ms ease;
+}
+.toggle-row:not(.toggle-overlay) .toggle-button:hover:not([disabled]):not(.active) { color: var(--text); }
+.toggle-row:not(.toggle-overlay) .toggle-button:focus-visible {
+  position: relative;
+  z-index: 2;
+  color: var(--text);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.toggle-button[disabled] { color: var(--tertiary); cursor: default; opacity: 0.6; }
+.toggle-group.disabled .toggle-overlay { display: none; }
+.toggle-label { min-width: 0; overflow-wrap: anywhere; }
+.toggle-count { color: var(--tertiary); font-size: 9px; font-variant-numeric: tabular-nums; transition: color 120ms ease; }
+/* Flat: no chip, no sliding overlay — colour is the only state, hover included. */
+.toggle-flat { width: auto; }
+.toggle-flat .toggle-button { flex: none; min-height: 22px; padding: 0 7px; font-size: 10px; }
+.toggle-flat .toggle-button.active,
+.toggle-flat .toggle-button:hover:not([disabled]) { color: var(--text); }
+/* The count lifts with the label, so the whole option brightens as one. */
+.toggle-flat .toggle-button.active .toggle-count,
+.toggle-flat .toggle-button:hover:not([disabled]) .toggle-count { color: var(--secondary); }
+
+/* ── Diff decoration ────────────────────────────────────────────────────── */
+
+.diff-frame { position: relative; display: flex; min-height: 0; flex: 1; flex-direction: column; width: 100%; }
+.diff-added { --diff: var(--success); --diff-soft: var(--success-soft); }
+/* Modified reads orange everywhere: the Changes list, the canvas chip and border, the Inspector badge. */
+.diff-modified { --diff: var(--modified); --diff-soft: var(--modified-soft); }
+.diff-removed { --diff: var(--danger); --diff-soft: var(--danger-soft); }
+.diff-unchanged { --diff: var(--tertiary); --diff-soft: var(--element); }
+.diff-needs-review { --diff: var(--tertiary); --diff-soft: var(--element); }
+.diff-source-affected { --diff: var(--purple); --diff-soft: var(--purple-soft); }
+.diff-not-compared { --diff: var(--tertiary); --diff-soft: var(--element); }
+/* Unavailable: the run could not capture the screen. Quiet like Not compared; the Inspector says why. */
+.diff-unavailable { --diff: var(--tertiary); --diff-soft: var(--element); }
+/* A screen variant is informational, not a change: accent blue, no change frame or border. */
+.diff-variant { --diff: var(--accent); --diff-soft: var(--accent-soft); }
+/* Changed items: solid outline in the change colour over a faint tint, with a solid pill
+   label riding the top edge. The frame grows past the screenshot box, never into the title. */
+.diff-frame.diff-added, .diff-frame.diff-modified, .diff-frame.diff-removed {
+  width: calc(100% + 20px);
+  margin: -10px;
+  padding: 10px;
+  border: 3px solid var(--diff);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--diff) 7%, transparent);
+}
+/* Map screenshot slots reserve stable graph geometry, while the visible frame hugs the
+   intrinsic image ratio. Keep change decoration on that visible frame so `contain` does not
+   read as empty side padding around portrait or landscape captures. */
+.screen-screenshot-card .diff-frame.diff-added,
+.screen-screenshot-card .diff-frame.diff-modified,
+.screen-screenshot-card .diff-frame.diff-removed {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.screen-screenshot-card .diff-frame.diff-added .screen-node-image img,
+.screen-screenshot-card .diff-frame.diff-modified .screen-node-image img,
+.screen-screenshot-card .diff-frame.diff-removed .screen-node-image img {
+  border-color: var(--diff);
+  box-shadow: 0 0 0 2px var(--diff);
+}
+.screen-screenshot-card .diff-frame.diff-added .screen-node-image > .image-placeholder,
+.screen-screenshot-card .diff-frame.diff-modified .screen-node-image > .image-placeholder,
+.screen-screenshot-card .diff-frame.diff-removed .screen-node-image > .image-placeholder {
+  border-color: var(--diff);
+  box-shadow: 0 0 0 2px var(--diff);
+}
+/* Map status chips straddle the screenshot's own top border instead of an offset frame. */
+.screen-screenshot-card .diff-label {
+  top: 0;
+  transform: translate(-50%, -50%);
+}
+.diff-label {
+  position: absolute;
+  z-index: 2;
+  top: -9px;
+  left: 50%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--diff);
+  box-shadow: 0 0 0 3px var(--screen);
+  /* Title case in the UI face reads at canvas zoom where tracked-out small caps did not. */
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1.4;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+/* While the camera or the projection animates, the chip keeps one raster and scales with its
+   pill; re-hinting the text on every frame read as the label bobbing. At rest the hint is off,
+   so the label re-rasters sharp at the final zoom. */
+.react-flow:is(.canvas-camera-flying, .canvas-projection-animating) .diff-label { will-change: transform; }
+/* Status chips take white text on light theme's deep colours, and dark text on dark theme's
+   light ones. */
+:root[data-theme="dark"] .diff-label { color: #0b0c0e; }
+.diff-dot { display: inline-block; width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--diff); }
+.diff-glyph { display: flex; width: 24px; height: 24px; flex: none; align-items: center; justify-content: center; border-radius: 6px; color: var(--diff); background: var(--diff-soft); }
+
+.screenshot-diff-frame { position: relative; min-width: 0; }
+.tone-success { color: var(--success); }
+.tone-warning { color: var(--warning); }
+.tone-danger { color: var(--danger); }
+
+.inspector .section-title .toggle-group { width: auto; }
+
+.inspector-preview { position: relative; display: flex; height: min(53vh, 468px); align-items: center; justify-content: center; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--subtle); }
+.inspector-preview img { width: 100%; height: 100%; object-fit: contain; }
+/* No screenshot: the canvas node's ImageOff and label, sized like the panel empty states — a
+   tertiary 20px icon above small secondary text, centred in the preview frame. */
+.screenshot-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--tertiary);
+  text-align: center;
+}
+.screenshot-placeholder > svg { flex: none; }
+.screenshot-placeholder > span { color: var(--secondary); font-size: 12px; font-weight: 500; line-height: 1.4; }
+/* A large preview waits with the Viewer's spinner centred over its empty frame. It fades in after a
+   beat, so a screenshot that resolves at once never flashes it. */
+.screenshot-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--tertiary);
+  pointer-events: none;
+  animation: screenshot-loading-in 160ms ease-out 200ms both;
+}
+.screenshot-loading > svg { width: 22px; height: 22px; animation: spin 800ms linear infinite; }
+@keyframes screenshot-loading-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .screenshot-loading > svg { animation: none; }
+}
+.status-badge { display: inline-flex; align-items: center; width: fit-content; padding: 4px 7px; border-radius: 6px; color: var(--secondary); background: var(--element); font-size: 10px; font-weight: 500; line-height: 1.2; text-transform: capitalize; }
+.status-badge.info { color: var(--accent-strong); background: var(--accent-soft); }
+.status-badge.success { color: var(--success); background: var(--success-soft); }
+.status-badge.warning { color: var(--warning); background: var(--warning-soft); }
+.status-badge.danger { color: var(--danger); background: var(--danger-soft); }
+.inspector-section { margin-top: 22px; }
+.section-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }
+.section-title h3 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; font-weight: 600; }
+.section-title > span { color: var(--tertiary); font-size: 10px; }
+.transition-list { display: flex; flex-direction: column; gap: 2px; }
+.transition-list > .tooltip-anchor { display: block; }
+.transition-row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 54px;
+  align-items: center;
+  gap: 9px;
+  padding: 6px;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+}
+.transition-row:hover { background: var(--panel-hover); }
+.transition-row:focus-visible { outline-offset: -2px; }
+.transition-thumb { display: flex; width: 34px; height: 42px; flex: none; align-items: center; justify-content: center; overflow: hidden; border: 1px solid var(--panel-line); border-radius: 5px; color: var(--tertiary); background: var(--subtle); }
+.transition-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.transition-kinds { display: flex; flex: none; flex-direction: column; align-items: flex-start; gap: 3px; }
+.transition-kind { padding: 2px 6px; border: 1px solid var(--border-subtle); border-radius: 5px; color: var(--secondary); background: var(--selected); font-size: 10px; font-weight: 500; line-height: 1.3; }
+.transition-copy { display: flex; min-width: 0; flex: 1; align-items: flex-start; justify-content: center; }
+.transition-copy strong { overflow-wrap: anywhere; white-space: normal; }
+.transition-copy strong { font-size: 10px; }
+.transition-copy .transition-path { display: block; width: 100%; color: var(--text); font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; font-size: 10px; font-weight: 600; line-height: 1.45; text-align: left; }
+.transition-row > svg { flex: none; color: var(--tertiary); }
+.inline-empty { padding: 24px; color: var(--tertiary); font-size: 11px; text-align: center; }
+.transition-section.is-empty { display: flex; flex: 1; flex-direction: column; }
+.transition-section.is-empty .inline-empty { display: flex; flex: 1; align-items: center; justify-content: center; }
+
+.button { display: inline-flex; height: 36px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 12px; font-weight: 600; box-shadow: none; }
+.button:hover { background: var(--hover); }
+.button-primary { border-color: var(--button-primary); color: var(--button-primary-text); background: var(--button-primary); }
+.button-primary:hover { border-color: var(--button-primary-hover); color: var(--button-primary-text); background: var(--button-primary-hover); }
+
+.page-empty, .centered-state { display: flex; align-items: center; justify-content: center; flex-direction: column; color: var(--tertiary); text-align: center; }
+.page-empty { max-width: 1440px; min-height: 360px; margin: 0 auto; border: 1px dashed var(--border); border-radius: 12px; background: var(--surface); }
+.page-empty h2, .centered-state h1 { margin: 12px 0 5px; color: var(--text); font-size: 16px; }
+.page-empty p, .centered-state p { margin: 0; font-size: 11px; }
+.compact-empty { min-height: 220px; }
+.map-empty { width: min(420px, calc(100% - 48px)); min-height: 0; margin: 48px auto; padding: 32px 24px; }
+.map-empty p { max-width: 340px; font-size: 12px; line-height: 1.5; }
+.map-empty p + p { margin-top: 8px; }
+.centered-state { width: 100%; height: 100%; padding: 24px; background: var(--screen); }
+.centered-state p { max-width: 520px; margin-bottom: 18px; line-height: 1.55; }
+.state-icon { display: flex; width: 42px; height: 42px; align-items: center; justify-content: center; border-radius: 10px; background: var(--element); }
+.state-icon-danger { color: var(--danger); background: var(--danger-soft); }
+.app-loading { display: flex; width: 100%; height: 100%; min-height: 200px; align-items: center; justify-content: center; background: var(--screen); }
+.app-loading-logo { position: relative; width: 56px; height: 51px; }
+.app-loading-logo .expo-mark { display: block; width: 100%; height: 100%; color: var(--border); transform: none; }
+.app-loading-logo-fill { position: absolute; inset: 0; animation: app-logo-fill 2.8s cubic-bezier(0.45, 0, 0.2, 1) infinite; }
+.app-loading-logo-fill .expo-mark { color: var(--text); }
+@keyframes app-logo-fill {
+  0%, 8% { clip-path: inset(100% 0 0); opacity: 1; }
+  65%, 80% { clip-path: inset(0 0 0); opacity: 1; }
+  95%, 100% { clip-path: inset(0 0 0); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-loading-logo-fill { animation: none; }
+}
+.sync-warning { position: fixed; z-index: 50; right: 14px; bottom: 14px; display: flex; height: 34px; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border)); border-radius: 7px; color: var(--warning); background: var(--surface); box-shadow: var(--shadow-md); font-size: 10px; }
+
+/* ── Left panel ─────────────────────────────────────────────────────────── */
+
+/* The Viewer's only left chrome: a pill floating over the canvas. */
+.left-panel { z-index: 100; }
+/* A trailing button carries its own inset; trailing text needs the pill's. */
+.left-panel.collapsed {
+  /* Persistent chrome: it stays put above the sliding canvas during a section switch. */
+  view-transition-name: app-pill;
+  position: absolute;
+  top: var(--chrome-top);
+  left: var(--canvas-chrome-inline-inset);
+  display: block;
+  width: fit-content;
+  max-width: min(calc(var(--left-collapsed-pill-width) * var(--ui-scale)), calc(100% - 24px));
+  height: var(--chrome-height);
+  border: 0;
+  background: transparent;
+}
+.left-panel-collapsed-pill {
+  display: flex;
+  width: 100%;
+  /* Zoomed by --ui-scale, so it fills the scaled pill from the unscaled height. */
+  height: var(--left-collapsed-pill-height);
+  zoom: var(--ui-scale);
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 14px 2px 5px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--side-panel-surface);
+  box-shadow: var(--floating-chrome-shadow);
+  backdrop-filter: blur(8px);
+}
+.collapsed-app-identity {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: baseline;
+  gap: 10px;
+}
+.collapsed-app-identity strong {
+  min-width: 0;
+  overflow-x: clip;
+  overflow-y: visible;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.collapsed-app-name { color: inherit; text-decoration: none; }
+.collapsed-app-name:hover { text-decoration-line: underline; text-underline-offset: 3px; }
+.collapsed-app-name:focus-visible { border-radius: 3px; outline: 2px solid var(--accent); outline-offset: 2px; }
+.collapsed-pr { flex: none; color: var(--tertiary); font-size: 13px; text-decoration: none; white-space: nowrap; }
+.collapsed-pr:hover { color: var(--text); text-decoration-line: underline; text-underline-offset: 3px; }
+.collapsed-pr:focus-visible { border-radius: 3px; outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The menu holds the whole Changes panel: find, status chips, the list and a review action. */
+.menu-popover.changes-menu {
+  display: flex;
+  width: calc(320px * var(--ui-scale));
+  overflow: hidden !important;
+  border: 1px solid var(--popover-line);
+  border-radius: 10px;
+  background: var(--popover);
+  box-shadow: var(--popover-shadow);
+}
+.changes-menu-body {
+  display: flex;
+  min-height: 0;
+  max-height: min(560px, calc(100dvh - 72px));
+  flex: 1;
+  flex-direction: column;
+  outline: none;
+}
+.changes-menu-body > .changes-panel { min-height: 0; flex: 1; }
+.changes-menu-review {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-top: 1px solid var(--popover-line);
+  color: var(--secondary);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.changes-menu-review > svg { width: 14px; height: 14px; flex: none; }
+.changes-menu-review:hover,
+.changes-menu-review:focus-visible { color: var(--text); background: var(--popover-hover); outline: none; }
+/* The Expo mark returns to the Map root; a hairline divides it from the app identity. */
+.panel-logo-button,
+.panel-logo-mark {
+  display: flex;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--text);
+  background: transparent;
+}
+.panel-logo-button:hover { background: var(--panel-hover); }
+/* The app's icon: a ring keeps a dark icon visible on the dark pill, and a light one on light. */
+.panel-logo-button .panel-app-icon {
+  display: block;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.14);
+}
+:root[data-theme="dark"] .panel-logo-button .panel-app-icon { box-shadow: 0 0 0 1px rgb(255 255 255 / 0.16); }
+.panel-logo-button .expo-mark,
+.panel-logo-mark .expo-mark { width: 20px; height: 18px; }
+.panel-logo-divider { width: 1px; height: 18px; flex: none; background: var(--panel-line-strong, var(--border-subtle)); }
+/* Trim the font's extra ascent/descent space so visible letters share the icons' center. */
+.collapsed-app-identity > strong {
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+}
+.panel-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.panel-body { display: flex; flex-direction: column; }
+.panel-empty { display: flex; align-items: center; flex-direction: column; padding: 40px 16px; color: var(--tertiary); text-align: center; }
+.panel-empty strong { margin: 9px 0 3px; color: var(--secondary); font-size: 12px; font-weight: 500; }
+.panel-empty span { font-size: 10px; line-height: 1.5; }
+
+.menu-row.menu-row-danger { color: var(--danger); }
+.menu-row-danger .menu-row-check { color: inherit; }
+.menu-row-danger:hover { background: var(--danger-soft); }
+
+/* sm: draws at 28px but keeps a 32px pointer target through the ::after pad. */
+.icon-button-sm { position: relative; width: var(--icon-btn-sm); height: var(--icon-btn-sm); border-radius: 6px; }
+.icon-button-sm > svg { width: var(--icon-glyph-sm); height: var(--icon-glyph-sm); }
+.icon-button-sm:hover { border-color: transparent; background: var(--panel-hover); }
+.icon-button-sm::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--icon-hit-min);
+  height: var(--icon-hit-min);
+  transform: translate(-50%, -50%);
+}
+
+/* ── Cascading menu ─────────────────────────────────────────────────────── */
+
+.menu-popover { position: absolute; z-index: 60; top: calc(100% + 6px); left: 0; }
+/* A menu's contents grow with --ui-scale; the popover keeps the place computed for it. */
+.menu-popover > * { zoom: var(--ui-scale); }
+.menu-list {
+  min-width: 208px;
+  max-height: min(360px, calc(100vh - 24px));
+  border: 1px solid var(--popover-line);
+  border-radius: 9px;
+  background: var(--popover);
+  box-shadow: var(--popover-shadow);
+}
+.menu-list-scroll { width: 100%; overflow-y: auto; padding: 4px; }
+/* A nested menu is positioned outside its parent list. Keep that space pointer-visible when the
+   level owns cascades; the generic scroll-area shell otherwise clips it as overflow. */
+.menu-list.menu-list-cascade,
+.menu-list-scroll.menu-list-scroll-cascade { overflow: visible; }
+.menu-list.menu-list-cascade > .auto-hide-scrollbar { display: none; }
+.menu-list.menu-list-nested { position: absolute; top: -5px; left: calc(100% + 3px); }
+.menu-branch { position: relative; }
+.menu-row {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 6px;
+  border-radius: 5px;
+  color: var(--text);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+}
+.menu-row:hover:not([disabled]) { background: var(--popover-hover); }
+.menu-row[disabled] { color: var(--tertiary); cursor: default; }
+.menu-row-open, .menu-row-open:hover:not([disabled]) { background: var(--popover-active); }
+.menu-row-check { display: flex; width: 16px; flex: none; align-items: center; justify-content: center; color: var(--secondary); }
+.menu-row-check svg { width: var(--icon-glyph-inline); height: var(--icon-glyph-inline); }
+.menu-row-label { min-width: 0; flex: 1; overflow-wrap: anywhere; white-space: normal; }
+.menu-row-description { display: block; margin-top: 1px; color: var(--secondary); font-size: 11px; }
+.menu-row-chevron { width: var(--icon-glyph-inline); height: var(--icon-glyph-inline); flex: none; color: var(--tertiary); }
+.menu-row-shortcut { flex: none; margin-left: 16px; color: var(--tertiary); font-size: 11px; }
+.menu-separator { height: 1px; margin: 4px 6px; background: var(--popover-line); }
+
+/* ── Feedback dialog ────────────────────────────────────────────────────── */
+
+.dialog-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+/* ── Search command ─────────────────────────────────────────────────────── */
+
+.search-command-backdrop {
+  z-index: 300;
+  align-items: flex-start;
+  padding-top: clamp(72px, 11vh, 112px);
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(1px);
+}
+.search-command {
+  display: flex;
+  zoom: var(--ui-scale);
+  width: min(600px, calc(100vw - 32px));
+  max-height: min(620px, calc(100vh - 104px));
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--dialog);
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.2), var(--shadow-md);
+}
+.search-command-input-row {
+  display: grid;
+  min-height: 54px;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 0 14px 0 16px;
+  border-bottom: 1px solid var(--panel-line);
+}
+.search-command-input-row > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--tertiary);
+}
+.search-command-input-row input {
+  width: 100%;
+  min-width: 0;
+  height: 52px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+  font-size: 15px;
+  line-height: 1;
+}
+.search-command-input-row input::placeholder { color: var(--tertiary); }
+.search-command-input-row kbd {
+  min-width: 30px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  color: var(--tertiary);
+  background: var(--subtle);
+  box-shadow: 0 1px 0 var(--border-subtle);
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1.5;
+  text-align: center;
+}
+.search-command-section-label {
+  padding: 10px 14px 5px;
+  color: var(--tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+.search-command-results {
+  width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 6px 7px;
+  overscroll-behavior: contain;
+}
+.search-command-results-shell { min-height: 0; flex: 0 1 auto; }
+.search-command-result {
+  display: grid;
+  width: 100%;
+  min-height: 52px;
+  grid-template-columns: 32px minmax(0, 1fr) auto 16px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+}
+.search-command-result.active { background: var(--card-hover); }
+.search-command-result:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.search-command-result-icon {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--secondary);
+  background: var(--element);
+}
+.search-command-result-icon svg { width: 16px; height: 16px; }
+.search-command-result-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.search-command-result-copy strong,
+.search-command-result-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-command-result-copy strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.search-command-result-copy small {
+  color: var(--tertiary);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.search-command-result-copy code { color: inherit; font-size: inherit; }
+.search-command-result-kind {
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--secondary);
+  background: var(--subtle);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.search-command-enter {
+  width: 14px;
+  height: 14px;
+  color: var(--tertiary);
+}
+.search-command-empty {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+  padding: 24px;
+  color: var(--tertiary);
+  text-align: center;
+}
+.search-command-empty svg { width: 22px; height: 22px; margin-bottom: 5px; }
+.search-command-empty strong { color: var(--text); font-size: 12px; }
+.search-command-empty span { max-width: 300px; font-size: 11px; }
+
+/* ── Toasts ─────────────────────────────────────────────────────────────── */
+
+html [data-sonner-toaster][data-sonner-theme] {
+  --normal-bg: var(--popover);
+  --normal-text: var(--text);
+  --normal-border: var(--popover-line);
+}
+.app-toast[data-sonner-toast] {
+  border: 1px solid var(--popover-line);
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--popover);
+  box-shadow: var(--popover-shadow);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+/* ── Tooltips ───────────────────────────────────────────────────────────── */
+
+.tooltip-anchor { position: relative; display: inline-flex; }
+.tooltip {
+  position: fixed;
+  z-index: 70;
+  padding: calc(5px * var(--ui-scale)) calc(9px * var(--ui-scale));
+  border: 1px solid var(--popover-line);
+  border-radius: calc(7px * var(--ui-scale));
+  color: var(--text);
+  background: var(--popover);
+  box-shadow: var(--popover-shadow);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-line;
+  width: max-content;
+  max-width: min(480px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  animation: tooltip-in 90ms ease-out both;
+}
+/* Once one tooltip has opened, adjacent tooltips swap without added motion or delay. */
+.tooltip[data-instant] { animation: none; }
+/* The key hint rides along at the end of the label, dimmed so the words still read first. */
+.tooltip-content { display: block; zoom: var(--ui-scale); }
+.tooltip-key { margin-left: 6px; color: var(--tertiary); }
+.tooltip-description { display: block; margin-top: 1px; color: var(--secondary); }
+
+/* Tail: a rotated square showing only its two outward edges, so it reads as a pointer
+   continuous with the bubble's border. */
+.tooltip::after {
+  content: "";
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  background: var(--popover);
+}
+.tooltip-right::after {
+  top: var(--tooltip-arrow);
+  left: -4px;
+  border-bottom: 1px solid var(--popover-line);
+  border-left: 1px solid var(--popover-line);
+  transform: translateY(-50%) rotate(45deg);
+}
+.tooltip-top::after {
+  bottom: -4px;
+  border-right: 1px solid var(--popover-line);
+  border-bottom: 1px solid var(--popover-line);
+  left: var(--tooltip-arrow);
+  margin-left: -4px;
+  transform: rotate(45deg);
+}
+.tooltip-bottom::after,
+.tooltip-bottom-end::after {
+  top: -4px;
+  border-top: 1px solid var(--popover-line);
+  border-left: 1px solid var(--popover-line);
+  transform: rotate(45deg);
+}
+.tooltip-bottom::after, .tooltip-bottom-end::after { left: var(--tooltip-arrow); margin-left: -4px; }
+.tooltip-left::after {
+  top: var(--tooltip-arrow);
+  right: -4px;
+  border-top: 1px solid var(--popover-line);
+  border-right: 1px solid var(--popover-line);
+  transform: translateY(-50%) rotate(45deg);
+}
+@keyframes tooltip-in { from { opacity: 0; } }
+
+@media (max-width: 1180px) {
+  .right-panel { width: 320px; }
+}
+
+@media (max-width: 900px) {
+  .right-panel { position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; box-shadow: var(--shadow-md); }
+}
+
+/* On a phone Search is a full-screen view with an X; the Esc hint and the backdrop are for a desktop. */
+.search-command-close { display: none; }
+@media (max-width: 819px) {
+  .search-command-backdrop { padding: 0; background: var(--dialog); backdrop-filter: none; }
+  .search-command { width: 100%; height: 100%; max-height: none; padding-top: env(safe-area-inset-top); border: 0; border-radius: 0; box-shadow: none; }
+  .search-command-input-row > kbd { display: none; }
+  .search-command-close { display: inline-flex; width: 34px; height: 34px; flex: none; align-items: center; justify-content: center; border: 0; border-radius: 17px; background: var(--element); color: var(--secondary); }
+  .search-command-close svg { width: 18px; height: 18px; }
+  .search-command-result { grid-template-columns: 32px minmax(0, 1fr) auto; }
+  .search-command-enter { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+/* Multi-platform reviews: the platform name in the pill opens the sibling report menu. */
+.collapsed-platform {
+  flex: none; display: inline-flex; height: 24px; align-items: center; gap: 6px; margin: 0; padding: 0 8px 0 10px; border: 0; border-radius: 7px;
+  background: var(--element); color: var(--secondary); font: inherit; font-size: 12.5px; font-weight: 500; line-height: 16px; white-space: nowrap; cursor: pointer;
+}
+.collapsed-platform > svg { width: 9px; height: 9px; }
+.collapsed-platform:hover, .collapsed-platform[aria-expanded="true"] { color: var(--text); background: var(--hover); }
+.collapsed-platform:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.launch-section .launch-note {
+  margin: 0;
+  color: var(--tertiary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.launch-section .launch-filmstrip {
+  margin: 10px 0 0;
+}
+
+.launch-section .launch-filmstrip img {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.launch-section .launch-filmstrip figcaption {
+  margin-top: 6px;
+  color: var(--tertiary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.launch-section .launch-video {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  border-radius: 8px;
+  background: #000;
+}
+
+
+.image-placeholder-reason {
+  display: block;
+  max-width: 80%;
+  margin-top: 6px;
+  font-size: 9px;
+  line-height: 1.4;
+  color: var(--text-muted, inherit);
+  opacity: 0.8;
+}
+
+.screenshot-placeholder-detail {
+  display: block;
+  max-width: 220px;
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: center;
+  opacity: 0.75;
+}

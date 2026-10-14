@@ -1,0 +1,17 @@
+{
+  "cli": {
+    "version": ">=16.0.0",
+    "requireCommit": false
+  },
+  "build": {
+    "explore": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_EXPLORE_MODE": "true"
+      },
+      "ios": {
+        "simulator": true
+      }
+    }
+  }
+}

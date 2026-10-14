@@ -1,0 +1,350 @@
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import test from "node:test";
+import { parse } from "yaml";
+
+const actionSource = await readFile(new URL("../../action.yml", import.meta.url), "utf8");
+const action = parse(actionSource);
+const reviewSource = await readFile(new URL("../../templates/explore-review.yml", import.meta.url), "utf8");
+const review = parse(reviewSource);
+const baselineSource = await readFile(new URL("../../templates/explore-baseline.yml", import.meta.url), "utf8");
+const baseline = parse(baselineSource);
+const workflows = [review, baseline];
+
+test("one review and one baseline template replace all duplicate CI entrypoints", async () => {
+  const names = (await readdir(new URL("../../templates/", import.meta.url))).filter(name => name.endsWith(".yml"));
+  assert.deepEqual(names.sort(), ["explore-baseline.yml", "explore-review.yml"]);
+  for (const source of [actionSource, reviewSource, baselineSource]) {
+    assert.doesNotMatch(source, /surface_manifest|surfaces\.json|runtime_probe|--keyless|KEYLESS|claude-code|agent_sandbox|report:export|report:comment/);
+  }
+  for (const removed of ["surface_manifest", "impact_plan", "runtime_probe_url", "keyless", "agent_sandbox", "bundle_id"]) {
+    assert.equal(action.inputs[removed], undefined);
+  }
+});
+
+test("Actions are immutable, have explicit permissions, and never persist checkout credentials", () => {
+  for (const workflow of workflows) {
+    assert.deepEqual(workflow.permissions, {});
+    for (const job of Object.values(workflow.jobs)) {
+      assert.ok(job.permissions);
+      for (const step of job.steps) {
+        if (step.uses) assert.match(step.uses, /^actions\/[a-z-]+@[a-f0-9]{40}$/);
+        if (step.uses?.startsWith("actions/checkout@")) assert.equal(step.with["persist-credentials"], false);
+      }
+    }
+  }
+  // Capture posts progress updates; publication rewrites the finished comment.
+  assert.equal(review.jobs.capture.permissions["pull-requests"], "write");
+  assert.equal(review.jobs.report.permissions["pull-requests"], "write");
+  assert.doesNotMatch(JSON.stringify(review.jobs.report), /EXPO_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY/);
+});
+
+test("CI and capture templates use Node 24 without skipping browser coverage or enabling privileged caches", async () => {
+  const ci = parse(await readFile(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8"));
+  const setup = parse(await readFile(new URL("../../.github/actions/setup/action.yml", import.meta.url), "utf8"));
+  const playwright = parse(await readFile(new URL("../../.github/actions/playwright/action.yml", import.meta.url), "utf8"));
+  const node = setup.runs.steps.find(step => step.uses?.startsWith("actions/setup-node@"));
+  assert.equal(node.with["node-version"], 24);
+  const jobs = Object.values(ci.jobs);
+  for (const job of jobs) {
+    assert.equal(job.steps[1].uses, "./.github/actions/setup", job.name);
+    for (const step of [...job.steps, ...setup.runs.steps, ...playwright.runs.steps]) {
+      if (step.uses?.startsWith("actions/")) assert.match(step.uses, /^actions\/[a-z-]+@[a-f0-9]{40}$/);
+    }
+  }
+  const steps = jobs.flatMap(job => job.steps);
+  for (const command of ["npx playwright test --shard=${{ matrix.shard }}/6", "npm run test:viewer:browser", "node --test test/browser/${{ matrix.suite }}.browser.mjs", "npm run test:hosting", "npm run build:hosting"]) {
+    const step = steps.find(step => step.run === command);
+    assert.ok(step, command);
+    assert.equal(step.if, undefined, command);
+  }
+  assert.deepEqual(ci.jobs.e2e.strategy.matrix.shard, [1, 2, 3, 4, 5, 6]);
+  const manifest = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+  const artifactSuites = manifest.scripts["test:viewer:artifacts"].match(/test\/browser\/([a-z-]+)\.browser\.mjs/g).map(file => file.slice("test/browser/".length, -".browser.mjs".length));
+  assert.deepEqual(ci.jobs["viewer-artifacts"].strategy.matrix.suite, artifactSuites);
+  assert.deepEqual(ci.jobs.unit.strategy.matrix.shard, [1, 2, 3]);
+  assert.equal(ci.jobs.unit.steps.at(-1).run, "node --test --test-shard=${{ matrix.shard }}/3 test/node/*.test.mjs");
+  assert.ok(playwright.runs.steps.some(step => step.run === "npx playwright install --with-deps chromium"));
+  for (const workflow of workflows) {
+    for (const job of Object.values(workflow.jobs)) {
+      for (const step of job.steps.filter(step => step.uses?.startsWith("actions/setup-node@"))) {
+        assert.equal(step.with["node-version"], 24);
+        assert.equal(step.with["package-manager-cache"], false);
+        assert.equal(step.with.cache, undefined);
+      }
+    }
+  }
+  for (const directory of ["", "viewer-host/"]) {
+    const manifest = JSON.parse(await readFile(new URL(`../../${directory}package.json`, import.meta.url), "utf8"));
+    const lock = JSON.parse(await readFile(new URL(`../../${directory}package-lock.json`, import.meta.url), "utf8"));
+    assert.equal(manifest.engines.node, ">=24.12.0", directory);
+    assert.equal(lock.packages[""].engines.node, manifest.engines.node, directory);
+  }
+});
+
+test("source consistency verification precedes app installs and capture", () => {
+  for (const job of [review.jobs.capture, baseline.jobs.baseline]) {
+    const names = job.steps.map(step => step.name);
+    const verify = names.indexOf("Verify deterministic source planning");
+    const install = names.indexOf("Install app dependencies");
+    const capture = job.steps.findIndex(step => /capture:(review|baseline)/.test(step.run ?? ""));
+    assert.ok(verify > 0 && verify < install && install < capture);
+    assert.match(job.steps[verify].run, /source:verify/);
+    assert.match(job.steps[verify].run, /--output "\$RUNNER_TEMP\/explore-consistency"/);
+    const tools = names.indexOf("Install Explore");
+    assert.ok(tools > 0 && tools < verify);
+    assert.match(job.steps[tools].run, /EXPLORE_VERSION_INVALID/);
+  }
+  const verify = action.runs.steps.findIndex(step => step.name === "Verify deterministic source planning");
+  assert.ok(verify < action.runs.steps.findIndex(step => step.id === "capture"));
+});
+
+test("workflows install the pinned npm release from the default branch's copy", () => {
+  for (const workflow of workflows) {
+    assert.match(workflow.env.EXPLORE_VERSION, /^set-by-expo-explore-setup$/);
+    assert.doesNotMatch(JSON.stringify(workflow), /EXPLORE_TOOLS_COMMIT|vendor\/expo-explore/);
+    for (const job of Object.values(workflow.jobs)) for (const step of job.steps.filter(step => step.name === "Install Explore")) {
+      assert.match(step.run, /npm pack "@expo\/explore@\$EXPLORE_VERSION"/);
+    }
+  }
+  assert.ok(Object.hasOwn(review.on, "pull_request_target"), "the default branch's workflow, and so its version, runs for every PR");
+});
+
+test("trusted tools retain native agent runtimes while omitting development dependencies and lifecycle scripts", () => {
+  const builds = [action.runs.steps.find(step => step.name === "Build the pinned Explore CLI"),
+    ...workflows.flatMap(workflow => Object.values(workflow.jobs)
+      .flatMap(job => job.steps.filter(step => step.name === "Install Explore")))];
+  assert.equal(builds.length, 8, "composite action, review platforms/capture/report/deploy/failure, and baseline platforms/baseline install the trusted tools");
+  for (const step of builds) {
+    const install = step.run.split("\n").find(line => /^\s*npm ci\b/.test(line));
+    assert.ok(install, step.name);
+    const flags = install.trim().split(/\s+/).slice(2);
+    assert.ok(flags.includes("--omit=dev"), step.name);
+    assert.ok(flags.includes("--include=optional"), "platform-native production runtimes must survive npm omit configuration");
+    assert.ok(flags.includes("--ignore-scripts"), step.name);
+    assert.ok(!flags.some(flag => /^--omit=.*optional|^--no-optional$/.test(flag)), step.name);
+    assert.doesNotMatch(step.run, /npm (?:install|i) -g|node_modules\/\.bin\/claude/);
+  }
+});
+
+test("baseline captures a complete single default-branch commit without a PR", () => {
+  assert.ok(Object.hasOwn(baseline.on, "push"));
+  assert.ok(Object.hasOwn(baseline.on, "workflow_dispatch"));
+  const job = baseline.jobs.baseline;
+  assert.match(baseline.jobs.platforms.if, /github\.event\.repository\.default_branch/);
+  assert.deepEqual(job.needs, "platforms");
+  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { platform: "${{ fromJSON(needs.platforms.outputs.platforms) }}" } });
+  assert.equal(job.env.PLATFORM, "${{ matrix.platform }}");
+  assert.match(baseline.jobs.platforms.steps.at(-1).run, /config:platforms .* \| jq -c '\.platforms'/);
+  const verify = job.steps.find(step => step.name === "Verify deterministic source planning");
+  assert.match(verify.run, /--base-sha "\$GITHUB_SHA" --head-sha "\$GITHUB_SHA" --scope all/);
+  const capture = job.steps.find(step => step.name === "Capture complete single-commit baseline");
+  assert.match(capture.run, /capture:baseline/);
+  assert.doesNotMatch(baselineSource, /--pull-request|capture:review|inputs\.pr/);
+  const upload = job.steps.find(step => step.name === "Upload exact-commit baseline evidence");
+  assert.equal(upload.with.name, "explore-baseline-${{ github.sha }}-${{ matrix.platform }}");
+  assert.equal(upload.with["retention-days"], 30);
+  const diagnostics = job.steps.find(step => step.name === "Upload planning and baseline diagnostics");
+  assert.equal(diagnostics.if, "always()");
+  assert.match(diagnostics.with.path, /explore-diagnostics/);
+});
+
+test("provider secrets reach runtime capture without entering static verification or reporting", () => {
+  for (const job of [review.jobs.capture, baseline.jobs.baseline]) {
+    const verify = job.steps.find(step => step.name === "Verify deterministic source planning");
+    assert.equal(verify.env?.OPENAI_API_KEY, undefined);
+    assert.equal(verify.env?.ANTHROPIC_API_KEY, undefined);
+    const capture = job.steps.find(step => /capture:(review|baseline)/.test(step.run ?? ""));
+    assert.equal(capture.env.OPENAI_API_KEY, "${{ secrets.OPENAI_API_KEY }}");
+    assert.equal(capture.env.ANTHROPIC_API_KEY, "${{ secrets.ANTHROPIC_API_KEY }}");
+  }
+  assert.doesNotMatch(JSON.stringify(review.jobs.failure), /EXPO_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY/);
+  const verify = action.runs.steps.find(step => step.name === "Verify deterministic source planning");
+  assert.equal(verify.env.OPENAI_API_KEY, undefined);
+  assert.equal(verify.env.ANTHROPIC_API_KEY, undefined);
+  const capture = action.runs.steps.find(step => step.id === "capture");
+  assert.equal(capture.env.OPENAI_API_KEY, "${{ inputs.openai_api_key }}");
+  assert.equal(capture.env.ANTHROPIC_API_KEY, "${{ inputs.anthropic_api_key }}");
+});
+
+test("optional Anthropic workspace selection reaches capture steps only", () => {
+  assert.equal(action.inputs.anthropic_workspace_id.required, false);
+  assert.equal(action.inputs.anthropic_workspace_id.default, "");
+  for (const workflow of workflows) {
+    assert.equal(workflow.env?.ANTHROPIC_WORKSPACE_ID, undefined);
+    for (const job of Object.values(workflow.jobs)) {
+      assert.equal(job.env?.ANTHROPIC_WORKSPACE_ID, undefined);
+      for (const step of job.steps) {
+        if (/capture:(review|baseline)/.test(step.run ?? "")) {
+          assert.equal(step.env.ANTHROPIC_WORKSPACE_ID, "${{ vars.ANTHROPIC_WORKSPACE_ID }}");
+        } else {
+          assert.doesNotMatch(JSON.stringify(step), /ANTHROPIC_WORKSPACE_ID/);
+        }
+      }
+    }
+  }
+  for (const step of action.runs.steps) {
+    if (step.id === "capture") {
+      assert.equal(step.env.ANTHROPIC_WORKSPACE_ID, "${{ inputs.anthropic_workspace_id }}");
+    } else {
+      assert.doesNotMatch(JSON.stringify(step), /ANTHROPIC_WORKSPACE_ID|anthropic_workspace_id/);
+    }
+  }
+});
+
+test("failed navigation traces remain in the always-uploaded diagnostic artifact", () => {
+  const diagnostics = review.jobs.capture.steps.find(step => step.name === "Upload planning and failure diagnostics");
+  assert.equal(diagnostics.if, "always()");
+  assert.match(diagnostics.with.path, /base-map\/capture-diagnostics/);
+  assert.match(diagnostics.with.path, /head-map\/capture-diagnostics/);
+  assert.match(diagnostics.with.path, /explore-review\/agent-usage\.jsonl/);
+  const baselineDiagnostics = baseline.jobs.baseline.steps.find(step => step.name === "Upload planning and baseline diagnostics");
+  assert.equal(baselineDiagnostics.if, "always()");
+  assert.match(baselineDiagnostics.with.path, /explore-baseline\/agent-usage\.jsonl/);
+  const packaging = review.jobs.capture.steps.find(step => step.name === "Upload captured review for packaging");
+  assert.doesNotMatch(packaging.with.path, /map\/capture-diagnostics/);
+});
+
+test("every checked-in shell step passes Bash syntax validation", () => {
+  const steps = [...action.runs.steps, ...workflows.flatMap(workflow => Object.values(workflow.jobs).flatMap(job => job.steps))];
+  for (const step of steps) {
+    if (!step.run) continue;
+    const result = spawnSync("bash", ["-n"], { input: step.run, encoding: "utf8" });
+    assert.equal(result.status, 0, `${step.name}: ${result.stderr}`);
+  }
+});
+
+
+test("capture receives the automatic GitHub token for current PR verification", () => {
+  const capture = review.jobs.capture.steps.find(step => step.name === "Capture review");
+  assert.equal(capture.env.GITHUB_TOKEN, "${{ github.token }}");
+  const compositeCapture = action.runs.steps.find(step => step.id === "capture");
+  assert.equal(compositeCapture.env.GITHUB_TOKEN, "${{ github.token }}");
+  assert.doesNotMatch(reviewSource, /secrets\.GITHUB_TOKEN/);
+  assert.equal(review.jobs.capture.permissions["pull-requests"], "write");
+});
+
+test("always-run cleanup consumes only explicit retained handoffs before checkout verification", () => {
+  for (const [job, name, sessionFiles] of [
+    [review.jobs.capture, "Stop retained capture sessions", ["head-session", "base-session"]],
+    [baseline.jobs.baseline, "Stop retained baseline session", ["baseline-session"]],
+  ]) {
+    const index = job.steps.findIndex(step => step.name === name);
+    const cleanup = job.steps[index];
+    assert.equal(cleanup.if, "always()");
+    assert.ok(cleanup["timeout-minutes"] <= 5);
+    assert.equal(cleanup.env.EXPO_TOKEN, "${{ secrets.EXPO_TOKEN }}");
+    assert.match(cleanup.run, /cleanup-ci-sessions\.mjs/);
+    for (const path of sessionFiles) assert.ok(cleanup.run.includes(path));
+    assert.ok(index < job.steps.findIndex(step => step.name?.startsWith("Verify application checkout")));
+    assert.doesNotMatch(cleanup.run, /simulator:list|--all/);
+  }
+  assert.equal(action.runs.steps.at(-1).name, "Stop retained capture sessions");
+  assert.equal(action.runs.steps.at(-1).if, "always() && steps.preflight.outcome == 'success'");
+});
+
+
+test("action rejects reused, escaping, or symlinked output paths before installing tools", async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "explore-action-output-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const temporary = join(root, "runner-temp");
+  await mkdir(temporary);
+  const preflight = action.runs.steps.find(step => step.id === "preflight");
+  assert.equal(preflight.env.RUNNER_TEMP_DIRECTORY, "${{ runner.temp }}");
+  const script = /<<'NODE'\n([\s\S]*?)\nNODE/.exec(preflight.run)[1];
+  const check = output => spawnSync(process.execPath, ["--input-type=module", "-", output, temporary], {
+    input: script, encoding: "utf8",
+  });
+  assert.equal(check(join(temporary, "fresh", "report")).status, 0);
+  await mkdir(join(temporary, "existing"));
+  await writeFile(join(temporary, "file"), "not a directory");
+  await mkdir(join(root, "outside"));
+  await symlink(join(root, "outside"), join(temporary, "escape"));
+  await symlink(join(temporary, "existing"), join(temporary, "local-link"));
+  await symlink(join(root, "outside"), join(temporary, "fresh-report-consistency"));
+  for (const output of ["relative", temporary, join(root, "outside", "report"), join(temporary, "existing"),
+    join(temporary, "file", "report"), join(temporary, "escape", "report"), join(temporary, "local-link", "report"),
+    join(temporary, "fresh-report")]) {
+    const result = check(output);
+    assert.equal(result.status, 1, output);
+    assert.match(result.stderr, /INVALID_OUTPUT_PATH/);
+  }
+});
+
+test("action rejects unsupported Node versions before installing tools", async t => {
+  const temporary = await realpath(await mkdtemp(join(tmpdir(), "explore-action-node-")));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const preflight = action.runs.steps.find(step => step.id === "preflight");
+  const script = /<<'NODE'\n([\s\S]*?)\nNODE/.exec(preflight.run)[1];
+  for (const [version, supported] of [["22.22.0", false], ["24.11.99", false], ["24.12.0", true], ["24.21.0", true], ["26.0.0", true]]) {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-", join(temporary, "report"), temporary], {
+      input: `Object.defineProperty(process.versions, "node", { value: ${JSON.stringify(version)} });\n${script}`,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, supported ? 0 : 1, `${version}: ${result.stderr}`);
+    if (!supported) assert.match(result.stderr, /NODE_VERSION_UNSUPPORTED::Install Node\.js 24\.12 or newer/);
+  }
+});
+
+test("the deploy job is the only post-capture job that holds EXPO_TOKEN, and it runs only for a requested hosted preview", () => {
+  const deploy = review.jobs.deploy;
+  assert.deepEqual(deploy.needs, ["platforms", "capture", "report"]);
+  assert.equal(deploy.if, "needs.capture.outputs.preview == 'eas'");
+  assert.deepEqual(deploy.permissions, { contents: "read", actions: "read", "pull-requests": "write" });
+  const step = deploy.steps.find(step => step.name === "Deploy the hosted preview and publish its Explore report links");
+  assert.equal(step.env.EXPO_TOKEN, "${{ secrets.EXPO_TOKEN }}");
+  assert.equal(step.env.GITHUB_TOKEN, "${{ github.token }}");
+  assert.equal(step.env.ARTIFACT_URL, undefined);
+  assert.match(step.run, /ci:deploy --inputs "\$RUNNER_TEMP\/explore-review" --reports "\$RUNNER_TEMP\/explore-report"/);
+  // Every platform's capture and report artifact, one directory each, so the deployment serves all of them.
+  const downloads = deploy.steps.filter(step => step.uses?.startsWith("actions/download-artifact@"));
+  assert.deepEqual(downloads.map(step => step.with.pattern), ["explore-capture-${{ github.run_id }}-${{ github.run_attempt }}-*", "explore-review-${{ github.run_id }}-${{ github.run_attempt }}-*"]);
+  assert.ok(downloads.every(step => step.with.name === undefined && step.with["merge-multiple"] === undefined));
+  assert.doesNotMatch(JSON.stringify(deploy), /OPENAI_API_KEY|ANTHROPIC_API_KEY/);
+  assert.equal(review.jobs.report.outputs, undefined);
+  assert.equal(review.jobs.capture.outputs.preview, "${{ steps.preview.outputs.preview }}");
+  const previewStep = review.jobs.capture.steps.find(step => step.id === "preview");
+  assert.match(previewStep.run, /jq -r '\.preview\.hosting \/\/ ""'/);
+  assert.ok(review.jobs.capture.steps.indexOf(previewStep) < review.jobs.capture.steps.findIndex(step => step.name === "Upload captured review for packaging"));
+  assert.deepEqual(review.jobs.failure.needs, ["platforms", "capture", "report", "deploy"]);
+  assert.match(review.jobs.failure.if, /needs\.platforms\.result == 'failure'/);
+  assert.match(review.jobs.failure.if, /needs\.deploy\.result == 'failure'/);
+});
+
+test("closing a pull request runs nothing: hosted previews stay until a developer deletes them", () => {
+  assert.ok(!review.on.pull_request_target.types.includes("closed"));
+  assert.doesNotMatch(review.jobs.platforms.if, /closed/);
+  assert.equal(review.jobs.cleanup, undefined);
+  for (const workflow of workflows) assert.doesNotMatch(JSON.stringify(workflow), /ci:cleanup|deploy:delete/);
+});
+
+test("review captures and reports each configured platform in its own matrix job, with platform-suffixed artifacts", () => {
+  const platforms = review.jobs.platforms;
+  assert.deepEqual(platforms.permissions, { contents: "read", "pull-requests": "read" });
+  assert.equal(platforms.outputs.platforms, "${{ steps.platforms.outputs.platforms }}");
+  assert.match(platforms.steps.at(-1).run, /config:platforms --project "\$GITHUB_WORKSPACE\/app-head\/\$APP_PROJECT_DIR" --config \.expo-explore\/config\.yaml \| jq -c '\.platforms'/);
+  assert.doesNotMatch(JSON.stringify(platforms), /EXPO_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|APP_REVIEW/);
+  for (const job of [review.jobs.capture, review.jobs.report]) {
+    assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { platform: "${{ fromJSON(needs.platforms.outputs.platforms) }}" } });
+    assert.equal(job.env.PLATFORM, "${{ matrix.platform }}");
+  }
+  assert.equal(review.jobs.capture.needs, "platforms");
+  assert.deepEqual(review.jobs.report.needs, ["platforms", "capture"]);
+  const runs = [review.jobs.capture, review.jobs.report, baseline.jobs.baseline].flatMap(job => job.steps.filter(step => step.run).map(step => step.run));
+  for (const command of ["source:verify", "capture:review", "capture:baseline", "ci:report", "ci:publish"]) {
+    const uses = runs.filter(run => run.includes(`cli.js" ${command}`));
+    assert.ok(uses.length > 0, command);
+    for (const run of uses) assert.match(run, /--platform "\$PLATFORM"/, command);
+  }
+  const baselineLookup = review.jobs.capture.steps.find(step => step.name === "Find optional exact-base evidence").with.script;
+  assert.match(baselineLookup, /explore-baseline-\$\{process\.env\.BASE_SHA\}-\$\{process\.env\.PLATFORM\}/);
+  assert.match(baselineLookup, /process\.env\.PLATFORM === 'ios' \? \[`explore-baseline-\$\{process\.env\.BASE_SHA\}`\]/);
+  for (const [job, name] of [[review.jobs.capture, "Upload captured review for packaging"], [review.jobs.capture, "Upload planning and failure diagnostics"],
+    [review.jobs.report, "Upload hosted review bundle"], [review.jobs.report, "Upload report failure diagnostics"],
+    [baseline.jobs.baseline, "Upload exact-commit baseline evidence"], [baseline.jobs.baseline, "Upload planning and baseline diagnostics"]]) {
+    assert.ok(job.steps.find(step => step.name === name).with.name.endsWith("-${{ matrix.platform }}"), name);
+  }
+});

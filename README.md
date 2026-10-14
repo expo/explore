@@ -1,0 +1,376 @@
+# Expo Explore
+
+Explore maps your app: a screenshot of every screen, connected by the taps between them. On each pull request it captures the screens the PR changes, before and after, on EAS Simulator, and posts a visual review.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-hero-dark.png">
+  <img alt="Explore's Map of the euxy app with the new About screen selected: every screen as a card laid out by distance from the launch screen, and the Inspector on the right showing the About capture as an added screen with its transitions" src="docs/screenshots/readme-hero-light.png">
+</picture>
+
+**See a real report:** [euxy](https://explore-example--euxy.expo.app/p/rfcoic27ccgnrmzgijubxkmuzmptcrva?platform=ios), a MIDI sequencer, reviewed by Explore. It is redeployed with the current Viewer on every merge to main.
+
+## Try it on your app
+
+Paste this into Claude Code or Codex from your app's directory. It explores a build you point to, or an Expo project straight from its source:
+
+```text
+Show me Expo Explore working on this app. Follow
+https://unpkg.com/@expo/explore/skills/explore-binary/SKILL.md and run Explore with
+npx @expo/explore. If I point you to a build, explore that. Otherwise, if this is an
+Expo project, run it from source without making a new build; if it is not, get a
+simulator build of it. If the app needs a sign-in, ask me for a test account the way
+the skill describes, never for a password in chat. Give me the report link, and if I
+need to log in to something first, tell me the command.
+```
+
+For apps behind a sign-in, see [Sign-in and other app state](#sign-in-and-other-app-state).
+
+<details>
+<summary><strong>Run it yourself</strong></summary>
+
+```sh
+npx @expo/explore explore:binary ./my-app.apk   # Android APK
+npx @expo/explore explore:binary ./my-app.app   # iOS simulator build (.app, .tar.gz, or simulator .ipa)
+```
+
+Explore starts an EAS Simulator, installs the build, taps through the app with your Claude Code or Codex login, and prints a link to the hosted report.
+
+</details>
+
+<details>
+<summary id="options"><strong>What it needs, and its options</strong></summary>
+
+- An EAS login (`eas whoami`) and a `claude` or `codex` login, or `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
+- A simulator build. A device `.ipa` or an `.aab` is rejected before a session starts.
+- Platform, bundle id, name, and version are read from the build; you pass nothing else.
+- A run stops after 15 minutes, 40 screens, or 150 actions (`--max-duration-minutes`, `--max-screens`, `--max-actions`).
+- Buttons that delete, pay, sign out, send, or leave the app are never tapped. `--allow-destructive "Clear cache"` allows one by label.
+- `--hints "…"` tells the model what to focus on or how to sign in ([details](#sign-in-and-other-app-state)).
+- The hosted link lasts 7 days (`--expires-in 30d|never`). `--no-upload` keeps the report local, and `--json` prints the result for scripts.
+- For a link that stays the same from run to run, pass `--alias NAME` and set `EXPLORE_PREVIEW_TOKEN` to a fixed 32-character token.
+- Read a local result with `expo-explore view --dir <folder>`, `screen:list`, or `gap:list`.
+
+</details>
+
+<details>
+<summary><strong>Explore a simulator session you already started</strong></summary>
+
+If the app is already running on an `agent-device` EAS Simulator session, Explore can start from there. It leaves your session running.
+
+```sh
+eas simulator:start --type agent-device --out-config-type dotenv   # then agent-device install / open
+npx @expo/explore explore:session                                   # session from ./.env.eas-simulator, app = the one in the foreground
+npx @expo/explore explore:session <session-id> --env-file path/.env.eas-simulator --bundle-id com.example.app --upload
+```
+
+`--bundle-id` picks the app when the foreground one is ambiguous. `--upload` hosts the report instead of opening it locally.
+
+</details>
+
+<details>
+<summary><strong>What a run without source shows</strong></summary>
+
+One card per screen the run reached, laid out by how many taps it took, with the tapped control on each edge. There is no before and after; that needs [CI](#set-up-ci-reviews-on-every-pr).
+
+![The Map of an exploration report for the euxy app: one card per screen the run reached, laid out by taps from the launch screen, each edge labelled with the control that was tapped](docs/screenshots/readme-exploration-light.png)
+
+</details>
+
+## Set up CI: reviews on every PR
+
+Paste this into Claude Code or Codex from your app's repository:
+
+```text
+Set up this app for Expo Explore CI reviews. Follow
+https://unpkg.com/@expo/explore/skills/explore-setup/SKILL.md and run Explore with
+npx @expo/explore. Recommend a capture mode, start from doctor --json, read the app's
+source for the state each screen needs, and repeat doctor until it reports no problems.
+Ask me only for what you cannot find in the repository. When you are done, tell me
+what to merge and how to start the first review.
+```
+
+<details>
+<summary><strong>Requirements</strong></summary>
+
+- An iOS app, an Android app, or both. Explore is in v0; Android capture is newer than iOS.
+- Expo SDK 57 or newer, with Expo Router (57 or newer) or React Navigation (6 or newer).
+- An EAS build profile per platform: `ios.simulator: true` for iOS, `android.buildType: apk` for Android. Its EAS environment cannot have secret-visibility variables.
+- EAS Simulator access (in preview, [join the waitlist](https://expo.dev/services/simulators)).
+- Node.js 24.12 or newer, and admin access to the GitHub repository.
+
+</details>
+
+<details>
+<summary><strong>After setup: your first review</strong></summary>
+
+1. Set the repository secrets that `expo-explore doctor` lists, such as `EXPO_TOKEN`.
+2. Merge the setup to the default branch and run **Expo Explore baseline** from GitHub Actions.
+3. Open a PR. **Expo Explore review** runs and posts a comment with the report.
+
+```sh
+expo-explore doctor            # check every step; exits 1 until ready
+expo-explore doctor --capture  # capture the committed app on EAS once, before the first PR
+```
+
+A failed run shows an error code and a next action in the PR comment; see [CI troubleshooting](docs/quickstart-ci.md#diagnose-a-failed-run).
+
+</details>
+
+<details>
+<summary><strong>Set up without a coding agent</strong></summary>
+
+```sh
+npx @expo/explore setup    # writes .expo-explore/config.yaml and the two workflows; in a monorepo: --project apps/mobile
+npx @expo/explore doctor   # fix each problem it reports, then commit
+```
+
+</details>
+
+<details>
+<summary><strong>Choose a capture mode</strong></summary>
+
+| | **Deterministic** (recommended to start) | **Agent** |
+| --- | --- | --- |
+| Cost | EAS and GitHub Actions only | Also model usage billed by [OpenAI](https://developers.openai.com/api/docs/pricing) or [Anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
+| Reaching screens | Opens each screen by deep link, with route parameters from the config | Claude Code or Codex navigates the UI |
+| App state (signed in, onboarded) | Fixed setup steps in the config | English instructions that the agent follows |
+| Unexpected UI | Capture stops with diagnostics | The agent tries to recover |
+
+Both modes use the same comparison rules and report. You can change modes later.
+
+</details>
+
+<details>
+<summary><strong>Configure agent mode</strong></summary>
+
+1. Create an [Anthropic](https://platform.claude.com/settings/keys) or [OpenAI](https://platform.openai.com/api-keys) API key.
+2. Set `mode: agent` and an `agent.model` your account can use.
+3. Store the key as the repository secret `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. A key that is not workspace-scoped also needs the `ANTHROPIC_WORKSPACE_ID` variable.
+4. Export the key and run `expo-explore doctor --check-model`.
+
+The model navigates and recovers on each uncaptured revision; see [agent usage](docs/quickstart-ci.md#agent-usage-and-reuse).
+
+</details>
+
+<details>
+<summary><strong>Repository settings</strong></summary>
+
+- `EXPO_TOKEN`: create it in [Expo access tokens](https://expo.dev/settings/access-tokens). For [hosted previews](#hosted-previews), use a [robot user](https://docs.expo.dev/accounts/programmatic-access/) that can create projects.
+- A secret for each `{{secret:NAME}}` in your setup steps. Run `expo-explore setup --workflows` after you add one.
+
+</details>
+
+<details>
+<summary id="platforms"><strong>Android and several platforms</strong></summary>
+
+`app.platform` names the primary platform, and a `platforms` map adds the other. Each entry can set its own `device`, `bundleId`, and `easProfile`.
+
+```yaml
+app:
+  platform: ios
+  bundleId: com.example.myapp
+  easProfile: explore
+device:
+  name: iPhone 17
+platforms:
+  ios: {}
+  android:
+    device: pixel_7
+    bundleId: com.example.myapp
+    easProfile: explore-android   # android.buildType: apk in eas.json
+```
+
+- The workflows run one capture job per platform, and the PR gets one comment with a section per platform.
+- A failed platform fails the check; the other platform's report still publishes.
+- An Android-only app sets `app.platform: android` with no `platforms` map.
+
+</details>
+
+<details>
+<summary id="hosted-previews"><strong>Hosted previews</strong></summary>
+
+By default reviewers download the report from GitHub. With hosted previews, the comment's **Explore report** link opens it in one click, even in private repositories.
+
+```yaml
+report:
+  preview:
+    hosting: eas        # default: off
+    expiresAfter: 30d   # default 30d, max 365d, or never
+    # project: acme-explore   # default <repository name>-explore, created on first run
+```
+
+- Run `expo-explore setup --workflows` after enabling it to add the `deploy` job.
+- `EXPO_TOKEN` must be able to create the EAS project, so use a [robot user's](https://docs.expo.dev/accounts/programmatic-access/) token.
+- The report is encrypted, and only a request carrying the link's token can open it. Treat the link like a shared file link; see [report access](docs/private-review.md#hosted-previews).
+
+</details>
+
+<details>
+<summary><strong>Keep your setup current</strong></summary>
+
+- A PR that adds a guarded screen or a dynamic route should also update `config.yaml`.
+- Renamed identifiers or labels break deterministic setup steps.
+- To update Explore, run `npx @expo/explore@latest setup --workflows` and commit the new version.
+
+</details>
+
+## Sign-in and other app state
+
+Each run starts on a fresh install. Tell Explore how to get past what the app needs: with `--hints` when running without source, or with [setup steps or agent instructions](docs/quickstart-ci.md#when-the-config-needs-setup-steps) in CI.
+
+**Signing in.** Use a test account. Put the password in an environment variable and refer to it as `{{secret:NAME}}`:
+
+```sh
+export APP_TEST_PASSWORD=...   # or keep it in a gitignored .env file and source it
+npx @expo/explore explore:binary ./my-app.app \
+  --hints "Sign in as explore-test@example.com with {{secret:APP_TEST_PASSWORD}}"
+```
+
+The model only sees the reference, and Explore types the value. The value is redacted everywhere, and a screen that shows it gets no screenshot, so keep non-sensitive values like a test email as plain text. In CI, store the value as a repository secret instead.
+
+If the sign-in can't be typed (one-time codes, email links, Sign in with Apple or Google), sign in by hand on a session and run `explore:session`. Explore never taps Sign out.
+
+**Other common blockers:**
+
+| The app… | What to do |
+| --- | --- |
+| Starts with onboarding | `--launch-url myapp://home` to skip it, or a hint ("skip the tour") |
+| Needs data to show a screen | A test account that has it, and a hint saying where ("open the first project") |
+| Asks for a permission | Explore denies it. Allow it by hand on a session, then run `explore:session` |
+| Has a paywall | An account that already has the entitlement; purchase buttons are never tapped |
+| Has a safe button that looks destructive | `--allow-destructive "Clear cache"` |
+| Is large | [Raise the budgets](#options) (15 minutes, 40 screens, 150 actions by default) and use `--hints` to set priorities |
+
+When a run stops early, `gap:list --dir <output>` says what blocked it.
+
+## What you get
+
+### A comment on every PR
+
+The report links, a row per platform, and the added, removed and modified screens.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-pr-comment-dark.png">
+  <img alt="Explore's GitHub PR comment on a euxy PR: the heading links to the iOS and Android reports, a table with one row per platform giving device, result and an Open link, the Added, Removed, Modified, Needs review and Source-affected screens as collapsed lists, fading out below them" src="docs/screenshots/readme-pr-comment-light.png">
+</picture>
+
+### Compare
+
+Each changed screen before and after, with the changed regions outlined.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-compare-dark.png">
+  <img alt="The Compare view with the euxy Patterns screen's before and after captures side by side: each pattern row's tempo moved out of the subtitle into its own column on the right, the changed subtitles outlined in both" src="docs/screenshots/readme-compare-light.png">
+</picture>
+
+### Screens
+
+Every capture, in a section per route folder, with a route tree whose folders fold away and a **Changed** / **All** filter.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-screens-dark.png">
+  <img alt="The Screens view of a euxy review: a foldable route tree on the left with Changed and All above it, and the screens in sections named after their app/ folder (Launch, Sequencer, Settings, Patterns) with each folder path beneath, the new About screen marked Added, Activity Log and Settings marked Modified, and the Sequencer marked No visible change" src="docs/screenshots/readme-screens-light.png">
+</picture>
+
+### Ask an agent about it
+
+Paste this into Claude Code, Codex, Cursor, or any tool that can fetch a URL. In the Viewer, **Hand off to AI** fills it in for you:
+
+```text
+Review the visual changes in this PR. Expo Explore report: <report link>
+
+Fetch the link first. It explains the report's JSON API. Go through the changed screens,
+compare the before and after screenshots, and tell me which changes look intended and
+which look like regressions. For each regression, name the source file to fix.
+```
+
+<details>
+<summary><strong>Terms in the report</strong></summary>
+
+- **Screen**: one route of the app, with its screenshot.
+- **Transition**: one screen leading to another, with the control that was tapped.
+- **Baseline**: the capture of the default branch. A review compares a PR's capture against it.
+- **Screen variant**: another screenshot of an unchanged screen, such as signed in or in dark mode. It is a different state, not a change in the PR.
+
+</details>
+
+<details>
+<summary id="agents"><strong>How agents read a report</strong></summary>
+
+The same link answers differently depending on who asks. It already carries the token, so there is nothing to install.
+
+- A browser gets the Viewer.
+- Anything that does not ask for HTML (`curl`, `fetch`, agents' URL tools) gets a Markdown index of the report, also at `/llms.txt`.
+- The index links to a read-only JSON API under `/api/v1`: `/screens?status=modified,added,removed`, `/screens/<id>`, `/transitions`, and `/raw` for the report file.
+- Reports without source also expose `/journeys`, `/gaps`, and `/frontier`.
+- Multi-platform reports take `?platform=ios|android`. Expired links answer `410`.
+
+```sh
+curl -s "$LINK/api/v1/screens?status=modified" | jq '.items[] | {route, status, review}'
+```
+
+</details>
+
+## More
+
+<details>
+<summary><strong>How it works</strong></summary>
+
+1. The review workflow runs on open, non-draft PRs from the repository whose author has write access. Bots such as Devin go under `ci.trustedAuthors` in `.expo-explore/config.yaml`.
+2. Explore reads the diff and your router source to pick the affected screens.
+3. It builds both revisions and captures each screen on EAS Simulator, reusing a baseline of the base commit when one exists.
+4. It compares the captures. A screen with a source change is **Modified** if its captures differ.
+5. It uploads the report to GitHub Actions and posts a PR comment.
+
+Reports and baselines are kept for 30 days and diagnostics for 7. Hosted deployments are never deleted automatically; see [report access](docs/private-review.md).
+
+</details>
+
+<details>
+<summary><strong>Known limitations</strong></summary>
+
+- Android capture has had less use than iOS. The first Android device is `pixel_7`.
+- PRs from forks are not reviewed.
+- Each route gets one capture per appearance (light and dark with `capture.appearance: auto`). Other states, such as modals, are planned.
+- The launch is captured once per appearance and compared like any screen. The comment says how long the splash stayed as it first appeared, when it first changed (a native launch screen handing over to an app-drawn one, an animation starting on it), and when the first screen settled. `capture.launch: video` adds a recording; a launch too fast to observe is reported as "no splash observed".
+- On Android the splash usually shows only in the recording, which needs `ffmpeg`. The generated workflows install it.
+- Hosted acceptance of agent mode with an API key is incomplete.
+
+</details>
+
+- [CI quick start](docs/quickstart-ci.md): config reference, troubleshooting, and agent usage
+- [Capture reviews](docs/public-capture-review.md): how Explore plans, captures, and compares screens
+- [Report access](docs/private-review.md): who can open a report and where it is stored
+
+## Inspiration
+
+Explore builds on two projects that map apps from what they render. [screenmap](https://github.com/aleqsio/screenmap) by [@aleqsio](https://github.com/aleqsio) captures the screens a PR changes. Revyl's [Atlas](https://revyl.com/atlas/) maps an app's screens and transitions from how it behaves at runtime.
+
+## Contributing
+
+<details>
+<summary><strong>Build, test, and release</strong></summary>
+
+```sh
+npm ci
+npm run typecheck
+npm test
+```
+
+- `npm test` rebuilds the CLI and the Viewer first, because the node tests run the compiled `dist/`. After one `npm run build`, `npm run test:node` skips the rebuild.
+- The agent runtimes and `eas-cli` are optional dependencies that only capture needs. Do not install with `--omit=optional`, which also drops esbuild's platform package.
+- To release, bump `version` in `package.json` and merge to main. The [publish workflow](.github/workflows/publish.yml) publishes any version npm does not have yet.
+
+```sh
+npx playwright install chromium
+npm run test:viewer:e2e
+npm run test:viewer:artifacts
+```
+
+To run the full CI pipeline against a sample app, see the [local CI test harness](test/ci/README.md). [ARCHITECTURE.md](ARCHITECTURE.md) describes the source layout and [CI-FLOW.md](CI-FLOW.md) the review pipeline.
+
+</details>
+
+## License
+
+[MIT](LICENSE)

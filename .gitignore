@@ -1,0 +1,27 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+blob-report/
+output/playwright/
+.next/
+.vinext/
+.wrangler/
+.vercel/
+.playwright-cli/
+.DS_Store
+*.tsbuildinfo
+npm-debug.log*
+
+# Local exploration artifacts and controller credentials can contain private data.
+.explore/
+.env.eas-simulator
+mcp.json
+.cursor/mcp.json
+.claude/mcp.json
+.env.local
+
+# Retained local CI summaries are tracked; generated evidence remains local.
+test/ci/runs/*/artifacts/
+npm-shrinkwrap.json

@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  unit:
+    name: Unit tests (${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: npm run build
+      - run: node --test --test-shard=${{ matrix.shard }}/3 test/node/*.test.mjs
+
+  typecheck:
+    name: Typecheck and pack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run build
+      # `npm pack --dry-run` with prepack would rebuild and re-export the hosted Viewer (~80 s) that the
+      # Viewer host job already verifies; this lists the package without scripts and checks it is complete.
+      - name: Check the package contents
+        run: node scripts/pack-check.mjs
+
+  e2e:
+    name: Viewer e2e (${{ matrix.shard }}/6)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - uses: ./.github/actions/playwright
+      - run: npm run build
+      - run: npx playwright test --shard=${{ matrix.shard }}/6
+      # playwright.config.ts keeps a trace for every failed test under the OS temp dir; without it a flake leaves only the line reporter's message.
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-traces-e2e-${{ matrix.shard }}
+          path: /tmp/expo-explore-playwright-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  viewer-browser:
+    name: Viewer browser tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - uses: ./.github/actions/playwright
+      - run: npm run build
+      - run: npm run test:viewer:browser
+
+  viewer-artifacts:
+    name: Hosted artifact loading (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [artifact-report, artifact-cache]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - uses: ./.github/actions/playwright
+      - run: npm run build
+      - run: node --test test/browser/${{ matrix.suite }}.browser.mjs
+
+  hosting:
+    name: Viewer host
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+        with:
+          viewer-host: "true"
+      - uses: ./.github/actions/playwright
+      - run: npm run test:hosting
+      - name: Export and verify the hosted Viewer
+        run: npm run build:hosting
+      - name: Export and verify the preview deployment
+        run: npm run build:hosting:preview

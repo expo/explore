@@ -1,0 +1,73 @@
+.panel-search {
+  display: flex;
+  min-width: 0;
+  height: 30px;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--panel-line);
+  border-radius: 7px;
+  color: var(--tertiary);
+  background: transparent;
+}
+
+.panel-search:has(input:focus) {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--panel-line));
+  background: var(--element);
+}
+
+.panel-search > svg {
+  width: var(--icon-glyph-md);
+  height: var(--icon-glyph-md);
+  flex: none;
+}
+
+.panel-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+  font-size: 12px;
+}
+
+.panel-search input::placeholder {
+  color: var(--tertiary);
+}
+
+.panel-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.panel-search-clear {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  margin-right: -6px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--tertiary);
+  background: transparent;
+}
+
+.panel-search-clear:hover {
+  color: var(--secondary);
+  background: var(--panel-hover);
+}
+
+.panel-search-clear:focus-visible {
+  outline: 0;
+  color: var(--secondary);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-hover));
+  box-shadow: none;
+  filter: brightness(1.08);
+}
+
+.panel-search-clear svg {
+  width: 14px;
+  height: 14px;
+}

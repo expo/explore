@@ -1,0 +1,48 @@
+name: Example report
+
+# Deploys main's hosted Viewer with the euxy reports (the assets of the viewer-preview-fixtures release, the same
+# ones every pull request previews) to a fixed address that never expires, so the README's example always shows
+# the current Viewer: https://explore-example--euxy.expo.app/p/<EXAMPLE_TOKEN>. The token is public on purpose.
+#
+# Needs the EXPO_TOKEN repository secret, able to create and deploy the explore-example project in expo-public.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: example-report
+  cancel-in-progress: true
+
+env:
+  PROJECT: explore-example
+  OWNER: expo-public
+  ALIAS: euxy
+  EXAMPLE_TOKEN: rfcoic27ccgnrmzgijubxkmuzmptcrva
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  deploy:
+    name: Deploy the example report
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+        with:
+          viewer-host: "true"
+      - name: Build the CLI and the hosted preview export
+        run: npm run build:cli && npm run build:hosting:preview
+      - name: Download the fixture reports
+        run: gh release download viewer-preview-fixtures --dir "$RUNNER_TEMP/fixtures" --clobber
+      - name: Deploy
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPLORE_PREVIEW_TOKEN: ${{ env.EXAMPLE_TOKEN }}
+        run: |
+          node scripts/deploy-viewer-preview.mjs --fixtures "$RUNNER_TEMP/fixtures" --alias "$ALIAS" \
+            --project "$PROJECT" --owner "$OWNER" > "$RUNNER_TEMP/example.json"
+          echo "Example report: $(jq -r .previewUrl "$RUNNER_TEMP/example.json")" >> "$GITHUB_STEP_SUMMARY"

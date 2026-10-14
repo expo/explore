@@ -1,0 +1,73 @@
+name: Publish to npm
+
+# Publishes @expo/explore when main has a package.json version that npm does not have yet.
+# To release, bump the version in package.json and merge to main.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Must match the environment in the npm trusted publisher settings.
+    environment: npm
+    permissions:
+      # Push the release tag.
+      contents: write
+      # npm trusted publishing (OIDC); no npm token is stored in the repository.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Find an unpublished version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          name=$(node -p 'require("./package.json").name')
+          version=$(node -p 'require("./package.json").version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if npm view "$name@$version" version > /dev/null 2>&1; then
+            echo "$name@$version is already on npm; nothing to publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.version.outputs.publish == 'true'
+        run: npm ci
+      - name: Install the hosting app that prepack exports for hosted previews
+        if: steps.version.outputs.publish == 'true'
+        run: npm --prefix viewer-host ci
+      - if: steps.version.outputs.publish == 'true'
+        run: npm run typecheck
+      - if: steps.version.outputs.publish == 'true'
+        run: npm test
+      - name: Use an npm that supports trusted publishing (11.5.1 or newer)
+        if: steps.version.outputs.publish == 'true'
+        run: npm install -g npm@11
+      - name: Publish
+        if: steps.version.outputs.publish == 'true'
+        env:
+          # npm cannot generate provenance for a private repository.
+          NPM_CONFIG_PROVENANCE: "false"
+        run: npm publish --access public
+      - name: Tag the release
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag "v$VERSION"
+          git push origin "v$VERSION"

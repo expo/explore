@@ -1,0 +1,4 @@
+{
+  "description": "A release: adds password reset, drops the features onboarding step, shows annual savings on the paywall, and refactors the transaction detail without visible change.",
+  "removed": ["src/app/onboarding/features.tsx"]
+}

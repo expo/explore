@@ -1,0 +1,580 @@
+/* The phone layout, below 820px (see utils/phone-layout.ts). The phone-only components below
+   render only in that layout; the media query at the end adapts shared chrome. Nothing here
+   applies to a wider window. */
+
+/* ── Type ────────────────────────────────────────────────────────────────────
+   The phone type scale, after the iOS text styles. One level per role; every font size in the
+   phone layout is one of these. Sheets, Search and menus render into the body, so it sits on :root.
+
+   title     22/28 700   the page's name                      "7 screens"
+   headline  17/22 600   a surface over the page               sheet title, Changes menu title
+   body      15/20 400   what is read or tapped (600 to stress) a screen's name, list rows, findings
+   subhead   13/18 500   controls (400 on secondary copy)      mode switch, chips, Before/After, notes
+   section   13/18 600   a group's label, in --secondary       "Results", "Transition"
+   caption   11/14 500   metadata (600 on a badge)             a route under a name, status badges
+   micro     10/12 600   the tab bar only                      tab labels, the tab badge
+
+   Monospace routes run 1px under the level they sit in, so they read as the same size as the
+   sans text beside them. Fields are 16px: iOS zooms the page into anything smaller. */
+:root {
+  --phone-title-size: 22px;
+  --phone-title-leading: 28px;
+  --phone-headline-size: 17px;
+  --phone-headline-leading: 22px;
+  --phone-body-size: 15px;
+  --phone-body-mono-size: 14px;
+  --phone-body-leading: 20px;
+  --phone-subhead-size: 13px;
+  --phone-subhead-mono-size: 12px;
+  --phone-subhead-leading: 18px;
+  --phone-caption-size: 11px;
+  --phone-caption-leading: 14px;
+  --phone-micro-size: 10px;
+  --phone-micro-leading: 12px;
+  --phone-field-size: 16px;
+}
+
+/* ── Top bar and tab bar ─────────────────────────────────────────────────── */
+
+.phone-icon-button {
+  display: inline-flex;
+  width: var(--floating-chrome-height);
+  height: var(--floating-chrome-height);
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--panel-line);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: var(--floating-chrome-shadow);
+}
+.phone-icon-button > svg { width: 20px; height: 20px; }
+.phone-icon-button > svg { stroke-width: 1.75; }
+.phone-icon-button:disabled { opacity: 0.35; }
+/* On is shown only while it can be turned off: a disabled toggle reads as plain off. */
+.phone-icon-button[aria-pressed="true"]:not(:disabled) { background: var(--element); }
+.phone-icon-button[aria-pressed="true"]:not(:disabled) > svg { color: var(--modified); }
+
+/* A floating capsule as wide as its tabs, centred over the content; the current tab is a pill inside it. */
+.phone-tab-bar {
+  position: fixed;
+  z-index: 30;
+  right: 0;
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  left: 0;
+  display: flex;
+  width: fit-content;
+  height: 54px;
+  margin: 0 auto;
+  padding: 4px;
+  border: 1px solid var(--panel-line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  box-shadow: var(--floating-chrome-shadow);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  view-transition-name: canvas-toolbar;
+}
+.phone-tab {
+  display: flex;
+  width: 76px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: 999px;
+  color: var(--secondary);
+  background: transparent;
+  font-size: var(--phone-micro-size);
+  font-weight: 600;
+  line-height: var(--phone-micro-leading);
+  transition: color 150ms ease, background 150ms ease;
+}
+.phone-tab[aria-current="page"] { color: var(--text); background: var(--element); }
+.phone-tab:disabled { opacity: 0.4; }
+.phone-tab-icon { position: relative; display: flex; }
+.phone-tab-icon > svg { width: 22px; height: 22px; stroke-width: 1.75; }
+.phone-tab-badge {
+  position: absolute;
+  top: -6px;
+  left: 14px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--modified);
+  font-size: var(--phone-micro-size);
+  font-weight: 700;
+  line-height: 17px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+:root[data-theme="dark"] .phone-tab-badge { color: #0c0d0e; }
+
+/* ── Compare ─────────────────────────────────────────────────────────────── */
+
+.phone-compare {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  /* Compare hides the app's top bar; its own header takes that place, as a bar of the same make. */
+  padding: 0 12px calc(76px + env(safe-area-inset-bottom));
+  color: var(--text);
+  background: var(--screen);
+}
+.phone-compare-empty { align-items: center; justify-content: center; color: var(--secondary); }
+/* The header is the phone's top bar: the full width, flush with the top edge, as the app's bar is. */
+.phone-compare-head {
+  position: relative;
+  display: flex;
+  height: calc(env(safe-area-inset-top, 0px) + var(--phone-bar-height, 53px) + 1px);
+  flex: none;
+  align-items: flex-end;
+  gap: 0;
+  margin: 0 -12px;
+  padding: env(safe-area-inset-top, 0px) 4px 3px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--side-panel-surface);
+}
+.phone-compare-head .phone-icon-button { border: 0; border-radius: 10px; background: transparent; box-shadow: none; }
+/* The navigation (CompareNav, compare-section.css) fills the bar's leading edge: full-height
+   targets, ‹ 3 of 6 › for steps, and the phone type scale. The route names the screen, as the
+   Changes list does; the picker is a control, so it is subhead, in mono. */
+.phone-compare .compare-nav {
+  height: var(--floating-chrome-height);
+  flex: 1;
+  align-items: stretch;
+  gap: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+/* On a phone the picker fills the capsule; the capsule's width is the header's, so it holds still. */
+.phone-compare .compare-nav > .tooltip-anchor:first-child { width: auto; flex: 1 1 auto; }
+.phone-compare .compare-nav-picker {
+  max-width: none;
+  height: auto;
+  padding: 0 6px 0 12px;
+  border-radius: 0;
+}
+.phone-compare .compare-nav-picker:active,
+.phone-compare .compare-nav-steps button:active:not(:disabled) { background: var(--panel-hover); }
+.phone-compare .compare-nav-route {
+  font-size: var(--phone-subhead-mono-size);
+  line-height: var(--phone-subhead-leading);
+}
+.phone-compare .compare-nav-steps { display: flex; height: var(--floating-chrome-height); flex: none; align-items: center; padding: 0 2px 0 4px; }
+.phone-compare .compare-nav-steps .tooltip-anchor { height: 100%; }
+.phone-compare .compare-nav-steps button {
+  width: 32px;
+  height: 100%;
+  border-radius: 0;
+  color: var(--secondary);
+}
+.phone-compare .compare-nav-position {
+  min-width: 40px;
+  font-size: var(--phone-caption-size);
+  line-height: var(--phone-caption-leading);
+}
+/* The mode switch is compact: the frame gets the height. */
+.phone-compare-modes { padding: 10px 0 0; }
+.phone-compare-modes > .toggle-group { width: 100%; height: 36px; }
+.phone-compare-modes .toggle-row:not(.toggle-overlay) { height: 100%; }
+.phone-compare-modes .toggle-button { flex: 1; min-height: 0; font-size: var(--phone-subhead-size); font-weight: 500; }
+/* Before and After: one row above the frame in every mode. */
+.phone-compare .compare-side-label { font-size: var(--phone-subhead-size); line-height: var(--phone-subhead-leading); }
+/* Flip and Swipe fill the width; Split puts two frames side by side. The height leaves room for
+   the header, the mode switch, the Before/After names and the tab bar. */
+.phone-compare .compare-stage,
+.phone-compare .compare-stage.mode-swipe,
+.phone-compare .compare-stage.mode-flip {
+  --compare-available-height: calc(100dvh - 235px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom));
+  --compare-frame-height: min(var(--compare-available-height), calc((100vw - 24px) / var(--compare-aspect)));
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding-top: 10px;
+}
+.phone-compare .compare-stage.mode-split {
+  --compare-frame-height: min(var(--compare-available-height), calc((100vw - 34px) / 2 / var(--compare-aspect)));
+}
+.phone-compare .compare-frame { border-radius: 12px; }
+
+/* ── Sheets ──────────────────────────────────────────────────────────────── */
+
+/* A half-height sheet over a dimmed page: the screen stays in view above it, and a tap there closes it. */
+.phone-sheet-scrim {
+  position: fixed;
+  z-index: 150;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  background: rgb(0 0 0 / 0.4);
+  animation: phone-scrim-in 200ms ease;
+}
+.phone-sheet {
+  display: flex;
+  width: 100%;
+  height: 50dvh;
+  flex-direction: column;
+  border: 1px solid var(--panel-line);
+  border-bottom: 0;
+  border-radius: 16px 16px 0 0;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 -8px 32px rgb(0 0 0 / 0.16);
+  transition: transform 200ms ease;
+  animation: phone-sheet-in 260ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.phone-sheet-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 12px 8px 20px;
+  touch-action: none;
+}
+.phone-sheet-head > strong {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: var(--phone-headline-size);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: var(--phone-headline-leading);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.phone-sheet-grabber {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  width: 36px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--selected);
+  transform: translateX(-50%);
+}
+.right-sheet-grabber { display: none; }
+/* A light X: the sheet's title carries the weight. The hit area stays a finger's size. */
+.phone-sheet-close {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  margin: -4px 0;
+  border-radius: 18px;
+  color: var(--tertiary);
+  background: transparent;
+}
+.phone-sheet-close:active { background: var(--panel-hover); }
+.phone-sheet-close > svg { width: 18px; height: 18px; }
+/* Full screen, as the Inspector is on a phone: no grabber or corners, a header row of the top bar's height. */
+.phone-sheet.full-screen {
+  height: 100dvh;
+  padding-top: env(safe-area-inset-top, 0px);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.phone-sheet.full-screen .phone-sheet-grabber { display: none; }
+.phone-sheet.full-screen .phone-sheet-head {
+  height: calc(var(--phone-bar-height, 53px) + 1px);
+  flex: none;
+  padding: 0 8px 0 20px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.phone-sheet.full-screen .phone-sheet-close { width: 44px; height: 44px; }
+.phone-sheet.full-screen .phone-sheet-body { display: flex; flex-direction: column; padding-top: 16px; }
+/* The head stays; the body takes the rest of the sheet's height and scrolls inside it. */
+.phone-sheet-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 20px calc(24px + env(safe-area-inset-bottom));
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* What changed in the phone's sheet (WhatChangedContent, compare-section.css), at the phone type
+   scale: findings at body, notes at subhead. */
+.phone-sheet .what-changed-content { gap: 16px; }
+.phone-sheet .what-changed-content-list {
+  padding-left: 20px;
+  gap: 10px;
+  font-size: var(--phone-body-size);
+  line-height: var(--phone-body-leading);
+}
+.phone-sheet .what-changed-content-notes { gap: 8px; }
+.phone-sheet .what-changed-content-list + .what-changed-content-notes { padding-top: 16px; }
+.phone-sheet .what-changed-content-notes > p {
+  font-size: var(--phone-subhead-size);
+  line-height: var(--phone-subhead-leading);
+}
+
+
+@keyframes phone-sheet-in { from { transform: translateY(100%); } }
+@keyframes phone-scrim-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .phone-sheet, .phone-sheet-scrim { animation: none; }
+}
+
+/* ── Shared chrome in the phone layout ───────────────────────────────────── */
+
+@media (max-width: 819px) {
+  /* Floating chrome is a finger's height; every control below is at least 44px on a side. */
+  /* Controls are 44px; the bars around them (the app's and Compare's) leave 6px above and 3px below. */
+  .phone-layout { --floating-chrome-height: 44px; --phone-bar-height: 53px; --chrome-height: var(--phone-bar-height); }
+  /* The pill is the phone's top bar: the full width, flush with the top edge (under a notch, past it). */
+  .phone-layout { --chrome-top: env(safe-area-inset-top, 0px); }
+  .phone-layout .left-panel.collapsed {
+    top: 0;
+    left: 0;
+    width: 100%;
+    max-width: none;
+    display: flex;
+    height: calc(var(--chrome-top) + var(--chrome-height) + 1px);
+    align-items: flex-end;
+    padding-top: var(--chrome-top);
+    padding-bottom: 3px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--side-panel-surface);
+  }
+  .phone-layout .left-panel-collapsed-pill {
+    padding-left: 8px;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+  .phone-layout .panel-logo-button { width: 44px; height: 44px; }
+  /* Search, in the pill: it fills the pill's height and its trailing padding. */
+  .collapsed-search {
+    display: inline-flex;
+    width: 44px;
+    height: 44px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    margin: -2px -14px -2px -4px;
+    border: 0;
+    border-radius: 10px;
+    color: var(--text);
+    background: transparent;
+  }
+  .collapsed-search > svg { width: 20px; height: 20px; }
+  .collapsed-search:active { background: var(--panel-hover); }
+  /* Text links and titles keep their size; their hit area grows into the space around them. */
+  .phone-layout .collapsed-app-name,
+  .phone-layout .collapsed-pr,
+  .screens-page.phone .screens-cell .screen-path-text,
+  .phone-layout .inspector-screen-path { padding-top: 14px; padding-bottom: 14px; margin-top: -14px; margin-bottom: -14px; }
+  /* Before/After keep a 32px line; the hit area grows into the gap on each side. */
+  .phone-layout .compare-flip-side { min-height: 32px; padding: 6px 12px; margin: -6px 0; }
+  .phone-layout .right-panel .icon-button { width: 44px; height: 44px; }
+  /* The Inspector's mode group is Compare's on a phone: 36px across the width, its buttons filling
+     the track. What changed's heading is 44px, a finger's height. The findings it opens take the
+     phone's type: the heading is a section label, the list is body. */
+  .phone-layout .what-changed-toggle { min-height: 44px; }
+  .phone-layout .sidebar-review-modes > .toggle-group { height: 36px; }
+  .phone-layout .right-panel .toggle-button { min-width: 44px; min-height: 44px; }
+  .phone-layout .sidebar-review-modes .toggle-button { min-height: 0; font-size: var(--phone-subhead-size); }
+  .phone-layout .what-changed-accordion-content .what-changed-content-list {
+    font-size: var(--phone-body-size);
+    line-height: var(--phone-body-leading);
+  }
+  .phone-layout .what-changed-accordion-content .what-changed-content-notes > p {
+    font-size: var(--phone-subhead-size);
+    line-height: var(--phone-subhead-leading);
+  }
+  /* Full-screen Search and the Changes menu are portaled outside the layout; the media query scopes them. */
+  /* The light X of the sheets: no fill, the field carries the weight. */
+  .search-command .search-command-close { width: 44px; height: 44px; border-radius: 22px; color: var(--tertiary); background: transparent; }
+  .search-command .search-command-close:active { background: var(--panel-hover); }
+  .changes-menu .icon-button.changes-search-button,
+  .changes-menu .icon-button.changes-search-close { width: 44px; height: 44px; }
+  /* The Changes menu wears the phone chrome: the picker's surface, border and radius, and the
+     phone type scale. It ends above the tab bar, and its list scrolls inside it. */
+  body > .menu-popover.changes-menu {
+    width: calc(100vw - 24px);
+    border-color: var(--panel-line);
+    border-radius: 16px;
+    background: var(--surface);
+    box-shadow: var(--floating-chrome-shadow);
+  }
+  .changes-menu .changes-menu-body { max-height: calc(100dvh - 150px - env(safe-area-inset-bottom)); }
+  .changes-menu .changes-panel-heading { height: 52px; min-height: 52px; padding: 8px 6px 4px 16px; }
+  .changes-menu .changes-panel-title {
+    font-size: var(--phone-headline-size);
+    letter-spacing: -0.01em;
+    line-height: var(--phone-headline-leading);
+  }
+  .changes-menu .changes-panel-count { font-size: var(--phone-subhead-size); font-weight: 500; }
+  .changes-menu .changes-panel-body { touch-action: pan-y; }
+  /* Status chips are neutral, like the mode switch; the dot alone carries the status colour. */
+  .changes-menu .changes-status-chips { gap: 8px; padding: 4px 16px 12px; }
+  .changes-menu .changes-status-chip,
+  .changes-menu .changes-status-chip:is(.diff-needs-review, .diff-unchanged, .diff-not-compared, .diff-unavailable) {
+    height: 36px;
+    padding: 0 14px;
+    border-radius: 999px;
+    color: var(--secondary);
+    background: var(--element);
+    font-size: var(--phone-subhead-size);
+    line-height: var(--phone-subhead-leading);
+  }
+  .changes-menu .changes-status-chip-dot { background: var(--diff, var(--tertiary)); }
+  .changes-menu .changes-status-chips.filtering .changes-status-chip[aria-pressed="true"] { color: var(--text); background: var(--selected); }
+  .changes-menu .changes-status-chips.filtering .changes-status-chip[aria-pressed="false"] { color: var(--tertiary); background: transparent; }
+  .changes-menu .changes-screen-row { min-height: 44px; gap: 12px; padding: 4px 10px; border-radius: 10px; }
+  /* A row's route is the row's content: body, in mono. */
+  .changes-menu .changes-screen-path { font-size: var(--phone-body-mono-size); line-height: var(--phone-body-leading); }
+  .changes-menu .changes-menu-review {
+    height: 48px;
+    border-top-color: var(--panel-line);
+    font-size: var(--phone-subhead-size);
+    font-weight: 500;
+  }
+  .changes-menu .panel-search > input { font-size: var(--phone-field-size); }
+  .changes-menu .changes-variants-title { font-size: var(--phone-subhead-size); font-weight: 600; }
+  .changes-menu .changes-variants-note { font-size: var(--phone-caption-size); line-height: var(--phone-caption-leading); }
+  .changes-menu .panel-empty strong { font-size: var(--phone-body-size); }
+  .changes-menu .panel-empty span { font-size: var(--phone-subhead-size); line-height: var(--phone-subhead-leading); }
+
+  /* The pill: the app's name is the page's main line, at body. */
+  .phone-layout .collapsed-app-name { font-size: var(--phone-body-size); font-weight: 600; }
+
+  /* The Inspector, full screen: its header names the screen at body; its groups are labelled
+     as sections; controls and empty notes are subhead; badges are captions. */
+  .phone-layout .right-panel .inspector-screen-path {
+    font-size: var(--phone-body-size);
+    font-weight: 600;
+    line-height: var(--phone-body-leading);
+  }
+  .phone-layout .right-panel .section-title h3 {
+    color: var(--secondary);
+    font-size: var(--phone-subhead-size);
+    font-weight: 600;
+    line-height: var(--phone-subhead-leading);
+  }
+  .phone-layout .right-panel .section-title > span { font-size: var(--phone-caption-size); }
+  .phone-layout .right-panel .toggle-button {
+    font-size: var(--phone-subhead-size);
+    font-weight: 500;
+  }
+  /* Before and After are captions under the mode buttons, as in the panel on a wider window. */
+  .phone-layout .right-panel .compare-side-label {
+    font-size: var(--phone-caption-size);
+    font-weight: 500;
+    line-height: var(--phone-caption-leading);
+  }
+  .phone-layout .right-panel .compare-flip-side[aria-pressed="true"] { font-weight: 600; }
+  .phone-layout .right-panel .inline-empty,
+  .phone-layout .right-panel .transition-section .inline-empty,
+  .phone-layout .right-panel .launch-note {
+    color: var(--secondary);
+    font-size: var(--phone-subhead-size);
+    line-height: var(--phone-subhead-leading);
+  }
+  .phone-layout .right-panel .transition-copy strong,
+  .phone-layout .right-panel .transition-copy .transition-path {
+    font-size: var(--phone-body-mono-size);
+    line-height: var(--phone-body-leading);
+  }
+  .phone-layout .right-panel .transition-kind,
+  .phone-layout .right-panel .variant-thumbnail-name,
+  .phone-layout .right-panel .inspector-diff-caption {
+    font-size: var(--phone-caption-size);
+    font-weight: 500;
+    line-height: var(--phone-caption-leading);
+  }
+  .phone-layout .right-panel .what-changed-item,
+  .phone-layout .right-panel .inspector-diff-summary p {
+    font-size: var(--phone-body-size);
+    line-height: var(--phone-body-leading);
+  }
+
+  /* Search, full screen: the same section label, body results and caption badges. */
+  .search-command .search-command-input-row input { font-size: var(--phone-field-size); }
+  .search-command .search-command-section-label {
+    padding: 16px 16px 6px;
+    color: var(--secondary);
+    font-size: var(--phone-subhead-size);
+    font-weight: 600;
+    letter-spacing: 0;
+    line-height: var(--phone-subhead-leading);
+    text-transform: none;
+  }
+  .search-command .search-command-result-copy strong { font-size: var(--phone-body-size); line-height: var(--phone-body-leading); }
+  .search-command .search-command-result-copy code { font-size: var(--phone-body-mono-size); }
+  .search-command .search-command-result-copy small { font-size: var(--phone-subhead-size); line-height: var(--phone-subhead-leading); }
+  .search-command .search-command-result-kind {
+    padding: 2px 8px;
+    font-size: var(--phone-caption-size);
+    line-height: var(--phone-caption-leading);
+  }
+  .search-command .search-command-empty strong { font-size: var(--phone-body-size); }
+  .search-command .search-command-empty span { font-size: var(--phone-subhead-size); line-height: var(--phone-subhead-leading); }
+  .changes-menu .panel-search { height: 44px; }
+  .changes-menu .panel-search > input { height: 44px; }
+  .changes-menu .panel-search-clear { width: 44px; height: 44px; }
+  /* The minimap repeats what a phone already shows whole, and covers a sixth of it. */
+  .phone-layout .canvas-minimap-shell { display: none; }
+  /* With nothing selected there is no Inspector to reopen. */
+  .phone-layout .right-float { display: none; }
+  /* The Inspector slides up over the whole screen; a drag down on its header puts it away. */
+  .phone-layout .right-panel {
+    position: fixed;
+    z-index: 120;
+    inset: 0;
+    width: auto;
+    height: auto;
+    padding-top: env(safe-area-inset-top);
+    border-left: 0;
+    zoom: 1;
+    transition: transform 200ms ease;
+    animation: phone-sheet-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .phone-layout .right-head { position: relative; height: 56px; padding-top: 0; touch-action: none; }
+  .phone-layout .right-panel .sidebar-review-stage.mode-swipe,
+  .phone-layout .right-panel .sidebar-review-stage.mode-flip {
+    --compare-frame-height: min(calc(100cqw / var(--compare-aspect)), 52dvh);
+  }
+  .phone-layout .right-panel .sidebar-review-off .variant-preview.has-image-ratio { width: min(100%, calc(52dvh * var(--preview-aspect))); }
+  /* The search box is full width; its Esc hint is for a keyboard. */
+  .phone-layout .search-command-input-row > kbd { display: none; }
+}
+@media (max-width: 819px) and (prefers-reduced-motion: reduce) {
+  .phone-layout .right-panel { animation: none; }
+}
+
+/* A screen without a screenshot: on the Map the placeholder is sized by its slot's height, which a
+   Screens grid cell does not have. Here it takes the cell's width and a screenshot's proportions,
+   so it lines up with the screenshots beside it. */
+.screens-cell .screen-node-image:has(> .image-placeholder) { container-type: normal; }
+.screens-cell .screen-node-image > .image-placeholder {
+  /* Like the image beside it: the screenshot's proportions inside the frame's 1px border. */
+  box-sizing: content-box;
+  width: calc(100% - 2 * var(--frame-border));
+  height: auto;
+  aspect-ratio: var(--screenshot-width) / var(--screenshot-height);
+  font-size: var(--phone-caption-size, 12px);
+}
+
+/* Pinch and double-tap zoom the page on a phone; only the map canvas zooms, and it handles that itself. */
+.phone-layout { touch-action: pan-x pan-y; }
+.phone-layout .react-flow,
+.phone-layout .react-flow__pane { touch-action: none; }
+/* A blurred full-screen backdrop repaints on every result change under it and flickers on phones. */
+.phone-layout .search-command-backdrop { backdrop-filter: none; background: rgba(0, 0, 0, 0.45); }

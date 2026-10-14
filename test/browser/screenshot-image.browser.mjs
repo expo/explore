@@ -1,0 +1,425 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { chromium, expect } from "@playwright/test";
+import { PNG } from "pngjs";
+import { createBrowserVite } from "../helpers/browser-vite.mjs";
+
+const firstSource = `expo-explore-asset:${"a".repeat(64)}.png`;
+const secondSource = `expo-explore-asset:${"b".repeat(64)}.png`;
+const thirdSource = `expo-explore-asset:${"c".repeat(64)}.png`;
+
+function png(width, height, color) {
+  const image = new PNG({ width, height });
+  for (let index = 0; index < image.data.length; index += 4) {
+    image.data.set([...color, 255], index);
+  }
+  return PNG.sync.write(image);
+}
+
+const firstImage = png(2, 3, [40, 100, 160]);
+const secondImage = png(4, 5, [160, 100, 40]);
+const imageUrl = bytes => `data:image/png;base64,${bytes.toString("base64")}`;
+
+const resolver = `
+export const isEmbeddedArtifactUrl = value => value.startsWith("expo-explore-asset:");
+export const releaseEmbeddedArtifactUrl = source => { window.releaseCalls.push(source); return true; };
+export function resolveEmbeddedArtifactUrl(source, priority) {
+  window.resolverCalls.push(source);
+  window.resolverPriorities.push(priority);
+  // A screenshot the report still holds decoded resolves at once.
+  if (window.immediateScreenshots.has(source)) return Promise.resolve(window.immediateScreenshots.get(source));
+  return new Promise((resolve, reject) => {
+    const pending = window.pendingScreenshots.get(source) ?? [];
+    pending.push({ resolve, reject });
+    window.pendingScreenshots.set(source, pending);
+  });
+}
+`;
+
+const entry = `
+import { useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { ScreenshotImage } from "/src/components/shared/screenshot-image.tsx";
+
+function Harness() {
+  const [state, setState] = useState(window.fixture);
+  useEffect(() => {
+    window.updateScreenshot = changes => setState(previous => ({ ...previous, ...changes }));
+    window.harnessReady = true;
+  }, []);
+  function loaded(event) {
+    const image = event.currentTarget;
+    window.imageLoads.push({ alt: image.alt, source: image.currentSrc, width: image.naturalWidth, height: image.naturalHeight });
+  }
+  function failed(event) {
+    const image = event.currentTarget;
+    window.imageErrors.push({ alt: image.alt, source: image.dataset.screenshotSrc });
+  }
+  return <main style={{ position: "relative", height: state.layout === "scroll" ? 3300 : 300,
+    width: 600, overflow: state.layout === "pan" ? "hidden" : undefined }}>
+    {state.normalSource && <ScreenshotImage src={state.normalSource} alt="Hosted screenshot"
+      width={24} height={18} decoding="async" onLoad={loaded} />}
+    <div data-testid="positioner" style={{ position: "absolute", left: 20,
+      top: state.layout === "scroll" ? 3000 : 30,
+      transform: state.layout === "pan" ? "translateX(2500px)" : undefined }}>
+      {state.mounted !== false && <ScreenshotImage src={state.source} alt="Captured checkout"
+        width={120} height={80} loading={state.loading} decoding="async" className="captured-image"
+        data-screen="checkout" onLoad={loaded} onError={failed}
+        {...(state.indicator ? { indicator: state.indicator } : {})}
+        {...(state.fallback ? { fallback: <span data-testid="fallback">No screenshot</span> } : {})} />}
+    </div>
+  </main>;
+}
+createRoot(document.getElementById("root")).render(<Harness />);
+`;
+
+async function fixture(t, options = {}) {
+  const vite = await createBrowserVite(t, {
+    configFile: false,
+    root: fileURLToPath(new URL("../../viewer", import.meta.url)),
+    logLevel: "error", esbuild: { jsx: "automatic" },
+    plugins: [{
+      name: "screenshot-image-fixture", enforce: "pre",
+      resolveId(id, importer) {
+        if (id === "/__screenshot_image.tsx") return id;
+        if (importer?.endsWith("/components/shared/screenshot-image.tsx") && /(?:^|\/)embedded-report(?:\.ts)?$/.test(id)) {
+          return "\0screenshot-image-resolver";
+        }
+      },
+      load(id) {
+        if (id === "/__screenshot_image.tsx") return entry;
+        if (id === "\0screenshot-image-resolver") return resolver;
+      },
+      configureServer(server) {
+        server.middlewares.use((request, response, next) => {
+          if (request.url === "/__normal.png") {
+            response.setHeader("Content-Type", "image/png");
+            response.end(firstImage);
+            return;
+          }
+          if (request.url !== "/") return next();
+          response.setHeader("Content-Type", "text/html");
+          response.end('<!doctype html><html><head><style>body{margin:0}</style></head><body><div id="root"></div><script type="module" src="/__screenshot_image.tsx"></script></body></html>');
+        });
+      },
+    }],
+    server: { host: "127.0.0.1", port: 0 },
+  });
+  await vite.listen();
+  const address = vite.httpServer.address();
+  assert.ok(address && typeof address === "object");
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 900, height: 600 } });
+  page.setDefaultTimeout(8000);
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  t.after(() => assert.deepEqual(errors, [], "The image lifecycle must not produce browser errors"));
+  await page.addInitScript(fixture => {
+    window.fixture = fixture;
+    window.resolverCalls = [];
+    window.resolverPriorities = [];
+    window.releaseCalls = [];
+    window.immediateScreenshots = new Map();
+    if (fixture.observer === "manual") {
+      // The test decides when the image enters or leaves the viewport, down to one task.
+      const observers = [];
+      window.IntersectionObserver = class {
+        constructor(callback) { this.callback = callback; this.targets = []; observers.push(this); }
+        observe(target) { this.targets.push(target); }
+        unobserve(target) { this.targets = this.targets.filter(value => value !== target); }
+        disconnect() { this.targets = []; }
+        takeRecords() { return []; }
+      };
+      window.setIntersecting = isIntersecting => {
+        for (const observer of observers) {
+          if (observer.targets.length) observer.callback(observer.targets.map(target => ({ target, isIntersecting })), observer);
+        }
+      };
+    }
+    window.imageLoads = [];
+    window.imageErrors = [];
+    window.pendingScreenshots = new Map();
+    window.resolveScreenshot = (source, value) => {
+      const pending = window.pendingScreenshots.get(source);
+      if (!pending?.length) throw new Error("No pending screenshot resolution");
+      window.pendingScreenshots.delete(source);
+      for (const { resolve } of pending) resolve(value);
+    };
+    window.rejectScreenshot = source => {
+      const pending = window.pendingScreenshots.get(source);
+      if (!pending?.length) throw new Error("No pending screenshot resolution");
+      window.pendingScreenshots.delete(source);
+      for (const { reject } of pending) reject(new Error("Screenshot resolution failed"));
+    };
+  }, { source: firstSource, layout: "visible", ...options });
+  await page.goto(`http://127.0.0.1:${address.port}/`);
+  await page.waitForFunction(() => window.harnessReady);
+  return { page, image: page.getByRole("img", { name: "Captured checkout", exact: true }) };
+}
+
+// Let native intersection delivery settle before asserting that no asset work began.
+async function observePosition(image) {
+  return image.evaluate(element => new Promise(resolve => {
+    const observer = new IntersectionObserver(([entry]) => {
+      observer.disconnect();
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve(entry.isIntersecting)));
+    });
+    observer.observe(element);
+  }));
+}
+
+async function resolveImage(page, source, bytes = firstImage) {
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toContain(source);
+  await page.evaluate(({ source, value }) => window.resolveScreenshot(source, value), { source, value: imageUrl(bytes) });
+}
+
+async function expectDecoded(image, width, height) {
+  await expect.poll(() => image.evaluate(element => ({ complete: element.complete, width: element.naturalWidth, height: element.naturalHeight })))
+    .toEqual({ complete: true, width, height });
+  await image.evaluate(element => element.decode());
+}
+
+/** A waiting image shows a transparent stand-in of its own size: never an `<img>` without a source. */
+async function expectWaiting(image, state = "loading") {
+  await expect(image).toHaveAttribute("data-screenshot-state", state);
+  await expect(image).toHaveAttribute("src", /^data:image\/svg\+xml,/);
+  await expect.poll(() => image.evaluate(element => ({ complete: element.complete, width: element.naturalWidth, height: element.naturalHeight })))
+    .toEqual({ complete: true, width: 120, height: 80 });
+}
+
+test("embedded screenshots resolve only when scrolling brings them near the viewport", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { layout: "scroll", loading: "lazy" });
+  assert.equal(await observePosition(image), false);
+  assert.deepEqual(await page.evaluate(() => window.resolverCalls), []);
+  await expectWaiting(image);
+
+  await image.scrollIntoViewIfNeeded();
+  await resolveImage(page, firstSource);
+  await expectDecoded(image, 2, 3);
+  assert.deepEqual(await page.evaluate(() => window.resolverCalls), [firstSource]);
+  assert.deepEqual(await page.evaluate(() => window.resolverPriorities), ["lazy"], "Scrolled-in images wait behind eager ones");
+  await expect.poll(() => page.evaluate(() => window.imageLoads.length)).toBe(1);
+});
+
+test("embedded screenshots respond to canvas panning without a scroll event", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { layout: "pan", loading: "lazy" });
+  assert.equal(await observePosition(image), false);
+  assert.deepEqual(await page.evaluate(() => window.resolverCalls), []);
+
+  await page.getByTestId("positioner").evaluate(element => { element.style.transform = "translateX(0px)"; });
+  await resolveImage(page, firstSource);
+  await expectDecoded(image, 2, 3);
+  assert.equal(await page.evaluate(() => window.scrollY), 0);
+  assert.deepEqual(await page.evaluate(() => window.resolverCalls), [firstSource]);
+});
+
+test("eager screenshots resolve offscreen and preserve ordinary image attributes and load events", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { layout: "scroll", loading: "eager", normalSource: "/__normal.png" });
+  assert.equal(await observePosition(image), false);
+  await resolveImage(page, firstSource);
+  await expectDecoded(image, 2, 3);
+  await expect(image).toHaveAttribute("width", "120");
+  await expect(image).toHaveAttribute("height", "80");
+  await expect(image).toHaveAttribute("loading", "eager");
+  await expect(image).toHaveAttribute("decoding", "async");
+  await expect(image).toHaveAttribute("data-screen", "checkout");
+  await expect(image).toHaveClass("captured-image");
+  await expectDecoded(page.getByRole("img", { name: "Hosted screenshot", exact: true }), 2, 3);
+  await expect.poll(() => page.evaluate(() => window.imageLoads.map(load => load.alt).sort()))
+    .toEqual(["Captured checkout", "Hosted screenshot"]);
+  assert.deepEqual(await page.evaluate(() => window.resolverCalls), [firstSource], "Ordinary URLs bypass embedded resolution");
+  assert.deepEqual(await page.evaluate(() => window.resolverPriorities), ["eager"]);
+  assert.equal(await page.evaluate(() => window.scrollY), 0);
+});
+
+test("late resolutions cannot replace a newer screenshot or revive an unmounted image", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager" });
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
+  await page.evaluate(source => window.updateScreenshot({ source }), secondSource);
+  await resolveImage(page, secondSource, secondImage);
+  await expectDecoded(image, 4, 5);
+  await expect.poll(() => page.evaluate(() => window.imageLoads.length)).toBe(1);
+
+  await resolveImage(page, firstSource);
+  await observePosition(image);
+  await expect(image).toHaveAttribute("src", imageUrl(secondImage));
+  await expectDecoded(image, 4, 5);
+  assert.equal(await page.evaluate(() => window.imageLoads.length), 1);
+
+  await page.evaluate(source => window.updateScreenshot({ source }), thirdSource);
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toContain(thirdSource);
+  await page.evaluate(() => window.updateScreenshot({ mounted: false }));
+  await expect(image).toHaveCount(0);
+  await resolveImage(page, thirdSource);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect(image).toHaveCount(0);
+  assert.equal(await page.evaluate(() => window.imageLoads.length), 1);
+});
+
+test("resolver failures notify the active image once and ignore replaced or unmounted sources", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager" });
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
+  await page.evaluate(source => window.rejectScreenshot(source), firstSource);
+  const expectedErrors = [{ alt: "Captured checkout", source: firstSource }];
+  await expect.poll(() => page.evaluate(() => window.imageErrors)).toEqual(expectedErrors);
+  await observePosition(image);
+  // Without a fallback the failed image stays an empty frame, not a broken image.
+  await expectWaiting(image, "failed");
+  assert.equal(await page.evaluate(() => window.imageLoads.length), 0);
+
+  await page.evaluate(source => window.updateScreenshot({ source }), secondSource);
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toContain(secondSource);
+  await page.evaluate(source => window.updateScreenshot({ source }), thirdSource);
+  await resolveImage(page, thirdSource, secondImage);
+  await expectDecoded(image, 4, 5);
+  await page.evaluate(source => window.rejectScreenshot(source), secondSource);
+  await observePosition(image);
+  assert.deepEqual(await page.evaluate(() => window.imageErrors), expectedErrors);
+  await expect(image).toHaveAttribute("src", imageUrl(secondImage));
+
+  await page.evaluate(source => window.updateScreenshot({ source }), firstSource);
+  await expect.poll(() => page.evaluate(source => window.resolverCalls.filter(value => value === source).length, firstSource)).toBe(2);
+  await page.evaluate(() => window.updateScreenshot({ mounted: false }));
+  await expect(image).toHaveCount(0);
+  await page.evaluate(source => window.rejectScreenshot(source), firstSource);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.deepEqual(await page.evaluate(() => window.imageErrors), expectedErrors);
+});
+
+test("a waiting embedded screenshot keeps its size, draws no alt text, and hides its stand-in from load listeners", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager" });
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
+  await expectWaiting(image);
+  await expect(image).toHaveAttribute("aria-busy", "true");
+  // The accessible name stays while the pixels wait.
+  await expect(image).toHaveAttribute("alt", "Captured checkout");
+  const waiting = await image.boundingBox();
+  assert.equal(await page.locator("img:not([src])").count(), 0);
+  assert.deepEqual(await page.evaluate(() => window.imageLoads), [], "The stand-in's load is not the screenshot's");
+
+  await resolveImage(page, firstSource);
+  await expectDecoded(image, 2, 3);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(image).not.toHaveAttribute("aria-busy", /.*/);
+  assert.deepEqual(await image.boundingBox(), waiting, "Resolving does not move or resize the image");
+  await expect.poll(() => page.evaluate(() => window.imageLoads.length)).toBe(1);
+});
+
+test("a spinner indicator shows over a waiting screenshot and leaves once its pixels load", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", indicator: "spinner" });
+  const spinner = page.getByRole("status", { name: "Loading screenshot", exact: true });
+  await expect(spinner).toHaveCount(1);
+  await expectWaiting(image);
+  await resolveImage(page, firstSource);
+  await expectDecoded(image, 2, 3);
+  await expect(spinner).toHaveCount(0);
+});
+
+test("a screenshot that cannot be resolved or decoded shows the fallback, never a broken image", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", fallback: true, indicator: "spinner" });
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
+  await page.evaluate(source => window.rejectScreenshot(source), firstSource);
+  await expect(page.getByTestId("fallback")).toHaveText("No screenshot");
+  await expect(image).toHaveCount(0);
+  await expect(page.getByRole("status")).toHaveCount(0);
+  assert.deepEqual(await page.evaluate(() => window.imageErrors), [{ alt: "Captured checkout", source: firstSource }]);
+
+  // Bytes that pass the resolver but fail to decode end the same way.
+  await page.evaluate(source => window.updateScreenshot({ source }), secondSource);
+  await expectWaiting(image);
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toContain(secondSource);
+  await page.evaluate(source => window.resolveScreenshot(source, "data:image/png;base64,AAAA"), secondSource);
+  await expect(page.getByTestId("fallback")).toHaveText("No screenshot");
+  await expect(image).toHaveCount(0);
+  assert.equal(await page.locator("img:not([src])").count(), 0);
+  assert.equal(await page.evaluate(() => window.imageErrors.length), 2);
+  assert.equal(await page.evaluate(() => window.imageLoads.length), 0);
+
+  // Returning to a source that failed earlier tries it again.
+  await page.evaluate(source => window.updateScreenshot({ source }), firstSource);
+  await expect.poll(() => page.evaluate(source => window.resolverCalls.filter(value => value === source).length, firstSource)).toBe(2);
+  await resolveImage(page, firstSource);
+  await expectDecoded(image, 2, 3);
+  await expect(page.getByTestId("fallback")).toHaveCount(0);
+});
+
+/** A Blob URL the page owns, like the report's; revoking it stands in for the report evicting it. */
+async function blobUrl(page, bytes) {
+  return page.evaluate(bytes => URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/png" })), [...bytes]);
+}
+
+test("returning to a screenshot before the next one resolves waits for a fresh URL, never the released one", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", fallback: true });
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
+  const released = await blobUrl(page, firstImage);
+  await page.evaluate(({ source, url }) => window.resolveScreenshot(source, url), { source: firstSource, url: released });
+  await expectDecoded(image, 2, 3);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+
+  // A to B releases A's URL; while B still resolves, the report evicts and revokes it.
+  await page.evaluate(source => window.updateScreenshot({ source }), secondSource);
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toContain(secondSource);
+  await expectWaiting(image);
+  await expect.poll(() => page.evaluate(() => window.releaseCalls)).toEqual([firstSource]);
+  await page.evaluate(url => URL.revokeObjectURL(url), released);
+
+  // Back to A before B resolves: A waits for its new resolution instead of drawing the revoked URL.
+  await page.evaluate(source => window.updateScreenshot({ source }), firstSource);
+  await expect.poll(() => page.evaluate(source => window.resolverCalls.filter(value => value === source).length, firstSource)).toBe(2);
+  await expectWaiting(image);
+  await expect(image).toHaveAttribute("aria-busy", "true");
+  const fresh = await blobUrl(page, firstImage);
+  await page.evaluate(({ source, url }) => window.resolveScreenshot(source, url), { source: firstSource, url: fresh });
+  await expectDecoded(image, 2, 3);
+  await expect(image).toHaveAttribute("src", fresh);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(page.getByTestId("fallback")).toHaveCount(0);
+  assert.deepEqual(await page.evaluate(() => window.imageErrors), []);
+});
+
+test("a fresh URL for a screenshot that failed to decode gives it another try", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { layout: "pan", loading: "lazy" });
+  const positioner = page.getByTestId("positioner");
+  const pan = offset => positioner.evaluate((element, offset) => { element.style.transform = `translateX(${offset}px)`; }, offset);
+  await pan(0);
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
+  await page.evaluate(source => window.resolveScreenshot(source, "data:image/png;base64,AAAA"), firstSource);
+  await expect(image).toHaveAttribute("data-screenshot-state", "failed");
+
+  // Panning away releases it; panning back resolves it again, and this time its bytes decode.
+  await pan(2500);
+  await expect.poll(() => page.evaluate(() => window.releaseCalls)).toEqual([firstSource]);
+  await pan(0);
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource, firstSource]);
+  await resolveImage(page, firstSource);
+  await expectDecoded(image, 2, 3);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(image).not.toHaveAttribute("aria-busy", /.*/);
+});
+
+test("an image that leaves and re-enters the viewport within one render is ready without a new load event", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "lazy", observer: "manual" });
+  await page.evaluate(() => window.setIntersecting(true));
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
+  const url = await blobUrl(page, firstImage);
+  await page.evaluate(({ source, url }) => window.resolveScreenshot(source, url), { source: firstSource, url });
+  await expectDecoded(image, 2, 3);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  await expect.poll(() => page.evaluate(() => window.imageLoads.length)).toBe(1);
+
+  // The report kept the released URL, so the second resolution returns it at once: React commits
+  // the same `src`, and the browser fires no load event for it.
+  await page.evaluate(({ source, url }) => {
+    window.immediateScreenshots.set(source, url);
+    window.setIntersecting(false);
+    window.setIntersecting(true);
+  }, { source: firstSource, url });
+  await expect.poll(() => page.evaluate(() => window.resolverCalls.length)).toBe(2);
+  assert.deepEqual(await page.evaluate(() => window.releaseCalls), [firstSource]);
+  await expect(image).toHaveAttribute("src", url);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(image).not.toHaveAttribute("aria-busy", /.*/);
+  assert.equal(await page.evaluate(() => window.imageLoads.length), 1, "No second load event fired");
+});

@@ -1,0 +1,42 @@
+{
+  "name": "@expo/explore-viewer-host",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "npm run stage:viewer && expo start --web",
+    "stage:viewer": "node scripts/stage-viewer.mjs",
+    "export": "npm run stage:viewer && expo export --platform web && npm run verify:export && npm run verify:assets",
+    "export:preview": "npm run stage:viewer && EXPLORE_HOST_VARIANT=preview expo export --platform web --output-dir dist-preview && npm run verify:export:preview",
+    "verify:export": "node scripts/verify-export.mjs",
+    "verify:export:preview": "node scripts/verify-export.mjs --variant preview",
+    "verify:assets": "playwright test --config ../playwright.hosted.config.ts",
+    "serve": "expo serve",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts tests/*.test.mjs",
+    "validate": "npm run typecheck && npm test && npm run export && npm run export:preview"
+  },
+  "dependencies": {
+    "expo": "~57.0.18",
+    "expo-constants": "~57.0.16",
+    "expo-linking": "~57.0.8",
+    "expo-router": "~57.0.17",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-web": "~0.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/react": "~19.2.2",
+    "tsx": "^4.23.0",
+    "typescript": "~6.0.3"
+  },
+  "overrides": {
+    "decode-uri-component": "0.5.0"
+  },
+  "engines": {
+    "node": ">=24.12.0"
+  }
+}

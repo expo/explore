@@ -1,0 +1,9 @@
+# Steps this scenario adds to the shared config's setup slots (../deterministic.yaml).
+# The password reset form exists only on head and must be captured while signed out. requiresRoute
+# skips the step on base; the shared config cannot name the route itself, because a route that
+# exists on neither revision (the identical and app-wide scenarios) is rejected.
+signed-out:
+  - action: open
+    url: explore-example-wallet://auth/forgot-password
+    requiresRoute: /auth/forgot-password
+    ready: { label: Reset your password }

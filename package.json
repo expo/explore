@@ -1,0 +1,98 @@
+{
+  "name": "@expo/explore",
+  "version": "0.18.1",
+  "description": "Source-driven mobile app maps, deterministic CI capture, and visual reviews",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "expo-explore": "dist/cli.js"
+  },
+  "files": [
+    "action.yml",
+    "npm-shrinkwrap.json",
+    "dist",
+    "docs",
+    "schema",
+    "templates",
+    "scripts/cleanup-ci-sessions.mjs",
+    "skills/explore-setup",
+    "skills/explore-binary"
+  ],
+  "exports": {
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
+    },
+    "./schema": "./schema/screen-map.v1.schema.json",
+    "./schema/screen-map.v1": "./schema/screen-map.v1.schema.json",
+    "./schema/build-catalog.v1": "./schema/build-catalog.v1.schema.json",
+    "./schema/build-comparison.v1": "./schema/build-comparison.v1.schema.json"
+  },
+  "engines": {
+    "node": ">=24.12.0"
+  },
+  "scripts": {
+    "prebuild": "node scripts/clean.mjs",
+    "build": "npm run build:cli && npm run build:viewer",
+    "build:cli": "tsc -p tsconfig.json",
+    "build:viewer": "vite build --config viewer/vite.config.ts",
+    "build:hosting": "npm --prefix viewer-host run export",
+    "build:hosting:preview": "npm --prefix viewer-host run export:preview && rm -rf dist/hosting-preview && mkdir -p dist && cp -R viewer-host/dist-preview dist/hosting-preview",
+    "dev": "node scripts/dev-viewer.mjs",
+    "postbuild:cli": "node scripts/make-cli-executable.mjs",
+    "explore": "tsx src/cli.ts",
+    "view": "npm run build && node dist/cli.js view",
+    "link:local": "npm run build && npm link",
+    "prepack": "npm run build && npm run build:hosting:preview && node scripts/shrinkwrap.mjs",
+    "postpack": "node scripts/shrinkwrap.mjs --remove",
+    "test": "npm run build && npm run test:node",
+    "test:node": "node --test test/node/*.test.mjs",
+    "test:hosting": "npm --prefix viewer-host run typecheck && npm --prefix viewer-host test",
+    "test:viewer:artifacts": "node --test test/browser/artifact-report.browser.mjs test/browser/artifact-cache.browser.mjs",
+    "test:viewer:browser": "node --test test/browser/screenshot-image.browser.mjs test/browser/inspector-notes.browser.mjs test/browser/inspector-variants.browser.mjs test/browser/inspector-source-navigation.browser.mjs test/browser/map-edge-presentation.browser.mjs test/browser/local-ci-view.browser.mjs test/browser/report-viewer.browser.mjs",
+    "test:viewer:e2e": "npm run test:viewer:browser && playwright test",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p viewer/tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "ci:local": "npm run build:cli && node test/ci/run.mjs",
+    "ci:local:matrix": "node test/ci/matrix.mjs",
+    "ci:local:view": "node test/ci/view.mjs",
+    "ci:local:recompare": "npm run build:cli && node test/ci/recompare.mjs",
+    "readme:screenshots": "node scripts/readme-screenshots.mjs"
+  },
+  "dependencies": {
+    "@expo/repack-app": "0.10.1",
+    "@types/node": "^22.19.19",
+    "@zip.js/zip.js": "2.16.0",
+    "agent-device": "0.21.15",
+    "ajv": "^8.17.1",
+    "pngjs": "7.0.0",
+    "typescript": "^5.9.3",
+    "yaml": "^2.9.0",
+    "zod": "4.5.4"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.285",
+    "@openai/codex": "0.159.2",
+    "eas-cli": "24.4.2"
+  },
+  "devDependencies": {
+    "@anthropic-ai/claude-code": "2.1.285",
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^4.7.0",
+    "@xyflow/react": "^12.11.3",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
+    "lucide-react": "^0.553.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "sonner": "^2.0.8",
+    "tsx": "^4.23.12",
+    "typescript-eslint": "^8.71.1",
+    "vite": "^6.4.3"
+  }
+}

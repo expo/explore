@@ -1,0 +1,497 @@
+/* Compare: one changed screen at a time, under the same floating chrome as the canvases.
+
+   Everything sits on the window's centre line: the command bar at the top, the screenshots, the
+   toolbar at the bottom. The two bars frame the screenshots, which keep the same gap to each: the
+   command bar ends 56px from the top (14px off it, 42px tall, as the pill and page actions are),
+   the toolbar 64px from the bottom (14px off it, 50px tall), and --compare-gap follows each. Between them: the Before/After names with
+   their gap (28px), then the frames. The frames take exactly the height that is left, so they are
+   as large as the window allows and the two gaps stay equal. Everything grows with the chrome.
+   --compare-aspect comes from the screenshot, set on the section. */
+.compare-section {
+  --compare-gap: 16px;
+  --compare-bar-end: 64px;
+  --compare-top-end: 56px;
+  --compare-split-gap: 24px;
+  --compare-available-height: calc(100dvh - (var(--compare-top-end) + var(--compare-bar-end) + 2 * var(--compare-gap) + 28px) * var(--ui-scale));
+  /* Split's two frames fit the height and the width. Flip and Swipe keep the same height, so a
+     frame does not jump when the mode changes. */
+  --compare-frame-height: min(
+    var(--compare-available-height),
+    calc((100vw - 96px - var(--compare-split-gap)) / 2 / var(--compare-aspect))
+  );
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: calc((var(--compare-top-end) + var(--compare-gap)) * var(--ui-scale)) 24px calc((var(--compare-bar-end) + var(--compare-gap)) * var(--ui-scale));
+  color: var(--text);
+  background: var(--screen);
+}
+.compare-section-empty { color: var(--secondary); font-size: 13px; }
+
+/* ── Command bar ─────────────────────────────────────────────────────────── */
+
+/* ● /route ‹ 2 of 6 › │ Outlines What changed — one capsule centred at the top, in the bottom
+   toolbar's make: its surface, border, padding, 36px buttons and dividers. The
+   pill keeps the left. On large windows the bar grows with --ui-scale; zoom goes on the bar, not
+   the positioned header, so the header stays exactly where it is placed. */
+.compare-top {
+  position: absolute;
+  z-index: 5;
+  top: var(--chrome-top);
+  left: 50%;
+  display: flex;
+  /* Centred, clear of the pill on both sides (useBarGeometry measures it). */
+  max-width: calc(100% - 2 * var(--compare-side-reserve, 16px));
+  transform: translateX(-50%);
+}
+.compare-bar {
+  display: flex;
+  /* COMPARE_BAR_WIDTH in compare-section.tsx; the bar is zoomed by --ui-scale. */
+  width: 600px;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 2px;
+  /* As tall as the pill and the page actions on its row: 36px buttons, 2px above and below. */
+  padding: 2px 6px;
+  border: 1px solid var(--panel-line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--floating-chrome-shadow);
+  zoom: var(--ui-scale);
+}
+
+/* The navigation (CompareNav), shared with the phone, which gives it a capsule of its own in
+   phone.css. Here the bar is its surface: the picker and the steps are toolbar buttons. */
+.compare-nav { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 2px; }
+/* The picker takes what the steps and the icons leave of the bar, whatever the route, so the bar
+   keeps its size and ‹ › stay put as the reviewer steps (a long route loses its start). Tooltip
+   wraps the picker in an anchor that carries the width. */
+.compare-nav > .tooltip-anchor:first-child { min-width: 0; flex: 1 1 0; }
+.compare-nav-picker {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: var(--icon-btn-lg);
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.compare-nav-picker > .status-glyph { width: 10px; height: 10px; }
+.compare-nav-picker > .status-glyph > svg { width: 11px; height: 11px; stroke-width: 3; }
+/* Right-to-left only so the ellipsis falls at the start, keeping the end that names the screen;
+   the <bdi> inside keeps the route itself left-to-right, and text-align keeps it at the left. */
+.compare-nav-route {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text);
+  direction: rtl;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+/* ‹ 2 of 6 ›: the count between the steps that change it. */
+.compare-nav-steps { display: flex; flex: none; align-items: center; }
+.compare-nav-steps button {
+  display: inline-flex;
+  width: 28px;
+  height: var(--icon-btn-lg);
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--tertiary);
+  background: transparent;
+  transition: color 120ms ease, background 120ms ease;
+}
+.compare-nav-steps button:disabled { opacity: 0.35; cursor: default; }
+.compare-nav-steps button > svg { width: 18px; height: 18px; stroke-width: 2; }
+.compare-nav-position {
+  min-width: 44px;
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+@media (hover: hover) and (pointer: fine) {
+  .compare-nav-picker:hover,
+  .compare-nav-steps button:hover:not(:disabled) { color: var(--secondary); background: var(--panel-hover); }
+  .compare-nav-picker:hover { color: var(--text); }
+}
+.compare-nav-picker[aria-expanded="true"] { background: var(--element); }
+
+/* Split, Swipe, Flip in Compare's command bar, between where the screen sits and what to look
+   for: a segmented control on a sunken track, so the bottom toolbar keeps one width everywhere. */
+.compare-controls { display: flex; flex: none; }
+.compare-controls .toggle-pill { padding: 3px; border: 0; border-radius: 9px; background: var(--screen); }
+.compare-controls .toggle-row { gap: 2px; }
+.compare-controls .toggle-row .tooltip-anchor { flex: none; }
+.compare-controls .toggle-button {
+  height: 28px;
+  flex: none;
+  padding: 0 12px;
+  border-radius: 7px;
+  color: var(--tertiary);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.compare-controls .toggle-overlay { inset: 3px; border-radius: 7px; background: var(--element); }
+
+
+/* Outlines: on, its icon takes the outline colour. On is shown only while it can be turned off,
+   so a disabled toggle reads as plain off. */
+.compare-outlines[aria-pressed="true"]:not(:disabled) { color: var(--text); background: var(--element); }
+.compare-outlines[aria-pressed="true"]:not(:disabled) > svg { color: var(--modified); }
+
+/* What changed opens under its button, right-aligned to the bar's end. */
+.compare-what-changed-anchor { position: relative; display: flex; flex: none; }
+.compare-what-changed-popover {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 14px);
+  right: -6px;
+  display: flex;
+  width: 340px;
+  max-height: min(440px, 60dvh);
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--panel-line);
+  border-radius: 14px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: var(--floating-chrome-shadow);
+  overscroll-behavior: contain;
+}
+.compare-what-changed-popover-title { font-size: 14px; font-weight: 600; line-height: 18px; }
+
+/* What changed's findings and notes, shared with the phone's sheet (which sizes them in phone.css). */
+.what-changed-content { display: flex; flex-direction: column; gap: 12px; }
+.what-changed-content-list {
+  display: flex;
+  margin: 0;
+  padding: 0 0 0 18px;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 18px;
+}
+.what-changed-content-list > li::marker { color: var(--tertiary); }
+.what-changed-content-notes { display: flex; flex-direction: column; gap: 6px; }
+.what-changed-content-list + .what-changed-content-notes { padding-top: 12px; border-top: 1px solid var(--panel-line); }
+.what-changed-content-notes > p { margin: 0; color: var(--secondary); font-size: 12px; line-height: 17px; }
+
+/* ── Status glyph ────────────────────────────────────────────────────────── */
+
+.status-glyph {
+  display: flex;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--diff, var(--tertiary));
+}
+.status-glyph > svg { width: 12px; height: 12px; stroke-width: 2.5; }
+.status-glyph-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+
+/* ── Stage ───────────────────────────────────────────────────────────────── */
+
+/* The frames' height comes from the section (Compare), the phone (phone.css) or the Inspector. */
+.compare-stage {
+  display: flex;
+  min-height: 0;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 48px;
+}
+.compare-section .compare-stage { max-width: 100%; gap: var(--compare-split-gap); }
+.compare-side {
+  display: flex;
+  margin: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.compare-side-label {
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+.compare-flip-label { display: flex; gap: 12px; }
+/* Swipe names its sides above the frame too: Before over the divider's left, After over its right. */
+.compare-swipe-label { display: flex; align-self: stretch; justify-content: space-between; padding: 0 2px; }
+.compare-flip-side {
+  padding: 0;
+  color: var(--tertiary);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.compare-flip-side:hover { color: var(--secondary); }
+.compare-flip-side[aria-pressed="true"] { color: var(--text); font-weight: 600; cursor: default; }
+/* A new or removed screen has nothing to name: the row keeps its height, unseen, so its frame
+   lines up with a compared screen's. */
+.compare-side-label-reserved { visibility: hidden; }
+.compare-frame-wrap { position: relative; }
+/* Flip: one frame, centred under its Before/After names, in Compare and in the Inspector. The wrap
+   is a flex row because a block sized by height + aspect-ratio does not shrink-wrap in every engine
+   (WebKit left the frame at the left edge). */
+.compare-stage.mode-flip .compare-side,
+.sidebar-review-stage.mode-flip .compare-side { width: 100%; align-items: center; }
+.compare-stage.mode-flip .compare-frame-wrap,
+.sidebar-review-stage.mode-flip .compare-frame-wrap { display: flex; justify-content: center; }
+.compare-frame {
+  position: relative;
+  display: block;
+  height: var(--compare-frame-height);
+  aspect-ratio: var(--compare-aspect);
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--subtle);
+}
+.compare-frame > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.compare-flip-frame { cursor: pointer; }
+.compare-flip-frame:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.compare-swipe .visual-swipe { width: auto; height: var(--compare-frame-height); }
+
+/* A selected area: the rest of the screenshot dims, so the eye lands on the change. */
+.compare-section .visual-change-outline.active,
+.sidebar-review .visual-change-outline.active {
+  border-width: 2px;
+  background: transparent;
+  box-shadow: 0 0 0 9999px rgb(8 9 10 / 0.5);
+}
+
+.compare-missing {
+  display: flex;
+  max-width: 360px;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--secondary);
+  font-size: 13px;
+  text-align: center;
+}
+.compare-missing > svg { width: 24px; height: 24px; color: var(--tertiary); }
+.compare-missing > strong { color: var(--text); font-size: 14px; }
+
+/* ── Keyboard shortcuts ───────────────────────────────────────────────────── */
+
+.shortcuts-scrim {
+  position: fixed;
+  z-index: 200;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(5 5 7 / 0.55);
+}
+.shortcuts-dialog {
+  display: flex;
+  zoom: var(--ui-scale);
+  width: min(760px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px 28px 28px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  color: var(--text);
+  background: var(--side-panel-surface);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.45);
+  outline: none;
+}
+.shortcuts-header { display: flex; align-items: center; gap: 10px; }
+.shortcuts-header > h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.shortcuts-close {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  padding: 0;
+  border-radius: 7px;
+  color: var(--secondary);
+  background: transparent;
+}
+.shortcuts-close:hover { background: var(--element); }
+.shortcuts-close > svg { width: 15px; height: 15px; }
+.shortcuts-columns { display: flex; flex-wrap: wrap; gap: 24px 40px; }
+.shortcuts-column { display: flex; min-width: 280px; flex: 1; flex-direction: column; gap: 16px; }
+.shortcuts-group > h3 {
+  margin: 0 0 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+.shortcuts-group > dl { margin: 0; }
+.shortcuts-row { display: flex; min-height: 28px; align-items: center; gap: 6px; }
+.shortcuts-row > dt { flex: 1; font-size: 13px; }
+.shortcuts-row > dd { display: flex; margin: 0; gap: 4px; }
+.shortcuts-dialog kbd,
+.shortcuts-header > kbd {
+  min-width: 20px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--element);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 14px;
+  text-align: center;
+}
+
+/* ── Sidebar review: Compare at Inspector size, on every canvas ──────────── */
+
+.sidebar-review {
+  /* Frames size from the panel's width, so the pair always fits the Inspector. */
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 14px 20px;
+}
+/* Split, Swipe, Flip across the panel's width as one tab group, the app's segmented control (its
+   track, sliding thumb and corners), the three sharing the row equally, as on a phone's Compare.
+   16px to the names under it (the review's 12px gap and 4px): the modes act on the pair, the
+   names label it. */
+.sidebar-review-modes { display: flex; margin-bottom: 4px; }
+.sidebar-review-modes > .toggle-group { width: 100%; height: 32px; }
+.sidebar-review-modes .toggle-row:not(.toggle-overlay) { height: 100%; }
+.sidebar-review-modes .toggle-button { flex: 1; min-height: 0; font-size: 12px; font-weight: 500; white-space: nowrap; }
+/* What changed: an accordion under the screenshots. Its heading is the Inspector's section title
+   (.section-title h3, as Variants and Transition), so it takes their size, weight and colour; the
+   whole row is the button, and the findings open in place under it. */
+.what-changed-accordion { display: flex; flex-direction: column; }
+.what-changed-heading { margin-bottom: 0; }
+.what-changed-heading > h3 { min-width: 0; flex: 1; }
+.what-changed-toggle {
+  display: flex;
+  width: calc(100% + 12px);
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+}
+.what-changed-toggle-title { display: flex; align-items: baseline; gap: 6px; }
+.what-changed-toggle-count { color: var(--tertiary); font-weight: 500; font-variant-numeric: tabular-nums; }
+.what-changed-toggle > svg { width: 15px; height: 15px; flex: none; color: var(--tertiary); transition: transform 150ms ease; }
+.what-changed-toggle[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.what-changed-toggle:disabled { cursor: default; opacity: 0.45; }
+@media (hover: hover) and (pointer: fine) {
+  .what-changed-toggle:hover:not(:disabled) { background: var(--panel-hover); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .what-changed-toggle > svg { transition: none; }
+}
+.what-changed-accordion-content { padding: 2px 0 4px; }
+/* A screen the build left unchanged: its preview takes the review's place, between the modes and
+   What changed, inside the review's own padding. */
+.sidebar-review-off .session-preview-frame { margin: 0; }
+/* Its one frame is sized as the review's Swipe and Flip frame is (the panel's width, up to 70% of
+   the window's height), not as half of a Before/After pair, so an unchanged screen's screenshot is
+   the size a changed screen's is. */
+.sidebar-review-off .variant-preview.has-image-ratio { width: min(100%, calc(70dvh * var(--preview-aspect))); }
+.sidebar-review-stage {
+  /* Two frames and a 12px gap share the panel's width. One frame takes the whole width, up to
+     most of the window's height. */
+  --compare-frame-height: calc((100cqw - 12px) / 2 / var(--compare-aspect));
+  gap: 12px;
+}
+.sidebar-review-stage.mode-swipe,
+.sidebar-review-stage.mode-flip {
+  --compare-frame-height: min(calc(100cqw / var(--compare-aspect)), 70dvh);
+}
+/* Split's labels sit inside the frames here, as Swipe's do. */
+.compare-side-tag {
+  position: absolute;
+  z-index: 2;
+  bottom: 8px;
+  max-width: calc(100% - 16px);
+  overflow: hidden;
+  padding: 3px 7px;
+  border-radius: 6px;
+  color: #edeef0;
+  background: rgb(17 17 19 / 0.82);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.compare-side-tag.before { left: 8px; }
+.compare-side-tag.after { right: 8px; }
+/* Before and After are captions under the review: 11px, quieter than the section titles and the
+   mode buttons, the side on screen in Flip a step stronger. */
+.sidebar-review-stage .compare-side-label { color: var(--tertiary); font-size: 11px; font-weight: 500; line-height: 14px; }
+.sidebar-review-stage .compare-flip-side[aria-pressed="true"] { color: var(--text); font-weight: 600; }
+.sidebar-review-stage .compare-side { gap: 6px; }
+.sidebar-review-stage .compare-frame { border-radius: 10px; }
+
+/* ── Tablet: Compare without the app pill ──────────────────────────────────
+   From the phone breakpoint (820px) to an iPad in landscape (1180px), Compare keeps the desktop
+   design but leaves out the collapsed app pill: the command bar then has the top row to itself
+   and never drops under it. Search stays in the bottom toolbar. useBarGeometry finds no pill to
+   clear. */
+@media (min-width: 820px) and (max-width: 1180px) {
+  body:has(.compare-section) .left-panel.collapsed { display: none; }
+}
+
+/* ── Too narrow beside the pill: the command bar drops under it ──────────── */
+
+/* The bar stays on the pill's row. Only when the pill leaves it less room than its width, the
+   toolbar's (useBarGeometry sets data-bar-below), does it move down a row, still centred. It then
+   ends 108px from the top (the pill's 42px, 10px, and its own 42px); that row comes out of the frames'
+   height. The toolbar still ends 64px from the bottom. */
+.compare-section[data-bar-below] {
+  --compare-split-gap: 16px;
+  --compare-available-height: calc(100dvh - (108px + 64px + 2 * var(--compare-gap) + 28px) * var(--ui-scale));
+  padding-top: calc((108px + var(--compare-gap)) * var(--ui-scale));
+}
+.compare-section[data-bar-below] .compare-top {
+  top: calc(var(--chrome-top) + (var(--floating-chrome-height) + 10px) * var(--ui-scale));
+  max-width: calc(100% - 32px);
+}

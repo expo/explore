@@ -1,0 +1,25 @@
+{
+  "type": "window",
+  "children": [
+    {
+      "AXRole": "AXButton",
+      "AXLabel": "Continue",
+      "AXIdentifier": "continue-button",
+      "frame": { "x": 16, "y": 80, "width": 358, "height": 48 },
+      "enabled": true,
+      "visible": true
+    },
+    {
+      "role": "button",
+      "label": "Hidden purchase",
+      "visible": false
+    },
+    {
+      "role": "group",
+      "label": "Details",
+      "children": [
+        { "role": "text", "label": "Nested content" }
+      ]
+    }
+  ]
+}

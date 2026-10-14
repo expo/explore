@@ -1,0 +1,125 @@
+name: Viewer preview
+
+# Deploys each pull request's Viewer to its own EAS Hosting alias (explore-viewer-pr--pr-<number>.expo.app), serving
+# fixed reports from a real app, and keeps one comment on the pull request that links it. The reports are the assets
+# of the viewer-preview-fixtures release; refresh them with scripts/refresh-viewer-preview-fixtures.sh. Every push
+# replaces what the alias serves, and the comment's /p/<token> is reused, so the link never changes.
+# viewer-preview-cleanup.yml deletes the alias a week after the pull request closes.
+#
+# Needs the EXPO_TOKEN repository secret (the same one the hosted Viewer deploys with), able to create and deploy
+# the explore-viewer-pr project in the expo-public account. Pull requests from forks get no secrets and are skipped.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: viewer-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PROJECT: explore-viewer-pr
+  OWNER: expo-public
+  MARKER: "<!-- explore-viewer-preview -->"
+  PR: ${{ github.event.pull_request.number }}
+  SHA: ${{ github.event.pull_request.head.sha }}
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  deploy:
+    name: Deploy the Viewer preview
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+        with:
+          viewer-host: "true"
+      - name: Build the CLI and the hosted preview export
+        run: npm run build:cli && npm run build:hosting:preview
+      - name: Download the fixture reports
+        run: gh release download viewer-preview-fixtures --dir "$RUNNER_TEMP/fixtures" --clobber
+      - name: Find the preview comment
+        id: comment
+        shell: bash
+        run: |
+          set -euo pipefail
+          comment="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --jq "[.[] | select(.body | startswith(\"$MARKER\"))][0] | select(. != null) | {id, body}" | head -1)"
+          [[ -n "$comment" ]] || comment='{}'
+          echo "id=$(jq -r '.id // empty' <<< "$comment")" >> "$GITHUB_OUTPUT"
+          # The link an earlier run posted: the next deployment keeps its token.
+          token="$(jq -r '.body // empty' <<< "$comment" | grep -oE '/p/[a-z2-7]{32}' | head -1 | cut -c4- || true)"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - name: Deploy
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPLORE_PREVIEW_TOKEN: ${{ steps.comment.outputs.token }}
+        run: |
+          node scripts/deploy-viewer-preview.mjs --fixtures "$RUNNER_TEMP/fixtures" --alias "pr-$PR" \
+            --project "$PROJECT" --owner "$OWNER" > "$RUNNER_TEMP/preview.json"
+      - name: Link the preview on the pull request
+        shell: bash
+        env:
+          COMMENT_ID: ${{ steps.comment.outputs.id }}
+        run: |
+          set -euo pipefail
+          jq -r --arg marker "$MARKER" --arg sha "${SHA:0:7}" --arg run "$RUN_URL" '
+            .previewUrl as $url
+            | ([.reports[] | select(.platform == "android")] + [.reports[] | select(.platform != "android")]) as $reports
+            | ($reports[0].source // "") as $source
+            | [$marker,
+               "**Viewer preview** of \($sha)\(if $source != "" then " · reports from \($source)" else "" end)",
+               "",
+               "| Platform | Changes | Open |",
+               "| --- | --- | --- |",
+               ($reports[] | "| \(if .platform == "ios" then "iOS" else "Android" end)\(if .device then " · \(.device)" else "" end) | \(.changes // "–") | [Map](\($url)?platform=\(.platform)) · [Screens](\($url)?platform=\(.platform)#/screens) · [Compare](\($url)?platform=\(.platform)&view=compare) |"),
+               "",
+               "The link stays the same on every push. [Deploy run](\($run))"]
+            | join("\n")' "$RUNNER_TEMP/preview.json" > "$RUNNER_TEMP/comment.md"
+          if [[ -n "$COMMENT_ID" ]]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID" -F "body=@$RUNNER_TEMP/comment.md" > /dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F "body=@$RUNNER_TEMP/comment.md" > /dev/null
+          fi
+          cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Say the preview is out of date
+        if: failure() && steps.comment.outputs.id != ''
+        shell: bash
+        env:
+          COMMENT_ID: ${{ steps.comment.outputs.id }}
+        run: |
+          set -euo pipefail
+          body="$(gh api "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID" --jq .body | grep -v '^> \*\*The preview of ' || true)"
+          note="> **The preview of ${SHA:0:7} failed to deploy;** the link below still serves an earlier push. [Run]($RUN_URL)"
+          printf '%s\n%s\n%s\n' "$MARKER" "$note" "$(tail -n +2 <<< "$body")" > "$RUNNER_TEMP/comment.md"
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID" -F "body=@$RUNNER_TEMP/comment.md" > /dev/null
+
+  # The preview project's account allows a handful of aliases, and every pull request holds one (`pr-<n>`)
+  # while it is open; a closed pull request gives its alias back. The deployments themselves stay.
+  release-alias:
+    name: Release the preview alias
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - name: Delete the alias
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          printf '{"name":"%s","version":"0.0.0","private":true}\n' "$PROJECT" > "$work/package.json"
+          printf '{"expo":{"name":"%s","slug":"%s","owner":"%s","web":{"output":"server"}}}\n' "$PROJECT" "$PROJECT" "$OWNER" > "$work/app.json"
+          cd "$work"
+          npx --prefix "$GITHUB_WORKSPACE" eas init --force --non-interactive > /dev/null
+          npx --prefix "$GITHUB_WORKSPACE" eas deploy:alias:delete "pr-$PR" --non-interactive \
+            || echo "::warning::The alias pr-$PR was not deleted (it may never have been assigned); delete it in the EAS Hosting dashboard if it exists."

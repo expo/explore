@@ -1,0 +1,4 @@
+{
+  "description": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen.\n\n  AXButton \"Pattern Untitled — menu\"  (0.040, 0.076, 0.653, 0.032)\n  AXStaticText \"Untitled\"  (0.129, 0.076, 0.196, 0.032)\n  AXButton \"Switch to record mode\"  (0.828, 0.846, 0.128, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.905, 1.000, 0.095)\n  AXButton \"Patterns\"  (0.383, 0.910, 0.234, 0.062)\n  AXTextField \"waveform\" id=\"waveform\"  (0.682, 0.916, 0.067, 0.032)",
+  "source": "ax-service"
+}

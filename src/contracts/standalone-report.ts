@@ -1,0 +1,48 @@
+import type { PublicReview } from "./capture.js";
+import type { BuildWorkspacePayload, Coverage, ExploreMap } from "../types.js";
+
+export const STANDALONE_REPORT_CONTRACT = "expo.explore.standalone-report.v1" as const;
+export const EMBEDDED_ASSET_PREFIX = "expo-explore-asset:";
+
+/** Original screenshot bytes live after the Viewer bootstrap, outside the metadata JSON. */
+export type EmbeddedScreenshot = {
+  mimeType: "image/png" | "image/jpeg" | "video/mp4";
+  byteLength: number;
+};
+
+export const EXPLORATION_REPORT_KIND = "explore.exploration-report" as const;
+
+/** What `explore:binary` learned about one prebuilt app: provenance plus the map it explored, with no review or pull request. */
+export type ExplorationReport = {
+  kind: typeof EXPLORATION_REPORT_KIND;
+  map: ExploreMap;
+  coverage: Coverage;
+  exploration: {
+    app: { name: string; bundleId: string; platform: "ios" | "android"; version?: string; buildNumber?: string };
+    /** Absent when the app was already installed on a session Explore attached to (explore:session). */
+    archive?: { kind: string; sha256: string; bytes: number; fileName: string };
+    device: { model: string; osVersion: string };
+    model: { provider: string; model: string };
+    budget: { maxDurationMinutes: number; maxScreens: number; maxActions: number };
+    stopReason: string;
+    summary?: string;
+    startedAt: string;
+    completedAt: string;
+    exploreVersion: string;
+  };
+  assets: Array<{ sha256: string; path: string }>;
+};
+
+export type EmbeddedReport = {
+  contract: typeof STANDALONE_REPORT_CONTRACT;
+  /** Strings support previously downloaded reports; new reports keep only a small image index here. */
+  assets: Record<string, string | EmbeddedScreenshot>;
+} & ({ publicReview: PublicReview; workspace?: never; exploration?: never } | {
+  workspace: BuildWorkspacePayload;
+  publicReview?: never;
+  exploration?: never;
+} | {
+  exploration: ExplorationReport;
+  publicReview?: never;
+  workspace?: never;
+});

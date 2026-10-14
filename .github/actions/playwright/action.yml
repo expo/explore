@@ -1,0 +1,19 @@
+name: Set up Playwright Chromium
+description: Restores the Chromium build for the installed @playwright/test from the cache, downloading it only when the version changed.
+
+runs:
+  using: composite
+  steps:
+    - id: version
+      shell: bash
+      run: echo "playwright=$(node -p 'require("@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
+    - id: browsers
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-chromium-${{ runner.os }}-${{ steps.version.outputs.playwright }}
+    # The ubuntu runner image ships Google Chrome, so Chromium's shared libraries are already
+    # present; apt only runs on a cache miss, where it protects a fresh runner image.
+    - if: steps.browsers.outputs.cache-hit != 'true'
+      shell: bash
+      run: npx playwright install --with-deps chromium

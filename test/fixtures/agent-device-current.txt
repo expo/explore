@@ -1,0 +1,15 @@
+Page: dev.brent.euxy
+App: dev.brent.euxy
+Snapshot: 10 visible nodes
+Detected an overly complex or slow accessibility tree. Fell back to the private-ax snapshot backend.
+Warning: possible repeated nav subtree detected.
+@e1 [application] "euxy"
+@e2 [button] "Activity log"
+@e3 [button] "Activity log"
+@e4 [button] [same label as parent]
+@e5 [search] "Search" [editable]
+@e6 [button] "Mute"
+@e7 [button] "Solo"
+@e8 [button] "Mute"
+@e9 [tab-bar] "Tab Bar"
+@e10 [button] "Patterns" [selected]

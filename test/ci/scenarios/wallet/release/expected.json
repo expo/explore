@@ -1,0 +1,11 @@
+{
+  "surfaces": {
+    "/auth/forgot-password": "added",
+    "/onboarding/features": "removed",
+    "/auth/sign-in": "modified",
+    "/paywall": "modified",
+    "/onboarding": "needs-review",
+    "/transactions/[id]": "needs-review"
+  },
+  "others": "unchanged"
+}

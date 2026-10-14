@@ -1,0 +1,46 @@
+# Agent-mode Explore config shared by every wallet scenario: the model walks the app itself,
+# guided by instructions.md; there are no scripted setup steps.
+mode: agent
+app:
+  name: Wallet
+  platform: ios
+  bundleId: com.expo-explore.example.wallet
+  easProfile: explore
+  scheme: explore-example-wallet
+navigation:
+  provider: expo-router
+device:
+  name: iPhone 17
+exploration:
+  scope: all
+capture:
+  maxMinutes: 60
+  maxActions: 500
+parameters:
+  /:
+    hold: 'true'
+  /send/amount:
+    to: alex
+  /send/review:
+    to: alex
+    amount: '2500'
+  /send/processing:
+    to: alex
+    amount: '2500'
+    hold: 'true'
+  # No tx: the agent captures the receipt of its own transfer (tx-0013 for a new account), which a
+  # pinned seeded id would reject as a different destination.
+  /send/failed:
+    reason: declined
+    to: dana
+    amount: '2500'
+  /transactions/[id]:
+    id: tx-0011
+  /cards/[id]:
+    id: card-1
+# The screens behind a permission (ATMs, Scan to pay, Your contacts, Notifications, Privacy &
+# permissions) take no parameters; instructions.md reaches each without a permission prompt.
+agent:
+  provider: anthropic
+  model: claude-sonnet-5
+  instructions: instructions.md

@@ -1,0 +1,609 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://expo.dev/schemas/explore/screen-map.v1.schema.json",
+  "title": "Expo Explore local screen map v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "revision",
+    "run",
+    "artifacts",
+    "screens",
+    "variants",
+    "observations",
+    "elements",
+    "actionAttempts",
+    "transitions",
+    "journeys",
+    "frontier",
+    "gaps"
+  ],
+  "properties": {
+    "contract": { "const": "expo.explore.local-map.v1" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "run": { "$ref": "#/$defs/run" },
+    "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+    "screens": { "type": "array", "items": { "$ref": "#/$defs/screen" } },
+    "variants": { "type": "array", "items": { "$ref": "#/$defs/variant" } },
+    "observations": { "type": "array", "items": { "$ref": "#/$defs/observation" } },
+    "elements": { "type": "array", "items": { "$ref": "#/$defs/element" } },
+    "actionAttempts": { "type": "array", "items": { "$ref": "#/$defs/attempt" } },
+    "transitions": { "type": "array", "items": { "$ref": "#/$defs/transition" } },
+    "sourceNavigation": { "$ref": "#/$defs/sourceNavigation" },
+    "baselineSourceNavigation": { "$ref": "#/$defs/sourceNavigation" },
+    "journeys": { "type": "array", "items": { "$ref": "#/$defs/journey" } },
+    "frontier": { "type": "array", "items": { "$ref": "#/$defs/frontier" } },
+    "gaps": { "type": "array", "items": { "$ref": "#/$defs/gap" } }
+  },
+  "$defs": {
+    "sourceNavigation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "edges", "modalSurfaceIds", "unresolved"],
+      "properties": {
+        "contract": { "const": "explore.navigation" },
+        "edges": {
+          "type": "array", "maxItems": 50000,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["from", "to", "kind", "sourceFile", "provenance"],
+            "properties": {
+              "from": { "$ref": "#/$defs/id" },
+              "to": { "$ref": "#/$defs/id" },
+              "kind": { "enum": ["push", "replace", "navigate", "redirect", "tab", "dismissTo"] },
+              "sourceFile": { "type": "string", "minLength": 1, "maxLength": 4096 },
+              "provenance": { "const": "source" }
+            }
+          }
+        },
+        "modalSurfaceIds": { "type": "array", "maxItems": 5000, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "unresolved": { "type": "array", "maxItems": 5000, "items": { "type": "string", "minLength": 1, "maxLength": 1024 } }
+      }
+    },
+    "id": { "type": "string", "minLength": 1 },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+    },
+    "platform": { "enum": ["ios", "android"] },
+    "controller": { "enum": ["agent-device", "argent"] },
+    "actionKind": {
+      "enum": ["press", "fill", "swipe", "back", "dismiss", "deep-link", "key", "other"]
+    },
+    "risk": { "enum": ["safe", "unknown", "destructive", "external"] },
+    "selector": {
+      "type": "string",
+      "minLength": 1,
+      "not": { "pattern": "@[eE]\\d+" }
+    },
+    "bounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "width", "height", "unit"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": "number", "minimum": 0 },
+        "height": { "type": "number", "minimum": 0 },
+        "unit": { "enum": ["points", "pixels", "normalized"] }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxScreens", "maxActions", "maxDurationMinutes"],
+      "properties": {
+        "maxScreens": { "type": "integer", "minimum": 1 },
+        "maxActions": { "type": "integer", "minimum": 1 },
+        "maxDurationMinutes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "version": { "type": "string" },
+        "number": { "type": "string" },
+        "hash": { "type": "string" },
+        "gitCommit": { "type": "string" },
+        "source": { "enum": ["local", "eas", "store", "unknown"] }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deviceModel": { "type": "string" },
+        "osVersion": { "type": "string" },
+        "locale": { "type": "string" },
+        "orientation": { "enum": ["portrait", "landscape"] },
+        "colorScheme": { "enum": ["light", "dark", "system"] },
+        "colorSchemes": { "type": "array", "items": { "enum": ["light", "dark"] }, "uniqueItems": true, "minItems": 1 },
+        "authState": { "enum": ["logged-out", "logged-in", "custom"] },
+        "authPersona": { "type": "string" },
+        "launchContext": { "type": "string" },
+        "instructions": { "type": "string" }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "enum": ["complete", "partial", "failed"] } } },
+          "then": { "required": ["completedAt"] }
+        },
+        {
+          "if": {
+            "properties": { "status": { "enum": ["partial", "failed"] } },
+            "required": ["status"]
+          },
+          "then": { "required": ["stopReason"] },
+          "else": { "not": { "required": ["stopReason"] } }
+        }
+      ],
+      "required": [
+        "id",
+        "name",
+        "platform",
+        "controller",
+        "status",
+        "createdAt",
+        "updatedAt",
+        "build",
+        "environment",
+        "limits"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
+        "platform": { "$ref": "#/$defs/platform" },
+        "platforms": { "type": "array", "items": { "$ref": "#/$defs/platform" }, "minItems": 2, "uniqueItems": true },
+        "controller": { "$ref": "#/$defs/controller" },
+        "bundleId": { "type": "string" },
+        "deviceId": { "type": "string" },
+        "status": { "enum": ["draft", "exploring", "complete", "partial", "failed"] },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" },
+        "completedAt": { "$ref": "#/$defs/timestamp" },
+        "stopReason": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "build": { "$ref": "#/$defs/build" },
+        "environment": { "$ref": "#/$defs/environment" },
+        "limits": { "$ref": "#/$defs/limits" },
+        "appIcon": { "$ref": "#/$defs/artifact" },
+        "exploration": { "enum": ["black-box"] }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "path", "sha256", "bytes", "mimeType", "createdAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["screenshot", "accessibility", "controller-output", "video", "log"] },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "mimeType": { "type": "string", "minLength": 1 },
+        "width": { "type": "integer", "minimum": 0 },
+        "height": { "type": "integer", "minimum": 0 },
+        "createdAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "screen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "start",
+        "terminal",
+        "depth",
+        "firstSeenAt",
+        "lastSeenAt",
+        "visits",
+        "variantIds",
+        "observationIds",
+        "elementIds"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1 },
+        "route": { "type": "string" },
+        "state": { "type": "string" },
+        "start": { "type": "boolean" },
+        "terminal": { "type": "boolean" },
+        "depth": { "type": "integer", "minimum": 0 },
+        "firstSeenAt": { "$ref": "#/$defs/timestamp" },
+        "lastSeenAt": { "$ref": "#/$defs/timestamp" },
+        "visits": { "type": "integer", "minimum": 0 },
+        "variantIds": { "type": "array", "items": { "$ref": "#/$defs/id" }, "uniqueItems": true },
+        "colorScheme": { "enum": ["light", "dark"] },
+        "observationIds": { "type": "array", "items": { "$ref": "#/$defs/id" }, "uniqueItems": true },
+        "elementIds": { "type": "array", "items": { "$ref": "#/$defs/id" }, "uniqueItems": true }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "screenId", "key", "firstSeenAt", "lastSeenAt", "observationIds"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "screenId": { "$ref": "#/$defs/id" },
+        "key": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "firstSeenAt": { "$ref": "#/$defs/timestamp" },
+        "lastSeenAt": { "$ref": "#/$defs/timestamp" },
+        "observationIds": { "type": "array", "items": { "$ref": "#/$defs/id" }, "uniqueItems": true }
+      }
+    },
+    "fingerprints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["combined"],
+      "properties": {
+        "combined": { "type": "string", "minLength": 1 },
+        "accessibility": { "type": "string" },
+        "visual": { "type": "string" }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "screenId",
+        "variantId",
+        "fingerprints",
+        "capturedAt",
+        "surfaceScope",
+        "elementIds",
+        "elements"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "screenId": { "$ref": "#/$defs/id" },
+        "variantId": { "$ref": "#/$defs/id" },
+        "fingerprints": { "$ref": "#/$defs/fingerprints" },
+        "capturedAt": { "$ref": "#/$defs/timestamp" },
+        "surfaceScope": { "enum": ["app", "system", "external"] },
+        "elementIds": { "type": "array", "items": { "$ref": "#/$defs/id" }, "uniqueItems": true },
+        "elements": { "type": "array", "items": { "$ref": "#/$defs/observedElement" } },
+        "screenshotArtifactId": { "$ref": "#/$defs/id" },
+        "accessibilityArtifactId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "observedElement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "elementId",
+        "role",
+        "label",
+        "occurrence",
+        "controller",
+        "actions",
+        "risk",
+        "actionable"
+      ],
+      "properties": {
+        "elementId": { "$ref": "#/$defs/id" },
+        "identifier": { "type": "string" },
+        "role": { "enum": ["button", "link", "tab", "field", "toggle", "menu-item", "text", "image", "other"] },
+        "label": { "type": "string" },
+        "value": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "visible": { "type": "boolean" },
+        "bounds": { "$ref": "#/$defs/bounds" },
+        "selector": { "$ref": "#/$defs/selector" },
+        "occurrence": { "type": "integer", "minimum": 0 },
+        "controller": { "$ref": "#/$defs/controller" },
+        "actions": { "type": "array", "items": { "$ref": "#/$defs/actionKind" }, "uniqueItems": true },
+        "risk": { "$ref": "#/$defs/risk" },
+        "actionable": { "type": "boolean" }
+      }
+    },
+    "element": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "screenId",
+        "role",
+        "label",
+        "occurrence",
+        "controller",
+        "actions",
+        "risk",
+        "actionable",
+        "firstSeenObservationId",
+        "lastSeenObservationId",
+        "observationIds"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "screenId": { "$ref": "#/$defs/id" },
+        "identifier": { "type": "string" },
+        "role": { "enum": ["button", "link", "tab", "field", "toggle", "menu-item", "text", "image", "other"] },
+        "label": { "type": "string" },
+        "value": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "visible": { "type": "boolean" },
+        "bounds": { "$ref": "#/$defs/bounds" },
+        "selector": { "$ref": "#/$defs/selector" },
+        "occurrence": { "type": "integer", "minimum": 0 },
+        "controller": { "$ref": "#/$defs/controller" },
+        "actions": { "type": "array", "items": { "$ref": "#/$defs/actionKind" }, "uniqueItems": true },
+        "risk": { "$ref": "#/$defs/risk" },
+        "actionable": { "type": "boolean" },
+        "firstSeenObservationId": { "$ref": "#/$defs/id" },
+        "lastSeenObservationId": { "$ref": "#/$defs/id" },
+        "observationIds": { "type": "array", "items": { "$ref": "#/$defs/id" }, "uniqueItems": true }
+      }
+    },
+    "actionInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["redacted"],
+      "oneOf": [
+        { "required": ["value"], "not": { "required": ["fixture"] } },
+        { "required": ["fixture"], "not": { "required": ["value"] } }
+      ],
+      "properties": {
+        "value": { "type": "string" },
+        "fixture": { "type": "string" },
+        "redacted": { "type": "boolean" }
+      }
+    },
+    "gesture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["direction"],
+      "properties": {
+        "direction": { "enum": ["up", "down", "left", "right"] },
+        "distance": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "wait": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy"],
+      "allOf": [
+        {
+          "if": { "properties": { "strategy": { "const": "duration" } }, "required": ["strategy"] },
+          "then": { "required": ["durationMs"] },
+          "else": { "not": { "required": ["durationMs"] } }
+        },
+        {
+          "if": { "properties": { "strategy": { "const": "element" } }, "required": ["strategy"] },
+          "then": { "required": ["selector"] },
+          "else": { "not": { "required": ["selector"] } }
+        }
+      ],
+      "properties": {
+        "strategy": { "enum": ["settle", "duration", "element"] },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "selector": { "$ref": "#/$defs/selector" }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "label"],
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "fill" } }, "required": ["kind"] },
+          "else": { "not": { "required": ["input"] } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "swipe" } }, "required": ["kind"] },
+          "else": { "not": { "required": ["gesture"] } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "deep-link" } }, "required": ["kind"] },
+          "else": { "not": { "required": ["deepLink"] } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "key" } }, "required": ["kind"] },
+          "else": { "not": { "required": ["key"] } }
+        }
+      ],
+      "properties": {
+        "kind": { "$ref": "#/$defs/actionKind" },
+        "label": { "type": "string", "minLength": 1 },
+        "elementId": { "$ref": "#/$defs/id" },
+        "selector": { "$ref": "#/$defs/selector" },
+        "input": { "$ref": "#/$defs/actionInput" },
+        "gesture": { "$ref": "#/$defs/gesture" },
+        "deepLink": { "type": "string" },
+        "key": { "type": "string" },
+        "wait": { "$ref": "#/$defs/wait" },
+        "expected": { "type": "string" }
+      }
+    },
+    "executedAction": {
+      "allOf": [
+        { "$ref": "#/$defs/action" },
+        {
+          "if": { "properties": { "kind": { "const": "fill" } }, "required": ["kind"] },
+          "then": { "required": ["input"] },
+          "else": { "not": { "required": ["input"] } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "swipe" } }, "required": ["kind"] },
+          "then": { "required": ["gesture"] },
+          "else": { "not": { "required": ["gesture"] } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "deep-link" } }, "required": ["kind"] },
+          "then": { "required": ["deepLink"] },
+          "else": { "not": { "required": ["deepLink"] } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "key" } }, "required": ["kind"] },
+          "then": { "required": ["key"] },
+          "else": { "not": { "required": ["key"] } }
+        }
+      ]
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "outcome": { "enum": ["transition", "same-screen"] } },
+            "required": ["outcome"]
+          },
+          "then": { "required": ["targetScreenId", "targetObservationId"] }
+        },
+        {
+          "if": { "required": ["targetScreenId"] },
+          "then": { "required": ["targetObservationId"] }
+        },
+        {
+          "if": { "required": ["targetObservationId"] },
+          "then": { "required": ["targetScreenId"] }
+        },
+        {
+          "if": {
+            "properties": { "outcome": { "const": "blocked" } },
+            "required": ["outcome"]
+          },
+          "else": {
+            "properties": { "action": { "$ref": "#/$defs/executedAction" } }
+          }
+        }
+      ],
+      "required": [
+        "id",
+        "sourceScreenId",
+        "sourceObservationId",
+        "action",
+        "outcome",
+        "risk",
+        "startedAt",
+        "completedAt"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "frontierId": { "$ref": "#/$defs/id" },
+        "sourceScreenId": { "$ref": "#/$defs/id" },
+        "sourceObservationId": { "$ref": "#/$defs/id" },
+        "targetScreenId": { "$ref": "#/$defs/id" },
+        "targetObservationId": { "$ref": "#/$defs/id" },
+        "action": { "$ref": "#/$defs/action" },
+        "outcome": { "enum": ["transition", "same-screen", "no-change", "failed", "blocked", "external"] },
+        "risk": { "$ref": "#/$defs/risk" },
+        "startedAt": { "$ref": "#/$defs/timestamp" },
+        "completedAt": { "$ref": "#/$defs/timestamp" },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "reason": { "type": "string" },
+        "error": { "type": "string" }
+      }
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "fromScreenId",
+        "toScreenId",
+        "actionKind",
+        "firstObservedAt",
+        "lastObservedAt",
+        "attemptIds"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "fromScreenId": { "$ref": "#/$defs/id" },
+        "toScreenId": { "$ref": "#/$defs/id" },
+        "actionKind": { "$ref": "#/$defs/actionKind" },
+        "elementId": { "$ref": "#/$defs/id" },
+        "selector": { "$ref": "#/$defs/selector" },
+        "firstObservedAt": { "$ref": "#/$defs/timestamp" },
+        "lastObservedAt": { "$ref": "#/$defs/timestamp" },
+        "attemptIds": { "type": "array", "items": { "$ref": "#/$defs/id" }, "minItems": 1, "uniqueItems": true }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "claimedAt", "expiresAt"],
+      "properties": {
+        "owner": { "type": "string", "minLength": 1 },
+        "claimedAt": { "$ref": "#/$defs/timestamp" },
+        "expiresAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "frontier": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "claimed" } }, "required": ["status"] },
+          "then": { "required": ["claim"] },
+          "else": { "not": { "required": ["claim"] } }
+        }
+      ],
+      "required": ["id", "screenId", "label", "actionKind", "risk", "depth", "priority", "status", "createdAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "screenId": { "$ref": "#/$defs/id" },
+        "elementId": { "$ref": "#/$defs/id" },
+        "label": { "type": "string" },
+        "selector": { "$ref": "#/$defs/selector" },
+        "actionKind": { "$ref": "#/$defs/actionKind" },
+        "risk": { "$ref": "#/$defs/risk" },
+        "depth": { "type": "integer", "minimum": 0 },
+        "priority": { "type": "integer", "minimum": 0 },
+        "status": { "enum": ["pending", "claimed", "done", "skipped", "blocked"] },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "completedAt": { "$ref": "#/$defs/timestamp" },
+        "lastAttemptId": { "$ref": "#/$defs/id" },
+        "reason": { "type": "string" },
+        "claim": { "$ref": "#/$defs/claim" }
+      }
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "status", "message", "createdAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["controller-parse", "missing-target", "authentication", "unsupported-ui", "connection", "coverage", "other"] },
+        "status": { "enum": ["open", "accepted", "resolved"] },
+        "message": { "type": "string", "minLength": 1 },
+        "screenId": { "$ref": "#/$defs/id" },
+        "observationId": { "$ref": "#/$defs/id" },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "resolvedAt": { "$ref": "#/$defs/timestamp" },
+        "reason": { "type": "string" }
+      }
+    },
+    "journey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "screenIds", "transitionIds", "attemptIds"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1 },
+        "screenIds": { "type": "array", "items": { "$ref": "#/$defs/id" }, "minItems": 1 },
+        "transitionIds": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+        "attemptIds": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+        "source": {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "flowId", "revision"],
+          "properties": {
+            "kind": { "const": "structural" },
+            "flowId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._-]+$" },
+            "revision": { "enum": ["current", "baseline"] }
+          }
+        }
+      }
+    }
+  }
+}

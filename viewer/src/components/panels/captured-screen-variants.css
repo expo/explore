@@ -1,0 +1,21 @@
+.captured-screen-variants .variant-preview { margin: 0; }
+.captured-screen-variants .variant-thumbnail.has-name {
+  width: 86px;
+  height: auto;
+  flex-basis: 86px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+}
+.captured-screen-variants .variant-thumbnail.has-name img { width: 52px; height: 90px; }
+.variant-thumbnail-name {
+  max-width: 100%;
+  color: var(--secondary);
+  font-size: 10px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+.captured-screen-variants .variant-thumbnail[aria-selected="true"] .variant-thumbnail-name { color: var(--text); }
+.captured-variant-single { display: grid; justify-items: center; gap: 7px; margin: 0; }
+.captured-variant-single figcaption { color: var(--secondary); font-size: 10px; line-height: 1.4; }

@@ -1,0 +1,1155 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
+import { BlobReader, BlobWriter, Uint8ArrayReader, ZipReader, ZipWriter } from "@zip.js/zip.js";
+import { chromium, expect as playwrightExpect } from "@playwright/test";
+import { PNG } from "pngjs";
+import { createBrowserVite } from "../helpers/browser-vite.mjs";
+
+// The file-drop and reload paths can take longer than expect's 5 s default on CI runners.
+const expect = playwrightExpect.configure({ timeout: 15_000 });
+
+
+const identity = { repo: "expo/example", run: "123", attempt: "2", artifact: "456" };
+const fileName = "explore-review-123-2.zip";
+const image = new PNG({ width: 32, height: 64 });
+image.data.fill(255);
+const png = PNG.sync.write(image);
+const sha256 = createHash("sha256").update(png).digest("hex");
+const path = `assets/${sha256}.png`;
+
+function reportFixture() {
+  const baseSha = "a".repeat(40);
+  const headSha = "b".repeat(40);
+  const timestamp = "2026-09-21T00:00:00.000Z";
+  const route = { id: "home", route: "/home", routeFile: "app/home.tsx", sourceFiles: [],
+    variant: "default", kind: "screen", provider: "expo-router", path: "/home", logicalPath: "app/home.tsx" };
+  const review = {
+    contract: "explore.review", mode: "all", createdAt: timestamp, runId: identity.run, runAttempt: identity.attempt,
+    pullRequest: { repositoryId: "1", repository: identity.repo, number: 8, title: "Modify home",
+      url: `https://github.com/${identity.repo}/pull/8`, base: { ref: "main", sha: baseSha },
+      head: { ref: "feature/home", sha: headSha } },
+    runtime: { projectId: "eas-project", buildId: "eas-head", gitCommit: headSha, appName: "Fixture" },
+    surfaces: [{ id: "home", status: "modified", base: { ...route }, head: { ...route },
+      baseOutcome: { status: "captured", attempts: 1, landing: "verified" },
+      headOutcome: { status: "captured", attempts: 1, landing: "verified" },
+      review: { status: "modified", description: "Home greeting was modified", facts: [
+        { category: "text", templateId: "text.changed", bullet: "Greeting changed from Hello to Welcome" },
+      ] } }],
+  };
+  for (const side of ["base", "head"]) review.surfaces[0][`${side}Image`] = {
+    url: `https://artifact.expo-explore.invalid/${sha256}.png`, sha256, width: 32, height: 64,
+    capturedAt: timestamp, sourceCommit: review.pullRequest[side].sha, buildId: `eas-${side}`,
+  };
+  return { kind: "explore.report", review, assets: [{ sha256, path }] };
+}
+
+async function archive(report = reportFixture(), extra = [], imageBytes = png) {
+  const writer = new ZipWriter(new BlobWriter("application/zip"), { useWebWorkers: false });
+  await writer.add("review.json", new Uint8ArrayReader(new TextEncoder().encode(JSON.stringify(report))), { level: 6 });
+  if (report.assets.length) await writer.add(path, new Uint8ArrayReader(imageBytes), { level: 0 });
+  for (const entry of extra) await writer.add(entry.name, new Uint8ArrayReader(entry.bytes), { level: 0 });
+  return Buffer.from(await (await writer.close()).arrayBuffer());
+}
+
+/**
+ * Serve `/r` like the hosted Viewer: the page alone, no report endpoint; the ZIP comes from the
+ * reviewer. `reportIdentity: null` opens the bare page without a linked run.
+ */
+async function harness(t, bytes, { app = false, open = true, name = fileName, reportIdentity = identity,
+  query = "&focus=modified&screen=home&inspect=diff", fault, preview } = {}) {
+  const pagePath = preview ? `/p/${preview.token}` : "/r";
+  const vite = await createBrowserVite(t, { configFile: false,
+    root: fileURLToPath(new URL("../../viewer", import.meta.url)), logLevel: "error", esbuild: { jsx: "automatic" },
+    server: { host: "127.0.0.1", port: 0 }, plugins: [{ name: "report-page-fixture", configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const url = new URL(request.url, "http://localhost");
+        // A preview deployment's Worker: the decrypted report behind the token, or the same 404 as any other path.
+        if (preview && url.pathname === `${pagePath}/report.zip`) {
+          preview.requests = (preview.requests ?? 0) + 1;
+          if (preview.status && preview.status !== 200) { response.statusCode = preview.status; return response.end(preview.body ?? "Not found"); }
+          response.setHeader("content-type", "application/zip");
+          response.setHeader("content-length", String(bytes.length));
+          return response.end(bytes);
+        }
+        if (url.pathname !== pagePath) return next();
+        response.setHeader("content-type", "text/html");
+        response.end(`<!doctype html><html><head><meta charset="utf-8"><link rel="icon" href="/favicon.svg" type="image/svg+xml"></head><body><div id="root"></div>
+          <script type="module">${app ? 'import "/src/main.tsx";' : `
+            import * as api from "/src/utils/artifact-report.ts";
+            window.archiveApi = api;
+            window.openReport = (bytes, identity, name, onProgress) => api.openReportBlob(
+              new Blob([new Uint8Array(bytes)], { type: "application/zip" }), identity, { ...(name ? { fileName: name } : {}), ...(onProgress ? { onProgress } : {}) });
+          `}</script></body></html>`);
+      });
+    } }] });
+  await vite.listen();
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  page.setDefaultTimeout(15_000);
+  await page.addInitScript(() => {
+    const create = URL.createObjectURL.bind(URL);
+    const revoke = URL.revokeObjectURL.bind(URL);
+    window.createdUrls = [];
+    window.revokedUrls = [];
+    URL.createObjectURL = value => { const url = create(value); window.createdUrls.push(url); return url; };
+    URL.revokeObjectURL = url => { window.revokedUrls.push(url); revoke(url); };
+  });
+  if (fault) await page.addInitScript(fault);
+  const origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
+  const search = reportIdentity ? `?${new URLSearchParams(reportIdentity)}${query}` : query ? `?${query.replace(/^&/, "")}` : "";
+  await page.goto(`${origin}${pagePath}${search}`);
+  if (!app) await page.waitForFunction(() => window.archiveApi);
+  else if (bytes && open && !preview) await chooseFile(page, bytes, name);
+  return { page, errors, origin };
+}
+
+/** The file picker path: a Buffer becomes an in-memory file; a path uploads the file itself. */
+async function chooseFile(page, file, name = fileName) {
+  await page.locator(".report-drop-input").setInputFiles(typeof file === "string" ? file : { name, mimeType: "application/zip", buffer: file });
+}
+
+async function fileTransfer(page, files) {
+  return page.evaluateHandle(files => {
+    const transfer = new DataTransfer();
+    for (const file of files) transfer.items.add(new File([new Uint8Array(file.bytes)], file.name, { type: file.type ?? "application/zip" }));
+    return transfer;
+  }, files.map(file => ({ ...file, bytes: [...file.bytes] })));
+}
+
+/** The drag path: a synthetic DataTransfer dropped on any element of the page. */
+async function dropFile(page, bytes, name = fileName, target = "body") {
+  const dataTransfer = await fileTransfer(page, [{ bytes, name }]);
+  await page.dispatchEvent(target, "dragenter", { dataTransfer });
+  await page.dispatchEvent(target, "drop", { dataTransfer });
+}
+
+/** CI's findings for the screen in the Inspector sit in its What changed popover. */
+async function showWhatChanged(page) {
+  const button = page.locator(".right-panel").getByRole("button", { name: /^What changed/ });
+  if (await button.getAttribute("aria-expanded") !== "true") await button.click();
+}
+
+/** The Changes list lives in a menu under the pill; ⌘B (Ctrl+B) opens it. */
+async function openChangesMenu(page) {
+  await expect(page.getByRole("toolbar", { name: "Canvas tools" }).getByRole("button", { name: "Compare", exact: true })).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+KeyB");
+  const menu = page.locator(".changes-menu");
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+/** `reportIdentity: null` opens without a linked run, like a bare `/r`. */
+const tryOpen = (page, bytes, reportIdentity = identity, name = fileName) => page.evaluate(async ({ bytes, identity, name }) => {
+  try { const archive = await window.openReport(bytes, identity ?? undefined, name); return { ok: true, identity: archive.identity }; }
+  catch (error) { return { ok: false, code: error.code, message: error.message }; }
+}, { bytes: [...bytes], identity: reportIdentity, name });
+
+test("the pill shows the app's own icon when the report has one, and the Expo mark otherwise", { timeout: 60_000 }, async t => {
+  const icon = new PNG({ width: 4, height: 4 });
+  icon.data.fill(180);
+  const iconBytes = PNG.sync.write(icon);
+  const iconSha = createHash("sha256").update(iconBytes).digest("hex");
+  const iconPath = `assets/${iconSha}.png`;
+  const report = reportFixture();
+  report.review.runtime.appIcon = { url: `https://artifact.expo-explore.invalid/${iconSha}.png`, sha256: iconSha, width: 4, height: 4 };
+  report.assets.push({ sha256: iconSha, path: iconPath });
+  const withIcon = await harness(t, await archive(report, [{ name: iconPath, bytes: iconBytes }]), { app: true });
+  const logo = withIcon.page.locator(".left-panel-collapsed-pill").getByRole("button", { name: "Map", exact: true });
+  await expect(logo.locator("img.panel-app-icon")).toHaveJSProperty("naturalWidth", 4);
+  await expect(logo.locator(".expo-mark")).toHaveCount(0);
+  // The tab shows it too, from a Blob URL: the ZIP's own reference is not one the browser can load.
+  const tabIcon = withIcon.page.locator("link[rel='icon']");
+  await expect(tabIcon).toHaveAttribute("href", /^blob:/);
+  assert.equal(await tabIcon.evaluate(async link => (await (await fetch(link.href)).blob()).size), iconBytes.length);
+  assert.deepEqual(withIcon.errors, []);
+
+  const withoutIcon = await harness(t, await archive(), { app: true });
+  const mark = withoutIcon.page.locator(".left-panel-collapsed-pill").getByRole("button", { name: "Map", exact: true });
+  await expect(mark.locator(".expo-mark")).toHaveCount(1);
+  await expect(mark.locator("img")).toHaveCount(0);
+  assert.deepEqual(withoutIcon.errors, []);
+});
+
+test("a report link shows the drop screen: download link, expected file name, empty states, one panel, and the system theme", async t => {
+  const { page, errors } = await harness(t, undefined, { app: true });
+  const shell = page.locator(".report-loading-shell");
+  await expect(shell).toHaveAttribute("data-loading-status", "awaiting");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(shell.locator(".left-panel")).toContainText("expo/example");
+  await expect(shell.locator(".report-loading-skeleton")).toHaveCount(0);
+  const drop = shell.locator(".report-drop");
+  await expect(drop.getByRole("heading", { name: "Open this report", exact: true })).toBeVisible();
+  // The drop card says where a report comes from; step 2 names the expected file.
+  const steps = drop.getByRole("list", { name: "How to open a report" });
+  await expect(steps.getByRole("listitem")).toHaveCount(3);
+  await expect(steps.getByRole("listitem").nth(1).locator("code")).toHaveText("explore-review-123-2.zip");
+  // Run and access details stay in the PR comment; the drop zone names the file.
+  await expect(drop).not.toContainText("Explore reviewed");
+  await expect(drop).not.toContainText("GitHub asks");
+  await expect(drop).not.toContainText("nothing is uploaded");
+  await expect(drop.locator("code")).toHaveText("explore-review-123-2.zip");
+  // The file name is the only download link.
+  await expect(drop.getByRole("link")).toHaveCount(1);
+  const download = drop.getByRole("link", { name: "explore-review-123-2.zip", exact: true });
+  await expect(download).toHaveAttribute("href", "https://github.com/expo/example/actions/runs/123/artifacts/456");
+  await expect(download).toHaveAttribute("target", "_blank");
+  await expect(drop.getByRole("button", { name: "Select a file", exact: true })).toBeVisible();
+  await expect(drop.locator(".report-drop-input")).toHaveAttribute("accept", ".zip,application/zip,application/x-zip-compressed");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  // Like the ready Viewer, the loading screen has only the top-left pill and no section rail.
+  await expect(shell.getByRole("tab")).toHaveCount(0);
+  await expect(shell.locator(".left-panel-collapsed-pill .panel-logo-mark")).toBeVisible();
+  // The repository name sits on one line beside the logo, as the app name does once the report opens.
+  const name = shell.locator(".left-panel-collapsed-pill strong");
+  await expect(name).toHaveText("expo/example");
+  const nameBox = await name.boundingBox();
+  assert.ok(nameBox.height < 24 && nameBox.width > 80, JSON.stringify(nameBox));
+  assert.deepEqual(errors, []);
+});
+
+test("the saved-report check shows the loading step and skeletons, then the drop screen replaces them", async t => {
+  const { page, errors } = await harness(t, undefined, { app: true, fault: () => { caches.open = () => new Promise(() => {}); } });
+  const shell = page.locator(".report-loading-shell");
+  await expect(shell).toHaveAttribute("data-loading-status", "loading");
+  const title = shell.locator(".report-loading-step.is-current");
+  await expect(title).toHaveText("Checking saved report");
+  assert.ok((await title.evaluate(element => getComputedStyle(element).animationName)).includes("step-in"));
+  await expect(shell.locator(".report-loading-pill-skeleton")).toBeVisible();
+  await expect(shell.locator(".report-drop")).toHaveCount(0);
+  // Stalled storage is abandoned after its timeout; the report can still be dropped.
+  await expect(shell).toHaveAttribute("data-loading-status", "awaiting");
+  await expect(shell.locator(".report-loading-skeleton")).toHaveCount(0);
+  await expect(shell.locator(".report-drop")).toBeVisible();
+  assert.deepEqual(errors, []);
+});
+
+test("choosing the report file opens it with the link's selection and keeps Modified filtering", { timeout: 60_000 }, async t => {
+  const { page, errors } = await harness(t, await archive(), { app: true });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await showWhatChanged(page);
+  await expect(page.getByText("Greeting changed from Hello to Welcome", { exact: true })).toBeVisible();
+  assert.match(page.url(), /repo=expo%2Fexample&run=123&attempt=2&artifact=456/);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "Screens", exact: true }).click();
+  const screenshot = page.locator(".screens-page img[data-screenshot-src]").first();
+  await expect.poll(() => screenshot.evaluate(image => image.naturalWidth)).toBe(32);
+  const screenshotUrl = await screenshot.getAttribute("src");
+  assert.match(page.url(), /#\/screens/);
+  // Leaving a canvas releases its screenshot, but the report keeps the decoded URL: coming back
+  // reuses it instead of reading and hashing the image again.
+  const created = await page.evaluate(() => window.createdUrls.length);
+  await page.getByRole("group", { name: "Canvas view" }).getByRole("button", { name: "Map", exact: true }).click();
+  await expect(page.locator(".screens-page")).toHaveCount(0);
+  await page.getByRole("button", { name: "Screens", exact: true }).click();
+  await expect(screenshot).toHaveAttribute("src", screenshotUrl);
+  await expect(screenshot).toHaveAttribute("data-screenshot-state", "ready");
+  assert.equal(await page.evaluate(() => window.createdUrls.length), created);
+
+  // The report is for review only: no simulator connection or AI account controls.
+  for (const name of ["Live", "Connect", "AI Agent", "Settings"]) {
+    await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
+  }
+  assert.deepEqual(errors, []);
+});
+
+test("dragging a file highlights the whole page and dropping it anywhere opens the report", async t => {
+  const bytes = await archive();
+  const { page, errors } = await harness(t, bytes, { app: true, open: false });
+  const shell = page.locator(".report-loading-shell");
+  await expect(shell).toHaveAttribute("data-loading-status", "awaiting");
+  const transfer = await fileTransfer(page, [{ bytes, name: fileName }]);
+  await page.dispatchEvent(".left-panel", "dragenter", { dataTransfer: transfer });
+  await expect(shell).toHaveClass(/is-dragging/);
+  // Moving between child elements nests enter/leave pairs; the highlight holds until the last leave.
+  await page.dispatchEvent(".report-loading-canvas", "dragenter", { dataTransfer: transfer });
+  await page.dispatchEvent(".left-panel", "dragleave", { dataTransfer: transfer });
+  await expect(shell).toHaveClass(/is-dragging/);
+  await page.dispatchEvent(".report-loading-canvas", "dragleave", { dataTransfer: transfer });
+  await expect(shell).not.toHaveClass(/is-dragging/);
+  const text = await page.evaluateHandle(() => { const transfer = new DataTransfer(); transfer.setData("text/plain", "hello"); return transfer; });
+  await page.dispatchEvent("body", "dragenter", { dataTransfer: text });
+  await expect(shell).not.toHaveClass(/is-dragging/);
+  await page.dispatchEvent(".left-panel", "dragenter", { dataTransfer: transfer });
+  await page.dispatchEvent(".left-panel", "drop", { dataTransfer: transfer });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await showWhatChanged(page);
+  await expect(page.getByText("Greeting changed from Hello to Welcome", { exact: true })).toBeVisible();
+  assert.equal(await page.evaluate(() => document.querySelector(".is-dragging")), null);
+  assert.deepEqual(errors, []);
+});
+
+test("a reload and a later per-screen link reopen the dropped report from the browser cache", async t => {
+  const { page, errors, origin } = await harness(t, await archive(), { app: true });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await page.reload();
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(page.locator(".report-drop")).toHaveCount(0);
+  await showWhatChanged(page);
+  await expect(page.getByText("Greeting changed from Hello to Welcome", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Screens", exact: true }).click();
+  const screenshot = page.locator(".screens-page img[data-screenshot-src]").first();
+  await expect.poll(() => screenshot.evaluate(image => image.naturalWidth)).toBe(32);
+  // Comment links to one screen carry the same run identity, so they open without a new drop.
+  await page.goto(`${origin}/r?${new URLSearchParams(identity)}&screen=home&inspect=diff`);
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await showWhatChanged(page);
+  await expect(page.getByText("Greeting changed from Hello to Welcome", { exact: true })).toBeVisible();
+  // PR comment screen links name `view=compare`, so they open that change in Compare.
+  await page.goto(`${origin}/r?${new URLSearchParams(identity)}&view=compare&screen=home`);
+  await expect(page.getByRole("region", { name: "Compare /home" })).toBeVisible();
+  await expect(page).toHaveURL(/#\/compare\/home$/);
+  const keys = await page.evaluate(async () => (await (await caches.open("explore-reports")).keys())
+    .map(key => new URL(key.url).pathname + new URL(key.url).search));
+  assert.deepEqual(keys, ["/.explore/report-cache/v1?repo=expo%2Fexample&run=123&attempt=2"]);
+  assert.equal(await page.evaluate(() => caches.has("explore-artifacts-public")), false);
+  assert.deepEqual(errors, []);
+});
+
+test("the report of another run is refused by name, keeps the drop zone, and the right file then opens", async t => {
+  const other = reportFixture();
+  other.review.runAttempt = "1";
+  const { page, errors } = await harness(t, await archive(other), { app: true, name: "explore-review-123-1.zip" });
+  const shell = page.locator(".report-loading-shell");
+  await expect(shell).toHaveAttribute("data-loading-status", "failed");
+  const alert = shell.locator(".report-loading-error");
+  await expect(alert).toContainText("Couldn’t open this report");
+  await expect(alert).toContainText("This file is the report for expo/example run 123 attempt 1. This link expects expo/example run 123 attempt 2 (explore-review-123-2.zip).");
+  // Skeletons promise arriving content; nothing is arriving after a refusal.
+  await expect(shell.locator(".report-loading-skeleton")).toHaveCount(0);
+  await expect(shell.getByRole("button", { name: "Try again" })).toBeVisible();
+  await expect(shell.locator(".report-loading-actions").getByRole("link", { name: "Download report" }))
+    .toHaveAttribute("href", "https://github.com/expo/example/actions/runs/123/artifacts/456");
+  await expect(shell.getByRole("link", { name: "Open workflow run" })).toHaveAttribute("href", "https://github.com/expo/example/actions/runs/123");
+  await expect(shell.getByRole("button", { name: "Select a file", exact: true })).toBeVisible();
+  assert.equal(await page.evaluate(() => window.createdUrls.length), 0);
+  await shell.getByRole("button", { name: "Try again" }).click();
+  await expect(shell).toHaveAttribute("data-loading-status", "awaiting");
+  await expect(shell.locator(".report-drop-file")).toBeVisible();
+  await chooseFile(page, await archive());
+  await expect(page.locator(".app-shell")).toBeVisible();
+  // The refused file was never saved; the run's real report is.
+  await page.reload();
+  await expect(page.locator(".app-shell")).toBeVisible();
+  assert.deepEqual(errors, []);
+});
+
+test("non-ZIP files, non-report ZIPs, empty drops, and multiple files are refused without object URLs", async t => {
+  const { page, errors } = await harness(t, undefined, { app: true });
+  const shell = page.locator(".report-loading-shell");
+  const alert = shell.locator(".report-loading-error");
+  await page.locator(".report-drop-input").setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("not a zip") });
+  await expect(alert).toContainText("“notes.txt” is not a ZIP file. Download the report artifact from GitHub Actions and drop that .zip.");
+  const plain = new ZipWriter(new BlobWriter("application/zip"), { useWebWorkers: false });
+  await plain.add("readme.txt", new Uint8ArrayReader(new TextEncoder().encode("hello")));
+  // A wrong file is replaced straight from the failed state.
+  await chooseFile(page, Buffer.from(await (await plain.close()).arrayBuffer()), "other.zip");
+  await expect(alert).toContainText("“other.zip” is not an Explore report: it has no review.json. Download explore-review-123-2.zip from the workflow run.");
+  await dropFile(page, Buffer.alloc(0), "folder");
+  await expect(alert).toContainText("“folder” is empty. Drop the .zip file itself, not an extracted folder.");
+  const two = await fileTransfer(page, [{ bytes: Buffer.from([80, 75, 3, 4]), name: "a.zip" }, { bytes: Buffer.from([80, 75, 3, 4]), name: "b.zip" }]);
+  await page.dispatchEvent("body", "dragenter", { dataTransfer: two });
+  await page.dispatchEvent("body", "drop", { dataTransfer: two });
+  await expect(shell.locator(".report-drop-message")).toHaveText("Drop one report ZIP at a time.");
+  await expect(shell).toHaveAttribute("data-loading-status", "failed");
+  assert.equal(await page.evaluate(() => window.createdUrls.length), 0);
+  assert.deepEqual(errors, []);
+});
+
+test("a corrupted saved report returns to the drop screen instead of failing", async t => {
+  const { page, errors } = await harness(t, undefined, { app: true });
+  await expect(page.locator(".report-drop")).toBeVisible();
+  await page.evaluate(async identity => {
+    const { putCachedArtifact } = await import("/src/utils/artifact-cache.ts");
+    await putCachedArtifact(identity, { blob: new Blob(["corrupted archive"]), digest: `sha256:${"0".repeat(64)}`, expiresAt: Date.now() + 60_000 });
+  }, identity);
+  const count = () => page.evaluate(async () => (await (await caches.open("explore-reports")).keys()).length);
+  assert.equal(await count(), 1);
+  await page.reload();
+  await expect(page.locator(".report-drop")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  assert.equal(await count(), 0);
+  assert.deepEqual(errors, []);
+});
+
+test("a hosted preview link downloads the report from its own token route, opens it with the link's selection, and shows no drop zone", { timeout: 60_000 }, async t => {
+  const preview = { token: "abcdefghijklmnopqrstuvwxyz234567" };
+  const { page, errors } = await harness(t, await archive(), { app: true, reportIdentity: null, preview });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.getByRole("toolbar", { name: "Canvas tools" }).getByRole("button", { name: "Compare", exact: true })).toBeVisible();
+  await showWhatChanged(page);
+  await expect(page.locator(".right-panel")).toContainText("Greeting changed from Hello to Welcome");
+  await expect(page.locator(".report-drop")).toHaveCount(0);
+  assert.equal(preview.requests, 1);
+  assert.equal(new URL(page.url()).pathname, `/p/${preview.token}`);
+  assert.deepEqual(errors, []);
+
+  // The report is kept like a dropped one: a reload opens the cached copy, but the preview is asked again only if that fails.
+  preview.status = 404;
+  const expired = await harness(t, await archive(), { app: true, reportIdentity: null, preview: { ...preview, token: "bcdefghijklmnopqrstuvwxyz2345672" } });
+  const shell = expired.page.locator(".report-loading-shell");
+  await expect(shell).toHaveAttribute("data-loading-status", "failed");
+  await expect(shell).toContainText("This preview link is not valid, or its deployment was deleted");
+  await expect(expired.page.locator(".report-drop-input")).toHaveCount(0);
+  assert.deepEqual(expired.errors, []);
+
+  // A deployment past its sealed expiry still opens and says when the link expired.
+  const gone = await harness(t, await archive(), { app: true, reportIdentity: null,
+    preview: { ...preview, token: "cdefghijklmnopqrstuvwxyz23456723", status: 410, body: JSON.stringify({ error: "expired", expiredAt: "2030-01-01T00:00:00.000Z" }) } });
+  const goneShell = gone.page.locator(".report-loading-shell");
+  await expect(goneShell).toHaveAttribute("data-loading-status", "failed");
+  await expect(goneShell).toContainText("This preview link expired on Jan 1, 2030. Download the report from the pull request instead");
+  await expect(gone.page.locator(".report-drop-input")).toHaveCount(0);
+  assert.deepEqual(gone.errors, []);
+});
+
+test("a bare /r opens any report and takes its identity from review.json", async t => {
+  const { page, errors, origin } = await harness(t, undefined, { app: true, reportIdentity: null, query: "" });
+  const drop = page.locator(".report-drop");
+  await expect(drop.getByRole("heading", { name: "Open a report", exact: true })).toBeVisible();
+  await expect(drop.getByRole("link")).toHaveCount(0);
+  await expect(drop.locator("code").first()).toHaveText("explore-review-<id>.zip");
+  await expect(page.locator(".left-panel")).toContainText("Explore");
+  await chooseFile(page, await archive());
+  await expect(page.locator(".app-shell")).toBeVisible();
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/r");
+  // The run named inside the report keys the saved copy, so its comment links open without a drop.
+  await page.goto(`${origin}/r?${new URLSearchParams(identity)}`);
+  await expect(page.locator(".app-shell")).toBeVisible();
+  assert.deepEqual(errors, []);
+});
+
+test("oversized files are refused before hashing, and archives reject path traversal", async t => {
+  const { page } = await harness(t);
+  const invalid = await tryOpen(page, await archive(reportFixture(), [{ name: "../escape.txt", bytes: new Uint8Array([1]) }]));
+  assert.equal(invalid.ok, false);
+  assert.match(invalid.message, /invalid or unsupported|Unsafe filename/);
+  const oversized = await page.evaluate(async identity => {
+    let hashed = 0;
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    crypto.subtle.digest = (...args) => { hashed++; return digest(...args); };
+    const file = new File([new Uint8Array([80, 75, 3, 4])], "huge.zip", { type: "application/zip" });
+    Object.defineProperty(file, "size", { value: 257 * 1024 * 1024 });
+    try { await window.archiveApi.openReportFile(file, identity); return "accepted"; }
+    catch (error) { return { code: error.code, message: error.message, hashed }; }
+  }, identity);
+  assert.deepEqual(oversized, { code: "too-large", message: "“huge.zip” is larger than the 256 MiB this browser can open.", hashed: 0 });
+});
+
+test("artifact archive indexes images without inflating them, reports its phases, and releases shared verified image URLs", async t => {
+  const { page, errors } = await harness(t);
+  const result = await page.evaluate(async ({ bytes, identity }) => {
+    const phases = [];
+    const archive = await window.openReport(bytes, identity, "explore-review-123-2.zip", progress => phases.push(progress.phase));
+    const before = window.createdUrls.length;
+    const sha = archive.data.publicReview.surfaces[0].headImage.sha256;
+    const reference = archive.reference(sha);
+    const [first, second] = await Promise.all([archive.resolve(reference), archive.resolve(reference)]);
+    const bytesRead = [...new Uint8Array(await (await fetch(first)).arrayBuffer())];
+    archive.release(reference);
+    const retained = !window.revokedUrls.includes(first);
+    archive.release(reference);
+    // The last release keeps the URL for a quick return rather than revoking it.
+    const kept = !window.revokedUrls.includes(first);
+    const again = await archive.resolve(reference);
+    archive.release(reference);
+    return { phases, identity: archive.identity, before, shared: first === second, retained, kept,
+      reused: again === first, created: window.createdUrls.length - before, bytes: bytesRead };
+  }, { bytes: [...await archive()], identity });
+  assert.deepEqual(result.phases, ["verifying", "opening"]);
+  assert.deepEqual(result.identity, identity);
+  assert.equal(result.before, 0);
+  assert.equal(result.shared, true);
+  assert.equal(result.retained, true);
+  assert.equal(result.kept, true);
+  assert.equal(result.reused, true);
+  assert.equal(result.created, 1);
+  assert.deepEqual(Buffer.from(result.bytes), png);
+  // The opened ZIP is saved for the run it belongs to and reopens through the cache with its own phases.
+  const cached = await page.evaluate(async identity => {
+    const phases = [];
+    const archive = await window.archiveApi.openCachedReport(identity, progress => phases.push(`${progress.phase}${progress.cached ? ":cached" : ""}`));
+    return { phases, route: archive?.data.publicReview.surfaces[0].head.route };
+  }, identity);
+  assert.deepEqual(cached, { phases: ["cache", "verifying:cached", "opening:cached"], route: "/home" });
+  assert.deepEqual(errors, []);
+});
+
+/** A report whose image index holds `count` distinct screenshots; its one surface shows the first. */
+async function multiImageArchive(count) {
+  return imageArchive(Array.from({ length: count }, (_, index) => {
+    const picture = new PNG({ width: 8, height: 16 });
+    for (let offset = 0; offset < picture.data.length; offset += 4) picture.data.set([index, 255 - index, (index * 37) % 256, 255], offset);
+    return PNG.sync.write(picture);
+  }));
+}
+
+/**
+ * `count` distinct screenshots of exactly `byteLength` bytes each. The archive checks only an
+ * image's signature and hash, so a PNG signature over zeros stands in; it deflates to almost nothing.
+ */
+async function largeImageArchive(count, byteLength) {
+  return imageArchive(Array.from({ length: count }, (_, index) => {
+    const bytes = Buffer.alloc(byteLength);
+    bytes.set([137, 80, 78, 71, 13, 10, 26, 10, index]);
+    return bytes;
+  }), 6);
+}
+
+async function imageArchive(pictures, level = 0, report = reportFixture()) {
+  const images = pictures.map(bytes => ({ bytes, sha256: createHash("sha256").update(bytes).digest("hex") }));
+  for (const side of ["baseImage", "headImage"]) report.review.surfaces[0][side].sha256 = images[0].sha256;
+  report.assets = images.map(({ sha256 }) => ({ sha256, path: `assets/${sha256}.png` }));
+  const writer = new ZipWriter(new BlobWriter("application/zip"), { useWebWorkers: false });
+  await writer.add("review.json", new Uint8ArrayReader(new TextEncoder().encode(JSON.stringify(report))), { level: 6 });
+  for (const { bytes, sha256 } of images) await writer.add(`assets/${sha256}.png`, new Uint8ArrayReader(bytes), { level });
+  const zip = Buffer.from(await (await writer.close()).arrayBuffer());
+  return { bytes: [...zip], shas: images.map(image => image.sha256), ranges: await entryRanges(zip) };
+}
+
+/** Each screenshot's byte range in the ZIP, from its local header to the next entry: `{ sha256: [start, end] }`. */
+async function entryRanges(zip) {
+  const reader = new ZipReader(new BlobReader(new Blob([zip])));
+  const entries = (await reader.getEntries()).sort((a, b) => a.offset - b.offset);
+  await reader.close();
+  return Object.fromEntries(entries.flatMap((entry, index) => {
+    const sha256 = /^assets\/([a-f0-9]{64})\.png$/.exec(entry.filename)?.[1];
+    return sha256 ? [[sha256, [entry.offset, entries[index + 1]?.offset ?? zip.length]]] : [];
+  }));
+}
+
+/**
+ * Page helpers: every later screenshot hash waits for `next()` or `all()`, and `hashed()` records,
+ * in call order, which screenshot each hash belongs to. `reads()` counts ZIP reads, and
+ * `readsWithin([start, end])` those that start inside one entry's byte range.
+ */
+const decodeProbe = () => {
+  const digest = crypto.subtle.digest.bind(crypto.subtle);
+  const hex = buffer => Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, "0")).join("");
+  const slice = Blob.prototype.slice;
+  const reads = [];
+  Blob.prototype.slice = function (...args) { reads.push(args[0] ?? 0); return slice.apply(this, args); };
+  const held = [];
+  const hashed = [];
+  crypto.subtle.digest = (algorithm, data) => {
+    const entry = { sha256: undefined };
+    hashed.push(entry);
+    void digest(algorithm, data).then(value => { entry.sha256 = hex(value); });
+    return new Promise(resolve => held.push(() => resolve(digest(algorithm, data))));
+  };
+  const until = async check => { for (let tries = 0; !check(); tries++) {
+    if (tries > 400) throw new Error("The decode queue stalled");
+    await new Promise(resolve => setTimeout(resolve, 5));
+  } };
+  return {
+    reads: () => reads.length,
+    readsWithin: ([start, end]) => reads.filter(offset => offset >= start && offset < end).length,
+    hashed: () => hashed.map(entry => entry.sha256),
+    held: () => held.length,
+    next: () => held.shift()(),
+    all: () => held.splice(0).forEach(release => release()),
+    until,
+  };
+};
+
+test("a screenshot released while it waits for a decode slot is skipped before any of it is read or hashed", { timeout: 20_000 }, async t => {
+  const { page, errors } = await harness(t);
+  const { bytes, shas, ranges } = await multiImageArchive(6);
+  const result = await page.evaluate(async ({ bytes, identity, shas, ranges, probe }) => {
+    const archive = await window.openReport(bytes, identity);
+    const decodes = new Function(`return (${probe})()`)();
+    const references = shas.map(sha => archive.reference(sha));
+    const running = references.slice(0, 4).map(reference => archive.resolve(reference));
+    await decodes.until(() => decodes.held() === 4);
+    const readsWhileBusy = decodes.reads();
+    const skippedReadsBefore = decodes.readsWithin(ranges[shas[4]]);
+    const skipped = archive.resolve(references[4]).then(() => "resolved", error => error.message);
+    archive.release(references[4]);
+    // Released and requested again before its turn: it keeps its place and decodes normally.
+    const kept = archive.resolve(references[5]);
+    archive.release(references[5]);
+    const again = archive.resolve(references[5]);
+    decodes.next();
+    await decodes.until(() => decodes.held() === 4);
+    decodes.all();
+    await Promise.all(running);
+    return { skipped: await skipped, keptShared: await kept === await again, hashed: decodes.hashed(),
+      readsSinceBusy: decodes.reads() - readsWhileBusy, skippedReadsBefore,
+      readsForSkipped: decodes.readsWithin(ranges[shas[4]]), readsForKept: decodes.readsWithin(ranges[shas[5]]),
+      created: window.createdUrls.length };
+  }, { bytes, identity, shas, ranges, probe: decodeProbe.toString() });
+  assert.equal(result.skipped, "This screenshot is no longer in use.");
+  assert.equal(result.keptShared, true);
+  assert.deepEqual(result.hashed, [...shas.slice(0, 4), shas[5]], "The released screenshot was never hashed");
+  assert.equal(result.skippedReadsBefore, 0);
+  assert.equal(result.readsForSkipped, 0, "Not one byte of the released screenshot's entry was read");
+  assert.ok(result.readsForKept > 0, "The re-requested screenshot was read");
+  assert.equal(result.readsSinceBusy, result.readsForKept, "Every read after the first four belongs to the re-requested screenshot");
+  assert.equal(result.created, 5);
+  assert.deepEqual(errors, []);
+});
+
+test("eager screenshot requests are decoded before earlier lazy ones, and a repeat eager request promotes a waiting one", { timeout: 20_000 }, async t => {
+  const { page, errors } = await harness(t);
+  const { bytes, shas } = await multiImageArchive(9);
+  const order = await page.evaluate(async ({ bytes, identity, shas, probe }) => {
+    const archive = await window.openReport(bytes, identity);
+    const decodes = new Function(`return (${probe})()`)();
+    const references = shas.map(sha => archive.reference(sha));
+    const requests = references.slice(0, 4).map(reference => archive.resolve(reference, "lazy"));
+    await decodes.until(() => decodes.held() === 4);
+    requests.push(archive.resolve(references[4], "lazy"), archive.resolve(references[5], "lazy"),
+      archive.resolve(references[6], "eager"), archive.resolve(references[7], "lazy"),
+      archive.resolve(references[8], "eager"), archive.resolve(references[5], "eager"));
+    // Free one slot at a time so each waiting screenshot starts alone.
+    for (let started = 4; started < 9; started++) {
+      decodes.next();
+      await decodes.until(() => decodes.hashed().length > started && decodes.hashed()[started]);
+    }
+    decodes.all();
+    await Promise.all(requests);
+    return decodes.hashed().slice(4).map(sha => shas.indexOf(sha));
+  }, { bytes, identity, shas, probe: decodeProbe.toString() });
+  assert.deepEqual(order, [6, 8, 5, 4, 7]);
+  assert.deepEqual(errors, []);
+});
+
+test("released screenshot URLs stay in a bounded cache, are evicted least recently released first, and are revoked on close", { timeout: 20_000 }, async t => {
+  const { page, errors } = await harness(t);
+  const limit = await page.evaluate(() => window.archiveApi.RETAINED_SCREENSHOTS);
+  assert.equal(limit, 32);
+  const { bytes, shas } = await multiImageArchive(limit + 3);
+  const result = await page.evaluate(async ({ bytes, identity, shas, limit }) => {
+    const archive = await window.openReport(bytes, identity);
+    const references = shas.map(sha => archive.reference(sha));
+    const revoked = url => window.revokedUrls.includes(url);
+    const urls = [];
+    // Screenshot 0 stays in use throughout: filling the cache past its limit never revokes it.
+    urls[0] = await archive.resolve(references[0]);
+    for (let index = 1; index <= limit + 1; index++) {
+      urls[index] = await archive.resolve(references[index]);
+      archive.release(references[index]);
+    }
+    const afterFill = { inUse: revoked(urls[0]), oldest: revoked(urls[1]), rest: urls.slice(2).filter(revoked).length };
+    // Returning to a kept screenshot reuses its URL and makes it the most recent again.
+    const created = window.createdUrls.length;
+    const reused = await archive.resolve(references[2]) === urls[2];
+    archive.release(references[2]);
+    urls[limit + 2] = await archive.resolve(references[limit + 2]);
+    archive.release(references[limit + 2]);
+    const afterReturn = { created: window.createdUrls.length - created, reused, returned: revoked(urls[2]), next: revoked(urls[3]) };
+    archive.release(references[0]);
+    const releasedInUse = revoked(urls[0]);
+    archive.dispose();
+    return { afterFill, afterReturn, releasedInUse, allRevoked: urls.every(revoked), revocations: window.revokedUrls.length, total: window.createdUrls.length };
+  }, { bytes, identity, shas, limit });
+  assert.deepEqual(result.afterFill, { inUse: false, oldest: true, rest: 0 });
+  assert.deepEqual(result.afterReturn, { created: 1, reused: true, returned: false, next: true });
+  assert.equal(result.releasedInUse, false);
+  assert.equal(result.allRevoked, true);
+  assert.equal(result.revocations, result.total, "Every Blob URL is revoked exactly once");
+  assert.deepEqual(errors, []);
+});
+
+test("released screenshot URLs are also bounded by their total size, least recently released first", { timeout: 60_000 }, async t => {
+  const { page, errors } = await harness(t);
+  const limit = await page.evaluate(() => window.archiveApi.RETAINED_SCREENSHOT_BYTES);
+  assert.equal(limit, 128 * 1024 * 1024);
+  // Four of these fit in the limit; a fifth does not, while the count limit is far away.
+  const { bytes, shas } = await largeImageArchive(6, 30 * 1024 * 1024);
+  const result = await page.evaluate(async ({ bytes, identity, shas }) => {
+    const archive = await window.openReport(bytes, identity);
+    const references = shas.map(sha => archive.reference(sha));
+    const urls = [];
+    const revoked = () => urls.map(url => window.revokedUrls.includes(url));
+    const visit = async index => {
+      urls[index] = await archive.resolve(references[index]);
+      archive.release(references[index]);
+    };
+    for (let index = 0; index < 4; index++) await visit(index);
+    const afterFour = revoked();
+    await visit(4);
+    const afterFifth = revoked();
+    // A screenshot in use again leaves the cache with its bytes, so the cache takes one more.
+    const created = window.createdUrls.length;
+    const reused = await archive.resolve(references[1]) === urls[1];
+    await visit(5);
+    const whileInUse = revoked();
+    archive.release(references[1]);
+    const afterReturn = revoked();
+    archive.dispose();
+    return { afterFour, afterFifth, reused, whileInUse, afterReturn, created: window.createdUrls.length - created,
+      allRevoked: revoked().every(Boolean), revocations: window.revokedUrls.length, total: window.createdUrls.length };
+  }, { bytes, identity, shas });
+  assert.deepEqual(result.afterFour, [false, false, false, false]);
+  assert.deepEqual(result.afterFifth, [true, false, false, false, false]);
+  assert.equal(result.reused, true);
+  assert.deepEqual(result.whileInUse, [true, false, false, false, false, false]);
+  assert.deepEqual(result.afterReturn, [true, false, true, false, false, false]);
+  assert.equal(result.created, 1);
+  assert.equal(result.allRevoked, true);
+  assert.equal(result.revocations, result.total, "Every Blob URL is revoked exactly once");
+  assert.deepEqual(errors, []);
+});
+
+test("closing a report mid-decode rejects waiting and running screenshots without creating Blob URLs", { timeout: 20_000 }, async t => {
+  const { page, errors } = await harness(t);
+  const { bytes, shas } = await multiImageArchive(6);
+  const result = await page.evaluate(async ({ bytes, identity, shas, probe }) => {
+    const archive = await window.openReport(bytes, identity);
+    const decodes = new Function(`return (${probe})()`)();
+    const outcome = promise => promise.then(() => "resolved", error => error.message);
+    const requests = shas.map(sha => outcome(archive.resolve(archive.reference(sha))));
+    await decodes.until(() => decodes.held() === 4);
+    archive.dispose();
+    const waiting = await Promise.all(requests.slice(4));
+    decodes.all();
+    const running = await Promise.all(requests.slice(0, 4));
+    const late = await outcome(archive.resolve(archive.reference(shas[0])));
+    return { waiting, running, late, hashed: decodes.hashed().length, created: window.createdUrls.length };
+  }, { bytes, identity, shas, probe: decodeProbe.toString() });
+  assert.deepEqual(result.waiting, Array(2).fill("This report was closed."));
+  assert.deepEqual(result.running, Array(4).fill("This report was closed."));
+  assert.equal(result.late, "This report screenshot is unavailable.");
+  assert.equal(result.hashed, 4);
+  assert.equal(result.created, 0);
+  assert.deepEqual(errors, []);
+});
+
+test("a screenshot released while it decodes is kept for a quick return instead of being thrown away", { timeout: 20_000 }, async t => {
+  const { page, errors } = await harness(t);
+  const { bytes, shas } = await multiImageArchive(1);
+  const result = await page.evaluate(async ({ bytes, identity, shas, probe }) => {
+    const archive = await window.openReport(bytes, identity);
+    const decodes = new Function(`return (${probe})()`)();
+    const reference = archive.reference(shas[0]);
+    const first = archive.resolve(reference);
+    await decodes.until(() => decodes.held() === 1);
+    archive.release(reference);
+    // A second release of a load nobody holds changes nothing.
+    archive.release(reference);
+    decodes.all();
+    const url = await first;
+    const kept = !window.revokedUrls.includes(url);
+    const again = await archive.resolve(reference);
+    return { kept, reused: again === url, hashed: decodes.hashed().length, created: window.createdUrls.length };
+  }, { bytes, identity, shas, probe: decodeProbe.toString() });
+  assert.deepEqual(result, { kept: true, reused: true, hashed: 1, created: 1 });
+  assert.deepEqual(errors, []);
+});
+
+test("artifact loader rejects a report bound to a different run before exposing screenshots", async t => {
+  const report = reportFixture();
+  report.review.runAttempt = "1";
+  const { page } = await harness(t);
+  const result = await tryOpen(page, await archive(report));
+  assert.equal(result.code, "mismatch");
+  assert.equal(result.message, "This file is the report for expo/example run 123 attempt 1. This link expects expo/example run 123 attempt 2 (explore-review-123-2.zip).");
+  assert.equal(await page.evaluate(() => window.createdUrls.length), 0);
+  assert.equal(await page.evaluate(async () => (await (await caches.open("explore-reports")).keys()).length), 0);
+  // Without a linked run, the same file opens and names its own run.
+  const bare = await tryOpen(page, await archive(report), null, "explore-review-123-1.zip");
+  assert.deepEqual(bare, { ok: true, identity: { repo: "expo/example", run: "123", attempt: "1" } });
+});
+
+test("artifact image hashes are verified on demand and failed images create no Blob URL", async t => {
+  const damaged = Buffer.from(png);
+  damaged[damaged.length - 1] ^= 1;
+  const { page } = await harness(t);
+  const result = await page.evaluate(async ({ bytes, identity }) => {
+    const archive = await window.openReport(bytes, identity);
+    try { await archive.resolve(archive.reference(archive.data.publicReview.surfaces[0].headImage.sha256)); return "accepted"; }
+    catch (error) { return error.message; }
+  }, { bytes: [...await archive(reportFixture(), [], damaged)], identity });
+  assert.match(result, /checksum/);
+  assert.equal(await page.evaluate(() => window.createdUrls.length), 0);
+});
+
+/** Hold every screenshot hash (not the report's) until the test lets them finish. */
+const holdScreenshotHashes = (byteLength = png.length) => `(() => {
+  const digest = crypto.subtle.digest.bind(crypto.subtle);
+  const held = [];
+  window.releaseScreenshotHashes = () => held.splice(0).forEach(release => release());
+  crypto.subtle.digest = (algorithm, data) => data.byteLength !== ${byteLength} ? digest(algorithm, data)
+    : new Promise(resolve => held.push(() => resolve(digest(algorithm, data))));
+})();`;
+
+test("a screenshot still being verified shows the Inspector spinner and quiet canvas frames, never a broken image", async t => {
+  const { page, errors } = await harness(t, await archive(), { app: true, fault: holdScreenshotHashes() });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  // The Inspector's review shows Before and After in two frames.
+  const sides = page.locator(".sidebar-review .compare-frame");
+  await expect(sides).toHaveCount(2);
+  for (const side of await sides.all()) {
+    await expect(side.getByRole("status", { name: "Loading screenshot", exact: true })).toBeVisible();
+    const image = side.locator("img");
+    await expect(image).toHaveAttribute("data-screenshot-state", "loading");
+    await expect(image).toHaveAttribute("src", /^data:image\/svg\+xml,/);
+  }
+  const canvasImage = page.locator(".map-canvas img[data-screenshot-src]").first();
+  await expect(canvasImage).toHaveAttribute("data-screenshot-state", "loading");
+  // The canvas frame stays: the waiting image keeps its box, border and background, in the
+  // screenshot's own recorded size.
+  const frame = await canvasImage.evaluate(image => ({ width: image.getBoundingClientRect().width,
+    border: getComputedStyle(image).borderTopWidth, ring: getComputedStyle(image).boxShadow !== "none",
+    complete: image.complete, natural: [image.naturalWidth, image.naturalHeight] }));
+  assert.ok(frame.width > 0, `The waiting canvas image keeps its frame: ${JSON.stringify(frame)}`);
+  // A changed screen keeps the 1px border and draws its emphasis as an outside ring.
+  assert.deepEqual([frame.border, frame.ring, frame.complete, frame.natural], ["1px", true, true, [32, 64]]);
+  assert.equal(await page.locator("img:not([src])").count(), 0, "No image waits without a source");
+  assert.equal(await page.evaluate(() => window.createdUrls.length), 0);
+
+  await page.evaluate(() => window.releaseScreenshotHashes());
+  for (const side of await sides.all()) {
+    await expect(side.locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+    await expect(side.locator("img")).toHaveAttribute("src", /^blob:/);
+    await expect(side.getByRole("status")).toHaveCount(0);
+  }
+  await expect(canvasImage).toHaveAttribute("src", /^blob:/);
+  assert.deepEqual(errors, []);
+});
+
+test("a waiting canvas screenshot takes the shape of the screenshot it waits for on the Map and Screens", { timeout: 60_000 }, async t => {
+  // A 20:9 capture: neither the Map slot's own proportions nor the default phone ratio.
+  const picture = new PNG({ width: 360, height: 800 });
+  picture.data.fill(255);
+  const capture = PNG.sync.write(picture);
+  const report = reportFixture();
+  const home = report.review.surfaces[0];
+  for (const side of ["baseImage", "headImage"]) Object.assign(home[side], { width: 360, height: 800 });
+  const empty = { contract: "explore.navigation", edges: [], modalSurfaceIds: [], unresolved: [] };
+  report.review.navigation = { base: structuredClone(empty), head: empty };
+  const { bytes } = await imageArchive([capture], 0, report);
+  const { page, errors } = await harness(t, Buffer.from(bytes), { app: true, fault: holdScreenshotHashes(capture.length) });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const canvasView = name => page.getByRole("group", { name: "Canvas view" }).getByRole("button", { name, exact: true });
+  // Layout boxes, which the canvas zoom does not scale.
+  const frame = async (canvas, state) => {
+    const image = page.locator(`${canvas} .screen-node-image img[data-screenshot-src]`);
+    await expect(image).toHaveCount(1);
+    await expect(image).toHaveAttribute("data-screenshot-state", state);
+    return image.evaluate(element => ({ left: element.offsetLeft, top: element.offsetTop, width: element.offsetWidth, height: element.offsetHeight }));
+  };
+  for (const [view, canvas] of [["Map", ".map-canvas"], ["Screens", ".screens-page"]]) {
+    if (view !== "Map") {
+      // The decoded screenshot is kept, so each view waits afresh after a reload from the report cache.
+      await canvasView(view).click();
+      // The switch commits inside a view transition; reload only once it has.
+      await expect(canvasView(view)).toHaveAttribute("aria-pressed", "true");
+      await page.reload();
+      await expect(page.locator(".app-shell")).toBeVisible();
+      await expect(canvasView(view)).toHaveAttribute("aria-pressed", "true");
+    }
+    const waiting = await frame(canvas, "loading");
+    assert.ok(waiting.width > 0 && waiting.height > waiting.width, `${view}: ${JSON.stringify(waiting)}`);
+    await page.evaluate(() => window.releaseScreenshotHashes());
+    assert.deepEqual(await frame(canvas, "ready"), waiting, `The ${view} frame does not move or resize when its screenshot loads`);
+  }
+  assert.deepEqual(errors, []);
+});
+
+test("a canvas screen without a readable screenshot is framed like the screenshot it stands in for on the Map and Screens", { timeout: 60_000 }, async t => {
+  // Home records a 20:9 capture whose bytes fail verification. Profile shares those bytes but
+  // records a 390 x 845 phone capture, the size a screen without one is framed at; About has none.
+  const damaged = Buffer.from(png);
+  damaged[damaged.length - 1] ^= 1;
+  const report = reportFixture();
+  const home = report.review.surfaces[0];
+  for (const side of ["baseImage", "headImage"]) Object.assign(home[side], { width: 360, height: 800 });
+  const route = id => ({ ...home.head, id, route: `/${id}`, path: `/${id}`, routeFile: `app/${id}.tsx`, logicalPath: `app/${id}.tsx` });
+  const phone = image => ({ ...image, width: 390, height: 845 });
+  report.review.surfaces.push(
+    { id: "profile", status: "unchanged", base: route("profile"), head: route("profile"),
+      baseImage: phone(home.baseImage), headImage: phone(home.headImage),
+      baseOutcome: { ...home.baseOutcome }, headOutcome: { ...home.headOutcome } },
+    { id: "about", status: "unchanged", base: route("about"), head: route("about") });
+  const empty = { contract: "explore.navigation", edges: [], modalSurfaceIds: [], unresolved: [] };
+  report.review.navigation = { base: structuredClone(empty), head: empty };
+  const { page, errors } = await harness(t, await archive(report, [], damaged), { app: true, fault: holdScreenshotHashes() });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const canvasView = name => page.getByRole("group", { name: "Canvas view" }).getByRole("button", { name, exact: true });
+  // Layout boxes, which the canvas zoom does not scale.
+  const frame = locator => locator.evaluate(element => ({ left: element.offsetLeft, top: element.offsetTop,
+    width: element.offsetWidth, height: element.offsetHeight }));
+  for (const [view, canvas] of [["Map", ".map-canvas"], ["Screens", ".screens-page"]]) {
+    if (view !== "Map") {
+      // A failed screenshot is tried afresh after a reload, so each view waits for it again.
+      await canvasView(view).click();
+      // The switch commits inside a view transition; reload only once it has.
+      await expect(canvasView(view)).toHaveAttribute("aria-pressed", "true");
+      await page.reload();
+      await expect(page.locator(".app-shell")).toBeVisible();
+      await expect(canvasView(view)).toHaveAttribute("aria-pressed", "true");
+    }
+    const card = path => page.locator(`${canvas} :is(.react-flow__node, .screens-cell)`).filter({ hasText: path }).locator(".screen-node-image");
+    const waiting = card("/home").locator("img[data-screenshot-src]");
+    await expect(waiting).toHaveAttribute("data-screenshot-state", "loading");
+    const before = await frame(waiting);
+    if (view !== "Map") {
+      // The Map draws only the focused Home. On the inventories, no screenshot reads as one more
+      // phone screenshot beside the others, not a full-width slot.
+      await expect(card("/profile").locator("img")).toHaveAttribute("data-screenshot-state", "loading");
+      const missing = card("/about").locator(".image-placeholder");
+      await expect(missing).toHaveText("No screenshot");
+      assert.deepEqual(await frame(missing), await frame(card("/profile").locator("img")), `${view}: About is framed like Profile`);
+      // A Screens cell is as wide as its screenshot, so the placeholder may fill it but never overflow it.
+      assert.ok((await frame(missing)).width <= await card("/about").evaluate(slot => slot.clientWidth), `${view}: About keeps inside its slot`);
+    }
+    await page.evaluate(() => window.releaseScreenshotHashes());
+    const failed = card("/home").locator(".image-placeholder");
+    await expect(failed).toHaveText("No screenshot");
+    assert.deepEqual(await frame(failed), before, `The ${view} frame does not move or resize when its screenshot fails`);
+  }
+  assert.deepEqual(errors, []);
+});
+
+test("a screenshot that fails verification shows No screenshot in the Inspector and on the canvas", async t => {
+  const damaged = Buffer.from(png);
+  damaged[damaged.length - 1] ^= 1;
+  const { page, errors } = await harness(t, await archive(reportFixture(), [], damaged), { app: true });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  // The Inspector's review shows Before and After in two frames.
+  const sides = page.locator(".sidebar-review .compare-frame");
+  await expect(sides).toHaveCount(2);
+  for (const side of await sides.all()) {
+    await expect(side.locator(".screenshot-placeholder")).toHaveText("No screenshot");
+    await expect(side.locator("img")).toHaveCount(0);
+  }
+  const node = page.locator(".map-canvas .screen-node-image").first();
+  await expect(node.locator(".image-placeholder")).toHaveText("No screenshot");
+  await expect(node.locator("img")).toHaveCount(0);
+  assert.equal(await node.locator(".image-placeholder").evaluate(element => getComputedStyle(element).borderTopStyle), "solid");
+  assert.equal(await page.locator("img:not([src])").count(), 0);
+  assert.equal(await page.evaluate(() => window.createdUrls.length), 0);
+  assert.deepEqual(errors, []);
+});
+
+test("transition thumbnails without a readable screenshot show the variant thumbnails' ImageOff glyph", async t => {
+  const damaged = Buffer.from(png);
+  damaged[damaged.length - 1] ^= 1;
+  const report = reportFixture();
+  const home = report.review.surfaces[0];
+  // One destination shares Home's screenshot, which fails verification; the other has none.
+  const route = (id, images) => {
+    const side = { ...home.head, id, route: `/${id}`, path: `/${id}`, routeFile: `app/${id}.tsx`, logicalPath: `app/${id}.tsx` };
+    return { id, status: "unchanged", base: { ...side }, head: side,
+      ...(images ? { baseImage: { ...home.baseImage }, headImage: { ...home.headImage },
+        baseOutcome: { ...home.baseOutcome }, headOutcome: { ...home.headOutcome } } : {}) };
+  };
+  report.review.surfaces.push(route("settings", true), route("about", false));
+  const graph = { contract: "explore.navigation", edges: ["settings", "about"].map(to => ({ from: "home", to, kind: "push",
+    provenance: "source", sourceFile: "app/home.tsx" })), modalSurfaceIds: [], unresolved: [] };
+  report.review.navigation = { base: structuredClone(graph), head: graph };
+  const { page, errors } = await harness(t, await archive(report, [], damaged), { app: true });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const thumbs = page.locator(".inspector .transition-row .transition-thumb");
+  await expect(thumbs).toHaveCount(2);
+  await expect(page.locator(".inspector .transition-path")).toHaveText(["/about", "/settings"]);
+  for (const thumb of await thumbs.all()) {
+    await expect(thumb.locator("svg.lucide-image-off")).toHaveCount(1);
+    await expect(thumb.locator("img")).toHaveCount(0);
+    await expect(thumb.locator("svg.lucide-box")).toHaveCount(0);
+  }
+  assert.equal(await page.evaluate(() => window.createdUrls.length), 0);
+  assert.deepEqual(errors, []);
+});
+
+test("a docs-only report with zero images and no EAS build opens Screens without a visual verdict", async t => {
+  const report = reportFixture();
+  report.review.mode = "changes";
+  report.review.runtime.projectId = "";
+  report.review.runtime.buildId = "";
+  const surface = report.review.surfaces[0];
+  surface.status = "unchanged";
+  for (const key of ["review", "baseOutcome", "headOutcome", "baseImage", "headImage"]) delete surface[key];
+  const graph = { contract: "explore.navigation", edges: [], modalSurfaceIds: [], unresolved: [] };
+  report.review.navigation = { base: structuredClone(graph), head: graph };
+  report.assets = [];
+  const { page, errors } = await harness(t, await archive(report), { app: true });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await page.getByRole("button", { name: "Screens", exact: true }).click();
+  await expect(page.locator(".screens-page .screens-cell")).toHaveCount(1);
+  await expect(page.locator(".screens-page .diff-frame.diff-not-compared")).toHaveCount(1);
+  // The Inspector's missing screenshot matches the canvas node: the icon above a short label,
+  // centred in a phone-shaped preview frame.
+  await page.locator(".screens-page .screen-screenshot-target").click();
+  const placeholder = page.locator(".inspector .inspector-preview .screenshot-placeholder");
+  await expect(placeholder).toHaveText("No screenshot");
+  const layout = await placeholder.evaluate(node => {
+    const box = element => element.getBoundingClientRect();
+    const frame = box(node.closest(".inspector-preview"));
+    const icon = box(node.querySelector("svg"));
+    const label = box(node.querySelector("span"));
+    return { frameRatio: frame.width / frame.height, iconSize: [icon.width, icon.height], iconAboveLabel: icon.bottom <= label.top,
+      iconOffset: Math.abs(icon.left + icon.width / 2 - (frame.left + frame.width / 2)),
+      labelOffset: Math.abs(label.left + label.width / 2 - (frame.left + frame.width / 2)),
+      verticalOffset: Math.abs((icon.top + label.bottom) / 2 - (frame.top + frame.height / 2)),
+      labelSize: getComputedStyle(node.querySelector("span")).fontSize };
+  });
+  assert.deepEqual(layout.iconSize, [20, 20]);
+  assert.equal(layout.iconAboveLabel, true);
+  assert.ok(layout.iconOffset < 1 && layout.labelOffset < 1 && layout.verticalOffset < 1, JSON.stringify(layout));
+  assert.ok(Math.abs(layout.frameRatio - 9 / 19.5) < 0.01, `A missing screenshot keeps the phone frame: ${layout.frameRatio}`);
+  assert.equal(layout.labelSize, "12px");
+  await expect(page.getByText("No screenshot captured")).toHaveCount(0);
+  // With no compared changes the pill has no Changes chip, so no list or filter claims any.
+  await expect(page.locator(".collapsed-change-count")).toHaveCount(0);
+  await expect(page.locator(".changes-screen-row")).toHaveCount(0);
+  await expect(page.locator(".diff-frame.diff-modified, .diff-frame.diff-unchanged")).toHaveCount(0);
+  assert.equal(await page.evaluate(() => window.createdUrls.length), 0);
+  assert.deepEqual(errors, []);
+});
+
+test("unverified capture diagnostics stay separate from verified Needs review and source impact filters", async t => {
+  const report = reportFixture();
+  const home = report.review.surfaces[0];
+  const uncertain = structuredClone(home);
+  uncertain.id = "uncertain";
+  for (const side of ["base", "head"]) {
+    uncertain[side] = { ...uncertain[side], id: uncertain.id, route: "/uncertain", path: "/uncertain",
+      routeFile: "app/uncertain.tsx", logicalPath: "uncertain" };
+  }
+  uncertain.review = { status: "needs-review", description: "Accessibility elements from the verified captures could not be paired" };
+  report.review.surfaces.push(uncertain);
+  delete home.review;
+  home.baseOutcome.landing = "unverified";
+  home.headOutcome.landing = "unverified";
+  home.baseOutcome.reason = "Destination landing was not verified";
+  home.headOutcome.reason = "Destination landing was not verified";
+  for (const [id, status] of [["candidate", "modified"], ["untouched", "unchanged"]]) {
+    const route = { ...home.head, id, route: `/${id}`, path: `/${id}`, routeFile: `app/${id}.tsx`, logicalPath: id };
+    report.review.surfaces.push({ id, status, base: { ...route }, head: { ...route } });
+  }
+  const { page, errors } = await harness(t, await archive(report), { app: true });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await page.getByRole("button", { name: "Screens", exact: true }).click();
+  await expect(page.locator(".screens-page .diff-frame.diff-needs-review")).toHaveCount(1);
+  await expect(page.locator(".screens-page .diff-frame.diff-source-affected")).toHaveCount(2);
+  await expect(page.locator(".screens-page .diff-frame.diff-not-compared")).toHaveCount(1);
+  await expect(page.locator(".screens-page .diff-frame.diff-modified")).toHaveCount(0);
+  const menu = await openChangesMenu(page);
+  const chips = menu.getByRole("group", { name: "Filter changes" }).getByRole("button");
+  await expect(chips).toHaveText(["Modified 0", "No visible change 1", "Source-affected 2"]);
+  assert.deepEqual(errors, []);
+});
+
+test("an existing report with operational verdicts opens as diagnostics without false change conclusions", async t => {
+  const report = reportFixture();
+  const home = report.review.surfaces[0];
+  home.review = { status: "needs-review", description: "Base screenshot captured; destination route was not verified", facts: [
+    { category: "text", templateId: "old", bullet: "Untrusted previous screen text" },
+  ] };
+  home.visual = { verdict: "unchanged", reason: "matched", threshold: 0.1, tool: "agent-device@0.20.2" };
+  for (const side of ["base", "head"]) {
+    home[`${side}Outcome`].landing = "unverified";
+    home[`${side}Outcome`].reason = "Observed /login instead of /home";
+  }
+  const untouched = structuredClone(home);
+  untouched.id = "untouched";
+  untouched.status = "unchanged";
+  untouched.review = { status: "unchanged", description: "Old comparison of unverified screenshots" };
+  for (const side of ["base", "head"]) untouched[side] = { ...untouched[side], id: untouched.id,
+    route: "/untouched", path: "/untouched", routeFile: "app/untouched.tsx", logicalPath: "untouched" };
+  report.review.surfaces.push(untouched);
+  for (const status of ["added", "removed"]) {
+    const route = { ...home.head, id: status, route: `/${status}`, path: `/${status}`,
+      routeFile: `app/${status}.tsx`, logicalPath: status };
+    const side = status === "added" ? "head" : "base";
+    report.review.surfaces.push({ id: status, status, base: status === "removed" ? route : null,
+      head: status === "added" ? route : null,
+      [`${side}Outcome`]: { status: "failed", attempts: 1, landing: "unverified", reason: `${side} simulator disconnected` },
+      review: { status: "needs-review", description: `${side} capture unavailable` } });
+  }
+  const { page, errors } = await harness(t, await archive(report), { app: true });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await page.getByRole("button", { name: "Screens", exact: true }).click();
+  await expect(page.locator(".screens-page .diff-frame.diff-source-affected")).toHaveCount(1);
+  await expect(page.locator(".screens-page .diff-frame.diff-not-compared")).toHaveCount(1);
+  await expect(page.locator(".screens-page .diff-frame.diff-unavailable")).toHaveCount(1, "an added route whose capture failed has nothing to show");
+  await expect(page.locator(".screens-page .diff-frame.diff-removed")).toHaveCount(1);
+  await expect(page.locator(".diff-frame.diff-needs-review, .diff-frame.diff-modified, .diff-frame.diff-unchanged, .diff-frame.diff-added")).toHaveCount(0);
+  await expect(page.getByText("Untrusted previous screen text", { exact: true })).toHaveCount(0);
+  const diagnostics = await page.evaluate(async () => {
+    const { activeArtifactReport } = await import("/src/utils/artifact-report.ts");
+    const { publicReviewProjection, publicReviewToWorkspace } = await import("/src/public/public-workspace.ts");
+    const review = activeArtifactReport.data.publicReview;
+    const projection = publicReviewProjection(review);
+    const workspace = publicReviewToWorkspace(review);
+    return { surfaces: review.surfaces.map(surface => ({ id: surface.id, review: surface.review, visual: surface.visual })),
+      capture: projection.runtimeEvidence['public:home'].current.groups.capture,
+      gaps: Object.values(workspace.builds).flatMap(build => build.map.gaps) };
+  });
+  assert.equal(diagnostics.surfaces.find(surface => surface.id === 'home').review, undefined);
+  assert.equal(diagnostics.surfaces.find(surface => surface.id === 'home').visual, undefined);
+  assert.equal(diagnostics.capture.find(row => row.label === 'Landing').value, 'Unverified');
+  assert.equal(diagnostics.capture.find(row => row.label === 'Capture reason').value, 'Observed /login instead of /home');
+  assert.equal(diagnostics.capture.some(row => row.label === 'Review status'), false);
+  assert.equal(diagnostics.gaps.filter(gap => gap.status === 'open').length, 6);
+  assert.deepEqual(errors, []);
+});
+
+// example-review-artifact.zip is the unmodified `explore-review-35721157511-1` GitHub Actions
+// artifact of expo/explore-playground PR #1, kept here as a local test fixture.
+// example-simulator-screenshot.png is its Settings head image (assets/23652a69….png).
+const RECORDED_ARTIFACT = new URL("../fixtures/example-review-artifact.zip", import.meta.url);
+const RECORDED_IDENTITY = { repo: "expo/explore-playground", run: "35721157511", attempt: "1", artifact: "10692082776" };
+const RECORDED_DIGEST = "7e4964bac68d9a7dcd8c69ab308551af32c6abee1c81cc9feb6ede6a04ed4e7d";
+
+test("a recorded pull-request artifact opens its verified verdicts and every screenshot", { timeout: 60_000 }, async t => {
+  const bytes = await readFile(RECORDED_ARTIFACT);
+  assert.equal(createHash("sha256").update(bytes).digest("hex"), RECORDED_DIGEST, "the fixture must stay the exact GitHub artifact");
+  const { page, errors } = await harness(t, undefined, { app: true, reportIdentity: RECORDED_IDENTITY, query: "" });
+  await expect(page.locator(".report-drop code")).toHaveText("explore-review-35721157511-1.zip");
+  await chooseFile(page, fileURLToPath(RECORDED_ARTIFACT));
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const pr = page.getByRole("link", { name: "PR #1 on GitHub" });
+  await expect(pr).toHaveText("PR #1");
+  // The pill shows the number; its tooltip carries the title.
+  await pr.hover();
+  await expect(page.locator(".tooltip")).toContainText("Add cats care guide, retire Sweet Bee, refresh share label");
+  const menu = await openChangesMenu(page);
+  for (const route of ["/cats/care-guide", "/cats", "/games", "/settings", "/games/sweet-bee"]) {
+    await expect(menu.getByText(route, { exact: true })).toBeVisible();
+  }
+
+  await page.getByRole("button", { name: "Screens", exact: true }).click();
+  const frames = page.locator(".screens-page .diff-frame");
+  await expect(frames).toHaveCount(35);
+  for (const [status, count] of [["modified", 3], ["added", 1], ["removed", 1], ["unchanged", 28], ["not-compared", 2]]) {
+    await expect(page.locator(`.screens-page .diff-frame.diff-${status}`)).toHaveCount(count);
+  }
+  const screenshots = page.locator(".screens-page img[data-screenshot-src]");
+  await expect(screenshots).toHaveCount(33);
+  await expect.poll(() => screenshots.first().evaluate(image => [image.naturalWidth, image.naturalHeight])).toEqual([402, 874]);
+
+  // A chip shows each status that has changes; statuses without any stay out of the way.
+  await expect((await openChangesMenu(page)).getByRole("group", { name: "Filter changes" }).getByRole("button"))
+    .toHaveText(["Added 1", "Modified 3", "Removed 1"]);
+  assert.deepEqual(errors, []);
+});
+
+test("local run ZIP opens and reloads without a fabricated GitHub identity", async t => {
+  const report = reportFixture();
+  const local = { origin: "local", repo: "local/example", run: "auth-run-1", attempt: "1" };
+  report.review.runId = local.run; report.review.runAttempt = local.attempt;
+  const { base, head, title } = report.review.pullRequest;
+  report.review.pullRequest = { origin: "local", repository: local.repo, runId: local.run, base, head, title };
+  const { page, errors } = await harness(t, await archive(report), { app: true, reportIdentity: local });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  // A local run has no pull request to link: the pill says "Local" and its tooltip names the run.
+  const localRun = page.locator(".left-panel-collapsed-pill .collapsed-pr");
+  await expect(localRun).toHaveText("Local");
+  await localRun.hover();
+  await expect(page.locator(".tooltip")).toContainText(title);
+  await expect(page.locator(".tooltip")).toContainText(`${head.ref} → ${base.ref}`);
+  await expect(page.locator('a[href*="github.com/local/"]')).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(localRun).toHaveText("Local");
+  assert.deepEqual(errors, []);
+});
