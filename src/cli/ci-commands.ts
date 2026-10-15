@@ -1,4 +1,4 @@
-import { cp, lstat, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -226,11 +226,15 @@ async function localReview(): Promise<void> {
   const result = await runLocalReview({ project: flag("project") ?? process.cwd(), base: flag("base"), head: flag("head"),
     uncommitted: has("uncommitted"), untracked: has("include-untracked"), ...(platform ? { platform } : {}),
     scope: flag("scope"), expiresIn: flag("expires-in"), cache: !has("no-cache"), configPath: flag("config"), progress: stderrProgress() });
-  if (has("output")) for (const report of result.reports) {
-    const target = resolve(required("output"), report.platform);
-    await cp(report.directory, join(target, "report"), { recursive: true });
-    await cp(report.zip, join(target, "report.zip"));
-    report.directory = join(target, "report"); report.zip = join(target, "report.zip");
+  if (has("output")) {
+    for (const report of result.reports) {
+      const target = resolve(required("output"), report.platform);
+      await cp(report.directory, join(target, "report"), { recursive: true });
+      await cp(report.zip, join(target, "report.zip"));
+      report.directory = join(target, "report"); report.zip = join(target, "report.zip");
+    }
+    // The reports now live under --output; the temporary copies are not needed.
+    await rm(result.work, { recursive: true, force: true });
   }
   const summary = { ok: true, runId: result.runId, base: result.base, head: result.head,
     reports: result.reports.map(({ platform, directory, zip, changes, device }) => ({ platform, directory, zip, ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) })) };
@@ -241,7 +245,11 @@ async function localReview(): Promise<void> {
     const hosted = await deployLocalReports({ reports: zips, project: previewProjectSlug(result.repository, preview?.project), ...(preview?.owner ? { owner: preview.owner } : {}),
       // null is expiresAfter: never, which must not fall back to the default.
       expiresAfterDays: has("expires-in") ? previewDays(required("expires-in"), "--expires-in") : preview ? preview.expiresAfterDays : PREVIEW_DEFAULT_DAYS });
-    if (has("json")) output({ ...summary, url: hosted.previewUrl, expiresAt: hosted.expiresAt });
+    // Hosted, the temporary copies are not needed (a failed upload keeps them for report:upload); --output keeps its own.
+    const copied = has("output");
+    if (!copied) await rm(result.work, { recursive: true, force: true });
+    if (has("json")) output({ ...summary, ...(copied ? {} : { reports: summary.reports.map(({ directory: _directory, zip: _zip, ...report }) => report) }),
+      url: hosted.previewUrl, expiresAt: hosted.expiresAt });
     else console.log(`Report: ${hosted.previewUrl}${hosted.expiresAt ? ` (until ${hosted.expiresAt.slice(0, 10)})` : ""}`);
     return;
   }

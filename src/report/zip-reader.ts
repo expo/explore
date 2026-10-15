@@ -59,8 +59,17 @@ export async function readZipEntry(bytes: Uint8Array, entry: ZipEntry, maxBytes:
   const compressed = bytes.subarray(start, start + entry.compressedSize);
   if (entry.method === 0) return compressed.byteLength === entry.size ? compressed : undefined;
   try {
-    const stream = new Blob([compressed as BlobPart]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-    const inflated = new Uint8Array(await new Response(stream).arrayBuffer());
-    return inflated.byteLength === entry.size ? inflated : undefined;
+    // Inflated in chunks and abandoned once past the declared size, so a header that lies cannot exhaust memory.
+    const reader = new Blob([compressed as BlobPart]).stream().pipeThrough(new DecompressionStream("deflate-raw")).getReader();
+    const inflated = new Uint8Array(entry.size);
+    let length = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (length + value.byteLength > entry.size) { await reader.cancel(); return undefined; }
+      inflated.set(value, length);
+      length += value.byteLength;
+    }
+    return length === entry.size ? inflated : undefined;
   } catch { return undefined; }
 }

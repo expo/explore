@@ -576,6 +576,42 @@ test("deployLocalReports hosts one review's platforms behind one link, labelled 
   ]);
   await assert.rejects(deployLocalReports({ reports: [{ platform: "ios", zip }, { platform: "ios", zip }], project: "acme-explore", expiresAfterDays: 7, exportPath,
     environment: deployEnvironment, transport: eas.transport, run: eas.run }), error => error.code === "PREVIEW_REPORTS_INVALID");
+
+  // One Android report is still listed, so the Worker does not take it for iOS; a label with `#` cannot cut the sealed .env short.
+  await deployLocalReports({ reports: [{ platform: "android", zip, changes: 1, device: "Pixel #9 <Pro>\n" }], project: "acme-explore", expiresAfterDays: 7, exportPath,
+    environment: deployEnvironment, transport: eas.transport, run: eas.run, now: () => now, verifyTimeoutMs: 1 });
+  assert.equal(eas.captured.env.EXPLORE_PREVIEW_REPORT, undefined);
+  assert.deepEqual(captureListing(eas.captured.listing), [{ platform: "android", path: "android.zip.enc", changes: 1, device: "Pixel 9 Pro" }]);
+});
+
+test("an explore:binary report names its platform, so an Android exploration is not served as iOS", async t => {
+  const { reportPath, exportPath } = await exportFixture(t);
+  await rename(join(reportPath, "review.json"), join(reportPath, "exploration.json"));
+  const eas = easFixture();
+  await deployExplorationReport({ reportPath, platform: "android", project: "acme-explore", owner: "brent-org", expiresAfterDays: 7, exportPath,
+    environment: deployEnvironment, transport: eas.transport, run: eas.run, now: () => now, verifyTimeoutMs: 1 });
+  assert.deepEqual(captureListing(eas.captured.listing), [{ platform: "android", path: "android.zip.enc" }]);
+});
+
+test("readReportZip stops inflating a report file once it passes the size its header declares", async () => {
+  const { deflateRawSync } = await import("node:zlib");
+  const name = Buffer.from("review.json");
+  const data = deflateRawSync(Buffer.alloc(32 * 1024 * 1024, 32));
+  const header = size => {
+    const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(data.length, 18); local.writeUInt32LE(size, 22); local.writeUInt16LE(name.length, 26);
+    return local;
+  };
+  // The directory claims 10 bytes of JSON; the entry inflates to 32 MiB.
+  const local = Buffer.concat([header(10), name, data]);
+  const central = Buffer.alloc(46); central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6); central.writeUInt16LE(8, 10);
+  central.writeUInt32LE(data.length, 20); central.writeUInt32LE(10, 24); central.writeUInt16LE(name.length, 28); central.writeUInt32LE(0, 42);
+  const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(46 + name.length, 12); end.writeUInt32LE(local.length, 16);
+  const zip = new Uint8Array(Buffer.concat([local, central, name, end]));
+  const before = process.memoryUsage().arrayBuffers;
+  await assert.rejects(readReportZip(zip), /review\.json is unreadable or larger than 64 MiB/);
+  assert.ok(process.memoryUsage().arrayBuffers - before < 16 * 1024 * 1024, "the inflated bytes were never all held");
 });
 
 test("report:upload checks its reports before it deploys anything", async t => {

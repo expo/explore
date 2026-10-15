@@ -3,8 +3,10 @@ import { spawnSync } from "node:child_process";
 import { appendFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
-import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter, configure } from "@zip.js/zip.js";
+import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter, configure } from "@zip.js/zip.js";
+import { MAX_METADATA_BYTES } from "./agent-api.js";
 import { publishCiReportComment, readCiReportInput, type CiReportInput } from "./artifact.js";
+import { readZipDirectory, readZipEntry } from "./zip-reader.js";
 import { reviewChangeCount, reviewDevice } from "./pr-comment-body.js";
 import type { ExplorePlatform } from "../config/explore-config.js";
 import type { ArtifactReport } from "../contracts/artifact-report.js";
@@ -73,7 +75,8 @@ export type PreviewDeployResult = {
 export const PREVIEW_EXPORT_PATH = join(TOOL_ROOT, "dist", "hosting-preview");
 const CIPHER_AAD = "expo-explore-preview/1";
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
-const MAX_REPORT_BYTES = 256 * 1024 * 1024;
+/** The largest report ZIP a hosted preview serves. */
+export const MAX_REPORT_BYTES = 256 * 1024 * 1024;
 const ZIP_DATE = new Date("2000-01-01T00:00:00Z");
 
 function base32(bytes: Uint8Array): string {
@@ -163,40 +166,40 @@ export async function zipReportDirectory(reportPath: string): Promise<Uint8Array
 export type ReportZipSummary = { platform: ExplorePlatform; changes?: number; device?: string }
   & ({ kind: "review"; repository: string; runId: string; base: string; head: string } | { kind: "exploration" });
 
-/** Reads a report ZIP as `zipReportDirectory` writes it (or GitHub's download of a report artifact): one report file and its assets, nothing else. */
+/**
+ * Reads a report ZIP as `zipReportDirectory` writes it (or GitHub's download of a report artifact): one report file and
+ * its assets, nothing else. It uses the hosted reader (zip-reader.ts) with its limits, so a ZIP accepted here is one a
+ * hosted or local Viewer link can serve, and a crafted one cannot inflate past them.
+ */
 export async function readReportZip(zip: Uint8Array): Promise<ReportZipSummary> {
-  configure({ useWebWorkers: false });
   if (zip.byteLength > MAX_REPORT_BYTES) throw new Error("Report exceeds the 256 MiB hosted preview limit");
-  const reader = new ZipReader(new Uint8ArrayReader(zip), { useWebWorkers: false });
-  try {
-    const entries = (await reader.getEntries()).filter(entry => !entry.directory);
-    const names = entries.map(entry => entry.filename);
-    const reportFile = REPORT_FILE_NAMES.find(name => names.includes(name));
-    if (!reportFile || names.some(name => name !== reportFile && !/^assets\/[a-f0-9]{64}\.(png|mp4)$/.test(name))) {
-      throw new Error("A report ZIP must contain review.json (or exploration.json) and assets/<sha256>.png or .mp4 only");
-    }
-    const entry = entries.find(candidate => candidate.filename === reportFile)!;
-    const report = JSON.parse(new TextDecoder().decode(await entry.getData!(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })));
-    if (reportFile === "exploration.json") {
-      const exploration = (report as Partial<ExplorationReport>).exploration;
-      if (report?.kind !== EXPLORATION_REPORT_KIND || !exploration || (exploration.app?.platform !== "ios" && exploration.app?.platform !== "android")) {
-        throw new Error("exploration.json is not an Explore exploration report");
-      }
-      return { kind: "exploration", platform: exploration.app.platform, device: `${exploration.device.model} ${exploration.device.osVersion}`.trim() };
-    }
-    const review = (report as Partial<ArtifactReport>).review;
-    const pr = review?.pullRequest;
-    if (report?.kind !== "explore.report" || !review || !pr || (review.runtime?.platform !== "ios" && review.runtime?.platform !== "android")) {
-      throw new Error("review.json is not an Explore review report");
-    }
-    const changes = reviewChangeCount({ review });
-    const device = reviewDevice({ runtime: { deviceModel: review.runtime.device?.model ?? "", osVersion: review.runtime.device?.osVersion ?? "",
-      ...(review.runtime.colorSchemes ? { colorSchemes: review.runtime.colorSchemes } : {}) } });
-    return { kind: "review", platform: review.runtime.platform, repository: pr.repository, runId: review.runId, base: pr.base.sha, head: pr.head.sha,
-      ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) };
-  } finally {
-    await reader.close();
+  const entries = readZipDirectory(zip);
+  if (!entries) throw new Error("Not a ZIP archive a hosted report can read");
+  const names = [...entries.keys()].filter(name => !name.endsWith("/"));
+  const reportFile = REPORT_FILE_NAMES.find(name => names.includes(name));
+  if (!reportFile || names.some(name => name !== reportFile && !/^assets\/[a-f0-9]{64}\.(png|mp4)$/.test(name))) {
+    throw new Error("A report ZIP must contain review.json (or exploration.json) and assets/<sha256>.png or .mp4 only");
   }
+  const bytes = await readZipEntry(zip, entries.get(reportFile)!, MAX_METADATA_BYTES);
+  if (!bytes) throw new Error(`${reportFile} is unreadable or larger than ${MAX_METADATA_BYTES / 1024 / 1024} MiB`);
+  const report = JSON.parse(new TextDecoder().decode(bytes));
+  if (reportFile === "exploration.json") {
+    const exploration = (report as Partial<ExplorationReport>).exploration;
+    if (report?.kind !== EXPLORATION_REPORT_KIND || !exploration || (exploration.app?.platform !== "ios" && exploration.app?.platform !== "android")) {
+      throw new Error("exploration.json is not an Explore exploration report");
+    }
+    return { kind: "exploration", platform: exploration.app.platform, device: `${exploration.device.model} ${exploration.device.osVersion}`.trim() };
+  }
+  const review = (report as Partial<ArtifactReport>).review;
+  const pr = review?.pullRequest;
+  if (report?.kind !== "explore.report" || !review || !pr || (review.runtime?.platform !== "ios" && review.runtime?.platform !== "android")) {
+    throw new Error("review.json is not an Explore review report");
+  }
+  const changes = reviewChangeCount({ review });
+  const device = reviewDevice({ runtime: { deviceModel: review.runtime.device?.model ?? "", osVersion: review.runtime.device?.osVersion ?? "",
+    ...(review.runtime.colorSchemes ? { colorSchemes: review.runtime.colorSchemes } : {}) } });
+  return { kind: "review", platform: review.runtime.platform, repository: pr.repository, runId: review.runId, base: pr.base.sha, head: pr.head.sha,
+    ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) };
 }
 
 /** iv (12 bytes) || AES-256-GCM ciphertext || tag, authenticated with the preview AAD; what the Worker decrypts. */
@@ -224,11 +227,16 @@ type SealedReport = { entry: PreviewReportInput; input: CiReportInput; zip: Uint
 
 function previewError(code: string, message: string, nextAction: string): CiError { return new CiError({ code, stage: "preflight", message, nextAction }); }
 
+/** A device label for the platform switch, safe in the sealed .env: no `#` (a dotenv comment), markup or control characters, and short. */
+function listingDevice(device: string): string {
+  return device.replace(/[#<>\u0000-\u001f\u007f]/g, "").trim().slice(0, 120);
+}
+
 /** The worker's EXPLORE_PREVIEW_REPORTS entries, in the order the workflow lists platforms; also what reports.json must echo. */
 export function previewReportListing(reports: ReadonlyArray<Pick<SealedReport, "entry" | "input" | "file">>, reportDirectory: string) {
   return reports.map(report => {
     const changes = reviewChangeCount(report.input.commentState);
-    const device = reviewDevice(report.input.commentState).replace(/[#<>\u0000-\u001f\u007f]/g, "").trim().slice(0, 120);
+    const device = listingDevice(reviewDevice(report.input.commentState));
     return { platform: report.entry.platform!, path: `/_report/${reportDirectory}/${report.file}`,
       ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) };
   });
@@ -468,6 +476,8 @@ async function deploySealedReports(options: {
 export type ExplorationDeployOptions = {
   /** The `explore:binary` report directory (exploration.json plus assets/). */
   reportPath: string;
+  /** The explored app's platform, listed so the Worker does not take the report for iOS. */
+  platform?: ExplorePlatform;
   project: string;
   owner?: string;
   /** Days until the hosted link stops serving the report; null never expires. */
@@ -503,7 +513,10 @@ export async function deployExplorationReport(options: ExplorationDeployOptions)
   const random = options.random ?? (bytes => new Uint8Array(randomBytes(bytes)));
   const now = options.now ?? Date.now;
   const sha256 = createHash("sha256").update(zip).digest("hex");
-  const hosted = await deploySealedReports({ reports: [{ zip, sha256, file: "report.zip.enc", query: "" }], reportDirectory: base32(random(10)), project: options.project,
+  const reportDirectory = base32(random(10));
+  const file = options.platform ? `${options.platform}.zip.enc` : "report.zip.enc";
+  const hosted = await deploySealedReports({ reports: [{ zip, sha256, file, query: options.platform ? `?platform=${options.platform}` : "" }], reportDirectory,
+    ...(options.platform ? { listing: [{ platform: options.platform, path: `/_report/${reportDirectory}/${file}` }] } : {}), project: options.project,
     ...(options.owner ? { owner: options.owner } : {}), ownerHint: "Pass --owner with the Expo account that should host the report.",
     projectHint: "Give this EAS login permission to create projects under the owner, or pass --project with an existing slug.",
     expiresAt: options.expiresAfterDays === null ? null : now() + options.expiresAfterDays * 86_400_000, exportPath, environment, run: options.run ?? defaultRun, ...(options.sleep ? { sleep: options.sleep } : {}),
@@ -585,14 +598,15 @@ export async function deployLocalReports(options: {
   const now = options.now ?? Date.now;
   const random = options.random ?? (bytes => new Uint8Array(randomBytes(bytes)));
   const reportDirectory = base32(random(10));
-  const multi = options.reports.length > 1;
-  const reports = options.reports.map(report => ({ ...report, sha256: createHash("sha256").update(report.zip).digest("hex"),
-    file: multi ? `${report.platform}.zip.enc` : "report.zip.enc" }));
-  const listing = multi ? reports.map(report => ({ platform: report.platform, path: `/_report/${reportDirectory}/${report.file}`,
-    ...(report.changes === undefined ? {} : { changes: report.changes }), ...(report.device ? { device: report.device } : {}) })) : undefined;
+  // Always listed, even alone: the Worker takes an unlisted report for iOS, so an Android one would be mislabelled.
+  const reports = options.reports.map(report => ({ ...report, sha256: createHash("sha256").update(report.zip).digest("hex"), file: `${report.platform}.zip.enc` }));
+  const listing = reports.map(report => {
+    const device = report.device ? listingDevice(report.device) : "";
+    return { platform: report.platform, path: `/_report/${reportDirectory}/${report.file}`, ...(report.changes === undefined ? {} : { changes: report.changes }), ...(device ? { device } : {}) };
+  });
   return deploySealedReports({
-    reports: reports.map(report => ({ zip: report.zip, sha256: report.sha256, file: report.file, query: multi ? `?platform=${report.platform}` : "" })),
-    reportDirectory, ...(listing ? { listing } : {}), project: options.project, ...(options.owner ? { owner: options.owner } : {}),
+    reports: reports.map(report => ({ zip: report.zip, sha256: report.sha256, file: report.file, query: `?platform=${report.platform}` })),
+    reportDirectory, listing, project: options.project, ...(options.owner ? { owner: options.owner } : {}),
     ownerHint: options.ownerHint ?? "Set report.preview.owner in .expo-explore/config.yaml to the account that should hold the hosted reports.",
     projectHint: options.projectHint ?? "Make sure your Expo account can create projects, or set report.preview.project to an existing project you can deploy to.",
     expiresAt: options.expiresAfterDays === null ? null : now() + options.expiresAfterDays * 86_400_000, exportPath, environment,

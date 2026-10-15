@@ -57,7 +57,7 @@ export async function exploreBinary(): Promise<void> {
   let hosted: Awaited<ReturnType<typeof deployExplorationReport>> | undefined;
   if (!has("no-upload")) {
     say("hosting the report on EAS Hosting");
-    hosted = await deployExplorationReport({ reportPath: report.reportPath, project: flag("project") ?? DEFAULT_BINARY_PROJECT, owner: result.session.owner, expiresAfterDays, ...stableLinkOptions() });
+    hosted = await deployExplorationReport({ reportPath: report.reportPath, platform: result.archive.platform, project: flag("project") ?? DEFAULT_BINARY_PROJECT, owner: result.session.owner, expiresAfterDays, ...stableLinkOptions() });
     say(`report: ${hosted.previewUrl}${hosted.expiresAt ? ` (expires ${hosted.expiresAt})` : ""}`);
   }
   const summary = { ok: true,
@@ -114,7 +114,7 @@ export async function exploreSession(): Promise<void> {
   let hosted: Awaited<ReturnType<typeof deployExplorationReport>> | undefined;
   if (has("upload")) {
     say("hosting the report on EAS Hosting");
-    hosted = await deployExplorationReport({ reportPath: report.reportPath, project: flag("project") ?? DEFAULT_BINARY_PROJECT, ...(flag("owner") ? { owner: flag("owner")! } : {}), expiresAfterDays, ...stableLinkOptions() });
+    hosted = await deployExplorationReport({ reportPath: report.reportPath, platform: result.app.platform, project: flag("project") ?? DEFAULT_BINARY_PROJECT, ...(flag("owner") ? { owner: flag("owner")! } : {}), expiresAfterDays, ...stableLinkOptions() });
     say(`report: ${hosted.previewUrl}${hosted.expiresAt ? ` (expires ${hosted.expiresAt})` : ""}`);
   }
   const summary = { ok: true, app: result.app, device: { model: result.runtime.deviceModel, osVersion: result.runtime.osVersion },

@@ -5,7 +5,7 @@
  * only in that environment, and streams it. Static files on the CDN are ciphertext; the Viewer
  * bundle under /viewer/ is public and identical to the central host's.
  */
-import { AGENT_API_VERSION, agentApiReply, agentIndexHtml, agentIndexMarkdown, loadReport, prefersHtml, type AgentContext, type LoadedReport } from "./agent-api";
+import { AGENT_API_VERSION, agentApiReply, agentIndexHtml, agentIndexMarkdown, loadReport, prefersHtml, type AgentContext, type LoadedReport } from "../../../src/report/agent-api";
 
 export type PreviewEnvironment = {
   /** Lowercase base32 path token the review comment links to. */

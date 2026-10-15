@@ -65,6 +65,8 @@ export type CiMapOptions = {
   readinessSeconds?: number;
   /** Reports each step as it starts; capture output stays in the map and bundle. */
   progress?: Progress;
+  /** Stops the capture between steps (before the build, the session and each route); a session it started is still stopped. */
+  signal?: AbortSignal;
 };
 export type SimulatorRuntimeMetadata = {
   provider: "eas-simulator"; controller: "agent-device"; controllerPackageVersion: string;
@@ -392,6 +394,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   setStage("build");
   // Historical frames do not replace the fresh build needed for missing targets.
   easBuildId = null;
+  options.signal?.throwIfAborted();
   say("computing the native fingerprint");
   const fingerprintResult = eas(["fingerprint:generate", "--platform", options.platform, "--build-profile", options.easProfile, "--json", "--non-interactive"]);
   fingerprint = fingerprintFrom(fingerprintResult.stdout);
@@ -409,6 +412,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     if (!app.version && reusable.appVersion) app.version = reusable.appVersion;
     if (!app.buildNumber && reusable.appBuildVersion) app.buildNumber = reusable.appBuildVersion;
   }
+  options.signal?.throwIfAborted();
   if (!easBuildId) {
     say(options.forceFreshBuild ? "building on EAS (a fresh build was requested); waiting for it to finish"
       : `no finished simulator build has fingerprint ${fingerprint.slice(0, 12)}; building on EAS and waiting for it to finish`);
@@ -424,6 +428,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     if (!app.version && built.appVersion) app.version = built.appVersion;
     if (!app.buildNumber && built.appBuildVersion) app.buildNumber = built.appBuildVersion;
   }
+  options.signal?.throwIfAborted();
   const simulatorProject = await realpath(await mkdtemp(join(tmpdir(), "expo-explore-session-")));
   const dotenvPath = join(simulatorProject, SIMULATOR_DOTENV_FILE_NAME);
   const statePath = options.sessionStatePath ? absoluteContractFile(options.sessionStatePath, "sessionStatePath") : undefined;

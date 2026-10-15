@@ -241,6 +241,8 @@ export async function runCiReview(options: {
   agentSessionFactory?: PrepareCiExplorationOptions["createSession"];
   prepareCapture?: () => Promise<void>;
   progress?: Progress;
+  /** Stops the captures between steps; model requests take it through agentSessionFactory. */
+  signal?: AbortSignal;
 }) {
   const { projects, output, config, environment, state, assertCurrentHead, postComment } = options;
   const progress = options.progress ?? silentProgress;
@@ -300,9 +302,9 @@ export async function runCiReview(options: {
         mapDirectory: join(output, `${side}-map`), outputDirectory: directory,
         name: config.app.name ?? pr.repository, buildId: pr.origin === "local" ? `local-${pr.runId}-${side}` : pr.origin === "compare" ? `compare-${options.runId}-${side}` : `pr-${pr.number}-${side}`, buildVersion: pr[side].sha.slice(0, 8), gitCommit: pr[side].sha,
         planPath: join(output, "execution-plan.json"), side, sessionStatePath: join(output, `${side}-session`),
-        ...(reuseDirectory ? { reuseDirectory } : {}) };
+        ...(reuseDirectory ? { reuseDirectory } : {}), ...(options.signal ? { signal: options.signal } : {}) };
       const captured = concurrent
-        ? await runCiMapOnWorker((({ progress: _progress, runner: _runner, agent: _agent, ...rest }) => rest)(mapOptions), progress)
+        ? await runCiMapOnWorker((({ progress: _progress, runner: _runner, agent: _agent, signal: _signal, ...rest }) => rest)(mapOptions), progress, options.signal)
         : await runCiMap(mapOptions);
       const bundle = await readCaptureBundle(directory);
       bundle.profile = cacheRecipe.profile;

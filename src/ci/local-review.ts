@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { copyFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { runCiReview } from "./pipeline.js";
@@ -13,7 +13,7 @@ import type { PrepareCiExplorationOptions } from "../capture/agent/exploration.j
 import { createCiAgentSession } from "../capture/agent/session.js";
 import { createLocalCiAgentSession } from "../capture/agent/session-local.js";
 import type { CommandRunner } from "../capture/run.js";
-import type { LocalReviewPresentation, PullRequestSidePresentation } from "../contracts/review.js";
+import { isSafeBranchRef, type LocalReviewPresentation, type PullRequestSidePresentation } from "../contracts/review.js";
 import { exportCiReport, readCiReportInput } from "../report/artifact.js";
 import { reviewChangeCount, reviewDevice, type PublicCommentState } from "../report/pr-comment-body.js";
 import { zipReportDirectory } from "../report/preview-deploy.js";
@@ -103,7 +103,8 @@ export async function snapshotWorkingTree(root: string, options: { untracked?: b
 /**
  * The base when none is given: where HEAD left the default branch (what it would merge), named after it. Both the
  * local branch and origin's are considered, by exact ref (a tag of the same name never counts), and the newer fork
- * point wins, so neither a stale local `main` nor an unfetched `origin/main` adds other people's changes.
+ * point wins, so neither a stale local `main` nor an unfetched `origin/main` adds other people's changes. On the
+ * default branch itself, its unpushed commits are reviewed against origin's.
  */
 export function defaultBase(root: string, headSha: string): PullRequestSidePresentation {
   const remote = git(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
@@ -114,12 +115,24 @@ export function defaultBase(root: string, headSha: string): PullRequestSidePrese
     const forks = tips.map(tip => git(root, ["merge-base", tip, headSha])).filter(result => result.ok).map(result => result.stdout);
     if (!forks.length) throw new CiError({ code: "LOCAL_REVIEW_BASE_REQUIRED", stage: "preflight", message: `${branch} and the head share no history.`,
       nextAction: "Pass --base with a commit the head descends from." });
-    // Each fork point is an ancestor of the other; the newer one is where the head actually branched off.
-    const fork = forks.reduce((older, newer) => git(root, ["merge-base", "--is-ancestor", older, newer]).ok ? newer : older);
+    // Each fork point is an ancestor of the other; the newer one is where the head actually branched off. A fork point
+    // that is the head itself is the branch you are on (main with unpushed commits): the other one is what you would push onto.
+    const candidates = forks.filter(fork => fork !== headSha);
+    const fork = (candidates.length ? candidates : forks).reduce((older, newer) => git(root, ["merge-base", "--is-ancestor", older, newer]).ok ? newer : older);
     return { ref: tips.includes(fork) ? branch : `${branch} (merge base)`, sha: fork };
   }
   throw new CiError({ code: "LOCAL_REVIEW_BASE_REQUIRED", stage: "preflight", message: "This repository has no default branch to compare with.",
     nextAction: "Pass --base with a branch, tag or commit SHA." });
+}
+
+/**
+ * The name a report gives a ref: as typed, unless the report's ref rules refuse it (`@{u}`, `@{-1}`, `HEAD@{1}`); then
+ * the branch it names, or the commit's short SHA. Checked here, since the report itself is only written after capture.
+ */
+export function reportRef(root: string, ref: string, sha: string): string {
+  if (isSafeBranchRef(ref)) return ref;
+  const name = git(root, ["rev-parse", "--abbrev-ref", "--verify", "--quiet", ref]);
+  return name.ok && name.stdout && name.stdout !== "HEAD" && isSafeBranchRef(name.stdout) ? name.stdout : sha.slice(0, 8);
 }
 
 /** owner/name from a github.com `origin`, or a local name; the report shows it and the hosted project is named after it. */
@@ -133,7 +146,8 @@ export function repositoryName(root: string, config: ExploreConfig): string {
  * The environment of app installs: no variable named like a credential. A reviewed commit's .npmrc or .yarnrc.yml
  * could otherwise send `${NPM_TOKEN}` or `${CLAUDE_CODE_OAUTH_TOKEN}` to a registry it chooses, even with
  * --ignore-scripts. Proxy, certificate, cache and SSH-agent settings stay. This matches CI, whose install step
- * gets no secrets; registry auth in your own ~/.npmrc is scoped to its host and still applies.
+ * gets no secrets; registry auth in your own ~/.npmrc is scoped to its host and still applies. It is not a sandbox: a
+ * commit's yarnPath, Yarn plugins or .pnpmfile.cjs still run as you, as its app config and bundling do later.
  */
 export function appEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(environment).filter(([key]) =>
@@ -185,9 +199,21 @@ export async function keepCapture(exported: string, target: string): Promise<boo
   if (!next) return false;
   const current = await cacheRecipe(target);
   if (current && current.recipe === next.recipe && current.images > next.images) return false;
-  await rm(target, { recursive: true, force: true }); await mkdir(resolve(target, ".."), { recursive: true });
-  await cp(exported, target, { recursive: true });
-  return true;
+  // Copied beside the entry and renamed into place, so a review reading the cache (or another one writing it) never
+  // sees a half-copied capture; when two write at once, the first rename wins and the other copy is dropped.
+  await mkdir(resolve(target, ".."), { recursive: true });
+  const staged = `${target}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    await cp(exported, staged, { recursive: true });
+    await rm(target, { recursive: true, force: true });
+    await rename(staged, target);
+    return true;
+  } catch (error) {
+    if (!["ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    return false;
+  } finally {
+    await rm(staged, { recursive: true, force: true });
+  }
 }
 
 function recordedSessionIds(outputs: string[]): string[] {
@@ -221,8 +247,8 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
   const work = await realpath(await mkdtemp(join(tmpdir(), "expo-explore-review-")));
   const worktrees: string[] = [];
   const outputs: string[] = [];
-  // The first Ctrl+C aborts model requests and stops the recorded simulator sessions, so the capture fails fast and
-  // unwinds through its own cleanup and the finally below. A second one quits now, naming any session left running.
+  // The first Ctrl+C stops the captures between steps (deterministic or agent), aborts model requests and stops the
+  // recorded simulator sessions, so the capture fails fast and unwinds through its own cleanup and the finally below. A second one quits now, naming any session left running.
   const abort = new AbortController();
   let interrupts = 0;
   const interrupt = () => {
@@ -254,8 +280,12 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
       if (snapshot) progress(`head: your uncommitted changes to ${snapshot.changed.length} file${snapshot.changed.length === 1 ? "" : "s"}`
         + (snapshot.untracked.length ? ` (untracked, uploaded with the build and kept in .git/objects until git gc: ${snapshot.untracked.join(", ")})` : ""));
       else progress("head: no uncommitted changes, reviewing HEAD");
-    } else head = { ref: headRef, sha: resolveCommit(root, headRef, "head") };
-    const base = options.base ? { ref: options.base, sha: resolveCommit(root, options.base, "base") } : defaultBase(root, head.sha);
+    } else {
+      const sha = resolveCommit(root, headRef, "head");
+      head = { ref: reportRef(root, headRef, sha), sha };
+    }
+    const baseSha = options.base ? resolveCommit(root, options.base, "base") : undefined;
+    const base = options.base && baseSha ? { ref: reportRef(root, options.base, baseSha), sha: baseSha } : defaultBase(root, head.sha);
     if (base.sha === head.sha) throw new CiError({ code: "COMPARE_SAME_COMMIT", stage: "preflight", message: `${base.ref} and ${head.ref} are the same commit (${head.sha.slice(0, 8)}).`,
       nextAction: "Pass --base with an earlier commit, or --uncommitted to review your uncommitted changes." });
     progress(`comparing ${head.ref} (${head.sha.slice(0, 8)}) with ${base.ref} (${base.sha.slice(0, 8)})`);
@@ -307,6 +337,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
       const result = await runCiReview({ projects, output, config, presentation, runId, runAttempt: "1", state, environment: platformEnvironment,
         ...(platforms.length > 1 ? { platforms } : {}), subscription, useLocalEasSession, progress: message => progress(`${platform}: ${message}`),
         ...(options.runner ? { runner: options.runner } : {}), ...(options.now ? { now: options.now } : {}), ...(options.sleep ? { sleep: options.sleep } : {}),
+        signal: abort.signal,
         // Model requests end on Ctrl+C: the session kills its own process group and restores any login it changed.
         agentSessionFactory: (configuration, sessionOptions) => {
           const session = (factory ?? (subscription ? createLocalCiAgentSession : createCiAgentSession))(configuration, sessionOptions);

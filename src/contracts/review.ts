@@ -175,17 +175,14 @@ function fullSha(value: unknown, label: string): string {
   return candidate.toLowerCase();
 }
 
+/** Whether a report may name a ref as given: no leading or trailing slash, `..`, backslash or reflog syntax (`@{`). */
+export function isSafeBranchRef(candidate: string): boolean {
+  return !(candidate.startsWith("/") || candidate.endsWith("/") || candidate.includes("..") || candidate.includes("\\") || candidate.includes("@{"));
+}
+
 function branchRef(value: unknown, label: string): string {
   const candidate = text(value, label, 255);
-  if (
-    candidate.startsWith("/")
-    || candidate.endsWith("/")
-    || candidate.includes("..")
-    || candidate.includes("\\")
-    || candidate.includes("@{")
-  ) {
-    throw new Error(`${label} is not a safe branch ref`);
-  }
+  if (!isSafeBranchRef(candidate)) throw new Error(`${label} is not a safe branch ref`);
   return candidate;
 }
 

@@ -4,8 +4,8 @@ import { webcrypto, createHash } from "node:crypto";
 import { deflateRawSync } from "node:zlib";
 import { readFileSync } from "node:fs";
 import { PREVIEW_CIPHER, previewResponse, type PreviewEnvironment } from "../src/server/preview";
-import { loadReport, prefersHtml, prefersMarkdown } from "../src/server/agent-api";
-import { readZipDirectory } from "../src/server/report-zip";
+import { loadReport, prefersHtml, prefersMarkdown } from "../../src/report/agent-api";
+import { readZipDirectory } from "../../src/report/zip-reader";
 
 const subtle = webcrypto.subtle as SubtleCrypto;
 const token = "abcdefghijklmnopqrstuvwxyz234567";

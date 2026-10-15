@@ -4,11 +4,14 @@ import { createServer, type Server } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExplorePlatform } from "../config/explore-config.js";
+import { AGENT_API_VERSION, agentApiReply, agentIndexMarkdown, loadReport, prefersHtml, type AgentContext, type LoadedReport } from "./agent-api.js";
 
 /**
  * Serve review reports on this machine the way a hosted report serves them: the built Viewer at `/p/<token>`, each
  * platform's report at `/p/<token>/report.zip?platform=…`, and the platform list at `/p/<token>/reports.json`. The
- * Viewer already knows this layout, so nothing in it changes. Loopback only; anything else answers 404.
+ * Viewer already knows this layout, so nothing in it changes. An agent on this machine gets what it gets from a hosted
+ * link: the Markdown index when it fetches `/p/<token>` without asking for HTML, `/p/<token>/llms.txt`, and the JSON
+ * API at `/p/<token>/api/v1/...` (agent-api.ts, shared with the hosted Worker). Loopback only; anything else answers 404.
  */
 export type LocalReport = { platform: ExplorePlatform; zip: Uint8Array; changes?: number; device?: string };
 export type LocalReportServer = { server: Server; url: string; close: () => Promise<void> };
@@ -16,6 +19,7 @@ export type LocalReportServer = { server: Server; url: string; close: () => Prom
 const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
   ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2", ".woff": "font/woff", ".json": "application/json; charset=utf-8", ".cur": "image/x-icon" };
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
+const AGENT_ROUTE = /^(?:\/llms\.txt|\/api\/v1(?:\/[A-Za-z0-9._:@-]{1,200}){0,2}\/?)$/;
 
 export async function startLocalReportServer(options: { reports: LocalReport[]; port?: number; viewerRoot?: string; token?: string }): Promise<LocalReportServer> {
   if (!options.reports.length) throw new Error("There is no report to serve");
@@ -25,20 +29,36 @@ export async function startLocalReportServer(options: { reports: LocalReport[]; 
   const page = `/p/${token}`;
   const listing = JSON.stringify(options.reports.map(report => ({ platform: report.platform,
     ...(report.changes === undefined ? {} : { changes: report.changes }), ...(report.device ? { device: report.device } : {}) })));
+  const loaded = new Map<LocalReport, Promise<LoadedReport | undefined>>();
+  let pageUrl = "";
   const server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? "/", "http://localhost");
-      const send = (status: number, body: Uint8Array | string, type = "text/plain; charset=utf-8") => {
-        response.writeHead(status, { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff" });
+      const send = (status: number, body: Uint8Array | string, type = "text/plain; charset=utf-8", headers: Record<string, string> = {}) => {
+        response.writeHead(status, { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers });
         response.end(body);
       };
       if (request.method !== "GET" && request.method !== "HEAD") return send(405, "Method not allowed");
-      if (url.pathname === page || url.pathname === `${page}/`) return send(200, await readFile(resolve(viewerRoot, "index.html")), TYPES[".html"]);
-      if (url.pathname === `${page}/report.zip`) {
-        const platform = url.searchParams.get("platform");
-        const report = platform ? options.reports.find(candidate => candidate.platform === platform) : options.reports[0];
-        return report ? send(200, report.zip, "application/zip") : send(404, "Not found");
+      // `?platform=` picks one of several reports, the first otherwise; an unknown platform matches nothing.
+      const platforms = url.searchParams.getAll("platform");
+      const report = platforms.length > 1 ? undefined : platforms.length ? options.reports.find(candidate => candidate.platform === platforms[0]) : options.reports[0];
+      const accept = request.headers.accept ?? null;
+      const isPage = url.pathname === page || url.pathname === `${page}/`;
+      const agentPath = url.pathname.startsWith(`${page}/`) ? url.pathname.slice(page.length) : "";
+      if ((isPage && !prefersHtml(accept)) || AGENT_ROUTE.test(agentPath)) {
+        if (!report) return send(404, "Not found");
+        if (!loaded.has(report)) loaded.set(report, loadReport(report.zip));
+        const content = await loaded.get(report);
+        if (!content) return send(404, "Not found");
+        const context: AgentContext = { pageUrl, platform: report.platform, platforms: options.reports.map(entry => entry.platform), expiresAt: null };
+        const link = { link: `<${pageUrl}/api/${AGENT_API_VERSION}>; rel="alternate"; type="application/json", <${pageUrl}/llms.txt>; rel="alternate"; type="text/markdown"`, vary: "Accept" };
+        if (isPage || agentPath === "/llms.txt") return send(200, agentIndexMarkdown(context, content), "text/markdown; charset=utf-8", link);
+        const reply = await agentApiReply(context, content, agentPath.slice("/api/v1".length).replace(/\/$/, ""), url.searchParams, accept);
+        const body = typeof reply.body === "string" ? reply.body : new Uint8Array(await new Response(reply.body).arrayBuffer());
+        return send(reply.status, body, reply.contentType, { vary: "Accept", ...reply.headers });
       }
+      if (isPage) return send(200, await readFile(resolve(viewerRoot, "index.html")), TYPES[".html"]);
+      if (url.pathname === `${page}/report.zip`) return report ? send(200, report.zip, "application/zip") : send(404, "Not found");
       if (url.pathname === `${page}/reports.json` && options.reports.length > 1) return send(200, listing, TYPES[".json"]);
       // The Viewer's own assets, at the absolute paths its index.html names; never anything outside the build.
       if (/^\/(assets|fonts|cursors)\/[A-Za-z0-9._/-]+$/.test(url.pathname) || url.pathname === "/favicon.svg") {
@@ -53,6 +73,7 @@ export async function startLocalReportServer(options: { reports: LocalReport[]; 
   await new Promise<void>((done, fail) => { server.once("error", fail); server.listen(options.port ?? 0, "127.0.0.1", done); });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("The local report server has no port");
-  return { server, url: `http://127.0.0.1:${address.port}${page}`,
+  pageUrl = `http://127.0.0.1:${address.port}${page}`;
+  return { server, url: pageUrl,
     close: () => new Promise<void>(done => server.close(() => done())) };
 }

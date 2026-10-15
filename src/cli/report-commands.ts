@@ -1,9 +1,10 @@
+import { spawnSync } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { DEFAULT_BINARY_PROJECT } from "../binary/run.js";
 import { repositoryName } from "../ci/local-review.js";
 import { readExploreConfig, previewDays, DEFAULT_EXPLORE_CONFIG_PATH, PREVIEW_DEFAULT_DAYS, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
-import { assertHostingExport, deployLocalReports, previewProjectSlug, readReportZip, zipReportDirectory, type ReportZipSummary } from "../report/preview-deploy.js";
+import { assertHostingExport, deployLocalReports, previewProjectSlug, readReportZip, zipReportDirectory, MAX_REPORT_BYTES, type ReportZipSummary } from "../report/preview-deploy.js";
 import { CiError, toCiError } from "../shared/ci-errors.js";
 import { argumentError, flag, has, output, positionals, required } from "./args.js";
 
@@ -16,9 +17,14 @@ async function readReport(path: string): Promise<{ path: string; zip: Uint8Array
   const info = await stat(target).catch(() => undefined);
   if (!info) argumentError(`There is no report at ${path}`, undefined, "Pass a report.zip or report directory that exists.");
   try {
+    // A ZIP is sized before it is read: nothing larger than a hosted report can be is loaded into memory.
+    const readZip = async (file: string) => {
+      if ((await stat(file)).size > MAX_REPORT_BYTES) throw new Error(`${path} is larger than the ${MAX_REPORT_BYTES / 1024 / 1024} MiB a hosted report can be`);
+      return new Uint8Array(await readFile(file));
+    };
     let zip: Uint8Array;
-    if (!info.isDirectory()) zip = new Uint8Array(await readFile(target));
-    else if (await stat(join(target, "report.zip")).then(file => file.isFile()).catch(() => false)) zip = new Uint8Array(await readFile(join(target, "report.zip")));
+    if (!info.isDirectory()) zip = await readZip(target);
+    else if (await stat(join(target, "report.zip")).then(file => file.isFile()).catch(() => false)) zip = await readZip(join(target, "report.zip"));
     else zip = await zipReportDirectory(target);
     return { path, zip, summary: await readReportZip(zip) };
   } catch (error) {
@@ -27,12 +33,34 @@ async function readReport(path: string): Promise<{ path: string; zip: Uint8Array
   }
 }
 
-/** This repository's report.preview, when the reports are this repository's: the hosted project its own reviews deploy to. */
-async function repositoryPreview(repository: string): Promise<NonNullable<ExploreConfig["report"]>["preview"]> {
-  const root = process.cwd();
-  if (!await stat(join(root, DEFAULT_EXPLORE_CONFIG_PATH)).catch(() => undefined)) return undefined;
-  const config = await readExploreConfig(root);
-  return repositoryName(root, config) === repository ? config.report?.preview : undefined;
+type PreviewSettings = NonNullable<ExploreConfig["report"]>["preview"];
+
+/** `<app>/.expo-explore/config.yaml` as the app directory and the path config readers take. */
+function configLocation(file: string): { app: string; path: string } {
+  return basename(dirname(file)) === ".expo-explore" ? { app: dirname(dirname(file)), path: relative(dirname(dirname(file)), file) } : { app: dirname(file), path: basename(file) };
+}
+
+/**
+ * The report.preview a review's own uploads use: from --config, or else from this repository's committed config when the
+ * reports are this repository's (the one in the current directory, or the only one, as in a monorepo). Says which.
+ */
+async function repositoryPreview(repository: string): Promise<{ preview: PreviewSettings; source: string } | undefined> {
+  const explicit = flag("config");
+  if (explicit) {
+    const { app, path } = configLocation(resolve(process.cwd(), explicit));
+    return { preview: (await readExploreConfig(app, path)).report?.preview, source: explicit };
+  }
+  const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: process.cwd(), encoding: "utf8" });
+  if (top.status !== 0) return undefined;
+  const root = top.stdout.trim();
+  const listed = spawnSync("git", ["ls-files", "--full-name", "--", ":(glob)**/.expo-explore/config.yaml"], { cwd: root, encoding: "utf8" });
+  const committed = listed.status === 0 ? listed.stdout.split("\n").filter(Boolean) : [];
+  const here = relative(root, join(process.cwd(), DEFAULT_EXPLORE_CONFIG_PATH)).split(sep).join("/");
+  const file = committed.includes(here) ? here : committed.length === 1 ? committed[0]! : undefined;
+  if (!file) return undefined;
+  const { app, path } = configLocation(join(root, file));
+  const config = await readExploreConfig(app, path);
+  return repositoryName(root, config) === repository ? { preview: config.report?.preview, source: file } : undefined;
 }
 
 /**
@@ -60,7 +88,10 @@ export async function reportUpload(): Promise<void> {
   }
   await assertHostingExport();
   const review = first.summary.kind === "review" ? first.summary : undefined;
-  const preview = review ? await repositoryPreview(review.repository) : undefined;
+  const found = review ? await repositoryPreview(review.repository) : undefined;
+  const preview = found?.preview;
+  if (review) process.stderr.write(found ? `report.preview from ${found.source}\n`
+    : `no config of ${review.repository} here: hosting with the defaults (pass --config, or --owner, --project and --expires-in)\n`);
   const project = flag("project") ?? (review ? previewProjectSlug(review.repository, preview?.project) : DEFAULT_BINARY_PROJECT);
   const owner = flag("owner") ?? preview?.owner;
   const expiresAfterDays = has("expires-in") ? previewDays(required("expires-in"), "--expires-in")

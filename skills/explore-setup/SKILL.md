@@ -161,6 +161,7 @@ npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all
 ```
 
 - It prints which commits it compares. Each is checked out as a detached worktree in a temporary directory, its dependencies installed (frozen lockfile, no scripts, no Explore credentials in the environment), and removed afterwards; the user's checkout, index and branches are never touched.
+- It runs both commits' code as the user (dependency installs, the app config, bundling). Before reviewing a branch the user did not write, say so and ask; credential-free installs are not a sandbox.
 - Logins: `EXPO_TOKEN` and the provider's API key when they are set; otherwise the user's `eas login` and their local `claude` or `codex` login for the configured provider. If `eas whoami` fails, tell them to run `eas login`.
 - `--uncommitted` includes tracked files only. `--include-untracked` adds untracked, non-ignored files, which are uploaded with the EAS build, so check the listed files first and never include secrets.
 - Every configured platform is reviewed unless `--platform` picks one. It opens the report in a local Viewer; `--upload` hosts it instead and prints the link, `--no-open` or `--json` only prints the report paths.

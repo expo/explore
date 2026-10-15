@@ -46,7 +46,8 @@ npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all --uploa
 
 - It checks out both commits as temporary worktrees, installs their dependencies, captures every configured platform on EAS Simulator (`--platform` picks one), and opens the report in a local Viewer. `--upload` hosts it and prints the link; `report:upload <report.zip>` hosts one you already have.
 - Your checkout, index and branches are never touched. `--uncommitted` takes tracked changes only; `--include-untracked` adds untracked files, which are uploaded with the EAS build.
-- Installs run without credential environment variables. A registry that needs `${NPM_TOKEN}` in the project's `.npmrc` must be authenticated in your own `~/.npmrc`.
+- It runs both commits' code on your machine, as you: installing their dependencies, evaluating the app config, and bundling the JavaScript. That is what checking them out and running them would do, so review only commits you would run, and someone else's branch only if you trust it.
+- Installs run without credential environment variables, which keeps tokens out of reach of a registry a commit's `.npmrc` names; that is not a sandbox. A registry that needs `${NPM_TOKEN}` in the project's `.npmrc` must be authenticated in your own `~/.npmrc`.
 - Captures are cached in `~/.cache/expo-explore`, so the same base is not captured twice (`--no-cache` skips it). Ctrl+C stops the run's simulator sessions.
 - Like a CI review, it builds on EAS (reusing a matching build) and runs simulator sessions: expect several minutes and EAS usage.
 

@@ -20,10 +20,11 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
   capture:review [--base REF] [--head REF | --uncommitted [--include-untracked]] [--platform ios|android] [--scope all|changes]
        [--upload [--expires-in 7d|30d|never]] [--no-open] [--no-cache] [--output DIRECTORY] [--project DIRECTORY]
        (on this machine: checks out both commits in temporary worktrees, captures them with your eas login and your
-        local claude or codex login, and opens the report; the base defaults to where HEAD left the default branch)
+        local claude or codex login, and opens the report; the base defaults to where HEAD left the default branch;
+        it runs both commits' code as you, so review only commits you would run)
   view [--catalog FILE] [--port N] [--no-open]
        (opens a report in the Viewer)
-  report:upload <report.zip | report directory>... [--owner ACCOUNT] [--project SLUG] [--expires-in 7d|30d|never] [--json]
+  report:upload <report.zip | report directory>... [--owner ACCOUNT] [--project SLUG] [--expires-in 7d|30d|never] [--config FILE] [--json]
        (hosts reports already on this machine on EAS Hosting behind one link, with your eas login: one per platform
         of the same review, from capture:review --output or a downloaded explore-review artifact, or one explore:binary report)`;
 

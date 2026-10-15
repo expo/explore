@@ -113,7 +113,7 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
 
   },
   view: { port: "value", catalog: "value", "no-open": "boolean" },
-  "report:upload": { owner: "value", project: "value", "expires-in": "value" },
+  "report:upload": { owner: "value", project: "value", "expires-in": "value", config: "value" },
   help: { all: "boolean" },
   "--help": { all: "boolean" },
   "-h": { all: "boolean" },

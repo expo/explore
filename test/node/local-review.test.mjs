@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { lstat, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appEnvironment, captureCacheDirectory, defaultBase, installDependencies, keepCapture, localInstallCommand, runLocalReview, snapshotWorkingTree } from '../../dist/ci/local-review.js';
+import { appEnvironment, captureCacheDirectory, defaultBase, installDependencies, keepCapture, localInstallCommand, reportRef, runLocalReview, snapshotWorkingTree } from '../../dist/ci/local-review.js';
 import { mkdir, readdir } from 'node:fs/promises';
 import { startLocalReportServer } from '../../dist/report/local-report-server.js';
 import { fixture, git } from '../helpers/public-ci-fixture.mjs';
@@ -22,6 +23,18 @@ async function repository(t) {
   await writeFile(join(root, 'tracked.txt'), 'one\n'); await writeFile(join(root, '.gitignore'), 'ignored.txt\n');
   git(root, 'add', '-A'); git(root, 'commit', '-q', '-m', 'one');
   return root;
+}
+
+
+/** A GET over node:http, which the review tests' fetch mock does not intercept. */
+function httpGet(url, accept) {
+  return new Promise((done, fail) => {
+    http.get(url, { headers: { accept } }, response => {
+      let body = '';
+      response.setEncoding('utf8').on('data', chunk => { body += chunk; }).on('end', () =>
+        done({ status: response.statusCode, type: response.headers['content-type'] ?? '', headers: response.headers, body }));
+    }).on('error', fail);
+  });
 }
 
 test('the working tree becomes a commit on HEAD without touching the index, files or refs; untracked files only on request', async t => {
@@ -99,6 +112,19 @@ test('the default base is the newer fork point of the local and origin default b
   const local = git(clone, 'rev-parse', 'HEAD');
   git(clone, 'checkout', '-q', '-b', 'feature2'); await writeFile(join(clone, 'tracked.txt'), 'two\n'); git(clone, 'commit', '-q', '-am', 'feature2');
   assert.deepEqual(defaultBase(clone, git(clone, 'rev-parse', 'HEAD')), { ref: 'main', sha: local });
+  // On main itself, its unpushed commits are reviewed against origin/main rather than against themselves.
+  git(clone, 'checkout', '-q', 'main');
+  assert.deepEqual(defaultBase(clone, local), { ref: 'main', sha: fetched });
+});
+
+test('a ref the report cannot name as typed is named by its branch or short SHA, before anything is captured', async t => {
+  const upstream = await repository(t);
+  const clone = await scratch(t, 'explore-local-refs-');
+  assert.equal(spawnSync('git', ['clone', '-q', upstream, clone]).status, 0);
+  const sha = git(clone, 'rev-parse', 'HEAD');
+  assert.equal(reportRef(clone, '@{u}', sha), 'origin/main');
+  assert.equal(reportRef(clone, 'HEAD@{0}', sha), sha.slice(0, 8));
+  for (const ref of ['main', 'HEAD~0', 'v1.2.0']) assert.equal(reportRef(clone, ref, sha), ref);
 });
 
 test('a cached capture is replaced by another recipe, kept against a smaller one of the same recipe, and never made from unvalidated evidence', async t => {
@@ -125,7 +151,8 @@ test('the local Viewer serves the built Viewer and each report the way a hosted 
   t.after(() => server.close());
   assert.match(server.url, /^http:\/\/127\.0\.0\.1:\d+\/p\/abcdefghijklmnopqrstuvwxyz234567$/);
   const get = path => fetch(new URL(path, server.url));
-  assert.match(await (await get(server.url)).text(), /<title>Viewer/);
+  assert.match(await (await fetch(server.url, { headers: { accept: 'text/html' } })).text(), /<title>Viewer/);
+  assert.equal((await get(server.url)).status, 404, 'an agent fetch of a report the agent API cannot read is a 404, not the Viewer shell');
   assert.deepEqual(new Uint8Array(await (await get(`${server.url}/report.zip?platform=android`)).arrayBuffer()), new Uint8Array([4]));
   assert.deepEqual(new Uint8Array(await (await get(`${server.url}/report.zip`)).arrayBuffer()), new Uint8Array([1, 2]));
   assert.deepEqual(await (await get(`${server.url}/reports.json`)).json(), [{ platform: 'ios', changes: 3, device: 'iPhone 17' }, { platform: 'android' }]);
@@ -162,6 +189,52 @@ test('a local review captures two commits of the repository in its own worktrees
   assert.equal(git(f.headProject, 'status', '--porcelain'), '');
   // Both commits' captures are kept for the next review of either.
   for (const sha of [f.baseSha, f.headSha]) assert.ok((await lstat(join(captureCacheDirectory(environment, 'ios', sha), 'bundle.json'))).isFile(), sha);
+
+  // An agent on this machine reads the report the way it reads a hosted one: the Markdown index, then the JSON API.
+  const viewerRoot = await scratch(t, 'explore-local-viewer-');
+  await writeFile(join(viewerRoot, 'index.html'), '<!doctype html><title>Viewer</title>');
+  const server = await startLocalReportServer({ reports: [{ platform: 'ios', zip: new Uint8Array(await readFile(report.zip)) }], viewerRoot });
+  t.after(() => server.close());
+  const index = await httpGet(server.url, '*/*');
+  assert.equal(index.status, 200);
+  assert.match(index.type, /^text\/markdown/);
+  assert.match(index.headers.link, new RegExp(`<${server.url}/api/v1>; rel="alternate"`));
+  assert.ok(index.body.includes(`${server.url}/api/v1`), 'the index links the local API, not a hosted one');
+  assert.match(index.body.split('\n')[0], new RegExp(`^# Expo Explore report: .+ ${f.headSha} vs ${f.baseSha} \\(ios\\)$`), 'a local review is named by its refs, not as a pull request');
+  assert.equal((await httpGet(`${server.url}/llms.txt`, '*/*')).body, index.body);
+  const api = JSON.parse((await httpGet(`${server.url}/api/v1`, 'application/json')).body);
+  assert.equal(api.kind, 'pr-review');
+  const screens = await httpGet(`${server.url}/api/v1/screens?status=modified`, 'application/json');
+  assert.equal(screens.status, 200);
+  assert.ok(JSON.parse(screens.body).items.length > 0);
+  assert.match((await httpGet(server.url, 'text/html')).body, /<title>Viewer/, 'a browser still gets the Viewer');
+  assert.equal((await httpGet(`${server.url}/api/v1?platform=android`, 'application/json')).status, 404);
+});
+
+test('Ctrl+C during a deterministic capture stops it before the next route and still stops its session', async t => {
+  const f = await fixture(t, 'expo-router');
+  t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
+  const environment = { ...f.environment, EXPLORE_CACHE_DIR: await scratch(t, 'explore-local-cache-'), GITHUB_RUN_ID: '', GITHUB_RUN_ATTEMPT: '', GITHUB_TOKEN: '' };
+  const ctrlC = new AbortController();
+  const calls = [];
+  const runner = request => {
+    const name = request.command.split('/').at(-1);
+    calls.push({ name, command: request.args[0], afterCtrlC: ctrlC.signal.aborted });
+    // The first route link is opened: the person presses Ctrl+C while it loads.
+    if (name === 'agent-device' && request.args[0] === 'open' && /sample:\/\//.test(request.args[2] ?? '') && !ctrlC.signal.aborted) ctrlC.abort();
+    return f.runner(request);
+  };
+  let kept;
+  await assert.rejects(runLocalReview({ project: f.headProject, base: f.baseSha, head: f.headSha, environment, interrupt: ctrlC.signal,
+    progress: message => { kept ??= /^kept this review's files for inspection: (.+)$/.exec(message)?.[1]; },
+    install: async checkout => { await writeCaptureObserverPackages(checkout, { provider: 'expo-router' }); }, runner, now: f.now, sleep: f.sleep }),
+  error => error.code === 'LOCAL_REVIEW_INTERRUPTED');
+  if (kept) t.after(() => rm(kept, { recursive: true, force: true }));
+  assert.ok(calls.some(call => call.afterCtrlC === false && call.command === 'simulator:start'), 'the capture had started a session');
+  const after = calls.filter(call => call.afterCtrlC);
+  assert.ok(after.some(call => call.command === 'simulator:stop'), 'its session is stopped');
+  assert.equal(after.filter(call => call.command === 'simulator:start').length, 0, 'no other session starts');
+  assert.ok(after.filter(call => call.name === 'agent-device' && call.command === 'open').length <= 1, 'no further route is opened');
 });
 
 test('Ctrl+C stops the review, and the checkouts are removed while its files are kept', async t => {
