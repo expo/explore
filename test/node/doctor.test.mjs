@@ -7,7 +7,7 @@ import test from "node:test";
 import { stringify } from "yaml";
 import { formatCaptureCheck, formatDoctorReport, runCaptureCheck, runDoctor, summarizeCaptureCheck } from "../../dist/ci/doctor.js";
 import { readRouteEntry, readSearchParameters } from "../../dist/ci/route-entry.js";
-import { installCiFiles, renderWorkflow, stampWorkflow, workflowIssues, workflowTemplateDrift, workflowUnmodified, workflowVersion } from "../../dist/ci/workflow-install.js";
+import { WORKFLOW_FILES, installCiFiles, renderWorkflow, stampWorkflow, workflowIssues, workflowTemplateDrift, workflowUnmodified, workflowVersion } from "../../dist/ci/workflow-install.js";
 import { unreproducibleEasVariables } from "../../dist/capture/eas-build.js";
 import { DRAFT_INSTRUCTIONS_MARKER } from "../../dist/config/setup.js";
 import { CiError } from "../../dist/shared/ci-errors.js";
@@ -62,7 +62,7 @@ async function app(t, config = baseConfig, extra = {}) {
 }
 
 async function workflows(root, options = {}) {
-  for (const name of ["explore-review.yml", "explore-baseline.yml"]) {
+  for (const name of WORKFLOW_FILES) {
     const text = renderWorkflow(await readFile(resolve("templates", name), "utf8"),
       { projectDir: ".", installDir: ".", manager: "npm", secretNames: [], ...options });
     await write(root, { [`.github/workflows/${name}`]: text });
@@ -275,7 +275,7 @@ test("workflows render for the app's package manager, monorepo layout, and app-t
 });
 
 test("bun workflows set up bun before the frozen-lockfile install", async () => {
-  for (const name of ["explore-review.yml", "explore-baseline.yml"]) {
+  for (const name of WORKFLOW_FILES) {
     const template = await readFile(resolve("templates", name), "utf8");
     const layout = { projectDir: ".", installDir: ".", manager: "bun", secretNames: [] };
     const rendered = renderWorkflow(template, layout);
@@ -293,8 +293,8 @@ test("CI install keeps an existing workflow, adding only missing secret lines", 
   await workflows(root);
   const result = await installCiFiles(root, ["EXAMPLE_LOGIN"]);
   assert.deepEqual(result.kept, []);
-  assert.deepEqual(result.written, [".github/workflows/explore-review.yml (secret lines)", ".github/workflows/explore-baseline.yml (secret lines)"]);
-  for (const name of ["explore-review.yml", "explore-baseline.yml"]) {
+  assert.deepEqual(result.written, WORKFLOW_FILES.map(name => `.github/workflows/${name} (secret lines)`));
+  for (const name of WORKFLOW_FILES) {
     const text = await readFile(join(root, ".github/workflows", name), "utf8");
     assert.equal(text.match(/EXAMPLE_LOGIN: \$\{\{ secrets\.EXAMPLE_LOGIN \}\}/g).length, 1);
   }
@@ -456,6 +456,15 @@ test("the CLI shows why a capture check did not start, with its next action", as
   assert.match(result.stdout, /→ .*git worktree add --detach/);
 });
 
+test("a missing compare workflow is a warning: pull request reviews do not need it", async (t) => {
+  const root = await app(t);
+  await workflows(root);
+  await rm(join(root, ".github/workflows/explore-compare.yml"));
+  const report = await runDoctor(offline(root));
+  assert.deepEqual(check(report, "workflow-explore-compare.yml").map(item => [item.status, item.code]), [["warn", "WORKFLOW_MISSING"]]);
+  assert.equal(check(report, "workflow-explore-review.yml")[0].status, "pass");
+});
+
 test("workflows count as on the default branch only when its copy matches this checkout", async (t) => {
   const root = await app(t);
   await workflows(root);
@@ -469,7 +478,7 @@ test("workflows count as on the default branch only when its copy matches this c
     }
     return { status: 1, stdout: "", stderr: "" };
   };
-  const same = { "explore-review.yml": await local("explore-review.yml"), "explore-baseline.yml": await local("explore-baseline.yml") };
+  const same = Object.fromEntries(await Promise.all(WORKFLOW_FILES.map(async name => [name, await local(name)])));
   assert.equal(check(await runDoctor({ project: root, online: false, run: github(same) }), "default-branch")[0].status, "pass");
   const older = await runDoctor({ project: root, online: false, run: github({ ...same, "explore-review.yml": "name: an older review workflow\n" }) });
   assert.equal(check(older, "default-branch")[0].code, "WORKFLOW_NOT_ON_DEFAULT_BRANCH");

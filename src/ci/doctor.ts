@@ -15,7 +15,7 @@ import { captureCompatibility } from "../capture/observer.js";
 import { assertCaptureEasProfile, assertSimulatorAvailable, repackProfileFrom, unreproducibleEasVariables } from "../capture/eas-build.js";
 import { createCiAgentSession } from "../capture/agent/session.js";
 import { readRouteEntry, type RouteEntry, type RouteEntryReport } from "./route-entry.js";
-import { LEGACY_VENDOR_DIRECTORY, WORKFLOW_FILES, ciLayout, renderWorkflow, workflowIssues, workflowTemplateDrift, workflowVersion } from "./workflow-install.js";
+import { LEGACY_VENDOR_DIRECTORY, OPTIONAL_WORKFLOW_FILES, WORKFLOW_FILES, ciLayout, renderWorkflow, workflowIssues, workflowTemplateDrift, workflowVersion } from "./workflow-install.js";
 import { EXPLORE_VERSION, TOOL_ROOT, packageBin } from "../shared/package-paths.js";
 import type { Progress } from "../shared/progress.js";
 
@@ -240,8 +240,11 @@ async function ciFileChecks(project: string, secretNames: readonly string[], run
     const file = `.github/workflows/${name}`;
     const path = join(layout.root, file);
     if (!await exists(path)) {
-      checks.push({ step: 6, id: `workflow-${name}`, status: "fail", code: "WORKFLOW_MISSING", message: `${file} is missing.`,
-        nextAction: "Run expo-explore setup --workflows, then commit the workflows." });
+      checks.push(OPTIONAL_WORKFLOW_FILES.has(name)
+        ? { step: 6, id: `workflow-${name}`, status: "warn", code: "WORKFLOW_MISSING", message: `${file} is missing, so reviews of two commits without a pull request (a tag against the last release, say) cannot run.`,
+          nextAction: "Run expo-explore setup --workflows to add it, then commit it." }
+        : { step: 6, id: `workflow-${name}`, status: "fail", code: "WORKFLOW_MISSING", message: `${file} is missing.`,
+          nextAction: "Run expo-explore setup --workflows, then commit the workflows." });
       continue;
     }
     const text = await readFile(path, "utf8");
@@ -301,6 +304,7 @@ function githubChecks(root: string, config: ExploreConfig, secretNames: readonly
     const published = remote(path, branch);
     let local: string | undefined;
     try { local = readFileSync(join(root, path), "utf8"); } catch { /* Reported by the CI file checks. */ }
+    if (local === undefined && OPTIONAL_WORKFLOW_FILES.has(name)) return [];
     return published === undefined ? [`${name} (missing)`] : local !== undefined && published !== local ? [`${name} (different)`] : [];
   });
   checks.push(stale.length
@@ -465,7 +469,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   checks.push(...files.checks);
   if (files.root) {
     const pending = run("git", ["status", "--porcelain", "--untracked-files=all", "--", DEFAULT_EXPLORE_CONFIG_PATH, ...(config.agent?.instructions ? [config.agent.instructions] : [])], project).stdout
-      + run("git", ["status", "--porcelain", "--untracked-files=normal", "--", ".github/workflows/explore-review.yml", ".github/workflows/explore-baseline.yml"], files.root).stdout;
+      + run("git", ["status", "--porcelain", "--untracked-files=normal", "--", ...WORKFLOW_FILES.map(name => `.github/workflows/${name}`)], files.root).stdout;
     const paths = [...new Set(pending.split("\n").map(line => line.slice(3).trim()).filter(Boolean))];
     if (paths.length) checks.push({ step: 6, id: "committed", status: "fail", code: "SETUP_FILES_UNCOMMITTED",
       message: `Setup files are not committed: ${list(paths)}. CI reads them from the pushed repository.`,

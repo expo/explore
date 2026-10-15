@@ -32,10 +32,33 @@ export type LocalReviewPresentation = {
   number?: never;
   url?: never;
 };
-export type ReviewPresentation = PullRequestPresentation | LocalReviewPresentation;
+/** Any two commits of a GitHub repository, compared without a pull request: a tag against the last release, a nightly against yesterday. */
+export type CompareReviewPresentation = {
+  origin: "compare";
+  repositoryId: string;
+  repository: string;
+  title: string;
+  /** github.com's compare page for the two commits. */
+  url: string;
+  base: PullRequestSidePresentation;
+  head: PullRequestSidePresentation;
+  number?: never;
+};
+export type ReviewPresentation = PullRequestPresentation | LocalReviewPresentation | CompareReviewPresentation;
+
+/** "v1.4.0 vs v1.3.0": the title a comparison gets when its caller names none; a ref given as a SHA reads as its short form. */
+export function compareTitle(base: PullRequestSidePresentation, head: PullRequestSidePresentation): string {
+  const name = (side: PullRequestSidePresentation) => /^[0-9a-f]{40}$/i.test(side.ref) ? side.sha.slice(0, 8) : side.ref;
+  return `${name(head)} vs ${name(base)}`;
+}
+
+export function compareUrl(repository: string, base: PullRequestSidePresentation, head: PullRequestSidePresentation): string {
+  return `https://github.com/${repository}/compare/${base.sha}...${head.sha}`;
+}
 
 export function projectReviewPresentation(value: unknown): ReviewPresentation {
   const candidate = record(value, "Review presentation");
+  if (candidate.origin === "compare") return projectComparePresentation(value);
   if (candidate.origin !== "local") return projectPullRequestPresentation(value);
   exactKeys(candidate, ["origin", "repository", "runId", "title", "base", "head"], [], "Local review");
   const runId = text(candidate.runId, "Local run", 160);
@@ -165,6 +188,20 @@ function pullRequestSide(value: unknown, label: string): PullRequestSidePresenta
     ref: branchRef(candidate.ref, `${label}.ref`),
     sha: fullSha(candidate.sha, `${label}.sha`),
   };
+}
+
+/** Strictly project a two-commit comparison before it enters a published workspace; its URL is always github.com's compare page. */
+export function projectComparePresentation(value: unknown): CompareReviewPresentation {
+  const candidate = record(value, "Comparison presentation");
+  exactKeys(candidate, ["origin", "repositoryId", "repository", "base", "head"], ["title", "url"], "Comparison presentation");
+  const repo = repository(candidate.repository);
+  const base = pullRequestSide(candidate.base, "base");
+  const head = pullRequestSide(candidate.head, "head");
+  if (base.sha === head.sha) throw new Error("comparison base and head must be different commits");
+  const url = compareUrl(repo, base, head);
+  if (candidate.url !== undefined && candidate.url !== url) throw new Error("comparison URL must be the github.com compare URL of its two commits");
+  return { origin: "compare", repositoryId: repositoryId(candidate.repositoryId), repository: repo,
+    title: candidate.title === undefined ? compareTitle(base, head) : text(candidate.title, "comparison title", 512), url, base, head };
 }
 
 /** Strictly project live GitHub PR metadata before it enters a published workspace. */

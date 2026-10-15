@@ -120,7 +120,7 @@ A failed run shows an error code and a next action in the PR comment; see [CI tr
 <summary><strong>Set up without a coding agent</strong></summary>
 
 ```sh
-npx @expo/explore setup    # writes .expo-explore/config.yaml and the two workflows; in a monorepo: --project apps/mobile
+npx @expo/explore setup    # writes .expo-explore/config.yaml and the workflows; in a monorepo: --project apps/mobile
 npx @expo/explore doctor   # fix each problem it reports, then commit
 ```
 
@@ -202,6 +202,41 @@ report:
 - Run `expo-explore setup --workflows` after enabling it to add the `deploy` job.
 - `EXPO_TOKEN` must be able to create the EAS project, so use a [robot user's](https://docs.expo.dev/accounts/programmatic-access/) token.
 - The report is encrypted, and only a request carrying the link's token can open it. Treat the link like a shared file link; see [report access](docs/private-review.md#hosted-previews).
+
+</details>
+
+<details>
+<summary id="compare"><strong>Review any two commits: releases, nightlies, any event</strong></summary>
+
+`.github/workflows/explore-compare.yml` reviews a `head` against a `base`, each a branch, tag or commit SHA, with no pull request. It captures, compares and reports exactly like a PR review, and links the report from the run's summary.
+
+Run it from the Actions tab, or call it from a workflow on any event:
+
+```yaml
+# .github/workflows/release-review.yml: each release tag against the release before it
+on:
+  push:
+    tags: ['v*']
+jobs:
+  previous:
+    runs-on: ubuntu-latest
+    outputs: { tag: '${{ steps.tag.outputs.tag }}' }
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - id: tag
+        run: echo "tag=$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^")" >> "$GITHUB_OUTPUT"
+  explore:
+    needs: previous
+    permissions: { contents: read, actions: read }
+    uses: ./.github/workflows/explore-compare.yml
+    with: { base: '${{ needs.previous.outputs.tag }}', head: '${{ github.ref_name }}' }
+    secrets: inherit
+```
+
+- Pick whatever `base` the event calls for: `main` for a release branch, yesterday's tag for a nightly, the last stable tag for a release candidate.
+- `setup --workflows` installs it. The caller grants `contents: read` and `actions: read`; `secrets: inherit` passes `EXPO_TOKEN` and any app-test secrets.
+- When the baseline workflow captured `base` in the last 30 days, that capture is reused and only `head` is captured.
 
 </details>
 

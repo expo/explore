@@ -134,6 +134,9 @@ export async function publishCiReportComment(options: {
       nextAction: "Publish the report-input.json produced by this repository's current workflow run and attempt." });
   }
   if (pr.origin === "local") throw new Error("Local reports cannot be published as GitHub PR comments");
+  if (pr.origin === "compare") throw new CiError({ code: "REPORT_NOT_A_PULL_REQUEST", stage: "publication",
+    message: "A comparison of two commits has no pull request to comment on",
+    nextAction: "Remove ci:publish from the comparison workflow; ci:deploy writes its link to the job summary." });
   const links = viewerLinks({ repository: pr.repository, headSha: pr.head.sha, runId: review.runId,
     runAttempt: review.runAttempt, configPath: input.commentState.configPath, artifactUrl: options.artifactUrl,
     ...(options.platform ? { platform: options.platform } : {}) });

@@ -319,13 +319,13 @@ The capture and publishing jobs use Expo and GitHub credentials. The review work
 
 Older setups committed a copy of the tools to `.github/vendor/expo-explore` and pinned it with an `EXPLORE_TOOLS_COMMIT` repository variable. `expo-explore doctor` reports these: delete the directory and both workflows, rerun `expo-explore setup --workflows`, and delete the variable.
 
-## 3. Install the two workflows
+## 3. Install the workflows
 
 ```sh
 expo-explore setup --workflows
 ```
 
-Install these on the default branch. Remove superseded Explore workflows to prevent duplicate captures and comments.
+This writes `explore-review.yml` (pull requests), `explore-baseline.yml` (the default branch) and `explore-compare.yml` (any two commits, from the Actions tab or another workflow; see [Review any two commits](../README.md#compare)). Install these on the default branch. Remove superseded Explore workflows to prevent duplicate captures and comments.
 
 Both templates use `APP_PROJECT_DIR` and `APP_INSTALL_DIR`, defaulting to `.`. For a monorepo, the project directory might be `apps/mobile` while the lockfile/install directory remains `.`. Keep config paths relative to the app. `expo-explore setup --workflows` replaces `npm ci --ignore-scripts` with the frozen-lockfile install of the package manager whose lockfile it finds: pnpm, Yarn, or bun. For bun it also adds an `oven-sh/setup-bun` step, because the runner does not have bun.
 

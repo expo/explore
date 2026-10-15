@@ -20,7 +20,7 @@ const pr = { repositoryId: "123", repository: "expo/explore-playground", number:
 const artifactUrl = "https://github.com/expo/explore-playground/actions/runs/10/artifacts/20";
 const environment = { GITHUB_TOKEN: "test-token", GITHUB_RUN_ID: "10", GITHUB_RUN_ATTEMPT: "1", GITHUB_REPOSITORY: pr.repository };
 
-async function fixture(t, { verified = true, preview = { hosting: "eas", expiresAfterDays: 7 } } = {}) {
+async function fixture(t, { verified = true, preview = { hosting: "eas", expiresAfterDays: 7 }, presentation = pr } = {}) {
   const root = await mkdtemp(join(tmpdir(), "explore-artifact-ci-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const files = new Map([["app/index.tsx", "export default function Home() { return null; }"]]);
@@ -37,12 +37,12 @@ async function fixture(t, { verified = true, preview = { hosting: "eas", expires
         buildId: "build", capturedAt: "2026-09-15T00:00:00Z" } },
       outcomes: { [id]: { status: "captured", attempts: 1, landing: verified ? "verified" : "unverified" } } }));
   }
-  const prepared = await prepareCaptureReview({ plan, pullRequest: pr, baseDirectory: join(root, "base"),
+  const prepared = await prepareCaptureReview({ plan, pullRequest: presentation, baseDirectory: join(root, "base"),
     headDirectory: join(root, "head"), runId: "10", runAttempt: "1", assertCurrentHead: async () => {},
     ...(verified ? { assessments: { [id]: { review: { status: "unchanged", description: "No visible change" } } } } : {}) });
   const inputPath = join(root, "report-input.json");
   await writeCiReportInput({ inputPath, publicReview: prepared.review, assets: prepared.assets,
-    commentState: { phase: "capturing", pullRequest: pr, mode: "all", executionMode: "deterministic", configPath: ".expo-explore/config.yaml",
+    commentState: { phase: "capturing", pullRequest: presentation, mode: "all", executionMode: "deterministic", configPath: ".expo-explore/config.yaml",
       startedAt: 1, updatedAt: 2, artifactOnly: true,
       links: viewerLinks({ repository: pr.repository, headSha: pr.head.sha, runId: "10", runAttempt: "1", configPath: ".expo-explore/config.yaml" }) },
     ...(preview ? { preview } : {}) });
@@ -493,3 +493,20 @@ test("ci:deploy writes its own deployments line over the one report jobs carried
   assert.match(JSON.parse(patched.options.body).body, /^<!-- expo-explore-ci -->\n<!-- expo-explore-deployments:explore-playground-explore--1lcbdcpwn3 -->\n/);
 });
 
+
+test("a comparison of two commits deploys the same way and links its report from the run summary, not a pull request", async t => {
+  const comparison = { origin: "compare", repositoryId: "123", repository: pr.repository,
+    base: { ref: "v1.3.0", sha: pr.base.sha }, head: { ref: "v1.4.0", sha: pr.head.sha } };
+  const { root, inputPath, reportPath, exportPath } = await exportFixture(t, { presentation: comparison });
+  const summaryPath = join(root, "summary.md");
+  const eas = easFixture();
+  const result = await deployPreview({ inputPath, reportPath, artifactUrl, exportPath, environment: { ...deployEnvironment, GITHUB_STEP_SUMMARY: summaryPath },
+    transport: eas.transport, run: eas.run, now: () => Date.parse("2026-09-11T03:07:00Z"), verifyTimeoutMs: 1 });
+  assert.deepEqual(eas.calls.map(call => call.args[0]), ["whoami", "init", "deploy"]);
+  assert.equal(eas.requests.filter(request => request.url.origin === "https://api.github.com").length, 0, "no pull request to read or comment on");
+  const summary = readFileSyncUtf8(summaryPath);
+  assert.match(summary, /^### Explore: v1\.4\.0 vs v1\.3\.0$/m);
+  assert.ok(summary.includes(`[Open the report](${result.previewUrl})`));
+  assert.ok(summary.includes(`(https://github.com/${pr.repository}/compare/${pr.base.sha}...${pr.head.sha})`));
+  assert.match(summary, /link expires 2026-09-18/);
+});

@@ -126,7 +126,7 @@ function reviewSummary(context: AgentContext, review: Json): Json {
   const pr = rec(review.pullRequest), runtime = rec(review.runtime);
   return defined({
     kind: "pr-review", api: AGENT_API_VERSION, contract: str(review.contract),
-    pullRequest: defined({ repository: str(pr.repository), number: num(pr.number), title: str(pr.title), url: str(pr.url), head: str(rec(pr.head).sha), base: str(rec(pr.base).sha) }),
+    pullRequest: defined({ origin: str(pr.origin), repository: str(pr.repository), number: num(pr.number), title: str(pr.title), url: str(pr.url), head: str(rec(pr.head).sha), base: str(rec(pr.base).sha) }),
     app: defined({ name: str(runtime.appName), version: str(runtime.appVersion), build: str(runtime.appBuildNumber), platform: str(runtime.platform) ?? context.platform, device: rec(runtime.device).model === undefined ? undefined : `${str(rec(runtime.device).model)} ${str(rec(runtime.device).osVersion) ?? ""}`.trim() }),
     createdAt: str(review.createdAt), mode: str(review.mode), platforms: context.platforms, expiresAt: context.expiresAt,
     screens: { total: surfaces.length, ...counts },
@@ -211,8 +211,10 @@ export function agentIndexMarkdown(context: AgentContext, loaded: LoadedReport):
   const lines: string[] = [];
   if (loaded.kind === "pr-review") {
     const pr = rec(summary.pullRequest);
-    lines.push(`# Expo Explore report: ${escapeMd(app.name ?? pr.repository)} PR #${escapeMd(pr.number)}${app.platform ? ` (${escapeMd(app.platform)})` : ""}`, "",
-      `> Visual review of pull request ${escapeMd(pr.repository)}#${escapeMd(pr.number)} by Expo Explore. ${screens.total} screens captured: ${screens.modified ?? 0} modified, ${screens.added ?? 0} added, ${screens.removed ?? 0} removed, ${screens.unchanged ?? 0} unchanged.${context.expiresAt ? ` This link stops serving the report after ${context.expiresAt}.` : ""}`, "",
+    // A comparison of two commits has a title ("v1.4.0 vs v1.3.0") where a pull request has a number.
+    const compared = pr.origin === "compare";
+    lines.push(`# Expo Explore report: ${escapeMd(app.name ?? pr.repository)} ${compared ? escapeMd(pr.title) : `PR #${escapeMd(pr.number)}`}${app.platform ? ` (${escapeMd(app.platform)})` : ""}`, "",
+      `> Visual review of ${compared ? `${escapeMd(pr.repository)} ${escapeMd(pr.title)}` : `pull request ${escapeMd(pr.repository)}#${escapeMd(pr.number)}`} by Expo Explore. ${screens.total} screens captured: ${screens.modified ?? 0} modified, ${screens.added ?? 0} added, ${screens.removed ?? 0} removed, ${screens.unchanged ?? 0} unchanged.${context.expiresAt ? ` This link stops serving the report after ${context.expiresAt}.` : ""}`, "",
       "This URL is the human Viewer. The same report is available as read-only JSON (no credentials beyond this URL):", "",
       `- [Summary](${links.summary ?? withPlatform(context, apiUrl(context))}): kind, counts by status, app and PR identity, links`,
       `- [Changed screens](${links.changed}): the modified, added and removed screens with the review description, visual verdict and mismatch percentage; \`status=\` filters, \`limit=\`/\`cursor=\` page`,

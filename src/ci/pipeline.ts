@@ -14,7 +14,7 @@ import { runCiMapOnWorker } from "./capture-worker.js";
 import { writeCiReportInput, readAppDirectory } from "../report/artifact.js";
 import { assessPublicEvidence, readExportedMap, type PublicEvidenceSide } from "../review/evidence-assessment.js";
 import { parseRuntimeExecutionContext } from "../review/runtime-adapter.js";
-import { projectPullRequestPresentation, type ReviewPresentation } from "../contracts/review.js";
+import { projectComparePresentation, projectPullRequestPresentation, type ReviewPresentation } from "../contracts/review.js";
 import { renderPublicComment, platformSectionMerge, type PublicCommentState } from "../report/pr-comment-body.js";
 import { upsertStickyComment } from "../report/pr-comment.js";
 import { viewerLinks } from "../report/viewer-links.js";
@@ -105,35 +105,59 @@ export type PublicCiOptions = {
   progress?: Progress;
 };
 
-export async function runPublicCi(options: PublicCiOptions) {
-  const environment = options.environment ?? process.env;
-  const transport = options.transport ?? fetch;
-  const now = options.now ?? Date.now;
-  const config = options.config;
-  const githubToken = requireSecret(environment, "GITHUB_TOKEN");
+function assertRunIdentity(environment: NodeJS.ProcessEnv): void {
   if (!/^[1-9][0-9]*$/.test(environment.GITHUB_RUN_ID ?? "") || !/^[1-9][0-9]*$/.test(environment.GITHUB_RUN_ATTEMPT ?? "")) {
     throw new CiError({ code: "CI_RUN_IDENTITY_MISSING", stage: "preflight", message: "The GitHub run ID or attempt is missing.",
       nextAction: "Run capture:review inside the maintained Explore GitHub Actions workflow." });
   }
-  const pr = projectPullRequestPresentation(JSON.parse(await readFile(options.pullRequestPath, "utf8")));
+}
+
+/** What both CI adapters check before capture: exact checkouts of both sides and an output outside them. */
+async function prepareCiRun(options: Pick<PublicCiOptions, "baseProject" | "headProject" | "output" | "config" | "configPath" | "now">,
+  environment: NodeJS.ProcessEnv, presentation: ReviewPresentation) {
+  const now = options.now ?? Date.now;
+  const config = options.config;
   const projects = { base: await realpath(options.baseProject), head: await realpath(options.headProject) };
   const output = resolve(options.output);
   const temporary = await realpath(environment.RUNNER_TEMP || tmpdir());
   const outputRelative = relative(temporary, output);
   if (!outputRelative || outputRelative.startsWith("..") || isAbsolute(outputRelative)) throw new Error("CI output must be inside RUNNER_TEMP, outside source checkouts");
   for (const side of ["base", "head"] as const) {
-    assertCheckout(projects[side], pr[side].sha);
+    assertCheckout(projects[side], presentation[side].sha);
     const rel = relative(projects[side], output);
     if (!rel.startsWith("..") && !isAbsolute(rel)) throw new Error("Capture output cannot be inside a source checkout");
   }
   const appDirectory = await readAppDirectory(projects.head);
   const configPath = options.configPath ?? DEFAULT_EXPLORE_CONFIG_PATH;
   const repositoryConfigPath = appDirectory === "." ? configPath : `${appDirectory}/${configPath}`;
-  const state: PublicCommentState = { phase: "pending", pullRequest: pr, mode: config.exploration.scope,
+  const state: PublicCommentState = { phase: "pending", pullRequest: presentation, mode: config.exploration.scope,
     executionMode: config.mode, configPath: repositoryConfigPath,
-    links: viewerLinks({ repository: pr.repository, headSha: pr.head.sha, runId: environment.GITHUB_RUN_ID!,
+    links: viewerLinks({ repository: presentation.repository, headSha: presentation.head.sha, runId: environment.GITHUB_RUN_ID!,
       runAttempt: environment.GITHUB_RUN_ATTEMPT!, configPath: repositoryConfigPath }),
     startedAt: now(), updatedAt: now(), build: { platform: config.app.platform, easProfile: config.app.easProfile }, artifactOnly: true };
+  return { projects, output, state };
+}
+
+/** A review of any two commits (`capture:review --compare FILE`): the same capture as a PR's, with no PR to verify or comment on. */
+export async function runCompareCi(options: Omit<PublicCiOptions, "pullRequestPath" | "transport" | "onComment"> & { comparePath: string }) {
+  const environment = options.environment ?? process.env;
+  assertRunIdentity(environment);
+  const comparison = projectComparePresentation(JSON.parse(await readFile(options.comparePath, "utf8")));
+  const { projects, output, state } = await prepareCiRun(options, environment, comparison);
+  const assertCurrentHead = async () => { for (const side of ["base", "head"] as const) assertCheckout(projects[side], comparison[side].sha); };
+  return runCiReview({ ...options, projects, output, state, presentation: comparison,
+    environment, runId: environment.GITHUB_RUN_ID!, runAttempt: environment.GITHUB_RUN_ATTEMPT!,
+    assertCurrentHead, postComment: async () => {} });
+}
+
+export async function runPublicCi(options: PublicCiOptions) {
+  const environment = options.environment ?? process.env;
+  const transport = options.transport ?? fetch;
+  const now = options.now ?? Date.now;
+  const githubToken = requireSecret(environment, "GITHUB_TOKEN");
+  assertRunIdentity(environment);
+  const pr = projectPullRequestPresentation(JSON.parse(await readFile(options.pullRequestPath, "utf8")));
+  const { projects, output, state } = await prepareCiRun(options, environment, pr);
   const postComment = async () => {
     await assertCurrentPr();
     state.updatedAt = now(); const body = renderPublicComment(state); options.onComment?.(state, body);
@@ -274,7 +298,7 @@ export async function runCiReview(options: {
         ...(options.useLocalEasSession ? { useLocalEasSession: true } : {}),
         ...(exploration.agent ? { agent: exploration.agent } : {}), project: projects[side],
         mapDirectory: join(output, `${side}-map`), outputDirectory: directory,
-        name: config.app.name ?? pr.repository, buildId: pr.origin === "local" ? `local-${pr.runId}-${side}` : `pr-${pr.number}-${side}`, buildVersion: pr[side].sha.slice(0, 8), gitCommit: pr[side].sha,
+        name: config.app.name ?? pr.repository, buildId: pr.origin === "local" ? `local-${pr.runId}-${side}` : pr.origin === "compare" ? `compare-${options.runId}-${side}` : `pr-${pr.number}-${side}`, buildVersion: pr[side].sha.slice(0, 8), gitCommit: pr[side].sha,
         planPath: join(output, "execution-plan.json"), side, sessionStatePath: join(output, `${side}-session`),
         ...(reuseDirectory ? { reuseDirectory } : {}) };
       const captured = concurrent
@@ -394,7 +418,7 @@ export async function runCiReview(options: {
       }
     }
     await preserveReport();
-    progress("writing the report and updating the pull request comment");
+    progress(pr.origin === "compare" ? "writing the report" : "writing the report and updating the pull request comment");
     await assertCurrentHead(); await postComment();
     return { ...result, evidence, inputPath };
   } catch (error) {

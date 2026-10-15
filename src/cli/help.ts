@@ -45,8 +45,9 @@ const BINARY = `Prebuilt apps (no source needed; runs on EAS Simulator with your
 const CI = `CI (the installed workflows run these; they manage remote EAS Simulator sessions):
   config:platforms [--project DIRECTORY] [--config FILE]
        (lists the platforms config.yaml captures; the review workflow's matrix)
-  capture:review --base-project DIRECTORY --head-project DIRECTORY --pull-request FILE
+  capture:review --base-project DIRECTORY --head-project DIRECTORY (--pull-request FILE | --compare FILE)
        --output TEMP_DIRECTORY [--config .expo-explore/config.yaml] [--platform ios|android]
+       (--compare reviews any two commits without a PR: {"origin":"compare","repositoryId","repository","base":{ref,sha},"head":{ref,sha}})
   capture:baseline --project DIRECTORY --sha COMMIT --output TEMP_DIRECTORY [--config FILE] [--platform ios|android]
   source:verify --base-project DIRECTORY --head-project DIRECTORY
        --base-sha COMMIT --head-sha COMMIT --output DIRECTORY [--config FILE] [--scope all|changes] [--platform ios|android]

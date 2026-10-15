@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { projectPullRequestPresentation } from "../../dist/contracts/review.js";
+import { projectPullRequestPresentation, projectReviewPresentation } from "../../dist/contracts/review.js";
 
 const input = {
   repositoryId: "123456789",
@@ -25,4 +25,31 @@ test("rejects PR URLs and metadata that can escape the fixed repository", () => 
     () => projectPullRequestPresentation({ ...input, extra: "secret" }),
     /unsupported field/,
   );
+});
+
+const comparison = {
+  origin: "compare",
+  repositoryId: "123456789",
+  repository: "expo/explore-playground",
+  base: { ref: "v1.3.0", sha: "a".repeat(40) },
+  head: { ref: "v1.4.0-rc.1", sha: "b".repeat(40) },
+};
+
+test("a comparison of two commits gets github.com's compare URL and a title from its refs", () => {
+  assert.deepEqual(projectReviewPresentation(comparison), {
+    ...comparison, title: "v1.4.0-rc.1 vs v1.3.0",
+    url: `https://github.com/expo/explore-playground/compare/${"a".repeat(40)}...${"b".repeat(40)}`,
+  });
+  const bySha = projectReviewPresentation({ ...comparison, head: { ref: "b".repeat(40), sha: "b".repeat(40) } });
+  assert.equal(bySha.title, "bbbbbbbb vs v1.3.0", "a ref given as a SHA reads as its short form");
+  assert.equal(projectReviewPresentation({ ...comparison, title: "Nightly" }).title, "Nightly");
+  const projected = projectReviewPresentation(comparison);
+  assert.deepEqual(projectReviewPresentation(projected), projected, "projection is stable, so a stored comparison validates again");
+});
+
+test("rejects comparisons that name another URL, a PR number, or one commit twice", () => {
+  assert.throws(() => projectReviewPresentation({ ...comparison, url: "https://example.com/compare" }), /compare URL/);
+  assert.throws(() => projectReviewPresentation({ ...comparison, number: 7 }), /unsupported field/);
+  assert.throws(() => projectReviewPresentation({ ...comparison, head: comparison.base }), /different commits/);
+  assert.throws(() => projectReviewPresentation({ ...comparison, repositoryId: "x" }), /decimal GitHub id/);
 });

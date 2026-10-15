@@ -2,7 +2,7 @@
 
 How a review runs, from the pull request event to the Viewer link, and how the same pipeline runs locally. Readers who want the user-facing instructions should start with the [CI quick start](docs/quickstart-ci.md); this file is the map of the implementation.
 
-Source of truth: `templates/explore-review.yml`, `templates/explore-baseline.yml`, `action.yml`, `src/ci/pipeline.ts`, `src/ci/verified-plan.ts`, `src/capture/run.ts`, `src/capture/route-capture.ts`, `src/capture/agent/*`, `test/ci/run.mjs`.
+Source of truth: `templates/explore-review.yml`, `templates/explore-baseline.yml`, `templates/explore-compare.yml`, `action.yml`, `src/ci/pipeline.ts`, `src/ci/verified-plan.ts`, `src/capture/run.ts`, `src/capture/route-capture.ts`, `src/capture/agent/*`, `test/ci/run.mjs`.
 
 ## At a glance
 
@@ -35,6 +35,7 @@ Older setups vendored the tools into `.github/vendor/expo-explore` and pinned th
 | --- | --- | --- | --- |
 | `explore-review.yml` | `pull_request_target` (opened, synchronize, reopened, ready_for_review), `workflow_dispatch` with `pr=N` | Open, non-draft, same-repository PR whose author has write access or is listed in `ci.trustedAuthors` | Captures base and head, compares, packages a report, comments on the PR |
 | `explore-baseline.yml` | `push` to the default branch, `workflow_dispatch` | Default branch only | Captures every route of one commit per configured platform and uploads `explore-baseline-<sha>-<platform>` for later PRs to reuse |
+| `explore-compare.yml` | `workflow_dispatch` or `workflow_call` with `base` and `head` (branch, tag or SHA) | Whoever can run or call workflows (write access) | Captures base and head, compares, packages a report like a PR review (`capture:review --compare`), and links it from the run summary; no PR comment |
 
 Both workflows start with a `platforms` job: it installs the pinned CLI and runs `expo-explore config:platforms`, whose JSON list (`["ios"]`, `["ios","android"]`) becomes the matrix of the capture, report, and baseline jobs (`fail-fast: false`). Every matrix job passes `--platform ${{ matrix.platform }}`, so one platform's failure neither cancels nor hides the other's report.
 

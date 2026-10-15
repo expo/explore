@@ -12,12 +12,14 @@ const reviewSource = await readFile(new URL("../../templates/explore-review.yml"
 const review = parse(reviewSource);
 const baselineSource = await readFile(new URL("../../templates/explore-baseline.yml", import.meta.url), "utf8");
 const baseline = parse(baselineSource);
-const workflows = [review, baseline];
+const compareSource = await readFile(new URL("../../templates/explore-compare.yml", import.meta.url), "utf8");
+const compare = parse(compareSource);
+const workflows = [review, baseline, compare];
 
-test("one review and one baseline template replace all duplicate CI entrypoints", async () => {
+test("one review, one baseline and one compare template replace all duplicate CI entrypoints", async () => {
   const names = (await readdir(new URL("../../templates/", import.meta.url))).filter(name => name.endsWith(".yml"));
-  assert.deepEqual(names.sort(), ["explore-baseline.yml", "explore-review.yml"]);
-  for (const source of [actionSource, reviewSource, baselineSource]) {
+  assert.deepEqual(names.sort(), ["explore-baseline.yml", "explore-compare.yml", "explore-review.yml"]);
+  for (const source of [actionSource, reviewSource, baselineSource, compareSource]) {
     assert.doesNotMatch(source, /surface_manifest|surfaces\.json|runtime_probe|--keyless|KEYLESS|claude-code|agent_sandbox|report:export|report:comment/);
   }
   for (const removed of ["surface_manifest", "impact_plan", "runtime_probe_url", "keyless", "agent_sandbox", "bundle_id"]) {
@@ -117,7 +119,7 @@ test("trusted tools retain native agent runtimes while omitting development depe
   const builds = [action.runs.steps.find(step => step.name === "Build the pinned Explore CLI"),
     ...workflows.flatMap(workflow => Object.values(workflow.jobs)
       .flatMap(job => job.steps.filter(step => step.name === "Install Explore")))];
-  assert.equal(builds.length, 8, "composite action, review platforms/capture/report/deploy/failure, and baseline platforms/baseline install the trusted tools");
+  assert.equal(builds.length, 12, "composite action, review platforms/capture/report/deploy/failure, baseline platforms/baseline, and compare platforms/capture/report/deploy install the trusted tools");
   for (const step of builds) {
     const install = step.run.split("\n").find(line => /^\s*npm ci\b/.test(line));
     assert.ok(install, step.name);
@@ -347,4 +349,20 @@ test("review captures and reports each configured platform in its own matrix job
     [baseline.jobs.baseline, "Upload exact-commit baseline evidence"], [baseline.jobs.baseline, "Upload planning and baseline diagnostics"]]) {
     assert.ok(job.steps.find(step => step.name === name).with.name.endsWith("-${{ matrix.platform }}"), name);
   }
+});
+
+test("compare reviews any two refs from a manual run or another workflow, with no pull request access", () => {
+  for (const trigger of ["workflow_dispatch", "workflow_call"]) {
+    assert.deepEqual(Object.keys(compare.on[trigger].inputs).sort(), ["base", "head"]);
+    for (const input of Object.values(compare.on[trigger].inputs)) assert.equal(input.required, true);
+  }
+  assert.deepEqual(Object.keys(compare.on).sort(), ["workflow_call", "workflow_dispatch"]);
+  for (const job of Object.values(compare.jobs)) assert.equal(job.permissions["pull-requests"], undefined, "a comparison never touches pull requests");
+  const capture = compare.jobs.capture.steps.find(step => step.name === "Capture review");
+  assert.match(capture.run, /capture:review[\s\S]*--compare "\$RUNNER_TEMP\/explore-compare\.json"/);
+  assert.doesNotMatch(compareSource, /ci:publish|ci:failure|--pull-request/);
+  assert.equal(compare.jobs.capture.env.BASE_SHA, "${{ needs.platforms.outputs.base }}", "capture checks out the commits the refs resolved to once");
+  assert.equal(compare.jobs.capture.env.HEAD_SHA, "${{ needs.platforms.outputs.head }}");
+  assert.match(compare.jobs.platforms.steps.find(step => step.id === "refs").run, /COMPARE_SAME_COMMIT/);
+  assert.match(compare.jobs.deploy.steps.at(-1).run, /ci:deploy --inputs/);
 });

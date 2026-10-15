@@ -46,3 +46,10 @@ test("deep links carry the encoded prompt", () => {
   assert.equal(claudeDeepLink("a & b\nc"), "claude-cli://open?q=a%20%26%20b%0Ac");
   assert.equal(codexDeepLink("a & b\nc"), "codex://new?prompt=a%20%26%20b%0Ac");
 });
+
+test("a comparison of two commits is reviewed by its refs", () => {
+  const sha = c => c.repeat(40);
+  const prompt = handoffPrompt({ ...input, pullRequest: { origin: "compare", title: "v1.4.0 vs v1.3.0",
+    url: `https://github.com/brentvatne/euxy/compare/${sha("a")}...${sha("b")}`, base: { ref: "v1.3.0", sha: sha("a") }, head: { ref: "v1.4.0", sha: sha("b") } } });
+  assert.match(prompt, /^Review the visual changes from v1\.3\.0 to v1\.4\.0 of brentvatne\/euxy\.\n/);
+});

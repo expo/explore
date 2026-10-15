@@ -105,8 +105,8 @@ export function AppPill(props: AppPillProps) {
   const prDetails = pullRequest
     ? `${pullRequest.title}\n${pullRequest.head.ref} → ${pullRequest.base.ref}\n${device}`
     : device;
-  // The PR URL is validated as https://github.com/owner/repo/pull/N, so its parent is the repository.
-  const repositoryUrl = pullRequest?.url && pullRequest.origin !== "local" ? pullRequest.url.replace(/\/pull\/\d+$/, "") : undefined;
+  // The URL is validated as https://github.com/owner/repo/pull/N (or /compare/<base>...<head>), so its parent is the repository.
+  const repositoryUrl = pullRequest?.url && pullRequest.origin !== "local" ? pullRequest.url.replace(/\/(pull\/\d+|compare\/.+)$/, "") : undefined;
   const appTitle = device ? `${applicationName} · ${device}` : applicationName;
   // Reports of a multi-platform review name every platform; the other ones are one menu away.
   const siblings = (props.map.run.platforms ?? [])
@@ -170,7 +170,18 @@ export function AppPill(props: AppPillProps) {
               <Menu items={appearanceItems} open={appearanceOpen} anchorRef={appearanceRef} ariaLabel="Appearance" onDismiss={() => setAppearanceOpen(false)} />
             </>
           ) : null}
-          {pullRequest && pullRequest.origin !== "local" ? (
+          {pullRequest?.origin === "compare" ? (
+            <Tooltip label={prDetails} placement="bottom">
+              <a
+                className="collapsed-pr"
+                href={pullRequest.url}
+                target="_blank"
+                rel="noreferrer noopener"
+                aria-label={`${pullRequest.title} on GitHub`}>
+                {pullRequest.title}
+              </a>
+            </Tooltip>
+          ) : pullRequest && pullRequest.origin !== "local" ? (
             <Tooltip label={prDetails} placement="bottom">
               <a
                 className="collapsed-pr"

@@ -1,12 +1,13 @@
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { appendFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter, configure } from "@zip.js/zip.js";
 import { publishCiReportComment, readCiReportInput, type CiReportInput } from "./artifact.js";
 import { reviewChangeCount, reviewDevice } from "./pr-comment-body.js";
 import type { ExplorePlatform } from "../config/explore-config.js";
+import type { CompareReviewPresentation } from "../contracts/review.js";
 import { CiError, toCiError } from "../shared/ci-errors.js";
 import { TOOL_ROOT, packageBin } from "../shared/package-paths.js";
 
@@ -212,8 +213,8 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
   if (pr.origin === "local") throw new Error("Local reports cannot be deployed as hosted previews");
   for (const { input } of inputs.slice(1)) {
     const other = input.publicReview;
-    if (!input.preview || other.pullRequest.origin === "local" || other.pullRequest.repository !== pr.repository || other.pullRequest.number !== pr.number
-      || other.pullRequest.head.sha !== pr.head.sha || other.runId !== review.runId || other.runAttempt !== review.runAttempt) {
+    if (!input.preview || other.pullRequest.origin !== pr.origin || other.pullRequest.repository !== pr.repository || other.pullRequest.number !== pr.number
+      || other.pullRequest.head.sha !== pr.head.sha || other.pullRequest.base.sha !== pr.base.sha || other.runId !== review.runId || other.runAttempt !== review.runAttempt) {
       throw previewError("PREVIEW_REPORTS_MISMATCH", "The platform reports do not come from the same review run", "Deploy only the reports this workflow run produced for the same PR head.");
     }
   }
@@ -244,7 +245,7 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
     verifyTimeoutMs: options.verifyTimeoutMs ?? 180_000 });
   } catch (error) {
     // The report job's comment says the report is deploying; it must now offer the download-and-drop flow instead.
-    for (const report of reports) {
+    if (pr.origin !== "compare") for (const report of reports) {
       try {
         await publishCiReportComment({ inputPath: report.entry.inputPath, artifactUrl: report.entry.artifactUrl, environment, transport,
           ...(report.entry.platform ? { platform: report.entry.platform } : {}), previewFailed: true });
@@ -253,9 +254,11 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
     throw error;
   }
   const previewUrl = hosted.previewUrl;
+  // A comparison has no pull request: its link goes to the run's summary, which the same repository readers see.
+  if (pr.origin === "compare") await writeCompareSummary(environment, pr, previewUrl, expiresAt, reports.map(report => report.input));
   {
     let headSha = pr.head.sha;
-    for (const report of reports) {
+    if (pr.origin !== "compare") for (const report of reports) {
       const published = await publishCiReportComment({ inputPath: report.entry.inputPath, artifactUrl: report.entry.artifactUrl, environment, transport,
         ...(report.entry.platform ? { platform: report.entry.platform } : {}), preview: { url: previewUrl, expiresAt } });
       headSha = published.headSha;
@@ -265,6 +268,25 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
       reports: reports.map(report => ({ ...(report.entry.platform ? { platform: report.entry.platform } : {}), artifactUrl: report.entry.artifactUrl,
         reportSha256: report.sha256, reportBytes: report.zip.byteLength })), headSha };
   }
+}
+
+/** The comparison's job summary: what was compared, the hosted link, and each platform's change count. */
+export function renderCompareSummary(comparison: CompareReviewPresentation, previewUrl: string, expiresAt: number | null, inputs: CiReportInput[]): string {
+  const platforms = inputs.map(input => {
+    const changes = reviewChangeCount(input.commentState);
+    const device = reviewDevice(input.commentState);
+    return `- ${input.publicReview.runtime.platform === "android" ? "Android" : "iOS"}${device ? ` (${device})` : ""}: ${changes === undefined ? "no review" : `${changes} ${changes === 1 ? "change" : "changes"}`}`;
+  });
+  return [`### Explore: ${comparison.title}`, "",
+    `[Open the report](${previewUrl}) · [${comparison.base.sha.slice(0, 8)}...${comparison.head.sha.slice(0, 8)}](${comparison.url})`
+      + (expiresAt === null ? "" : ` · link expires ${new Date(expiresAt).toISOString().slice(0, 10)}`), "",
+    ...platforms, ""].join("\n");
+}
+
+async function writeCompareSummary(environment: NodeJS.ProcessEnv, comparison: CompareReviewPresentation, previewUrl: string, expiresAt: number | null, inputs: CiReportInput[]) {
+  const path = environment.GITHUB_STEP_SUMMARY;
+  if (!path) return;
+  await appendFile(path, renderCompareSummary(comparison, previewUrl, expiresAt, inputs));
 }
 
 type HostedReportInput = { zip: Uint8Array; sha256: string; file: string; query: string };

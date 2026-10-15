@@ -32,13 +32,15 @@ export type HandoffInput = {
 };
 
 function repository(pullRequest: PullRequestPresentation): string | undefined {
-  return /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/\d+$/.exec(pullRequest.url ?? "")?.[1];
+  return /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(?:pull\/\d+|compare\/.+)$/.exec(pullRequest.url ?? "")?.[1];
 }
 
 /** The prompt to paste into an agent; `view` adds what the reader is looking at as its last line. */
 export function handoffPrompt(input: HandoffInput, view?: HandoffView): string {
   const repo = input.pullRequest ? repository(input.pullRequest) : undefined;
-  const subject = input.pullRequest && input.pullRequest.origin !== "local"
+  const subject = input.pullRequest?.origin === "compare"
+    ? `Review the visual changes from ${input.pullRequest.base.ref} to ${input.pullRequest.head.ref}${repo ? ` of ${repo}` : ""}.`
+    : input.pullRequest && input.pullRequest.origin !== "local"
     ? `Review the visual changes in PR #${input.pullRequest.number}${repo ? ` of ${repo}` : ""}.`
     : `Review this Expo Explore report of ${input.appName}.`;
   const appearances = input.appearances.length > 1

@@ -2,7 +2,7 @@ import { lstat, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { runPublicCi, runBaselineCi } from "../ci/pipeline.js";
+import { runPublicCi, runBaselineCi, runCompareCi } from "../ci/pipeline.js";
 import { exportCiReport, publishCiReportComment } from "../report/artifact.js";
 import { collectPlatformReports, deployPreview } from "../report/preview-deploy.js";
 import { publishFailureComment } from "../report/failure-comment.js";
@@ -160,8 +160,11 @@ export async function captureReview(): Promise<void> {
   const platform = platformFlag();
   const rawConfig = await readExploreConfig(headProject, configPath);
   const config = resolvePlatformConfig(rawConfig, platform);
-  const result = await runPublicCi({ ...(platform ? { platform } : {}), platforms: listPlatforms(rawConfig), baseProject: required("base-project"), headProject,
-    pullRequestPath: required("pull-request"), output: required("output"), config, configPath, progress: stderrProgress() });
+  if (has("pull-request") === has("compare")) argumentError("Pass --pull-request FILE for a pull request, or --compare FILE for any two commits.", has("compare") ? "compare" : "pull-request");
+  const common = { ...(platform ? { platform } : {}), platforms: listPlatforms(rawConfig), baseProject: required("base-project"), headProject,
+    output: required("output"), config, configPath, progress: stderrProgress() };
+  const result = has("compare") ? await runCompareCi({ ...common, comparePath: required("compare") })
+    : await runPublicCi({ ...common, pullRequestPath: required("pull-request") });
   output({ ok: true, inputPath: result.inputPath });
 }
 

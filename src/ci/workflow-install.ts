@@ -4,7 +4,9 @@ import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { EXPLORE_VERSION, TOOL_ROOT } from "../shared/package-paths.js";
 
-export const WORKFLOW_FILES = ["explore-review.yml", "explore-baseline.yml"] as const;
+export const WORKFLOW_FILES = ["explore-review.yml", "explore-baseline.yml", "explore-compare.yml"] as const;
+/** Installed by setup but not needed for pull request reviews: doctor reports one that is missing as a warning. */
+export const OPTIONAL_WORKFLOW_FILES: ReadonlySet<string> = new Set(["explore-compare.yml"]);
 /** Written by setup before npm distribution; CI now installs @expo/explore instead. */
 export const LEGACY_VENDOR_DIRECTORY = ".github/vendor/expo-explore";
 export const SECRET_ANCHOR = "# App-test secrets: one NAME: line per {{secret:NAME}} input in .expo-explore (expo-explore setup adds them).";

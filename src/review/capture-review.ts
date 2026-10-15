@@ -268,6 +268,7 @@ async function constructCaptureReview(options: CaptureReviewOptions, store: Scre
   if (pr.head.sha !== plan.headSha || pr.base.sha !== plan.baseSha) throw new Error("PR identity differs from capture plan");
   const run = `${identifier(options.runId)}-${identifier(options.runAttempt)}`;
   const prefix = pr.origin === "local" ? `local/${identifier(pr.runId)}/${run}`
+    : pr.origin === "compare" ? `reviews/${identifier(pr.repositoryId)}/compare/${pr.base.sha}-${pr.head.sha}/${run}`
     : `reviews/${identifier(pr.repositoryId)}/pr-${pr.number}/${pr.head.sha}/${run}`;
   await options.assertCurrentHead();
   const base = await uploadSide(store, options.baseDirectory, plan.baseSha, plan.baseCaptureSurfaceIds, `${prefix}/base`);

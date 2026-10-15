@@ -623,7 +623,7 @@ export function publicReviewProjection(review: PublicReview): ViewerReviewProjec
   }
   return {
     pullRequest: {
-      ...(review.pullRequest.origin === "local" ? { origin: "local" as const } : {}),
+      ...(review.pullRequest.origin === "local" || review.pullRequest.origin === "compare" ? { origin: review.pullRequest.origin } : {}),
       number: review.pullRequest.number, title: review.pullRequest.title, url: review.pullRequest.url,
       base: { ...review.pullRequest.base }, head: { ...review.pullRequest.head },
     },
