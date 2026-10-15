@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { describeReports, findSavedRun, listSavedRuns, pruneSavedRuns, readSavedReports, removeSavedRun, saveRun, savedRunsDirectory } from '../../dist/report/saved-runs.js';
+import { pruneCaptureCache } from '../../dist/ci/local-review.js';
 import { readReportZip, zipReportDirectory } from '../../dist/report/preview-deploy.js';
 
 const root = resolve(import.meta.dirname, '../..');
@@ -100,4 +101,82 @@ test('reports lists, opens by id, removes and prunes from the command line', asy
   assert.match(added.stdout, new RegExp(`Kept Add cats care guide, retire Sweet Bee, refresh share label as ${run.id}\\.`));
   assert.deepEqual((await listSavedRuns(environment)).map(each => each.id), [run.id]);
   assert.match(reports('add').stderr, /Pass the report to keep/);
+});
+
+test('what a report or commit says reaches the terminal as plain text, and run.json can only name the two platforms', async t => {
+  const environment = await cache(t);
+  const run = await saveRun([{ platform: 'ios', zip: review }], { subjects: { head: 'Add cats\x1b]52;c;cHduZWQ=\x07\x1b[2J', base: 'Initial\x9b2J commit' } }, environment);
+  assert.equal(run.head.subject, 'Add cats]52;c;cHduZWQ=[2J');
+  assert.equal(run.base.subject, 'Initial2J commit');
+  // A run.json edited (or written by an older version) with escape sequences is read back plain.
+  const file = join(savedRunsDirectory(environment), run.id, 'run.json');
+  const edited = JSON.parse(await readFile(file, 'utf8'));
+  await writeFile(file, JSON.stringify({ ...edited, title: 'Evil\x1b[2J title', device: 'Pixel\x07' }));
+  const [read] = await listSavedRuns(environment);
+  assert.deepEqual([read.title, read.device], ['Evil[2J title', 'Pixel']);
+  // Platforms name the ZIPs read back: anything else is not a run.
+  await writeFile(file, JSON.stringify({ ...edited, platforms: ['../../private'] }));
+  assert.deepEqual(await listSavedRuns(environment), []);
+});
+
+test('a review\'s platforms saved one at a time are one run, and runs of a long-named repository keep apart', async t => {
+  const environment = await cache(t);
+  const dir = await mkdtemp(join(tmpdir(), 'explore-saved-platforms-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, 'a.zip'), review);
+  spawnSync('unzip', ['-q', '-o', join(dir, 'a.zip'), '-d', join(dir, 'report')]);
+  const variant = async (mutate, name) => {
+    const json = JSON.parse(await readFile(join(dir, 'report', 'review.json'), 'utf8'));
+    mutate(json.review);
+    const copy = join(dir, name);
+    await rm(copy, { recursive: true, force: true });
+    await mkdir(copy);
+    await writeFile(join(copy, 'review.json'), JSON.stringify(json));
+    await spawnSync('cp', ['-R', join(dir, 'report', 'assets'), join(copy, 'assets')]);
+    return zipReportDirectory(copy);
+  };
+  const android = await variant(r => { r.runtime.platform = 'android'; }, 'android');
+  await saveRun([{ platform: 'ios', zip: review }], { subjects: { head: 'Add cats' } }, environment);
+  const both = await saveRun([{ platform: 'android', zip: android }], {}, environment);
+  assert.deepEqual(both.platforms, ['ios', 'android']);
+  assert.equal(both.head.subject, 'Add cats', 'what the first save knew is kept');
+  assert.deepEqual((await readdir(join(savedRunsDirectory(environment), both.id))).sort(), ['android.zip', 'ios.zip', 'run.json']);
+  // Another attempt of the same run is another run, however long the repository's name.
+  const long = 'an-unusually-long-repository-name-for-the-app';
+  const first = await variant(r => { r.pullRequest.repository = `acme/${long}`; r.runId = '18234567890'; r.runAttempt = '1'; }, 'first');
+  const second = await variant(r => { r.pullRequest.repository = `acme/${long}`; r.runId = '18234567890'; r.runAttempt = '2'; }, 'second');
+  const a = await saveRun([{ platform: 'ios', zip: first }], {}, environment), b = await saveRun([{ platform: 'ios', zip: second }], {}, environment);
+  assert.notEqual(a.id, b.id);
+  assert.equal((await listSavedRuns(environment)).length, 3);
+});
+
+test('a commit named by a report is never read as one of git\'s options', async t => {
+  const { commitSubject } = await import('../../dist/cli/report-commands.js');
+  const repo = await mkdtemp(join(tmpdir(), 'explore-subject-'));
+  t.after(() => rm(repo, { recursive: true, force: true }));
+  for (const args of [['init', '-q'], ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'First']]) spawnSync('git', args, { cwd: repo });
+  const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).stdout.trim();
+  assert.equal(commitSubject(repo, sha), 'First');
+  assert.equal(commitSubject(repo, `--output=${join(repo, 'victim')}`), undefined);
+  await assert.rejects(readFile(join(repo, 'victim')), { code: 'ENOENT' });
+});
+
+test('cached captures go after 30 days unused, then the least recently used past the size limit', async t => {
+  const environment = await cache(t);
+  const { utimes } = await import('node:fs/promises');
+  const day = 86_400_000, now = Date.UTC(2026, 9, 15);
+  const capture = async (sha, usedDaysAgo, bytes) => {
+    const dir = join(environment.EXPLORE_CACHE_DIR, 'captures', 'ios', sha);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'image.png'), Buffer.alloc(bytes));
+    await writeFile(join(dir, 'cache-metadata.json'), '{}');
+    const when = new Date(now - usedDaysAgo * day);
+    await utimes(join(dir, 'cache-metadata.json'), when, when);
+    return dir;
+  };
+  const old = await capture('a'.repeat(40), 40, 10), recent = await capture('b'.repeat(40), 2, 10), newest = await capture('c'.repeat(40), 1, 10);
+  assert.deepEqual(await pruneCaptureCache(environment, now), [old]);
+  assert.deepEqual(await pruneCaptureCache(environment, now, { maxAgeDays: 30, maxBytes: 15 }), [recent], 'the least recently used goes first');
+  assert.deepEqual((await readdir(join(environment.EXPLORE_CACHE_DIR, 'captures', 'ios'))), ['c'.repeat(40)]);
+  assert.ok(newest);
 });

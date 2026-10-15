@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { DEFAULT_BINARY_PROJECT } from "../binary/run.js";
-import { repositoryName } from "../ci/local-review.js";
+import { pruneCaptureCache, repositoryName } from "../ci/local-review.js";
 import { readExploreConfig, previewDays, DEFAULT_EXPLORE_CONFIG_PATH, PREVIEW_DEFAULT_DAYS, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { assertHostingExport, deployLocalReports, previewProjectSlug, readReportZip, zipReportDirectory, MAX_REPORT_BYTES, type ReportZipSummary } from "../report/preview-deploy.js";
 import { startLocalReportServer } from "../report/local-report-server.js";
@@ -121,7 +121,8 @@ export async function keepReports(reports: SavedReport[] | (() => Promise<SavedR
 
 /** The subject line of a commit, when this checkout has it. */
 export function commitSubject(cwd: string, sha: string): string | undefined {
-  const result = spawnSync("git", ["log", "-1", "--format=%s", sha], { cwd, encoding: "utf8" });
+  // --end-of-options: a commit named by a report is never read as one of git's options.
+  const result = spawnSync("git", ["log", "-1", "--format=%s", "--end-of-options", sha], { cwd, encoding: "utf8" });
   return result.status === 0 && result.stdout.trim() ? result.stdout.trim() : undefined;
 }
 
@@ -216,8 +217,11 @@ export async function reports(): Promise<void> {
     }
     case "prune": {
       const removed = await pruneSavedRuns();
-      if (has("json")) output({ ok: true, removed: removed.map(run => run.id) });
-      else console.log(removed.length ? `Removed ${removed.length} run${removed.length === 1 ? "" : "s"} kept longer than ${SAVED_RUN_LIMITS.maxAgeDays} days or past ${formatBytes(SAVED_RUN_LIMITS.maxBytes)}.` : "Nothing to prune.");
+      const captures = await pruneCaptureCache(process.env);
+      if (has("json")) output({ ok: true, removed: removed.map(run => run.id), captures: captures.length });
+      else console.log(removed.length || captures.length
+        ? `Removed ${removed.length} run${removed.length === 1 ? "" : "s"} and ${captures.length} cached capture${captures.length === 1 ? "" : "s"} kept longer than ${SAVED_RUN_LIMITS.maxAgeDays} days or past ${formatBytes(SAVED_RUN_LIMITS.maxBytes)}.`
+        : "Nothing to prune.");
       return;
     }
     case "list": case "": break;

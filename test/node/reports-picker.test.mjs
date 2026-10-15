@@ -81,6 +81,9 @@ test('keys move, filter, open, upload, and delete only after y', () => {
   assert.equal(press({ text: 'q' }), undefined, 'q is text while filtering');
   press('escape');
   assert.deepEqual([current.filtering, current.filter], [false, '']);
+  press({ text: '/' }, { text: 'x' });
+  assert.deepEqual(press('quit'), { type: 'quit' }, 'Ctrl+C quits while filtering too');
+  press('escape');
   press('tab');
   assert.equal(current.scope, 'all');
   assert.deepEqual(press('escape'), { type: 'quit' });
@@ -90,6 +93,10 @@ test('keys move, filter, open, upload, and delete only after y', () => {
 test('raw terminal input becomes keys, several at a time', () => {
   assert.deepEqual(decodeKeys('\x1b[A\x1b[B\r\tjk\x7f\x03\x1b'), ['up', 'down', 'enter', 'tab', { text: 'j' }, { text: 'k' }, 'backspace', 'quit', 'escape']);
   assert.deepEqual(decodeKeys('\x1b[5~\x1b[6~\x1b[H\x1b[F\x1b[C'), ['pageup', 'pagedown', 'home', 'end']);
+  // Keys the picker has no use for are swallowed whole, never read as Esc (which quits): Delete, F1, Shift+Tab, Ctrl+Up, Alt+x.
+  assert.deepEqual(decodeKeys('\x1b[3~\x1bOP\x1b[Z\x1b[1;5A\x1bxj'), [{ text: 'j' }]);
+  assert.deepEqual(decodeKeys('\x1b'), ['escape']);
+  assert.deepEqual(decodeKeys('a\u009b2Jb'), [{ text: 'a' }, { text: '2' }, { text: 'J' }, { text: 'b' }], 'a C1 control is not typed into the filter');
 });
 
 test('times and sizes read like a person would say them', () => {
@@ -131,4 +138,22 @@ test('the picker restores the terminal however it ends', async () => {
   assert.deepEqual(input.modes, [true, false]);
   assert.ok(written.startsWith('\x1b[?1049h\x1b[?25l') && written.endsWith('\x1b[?25h\x1b[?1049l'), 'the alternate screen and cursor are restored');
   assert.ok(written.includes('Deleted Splash screen and about page.'));
+});
+
+test('a key that skips the title animation only skips it; Ctrl+C during it still quits', async () => {
+  const terminal = () => {
+    const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() { return this; } });
+    const output = Object.assign(new PassThrough(), { columns: 100, rows: 30 });
+    output.resume();
+    return { input, output };
+  };
+  const first = terminal();
+  const picked = runPicker(state(), { ...first, color: false, intro: 'snap', remove: async () => {}, totalBytes: () => 0 });
+  first.input.write('\r');
+  setTimeout(() => first.input.write('q'), 60);
+  assert.deepEqual(await picked, { type: 'quit' }, 'Enter skipped the animation instead of opening a run');
+  const second = terminal();
+  const quitting = runPicker(state(), { ...second, color: false, intro: 'decrypt', remove: async () => {}, totalBytes: () => 0 });
+  second.input.write('\x03');
+  assert.deepEqual(await quitting, { type: 'quit' });
 });

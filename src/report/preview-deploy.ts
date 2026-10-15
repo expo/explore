@@ -197,6 +197,12 @@ export async function readReportZip(zip: Uint8Array): Promise<ReportZipSummary> 
   if (report?.kind !== "explore.report" || !review || !pr || (platform !== "ios" && platform !== "android")) {
     throw new Error("review.json is not an Explore review report");
   }
+  // What the CLI later hands to git and shows in a terminal: full SHAs and plain text, or the ZIP is not a report.
+  const sha = (value: unknown) => typeof value === "string" && /^[0-9a-f]{40}$/i.test(value);
+  const text = (value: unknown) => typeof value === "string" && value.length > 0 && value.length <= 1000;
+  if (!sha(pr.head?.sha) || !sha(pr.base?.sha) || !text(pr.head?.ref) || !text(pr.base?.ref) || !text(pr.repository) || !text(pr.title) || !text(review.runId)) {
+    throw new Error("review.json does not name its repository, title and commits as a report does");
+  }
   const changes = reviewChangeCount({ review });
   const device = reviewDevice({ runtime: { deviceModel: review.runtime?.device?.model ?? "", osVersion: review.runtime?.device?.osVersion ?? "",
     ...(review.runtime?.colorSchemes ? { colorSchemes: review.runtime.colorSchemes } : {}) } });
@@ -230,8 +236,13 @@ type SealedReport = { entry: PreviewReportInput; input: CiReportInput; zip: Uint
 function previewError(code: string, message: string, nextAction: string): CiError { return new CiError({ code, stage: "preflight", message, nextAction }); }
 
 /** A device label for the platform switch, safe in the sealed .env: no `#` (a dotenv comment), markup or control characters, and short. */
+/**
+ * A device label for the platform switch, safe in the sealed .env: letters, digits and a few separators only. `eas
+ * deploy` reads that file with variable expansion, so a `$` (even single-quoted) would pull the deploying process's
+ * environment into the label, and a `#` or a backslash would cut or corrupt the JSON around it.
+ */
 function listingDevice(device: string): string {
-  return device.replace(/[#<>\u0000-\u001f\u007f]/g, "").trim().slice(0, 120);
+  return device.replace(/[^\p{L}\p{N} .,()+·_:/-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 120);
 }
 
 /** The worker's EXPLORE_PREVIEW_REPORTS entries, in the order the workflow lists platforms; also what reports.json must echo. */

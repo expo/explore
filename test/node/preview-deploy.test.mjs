@@ -553,6 +553,16 @@ test("readReportZip reads a review ZIP's platform, run and labels, and rejects a
   await assert.rejects(readReportZip(await extra.close()), /review.json \(or exploration.json\) and assets/);
   await assert.rejects(readReportZip(new Uint8Array([1, 2, 3])));
 
+  // Commits are full SHAs and the names are text: what the CLI hands to git and prints is never anything else.
+  const original = await readFile(join(reportPath, "review.json"), "utf8");
+  for (const [field, value] of [["head", { ref: "x", sha: "--output=/tmp/explore-victim" }], ["title", 42]]) {
+    const report = JSON.parse(original);
+    report.review.pullRequest[field] = value;
+    await writeFile(join(reportPath, "review.json"), JSON.stringify(report));
+    await assert.rejects(readReportZip(await zipReportDirectory(reportPath)), /does not name its repository, title and commits/, field);
+  }
+  await writeFile(join(reportPath, "review.json"), original);
+
   // A review renamed to exploration.json is neither.
   await rename(join(reportPath, "review.json"), join(reportPath, "exploration.json"));
   await assert.rejects(readReportZip(await zipReportDirectory(reportPath)), /not an Explore exploration report/);
@@ -582,6 +592,10 @@ test("deployLocalReports hosts one review's platforms behind one link, labelled 
     environment: deployEnvironment, transport: eas.transport, run: eas.run, now: () => now, verifyTimeoutMs: 1 });
   assert.equal(eas.captured.env.EXPLORE_PREVIEW_REPORT, undefined);
   assert.deepEqual(captureListing(eas.captured.listing), [{ platform: "android", path: "android.zip.enc", changes: 1, device: "Pixel 9 Pro" }]);
+  // eas deploy expands $VARIABLES in that .env, even single-quoted: a label never carries one in, nor a backslash.
+  await deployLocalReports({ reports: [{ platform: "ios", zip, device: "iPhone ${EXPO_TOKEN} $EXPLORE_PREVIEW_KEY \\$ · light + dark" }], project: "acme-explore",
+    expiresAfterDays: 7, exportPath, environment: deployEnvironment, transport: eas.transport, run: eas.run, now: () => now, verifyTimeoutMs: 1 });
+  assert.deepEqual(captureListing(eas.captured.listing), [{ platform: "ios", path: "ios.zip.enc", device: "iPhone EXPO_TOKEN EXPLORE_PREVIEW_KEY · light + dark" }]);
 });
 
 test("an explore:binary report names its platform, so an Android exploration is not served as iOS", async t => {

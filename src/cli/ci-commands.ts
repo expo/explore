@@ -270,4 +270,6 @@ async function localReview(): Promise<void> {
   openViewerInBrowser(server.url);
   await new Promise<void>(done => { process.once("SIGINT", () => done()); process.once("SIGTERM", () => done()); });
   await server.close();
+  // The Viewer served the reports from memory, and the saved run keeps them; the temporary copy is no longer needed.
+  if (saved) await rm(result.work, { recursive: true, force: true });
 }

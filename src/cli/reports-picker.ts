@@ -1,4 +1,4 @@
-import type { SavedRun } from "../report/saved-runs.js";
+import { cleanRun, type SavedRun } from "../report/saved-runs.js";
 import { intros, WORDMARK, type IntroName, type Paint } from "./title-intros.js";
 
 /**
@@ -101,7 +101,8 @@ export function renderPicker(state: PickerState, options: { width: number; heigh
   const paint = options.color === false ? PLAIN : COLOR;
   const select = options.color === false ? (text: string) => text : SELECT;
   const width = Math.max(40, options.width), now = options.now ?? Date.now();
-  const runs = visibleRuns(state);
+  // Runs are made plain when saved and read; drawing them again plain keeps a hand-edited run.json from reaching the terminal.
+  const runs = visibleRuns(state).map(cleanRun);
   const scope = state.scope === "all" || !state.repository ? "all repositories" : state.repository;
   const subtitle = paint.dim(`${state.runs.length} saved run${state.runs.length === 1 ? "" : "s"} · ${formatBytes(options.totalBytes)} on disk · ${scope}`);
   const tall = options.height >= 20 && width >= WORDMARK[0]!.length + 6;
@@ -162,6 +163,8 @@ export function reducePicker(state: PickerState, key: Key, pageSize = 10): { sta
     const next: PickerState = { ...state, confirming: undefined };
     return typeof key === "object" && key.text.toLowerCase() === "y" && run ? { state: next, action: { type: "delete", run } } : { state: { ...next, message: "Kept it." } };
   }
+  // Ctrl+C always quits, whatever the picker is in the middle of.
+  if (key === "quit") return { state, action: { type: "quit" } };
   if (state.filtering) {
     if (key === "escape") return { state: { ...state, filtering: false, filter: "", selected: 0, offset: 0 } };
     if (key === "enter") return { state: { ...state, filtering: false } };
@@ -181,7 +184,6 @@ export function reducePicker(state: PickerState, key: Key, pageSize = 10): { sta
     case "enter": return run ? { state, action: { type: "open", run } } : { state };
     case "tab": return state.repository ? { state: { ...state, scope: state.scope === "all" ? "repository" : "all", selected: 0, offset: 0, message: undefined } } : { state };
     case "escape": return state.filter ? { state: { ...state, filter: "", selected: 0, offset: 0 } } : { state, action: { type: "quit" } };
-    case "quit": return { state, action: { type: "quit" } };
     case "backspace": return { state };
   }
   switch (key.text) {
@@ -197,23 +199,32 @@ export function reducePicker(state: PickerState, key: Key, pageSize = 10): { sta
   return { state };
 }
 
-/** Raw terminal input to keys; a paste or several keys in one chunk become several keys. */
+/**
+ * Raw terminal input to keys; a paste or several keys in one chunk become several keys. Escape sequences the picker has
+ * no use for (Delete, F-keys, modified arrows, Alt+key) are consumed whole and ignored, so they never read as Esc.
+ */
 export function decodeKeys(data: string): Key[] {
   const keys: Key[] = [];
-  const sequences: Array<[string, Key]> = [["\x1b[A", "up"], ["\x1bOA", "up"], ["\x1b[B", "down"], ["\x1bOB", "down"], ["\x1b[5~", "pageup"], ["\x1b[6~", "pagedown"],
-    ["\x1b[H", "home"], ["\x1b[1~", "home"], ["\x1b[F", "end"], ["\x1b[4~", "end"], ["\x1b[C", { text: "" }], ["\x1b[D", { text: "" }]];
+  const named: Record<string, Key> = { "[A": "up", OA: "up", "[B": "down", OB: "down", "[5~": "pageup", "[6~": "pagedown",
+    "[H": "home", OH: "home", "[1~": "home", "[F": "end", OF: "end", "[4~": "end" };
   let rest = data;
   while (rest) {
-    const sequence = sequences.find(([prefix]) => rest.startsWith(prefix));
-    if (sequence) { if (typeof sequence[1] === "string" || sequence[1].text) keys.push(sequence[1]); rest = rest.slice(sequence[0].length); continue; }
+    if (rest.startsWith("\x1b")) {
+      // CSI: ESC [ parameters final byte; SS3: ESC O and one byte; Alt+key: ESC and the key; a lone ESC is Esc.
+      const sequence = /^\x1b(\[[0-?]*[ -/]*[@-~]|O.|[^[O])/s.exec(rest);
+      if (!sequence) { keys.push("escape"); rest = rest.slice(1); continue; }
+      const key = named[sequence[1]!];
+      if (key) keys.push(key);
+      rest = rest.slice(sequence[0].length);
+      continue;
+    }
     const [first] = rest;
     rest = rest.slice(first!.length);
-    if (first === "\x1b") keys.push("escape");
-    else if (first === "\r" || first === "\n") keys.push("enter");
+    if (first === "\r" || first === "\n") keys.push("enter");
     else if (first === "\t") keys.push("tab");
     else if (first === "\x7f" || first === "\b") keys.push("backspace");
     else if (first === "\x03" || first === "\x04") keys.push("quit");
-    else if (first! >= " ") keys.push({ text: first! });
+    else if (first! >= " " && !/[\u007f-\u009f]/.test(first!)) keys.push({ text: first! });
   }
   return keys;
 }
@@ -258,6 +269,10 @@ export async function runPicker(initial: PickerState, terminal: PickerTerminal):
         if (t === 1 || pending.length) break;
         await new Promise(done => setTimeout(done, 16));
       }
+      // A key that skipped the intro only skips it; Ctrl+C still quits.
+      const quit = pending.includes("quit");
+      pending.length = 0;
+      if (quit) pending.push("quit");
     }
     draw();
     for (;;) {

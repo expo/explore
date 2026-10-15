@@ -48,7 +48,21 @@ export function savedRunsDirectory(environment: NodeJS.ProcessEnv = process.env)
   return join(exploreCacheRoot(environment), "reports");
 }
 
-const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "").slice(0, 60) || "run";
+const slug = (value: string, max: number) => value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "").slice(0, max).replace(/[-.]+$/, "") || "run";
+
+/** Text from a report or a commit, as a terminal may print it: no control characters (C0, DEL, C1), so no escape sequences. */
+export function plainText(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+}
+
+/** A run with every string a report or a commit supplied made plain, including runs saved before this was enforced. */
+export function cleanRun(run: SavedRun): SavedRun {
+  const commit = (side?: SavedCommit) => side && { ...side, ref: plainText(side.ref), ...(side.subject === undefined ? {} : { subject: plainText(side.subject) }) };
+  return { ...run, title: plainText(run.title), ...(run.repository === undefined ? {} : { repository: plainText(run.repository) }),
+    ...(run.head ? { head: commit(run.head)! } : {}), ...(run.base ? { base: commit(run.base)! } : {}), ...(run.device === undefined ? {} : { device: plainText(run.device) }),
+    ...(run.explored ? { explored: { ...run.explored, app: plainText(run.explored.app), ...(run.explored.version ? { version: plainText(run.explored.version) } : {}),
+      ...(run.explored.buildNumber ? { buildNumber: plainText(run.explored.buildNumber) } : {}) } } : {}) };
+}
 
 async function reportJson(zip: Uint8Array): Promise<{ file: "review.json" | "exploration.json"; json: unknown } | undefined> {
   const entries = readZipDirectory(zip);
@@ -75,7 +89,7 @@ export async function describeReports(reports: SavedReport[], extra: { subjects?
     if (report.kind !== EXPLORATION_REPORT_KIND || !report.exploration || !report.map) throw new Error("Not an Explore exploration report");
     const { app, device } = report.exploration;
     const zipHash = createHash("sha256").update(reports[0]!.zip).digest("hex").slice(0, 10);
-    return { id: `explore-${slug(app.name)}-${zipHash}`, kind: "exploration", title: `${app.name}${app.version ? ` ${app.version}` : ""}${app.buildNumber ? ` (${app.buildNumber})` : ""} on ${device.model}`,
+    return { id: `explore-${slug(app.name, 40)}-${zipHash}`, kind: "exploration", title: `${app.name}${app.version ? ` ${app.version}` : ""}${app.buildNumber ? ` (${app.buildNumber})` : ""} on ${device.model}`,
       platforms, device: `${device.model} ${device.osVersion}`.trim(),
       explored: { app: app.name, ...(app.version ? { version: app.version } : {}), ...(app.buildNumber ? { buildNumber: app.buildNumber } : {}),
         screens: report.map.screens.length, unexplored: report.coverage?.frontier.pending ?? 0 },
@@ -94,22 +108,39 @@ export async function describeReports(reports: SavedReport[], extra: { subjects?
     ...(each.runtime?.colorSchemes ? { colorSchemes: each.runtime.colorSchemes } : {}) } }) : "").filter(Boolean))];
   const kind = pr.origin === "local" ? "local" : pr.origin === "compare" ? "compare" : "pull-request";
   const number = "number" in pr && typeof pr.number === "number" ? pr.number : undefined;
-  const id = kind === "local" ? slug(review.runId) : slug(`${kind === "compare" ? "compare" : `pr-${number}`}-${pr.repository.split("/").at(-1)}-${review.runId}-${review.runAttempt}`);
+  // The run's own id and attempt are never cut short: two runs of one repository must not share a folder.
+  const id = kind === "local" ? slug(review.runId, 100)
+    : `${kind === "compare" ? "compare" : `pr-${number}`}-${slug(pr.repository.split("/").at(-1) ?? "", 40)}-${slug(review.runId, 40)}-${slug(String(review.runAttempt), 8)}`;
   const commit = (side: "head" | "base"): SavedCommit => ({ ref: pr[side].ref, sha: pr[side].sha, ...(extra.subjects?.[side] ? { subject: extra.subjects[side] } : {}) });
   return { id, kind, title: pr.title, repository: pr.repository, ...(number === undefined ? {} : { number }), head: commit("head"), base: commit("base"),
     ...(extra.uncommittedFiles ? { uncommittedFiles: extra.uncommittedFiles } : {}), platforms, ...(devices.length ? { device: devices.join(", ") } : {}),
     changes, createdAt: review.createdAt ?? createdAt };
 }
 
-/** Keeps a run's reports, replacing an earlier copy of the same run, then prunes. Written beside and renamed into place. */
+/**
+ * Keeps a run's reports, then prunes. A review's platforms saved one at a time join the run already kept for the same
+ * review (same repository, run, attempt and commits); anything else under that id is replaced. Written beside and
+ * renamed into place.
+ */
 export async function saveRun(reports: SavedReport[], extra: Parameters<typeof describeReports>[1] = {}, environment: NodeJS.ProcessEnv = process.env, now = Date.now()): Promise<SavedRun> {
-  const described = await describeReports(reports, extra);
+  let described = await describeReports(reports, extra);
   if (!ID.test(described.id)) throw new Error(`Cannot keep a run named ${described.id}`);
   const root = savedRunsDirectory(environment);
   await mkdir(root, { recursive: true });
   const target = join(root, described.id);
+  const kept = await findSavedRun(described.id, environment);
+  if (kept && described.kind !== "exploration" && kept.kind === described.kind && kept.repository === described.repository
+    && kept.head?.sha === described.head?.sha && kept.base?.sha === described.base?.sha) {
+    const others = (await readSavedReports(kept, environment).catch(() => [] as SavedReport[])).filter(report => !reports.some(each => each.platform === report.platform));
+    if (others.length) {
+      const order: ExplorePlatform[] = ["ios", "android"];
+      reports = [...reports, ...others].sort((a, b) => order.indexOf(a.platform) - order.indexOf(b.platform));
+      const subjects = { ...(kept.head?.subject ? { head: kept.head.subject } : {}), ...(kept.base?.subject ? { base: kept.base.subject } : {}), ...extra.subjects };
+      described = await describeReports(reports, { ...extra, subjects, ...(kept.uncommittedFiles && !extra.uncommittedFiles ? { uncommittedFiles: kept.uncommittedFiles } : {}) });
+    }
+  }
   const staged = join(root, `.${described.id}.${randomBytes(4).toString("hex")}.tmp`);
-  const run: SavedRun = { version: 1, ...described, savedAt: new Date(now).toISOString(), bytes: reports.reduce((total, report) => total + report.zip.byteLength, 0) };
+  const run = cleanRun({ version: 1, ...described, savedAt: new Date(now).toISOString(), bytes: reports.reduce((total, report) => total + report.zip.byteLength, 0) });
   try {
     await mkdir(staged);
     for (const report of reports) await writeFile(join(staged, `${report.platform}.zip`), report.zip);
@@ -125,7 +156,9 @@ export async function saveRun(reports: SavedReport[], extra: Parameters<typeof d
 
 function validRun(value: unknown, id: string): SavedRun | undefined {
   const run = value as Partial<SavedRun> | undefined;
-  if (!run || run.version !== 1 || run.id !== id || typeof run.title !== "string" || !Array.isArray(run.platforms) || typeof run.bytes !== "number") return undefined;
+  if (!run || run.version !== 1 || run.id !== id || typeof run.title !== "string" || typeof run.bytes !== "number") return undefined;
+  // Platforms name the ZIP files read back, so only the two there are.
+  if (!Array.isArray(run.platforms) || !run.platforms.length || run.platforms.some(platform => platform !== "ios" && platform !== "android")) return undefined;
   if (!["local", "pull-request", "compare", "exploration"].includes(run.kind ?? "") || Number.isNaN(Date.parse(run.createdAt ?? "")) || Number.isNaN(Date.parse(run.savedAt ?? ""))) return undefined;
   return run as SavedRun;
 }
@@ -139,7 +172,7 @@ export async function listSavedRuns(environment: NodeJS.ProcessEnv = process.env
     if (!ID.test(name)) continue;
     try {
       const run = validRun(JSON.parse(await readFile(join(root, name, "run.json"), "utf8")), name);
-      if (run) runs.push(run);
+      if (run) runs.push(cleanRun(run));
     } catch { /* a run being written, or not a run */ }
   }
   return runs.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));

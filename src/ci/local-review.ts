@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { copyFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { runCiReview } from "./pipeline.js";
@@ -181,6 +181,40 @@ export function captureCacheDirectory(environment: NodeJS.ProcessEnv, platform: 
 async function exists(path: string): Promise<boolean> { try { await lstat(path); return true; } catch { return false; } }
 
 const CACHE_METADATA = "cache-metadata.json";
+
+/**
+ * Drops cached captures not used for 30 days, then the least recently used until the rest fit in 2 GB, as saved runs
+ * are pruned. A capture counts as used when a review keeps or reuses it (its cache-metadata.json is touched then).
+ */
+export async function pruneCaptureCache(environment: NodeJS.ProcessEnv, now = Date.now(), limits = { maxAgeDays: 30, maxBytes: 2 * 1024 * 1024 * 1024 }): Promise<string[]> {
+  const root = join(exploreCacheRoot(environment), "captures");
+  const entries: Array<{ path: string; used: number; bytes: number }> = [];
+  const size = async (path: string): Promise<number> => {
+    const info = await lstat(path);
+    if (!info.isDirectory()) return info.size;
+    let total = 0;
+    for (const name of await readdir(path)) total += await size(join(path, name));
+    return total;
+  };
+  for (const platform of await readdir(root).catch(() => [] as string[])) {
+    for (const sha of await readdir(join(root, platform)).catch(() => [] as string[])) {
+      const path = join(root, platform, sha);
+      if (!/^[0-9a-f]{40}$/.test(sha)) continue;
+      const used = await stat(join(path, CACHE_METADATA)).then(info => info.mtimeMs, () => 0);
+      entries.push({ path, used, bytes: await size(path).catch(() => 0) });
+    }
+  }
+  entries.sort((a, b) => a.used - b.used);
+  let total = entries.reduce((sum, entry) => sum + entry.bytes, 0);
+  const removed: string[] = [];
+  for (const entry of entries) {
+    if (now - entry.used <= limits.maxAgeDays * 86_400_000 && total <= limits.maxBytes) continue;
+    await rm(entry.path, { recursive: true, force: true });
+    total -= entry.bytes;
+    removed.push(entry.path);
+  }
+  return removed;
+}
 async function cacheRecipe(directory: string): Promise<{ recipe: string; images: number } | undefined> {
   try {
     const metadata = JSON.parse(await readFile(join(directory, CACHE_METADATA), "utf8")) as { recipe?: unknown };
@@ -326,7 +360,11 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
       const platformEnvironment = { ...environment };
       delete platformEnvironment.EXPLORE_CAPTURE_CACHE;
       const cachedBase = captureCacheDirectory(environment, platform, base.sha);
-      if (options.cache !== false && await exists(join(cachedBase, CACHE_METADATA))) platformEnvironment.EXPLORE_CAPTURE_CACHE = cachedBase;
+      if (options.cache !== false && await exists(join(cachedBase, CACHE_METADATA))) {
+        platformEnvironment.EXPLORE_CAPTURE_CACHE = cachedBase;
+        // Reusing a capture counts as using it, so pruning keeps the bases reviews come back to.
+        await utimes(join(cachedBase, CACHE_METADATA), new Date(), new Date()).catch(() => undefined);
+      }
       const presentation: LocalReviewPresentation = { origin: "local", repository, runId, title: `${head.ref} vs ${base.ref}`,
         base: { ref: base.ref, sha: base.sha }, head: { ref: head.ref, sha: head.sha } };
       const state: PublicCommentState = { phase: "pending", pullRequest: presentation, mode: config.exploration.scope, executionMode: config.mode,
@@ -373,6 +411,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
         if (side === "head" && head.uncommitted) continue;
         await keepCapture(join(output, `${side}-export`), captureCacheDirectory(environment, platform, side === "base" ? base.sha : head.sha));
       }
+      if (options.cache !== false) await pruneCaptureCache(environment).catch(() => []);
       // The report is all that is kept; the captures, maps and checkouts are the bulk of the run.
       for (const entry of await readdir(output)) if (entry !== "report" && entry !== "report.zip") await rm(join(output, entry), { recursive: true, force: true });
       abort.signal.throwIfAborted();
@@ -390,8 +429,8 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     options.interrupt?.removeEventListener("abort", interrupt);
     // A capture stops its own sessions; this catches one that ended before it could. Tests inject their own runner.
     if (!options.runner) await stopRecordedSessions(outputs, environment).catch(() => []);
+    // Only the run's own worktrees: a repository-wide prune would also drop the user's own worktrees on an unmounted disk.
     for (const tree of worktrees) git(root, ["worktree", "remove", "--force", tree]);
-    git(root, ["worktree", "prune"]);
     // A failed run keeps what it produced for inspection; one that failed before producing anything leaves nothing.
     if (failed) {
       if ((await readdir(work).catch(() => [])).length) progress(`kept this review's files for inspection: ${work}`);
