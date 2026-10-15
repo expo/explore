@@ -152,22 +152,30 @@ export async function findOptionalBaseline(options: Parameters<typeof findBaseli
 }
 
 /**
+ * The commit a ref names in a checkout. `HEAD` (and `HEAD~1`, `@`) is the checked-out commit, never `origin/HEAD`.
+ * A name is tried as a tag, then a local branch, then a branch of `origin` (all CI has after a full checkout),
+ * then as git spells it (a SHA, `origin/main`, `refs/heads/...`).
+ */
+export function resolveCommit(project: string, ref: string, side: "base" | "head"): string {
+  if (!ref.trim() || ref.startsWith("-") || /[\s\u0000-\u001f]/.test(ref)) throw new CiError({ code: "COMPARE_REF_INVALID", stage: "preflight",
+    message: `The ${side} '${ref}' is not a ref.`, nextAction: `Pass ${side} as a branch, tag or commit SHA.` });
+  const relative = /^(?:HEAD|@)(?:[~^].*)?$/.test(ref);
+  for (const candidate of relative ? [ref] : [`refs/tags/${ref}`, `refs/heads/${ref}`, `refs/remotes/origin/${ref}`, ref]) {
+    const result = spawnSync("git", ["-C", project, "rev-parse", "--verify", "--quiet", `${candidate}^{commit}`], { encoding: "utf8" });
+    if (result.status === 0 && SHA.test(result.stdout.trim())) return result.stdout.trim();
+  }
+  throw new CiError({ code: "COMPARE_REF_NOT_FOUND", stage: "preflight", message: `${ref} is not a branch, tag or commit of this repository.`,
+    nextAction: "Check the ref's spelling, and that the checkout fetched every branch and tag (fetch-depth: 0)." });
+}
+
+/**
  * `ci:compare-refs`: the commits two refs (branch, tag or SHA) name in a full clone, as the comparison a
  * `capture:review --compare` run captures. A tag wins over a branch of the same name.
  */
 export function resolveCompareRefs(options: { project: string; base: string; head: string; title?: string; environment?: Environment }): CompareReviewPresentation {
   const environment = options.environment ?? process.env;
   const repository = environment.GITHUB_REPOSITORY ?? "", repositoryId = environment.GITHUB_REPOSITORY_ID ?? "";
-  const commit = (ref: string, side: "base" | "head") => {
-    if (!ref.trim() || ref.startsWith("-") || /[\s\u0000-\u001f]/.test(ref)) throw new CiError({ code: "COMPARE_REF_INVALID", stage: "preflight",
-      message: `The ${side} '${ref}' is not a ref.`, nextAction: `Pass ${side} as a branch, tag or commit SHA.` });
-    for (const candidate of [`refs/tags/${ref}`, `refs/remotes/origin/${ref}`, ref]) {
-      const result = spawnSync("git", ["-C", options.project, "rev-parse", "--verify", "--quiet", `${candidate}^{commit}`], { encoding: "utf8" });
-      if (result.status === 0 && SHA.test(result.stdout.trim())) return result.stdout.trim();
-    }
-    throw new CiError({ code: "COMPARE_REF_NOT_FOUND", stage: "preflight", message: `${ref} is not a branch, tag or commit of this repository.`,
-      nextAction: "Check the ref's spelling, and that the checkout fetched every branch and tag (fetch-depth: 0)." });
-  };
+  const commit = (ref: string, side: "base" | "head") => resolveCommit(options.project, ref, side);
   const base = { ref: options.base, sha: commit(options.base, "base") }, head = { ref: options.head, sha: commit(options.head, "head") };
   if (base.sha === head.sha) throw new CiError({ code: "COMPARE_SAME_COMMIT", stage: "preflight",
     message: `${options.base} and ${options.head} are the same commit (${head.sha}).`, nextAction: "Compare two different commits; the baseline workflow captures a single one." });

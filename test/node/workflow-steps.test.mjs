@@ -4,7 +4,7 @@ import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { cleanupAfterCapture, resolveCompareRefs, writeStepOutputs } from "../../dist/ci/workflow-steps.js";
+import { cleanupAfterCapture, resolveCommit, resolveCompareRefs, writeStepOutputs } from "../../dist/ci/workflow-steps.js";
 import { renderWorkflow, workflowIssues } from "../../dist/ci/workflow-install.js";
 
 const git = (cwd, ...args) => {
@@ -38,6 +38,25 @@ test("ci:compare-refs resolves tags, branches and SHAs to the comparison a captu
     ["--upload-pack=x", "main", "COMPARE_REF_INVALID"], ["main", "", "COMPARE_REF_INVALID"], ["a b", "main", "COMPARE_REF_INVALID"]]) {
     assert.throws(() => resolveCompareRefs({ project: root, base, head, environment }), error => error.code === code, `${base}..${head}`);
   }
+});
+
+test("HEAD is the checked-out commit and a local branch beats origin's, while CI's remote-only branches still resolve", async t => {
+  const { root: upstream, first, second } = await repository(t);
+  const clone = await realpath(await mkdtemp(join(tmpdir(), "explore-steps-clone-")));
+  t.after(() => rm(clone, { recursive: true, force: true }));
+  assert.equal(spawnSync("git", ["clone", "-q", upstream, clone]).status, 0);
+  git(clone, "config", "user.email", "test@example.com"); git(clone, "config", "user.name", "Test");
+  git(clone, "commit", "-q", "--allow-empty", "-m", "local only");
+  const local = git(clone, "rev-parse", "HEAD");
+  git(clone, "checkout", "-q", "--detach", first);
+  assert.equal(git(clone, "rev-parse", "refs/remotes/origin/HEAD"), second, "origin/HEAD is not HEAD here");
+  assert.equal(resolveCommit(clone, "HEAD", "head"), first);
+  assert.equal(resolveCommit(clone, "@", "head"), first);
+  assert.equal(resolveCommit(clone, "HEAD~0", "head"), first);
+  assert.equal(resolveCommit(clone, "main", "base"), local, "your main, not a stale origin/main");
+  assert.equal(resolveCommit(clone, "origin/main", "base"), second);
+  assert.equal(resolveCommit(clone, "release", "base"), second, "a branch only origin has, as in a CI checkout");
+  assert.equal(resolveCommit(clone, "v1.0.0", "base"), first);
 });
 
 test("ci:after-capture reports a checkout that capture modified, and passes clean ones and missing ones", async t => {
