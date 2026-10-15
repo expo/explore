@@ -1,9 +1,9 @@
-import { lstat, mkdtemp } from "node:fs/promises";
+import { lstat, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { runPublicCi, runBaselineCi, runCompareCi } from "../ci/pipeline.js";
-import { exportCiReport, publishCiReportComment } from "../report/artifact.js";
+import { exportCiReport, publishCiReportComment, readCiReportInput } from "../report/artifact.js";
 import { collectPlatformReports, deployPreview } from "../report/preview-deploy.js";
 import { publishFailureComment } from "../report/failure-comment.js";
 import { runExploreSetup } from "../config/setup.js";
@@ -15,6 +15,7 @@ import { readExploreConfig, readExploreInstructions, resolvePlatformConfig, conf
 import { argumentError, output, required, has, flag, flags, oneOf } from "./args.js";
 import { help } from "./help.js";
 import { CiError } from "../shared/ci-errors.js";
+import { cleanupAfterCapture, findBaselineArtifact, resolveCompareRefs, resolvePullRequest, writeStepOutputs } from "../ci/workflow-steps.js";
 import { stderrProgress } from "../shared/progress.js";
 
 export async function doctor(): Promise<void> {
@@ -93,6 +94,40 @@ export async function ciFailure(): Promise<void> {
     ...(has("diagnostics") ? { diagnosticsPath: required("diagnostics") } : {}), ...(platform ? { platform } : {}) }) });
 }
 
+/** `ci:pr --pr N [--output FILE]`: the live, authorized pull request; its commits go to the step outputs. */
+export async function ciPullRequest(): Promise<void> {
+  const { presentation, author } = await resolvePullRequest({ number: Number(required("pr")),
+    ...(has("app-dir") ? { appDirectory: required("app-dir") } : {}), ...(has("config") ? { configPath: required("config") } : {}) });
+  if (has("output")) await writeFile(required("output"), JSON.stringify(presentation));
+  await writeStepOutputs(process.env, { pr_number: String(presentation.number), base: presentation.base.sha, head: presentation.head.sha });
+  output({ ok: true, pullRequest: presentation, author });
+}
+
+/** `ci:find-baseline --sha SHA [--platform P]`: a reusable baseline artifact of the base commit, if one exists. */
+export async function ciFindBaseline(): Promise<void> {
+  const platform = platformFlag();
+  const found = await findBaselineArtifact({ sha: required("sha"), ...(platform ? { platform } : {}) });
+  if (found) await writeStepOutputs(process.env, { id: String(found.id), run: String(found.run) });
+  output({ ok: true, baseline: found ?? null });
+}
+
+/** `ci:compare-refs --project DIR --base REF --head REF [--output FILE]`: the two commits a comparison captures. */
+export async function ciCompareRefs(): Promise<void> {
+  const comparison = resolveCompareRefs({ project: required("project"), base: required("base"), head: required("head"),
+    ...(has("title") ? { title: required("title") } : {}) });
+  if (has("output")) await writeFile(required("output"), JSON.stringify(comparison));
+  await writeStepOutputs(process.env, { base: comparison.base.sha, head: comparison.head.sha, compare: JSON.stringify(comparison) });
+  output({ ok: true, comparison });
+}
+
+/** `ci:after-capture --output DIR --checkout DIR...`: stop recorded sessions and check the checkouts are untouched; fails after reporting every problem. */
+export async function ciAfterCapture(): Promise<void> {
+  const result = await cleanupAfterCapture({ output: required("output"), checkouts: flags("checkout") });
+  for (const failure of result.failures) console.error(`::error title=${failure.code}::${failure.message} ${failure.nextAction}`);
+  output({ ok: result.failures.length === 0, ...result });
+  if (result.failures.length) process.exitCode = 1;
+}
+
 /** The `--platform` flag, when given; capture then reads that platform's fields from config.yaml. */
 export function platformFlag(): ExplorePlatform | undefined {
   return has("platform") ? oneOf("platform", EXPLORE_PLATFORMS) : undefined;
@@ -165,6 +200,8 @@ export async function captureReview(): Promise<void> {
     output: required("output"), config, configPath, progress: stderrProgress() };
   const result = has("compare") ? await runCompareCi({ ...common, comparePath: required("compare") })
     : await runPublicCi({ ...common, pullRequestPath: required("pull-request") });
+  // The deploy job runs only when the reviewed config asks for a hosted report.
+  await writeStepOutputs(process.env, { preview: (await readCiReportInput(result.inputPath)).preview?.hosting ?? "" });
   output({ ok: true, inputPath: result.inputPath });
 }
 

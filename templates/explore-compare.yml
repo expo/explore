@@ -21,14 +21,18 @@ on:
       base: { description: 'Base: a branch, tag or commit SHA', required: true, type: string }
       head: { description: 'Head: a branch, tag or commit SHA', required: true, type: string }
 permissions: {}
-# The exact @expo/explore release CI installs. expo-explore setup --workflows sets it.
 env:
+  # The exact @expo/explore release CI installs. expo-explore setup --workflows sets it.
   EXPLORE_VERSION: set-by-expo-explore-setup
+  APP_PROJECT_DIR: .
+  APP_INSTALL_DIR: .
+  TOOLS_PREFIX: explore-tools
+  TOOLS: explore-tools/package
 concurrency:
   group: explore-compare-${{ inputs.base }}-${{ inputs.head }}
   cancel-in-progress: false
 jobs:
-  # Resolves both refs to commits, and lists the platforms .expo-explore/config.yaml captures at head.
+  # Resolves both refs to commits once, and lists the platforms .expo-explore/config.yaml captures at head.
   platforms:
     runs-on: ubuntu-22.04
     timeout-minutes: 10
@@ -38,36 +42,15 @@ jobs:
       platforms: ${{ steps.platforms.outputs.platforms }}
       base: ${{ steps.refs.outputs.base }}
       head: ${{ steps.refs.outputs.head }}
-    env:
-      TOOLS_PREFIX: explore-tools
-      TOOLS: explore-tools/package
-      APP_PROJECT_DIR: .
+      compare: ${{ steps.refs.outputs.compare }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { path: app-head, fetch-depth: 0, persist-credentials: false }
-      - name: Resolve base and head to commits
-        id: refs
-        env:
-          BASE_REF: ${{ inputs.base }}
-          HEAD_REF: ${{ inputs.head }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          resolve() {
-            local ref="$1" sha
-            if [[ -z "$ref" || "$ref" == -* ]]; then echo "::error title=COMPARE_REF_INVALID::Pass a branch, tag or commit SHA, not '$ref'."; exit 1; fi
-            for candidate in "refs/tags/$ref" "refs/remotes/origin/$ref" "$ref"; do
-              if sha="$(git -C app-head rev-parse --verify --quiet "$candidate^{commit}")"; then echo "$sha"; return; fi
-            done
-            echo "::error title=COMPARE_REF_NOT_FOUND::$ref is not a branch, tag or commit of this repository."; exit 1
-          }
-          base="$(resolve "$BASE_REF")"; head="$(resolve "$HEAD_REF")"
-          if [[ "$base" == "$head" ]]; then echo "::error title=COMPARE_SAME_COMMIT::$BASE_REF and $HEAD_REF are the same commit ($head)."; exit 1; fi
-          echo "base=$base" >> "$GITHUB_OUTPUT"; echo "head=$head" >> "$GITHUB_OUTPUT"
-          git -C app-head checkout --quiet --detach "$head"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - &setup-node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 24, package-manager-cache: false }
-      - name: Install Explore
+      - &install-explore
+        name: Install Explore
         shell: bash
         run: |
           set -euo pipefail
@@ -80,6 +63,18 @@ jobs:
           tar -xzf "$TOOLS_PREFIX"/expo-explore-*.tgz -C "$TOOLS_PREFIX"
           cd "$TOOLS"
           npm ci --omit=dev --include=optional --ignore-scripts --no-audit --no-fund
+      - name: Resolve base and head to commits
+        id: refs
+        env:
+          BASE_REF: ${{ inputs.base }}
+          HEAD_REF: ${{ inputs.head }}
+        shell: bash
+        run: node "$TOOLS/dist/cli.js" ci:compare-refs --project app-head --base "$BASE_REF" --head "$HEAD_REF"
+      - name: Check out head
+        env:
+          HEAD_SHA: ${{ steps.refs.outputs.head }}
+        shell: bash
+        run: git -C app-head checkout --quiet --detach "$HEAD_SHA"
       - name: List the configured platforms
         id: platforms
         shell: bash
@@ -100,47 +95,18 @@ jobs:
       actions: read
     outputs:
       # "eas" when .expo-explore/config.yaml sets report.preview.hosting; the deploy job runs only then.
-      preview: ${{ steps.preview.outputs.preview }}
+      preview: ${{ steps.capture.outputs.preview }}
     env:
-      TOOLS_PREFIX: explore-tools
-      TOOLS: explore-tools/package
-      APP_PROJECT_DIR: .
-      APP_INSTALL_DIR: .
       PLATFORM: ${{ matrix.platform }}
       BASE_SHA: ${{ needs.platforms.outputs.base }}
       HEAD_SHA: ${{ needs.platforms.outputs.head }}
     steps:
-      - name: Describe the comparison
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-          BASE_REF: ${{ inputs.base }}
-          HEAD_REF: ${{ inputs.head }}
-        with:
-          script: |
-            const { data: repository } = await github.rest.repos.get(context.repo);
-            require('node:fs').writeFileSync(`${process.env.RUNNER_TEMP}/explore-compare.json`, JSON.stringify({
-              origin: 'compare', repositoryId: String(repository.id), repository: repository.full_name,
-              base: { ref: process.env.BASE_REF, sha: process.env.BASE_SHA }, head: { ref: process.env.HEAD_REF, sha: process.env.HEAD_SHA }
-            }));
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: '${{ needs.platforms.outputs.base }}', path: app-base, fetch-depth: 0, persist-credentials: false }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: '${{ needs.platforms.outputs.head }}', path: app-head, fetch-depth: 0, persist-credentials: false }
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with: { node-version: 24, package-manager-cache: false }
-      - name: Install Explore
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! "$EXPLORE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo '::error title=EXPLORE_VERSION_INVALID::Set EXPLORE_VERSION to an exact @expo/explore version. Run expo-explore setup --workflows.'; exit 1
-          fi
-          # npm ci against the release's npm-shrinkwrap.json installs the exact dependency tree it was tested with.
-          mkdir -p "$TOOLS_PREFIX"
-          npm pack "@expo/explore@$EXPLORE_VERSION" --pack-destination "$TOOLS_PREFIX" --silent > /dev/null
-          tar -xzf "$TOOLS_PREFIX"/expo-explore-*.tgz -C "$TOOLS_PREFIX"
-          cd "$TOOLS"
-          npm ci --omit=dev --include=optional --ignore-scripts --no-audit --no-fund
+      - *setup-node
+      - *install-explore
       - name: Install the launch recording decoder
         shell: bash
         # Launch recordings (capture.launch) are decoded with ffmpeg; GitHub's Ubuntu runners do not ship it.
@@ -165,22 +131,10 @@ jobs:
       - name: Find optional exact-base evidence
         id: cache
         continue-on-error: true
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          script: |
-            const { data: repository } = await github.rest.repos.get(context.repo);
-            const { data: baseline } = await github.rest.actions.getWorkflow({ ...context.repo, workflow_id: 'explore-baseline.yml' });
-            // Baselines carry the platform suffix; iOS also accepts the unsuffixed name older baseline workflows uploaded.
-            const names = [`explore-baseline-${process.env.BASE_SHA}-${process.env.PLATFORM}`, ...(process.env.PLATFORM === 'ios' ? [`explore-baseline-${process.env.BASE_SHA}`] : [])];
-            const records = (await Promise.all(names.map(name => github.paginate(github.rest.actions.listArtifactsForRepo, { ...context.repo, name, per_page: 100 })))).flat();
-            for (const artifact of records.filter(a => !a.expired).sort((a, b) => b.id - a.id)) {
-              if (!artifact.workflow_run?.id) continue;
-              const { data: run } = await github.rest.actions.getWorkflowRun({ ...context.repo, run_id: artifact.workflow_run.id });
-              if (run.conclusion !== 'success' || run.workflow_id !== baseline.id || run.head_sha !== process.env.BASE_SHA
-                || run.head_branch !== repository.default_branch || !['push', 'workflow_dispatch'].includes(run.event)
-                || run.head_repository?.full_name !== `${context.repo.owner}/${context.repo.repo}`) continue;
-              core.setOutput('id', artifact.id); core.setOutput('run', run.id); break;
-            }
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: node "$TOOLS/dist/cli.js" ci:find-baseline --sha "$BASE_SHA" --platform "$PLATFORM"
       - name: Download optional exact-base evidence
         if: steps.cache.outputs.id != ''
         continue-on-error: true
@@ -192,7 +146,9 @@ jobs:
           run-id: ${{ steps.cache.outputs.run }}
           github-token: ${{ github.token }}
       - name: Capture review
+        id: capture
         env:
+          COMPARE: ${{ needs.platforms.outputs.compare }}
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -202,39 +158,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          printf '%s' "$COMPARE" > "$RUNNER_TEMP/explore-compare.json"
           node "$TOOLS/dist/cli.js" capture:review \
             --base-project "$GITHUB_WORKSPACE/app-base/$APP_PROJECT_DIR" --head-project "$GITHUB_WORKSPACE/app-head/$APP_PROJECT_DIR" \
             --compare "$RUNNER_TEMP/explore-compare.json" --output "$RUNNER_TEMP/explore-review" --config .expo-explore/config.yaml \
             --platform "$PLATFORM"
-      - name: Stop retained capture sessions
+      - name: Stop capture sessions and check the checkouts
         if: always()
         timeout-minutes: 5
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! -e "$RUNNER_TEMP/explore-review/head-session" && ! -L "$RUNNER_TEMP/explore-review/head-session" && ! -e "$RUNNER_TEMP/explore-review/base-session" && ! -L "$RUNNER_TEMP/explore-review/base-session" ]]; then exit 0; fi
-          node "$TOOLS/scripts/cleanup-ci-sessions.mjs" --eas "$GITHUB_WORKSPACE/$TOOLS/node_modules/.bin/eas" \
-            --session-file "$RUNNER_TEMP/explore-review/head-session" --session-file "$RUNNER_TEMP/explore-review/base-session"
-      - name: Verify application checkouts remain clean
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          for directory in app-base app-head; do
-            if [[ -d "$directory/.git" || -f "$directory/.git" ]]; then
-              if [[ -n "$(git -C "$directory" status --porcelain --untracked-files=all)" ]]; then
-                echo "::error title=CHECKOUT_MODIFIED::Capture modified $directory. Keep generated files outside source checkouts."; exit 1
-              fi
-            fi
-          done
-      - name: Read the hosted preview request
-        id: preview
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "preview=$(jq -r '.preview.hosting // ""' "$RUNNER_TEMP/explore-review/report-input.json")" >> "$GITHUB_OUTPUT"
+        run: node "$TOOLS/dist/cli.js" ci:after-capture --output "$RUNNER_TEMP/explore-review" --checkout app-base --checkout app-head
       - name: Upload captured review for packaging
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -278,34 +213,17 @@ jobs:
     permissions:
       contents: read
     env:
-      TOOLS_PREFIX: explore-tools
-      TOOLS: explore-tools/package
       PLATFORM: ${{ matrix.platform }}
     steps:
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with: { node-version: 24, package-manager-cache: false }
-      - name: Install Explore
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! "$EXPLORE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo '::error title=EXPLORE_VERSION_INVALID::Set EXPLORE_VERSION to an exact @expo/explore version. Run expo-explore setup --workflows.'; exit 1
-          fi
-          # npm ci against the release's npm-shrinkwrap.json installs the exact dependency tree it was tested with.
-          mkdir -p "$TOOLS_PREFIX"
-          npm pack "@expo/explore@$EXPLORE_VERSION" --pack-destination "$TOOLS_PREFIX" --silent > /dev/null
-          tar -xzf "$TOOLS_PREFIX"/expo-explore-*.tgz -C "$TOOLS_PREFIX"
-          cd "$TOOLS"
-          npm ci --omit=dev --include=optional --ignore-scripts --no-audit --no-fund
+      - *setup-node
+      - *install-explore
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: explore-capture-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform }}
           path: ${{ runner.temp }}/explore-review
       - name: Package the report
         shell: bash
-        run: |
-          set -euo pipefail
-          node "$TOOLS/dist/cli.js" ci:report --input "$RUNNER_TEMP/explore-review/report-input.json" --output "$RUNNER_TEMP/explore-report" --platform "$PLATFORM"
+        run: node "$TOOLS/dist/cli.js" ci:report --input "$RUNNER_TEMP/explore-review/report-input.json" --output "$RUNNER_TEMP/explore-report" --platform "$PLATFORM"
       - name: Upload the report
         id: report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -321,7 +239,6 @@ jobs:
           HEAD_REF: ${{ inputs.head }}
         shell: bash
         run: |
-          set -euo pipefail
           echo "- $PLATFORM report of $HEAD_REF vs $BASE_REF: [download]($ARTIFACT_URL), then drop it on the Viewer or run \`npx @expo/explore view\`" >> "$GITHUB_STEP_SUMMARY"
   # Hosted report (opt-in, report.preview in config.yaml): one token-gated EAS Hosting deployment serving every platform's report.
   # This is the only job after capture that holds EXPO_TOKEN; it writes the link to the run summary.
@@ -333,24 +250,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-    env:
-      TOOLS_PREFIX: explore-tools
-      TOOLS: explore-tools/package
     steps:
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with: { node-version: 24, package-manager-cache: false }
-      - name: Install Explore
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! "$EXPLORE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo '::error title=EXPLORE_VERSION_INVALID::Set EXPLORE_VERSION to an exact @expo/explore version. Run expo-explore setup --workflows.'; exit 1
-          fi
-          mkdir -p "$TOOLS_PREFIX"
-          npm pack "@expo/explore@$EXPLORE_VERSION" --pack-destination "$TOOLS_PREFIX" --silent > /dev/null
-          tar -xzf "$TOOLS_PREFIX"/expo-explore-*.tgz -C "$TOOLS_PREFIX"
-          cd "$TOOLS"
-          npm ci --omit=dev --include=optional --ignore-scripts --no-audit --no-fund
+      - *setup-node
+      - *install-explore
       # One directory per platform artifact (explore-capture-<run>-<attempt>-<platform>, explore-review-<run>-<attempt>-<platform>).
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -365,6 +267,4 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         shell: bash
-        run: |
-          set -euo pipefail
-          node "$TOOLS/dist/cli.js" ci:deploy --inputs "$RUNNER_TEMP/explore-review" --reports "$RUNNER_TEMP/explore-report"
+        run: node "$TOOLS/dist/cli.js" ci:deploy --inputs "$RUNNER_TEMP/explore-review" --reports "$RUNNER_TEMP/explore-report"

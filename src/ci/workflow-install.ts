@@ -118,8 +118,8 @@ export function forwardedSecretNames(workflow: string): string[] {
 
 export function renderWorkflow(template: string, options: { projectDir: string; installDir: string; manager: PackageManager | undefined; secretNames: readonly string[] }): string {
   let text = pinWorkflowVersion(template)
-    .replace(/^(\s+APP_PROJECT_DIR:) \.$/m, `$1 ${options.projectDir}`)
-    .replace(/^(\s+APP_INSTALL_DIR:) \.$/m, `$1 ${options.installDir}`);
+    .replace(/^(\s+APP_PROJECT_DIR:) \.$/gm, `$1 ${options.projectDir}`)
+    .replace(/^(\s+APP_INSTALL_DIR:) \.$/gm, `$1 ${options.installDir}`);
   if (options.manager && options.manager !== "npm") {
     text = text.replace(TEMPLATE_INSTALL, (_match, directory: string) => installCommand(options.manager!, directory));
   }
@@ -151,12 +151,14 @@ export function workflowIssues(file: string, text: string, expected: { projectDi
   if (!version || !EXACT_VERSION.test(version)) issues.push({ code: "EXPLORE_VERSION_INVALID", file,
     message: `${file} does not pin an exact @expo/explore version (EXPLORE_VERSION is ${version ?? "missing"}).`,
     nextAction: "Run expo-explore setup --workflows to set it." });
-  const value = (name: string) => new RegExp(`^\\s+${name}: (.+)$`, "m").exec(text)?.[1]?.trim().replace(/^['"]|['"]$/g, "");
+  // Workflows generated before 0.19 set these per job; every job must name the same directory.
+  const values = (name: string) => [...text.matchAll(new RegExp(`^\\s+${name}: (.+)$`, "gm"))].map(match => match[1]!.trim().replace(/^['"]|['"]$/g, ""));
   for (const [name, wanted] of [["APP_PROJECT_DIR", expected.projectDir], ["APP_INSTALL_DIR", expected.installDir]] as const) {
-    const actual = value(name);
-    if (actual !== wanted) issues.push({ code: "WORKFLOW_APP_DIR_MISMATCH", file,
-      message: `${name} is ${actual ?? "missing"}, but the app layout needs ${wanted}.`,
-      nextAction: `Set ${name}: ${wanted} in ${file}.` });
+    const actual = values(name);
+    const wrong = actual.find(value => value !== wanted);
+    if (!actual.length || wrong !== undefined) issues.push({ code: "WORKFLOW_APP_DIR_MISMATCH", file,
+      message: `${name} is ${actual.length ? wrong : "missing"}${actual.length > 1 ? " in one of its jobs" : ""}, but the app layout needs ${wanted}.`,
+      nextAction: `Set ${name}: ${wanted} everywhere in ${file}, or rerun expo-explore setup --workflows --force.` });
   }
   if (expected.manager && expected.manager !== "npm" && /npm ci --ignore-scripts --prefix/.test(text)) {
     const command = installCommand(expected.manager, "<dir>");

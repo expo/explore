@@ -425,8 +425,22 @@ function reportConfig(value: unknown): ExploreConfig["report"] {
   } };
 }
 
+/**
+ * ci.trustedAuthors alone, from a config the rest of which may be incomplete or from another release:
+ * the review workflow's trust check reads only this list from the default branch.
+ */
+export function parseTrustedAuthors(source: string): string[] {
+  const value = plainDocument(source);
+  const ci = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).ci : undefined;
+  return ciConfig(ci)?.trustedAuthors ?? [];
+}
+
 /** Parse YAML as plain data: no anchors, aliases, merge keys, or custom tags. */
 export function parseExploreConfig(source: string): ExploreConfig {
+  return validateExploreConfig(plainDocument(source));
+}
+
+function plainDocument(source: string): unknown {
   if (Buffer.byteLength(source) > MAX_CONFIG_BYTES) fail("file is too large");
   const document = parseDocument(source, { uniqueKeys: true, merge: false, schema: "core" });
   if (document.errors.length > 0) fail(document.errors[0]!.message.split("\n")[0]!);
@@ -436,7 +450,7 @@ export function parseExploreConfig(source: string): ExploreConfig {
       fail("custom tags are not allowed");
     }
   });
-  return validateExploreConfig(document.toJS());
+  return document.toJS();
 }
 
 /** Credential gate for active agent execution; never call during static planning. */

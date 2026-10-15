@@ -59,7 +59,14 @@ const CI = `CI (the installed workflows run these; they manage remote EAS Simula
   ci:publish --input REPORT_INPUT --artifact-url GITHUB_ARTIFACT_URL [--platform ios|android]
   ci:publish --inputs DIRECTORY        (one <platform>/ subdirectory per captured platform)
   ci:deploy --input REPORT_INPUT --report REPORT_DIR --artifact-url GITHUB_ARTIFACT_URL [--platform ios|android]
-  ci:deploy --inputs DIRECTORY --reports DIRECTORY`;
+  ci:deploy --inputs DIRECTORY --reports DIRECTORY
+  ci:pr --pr N [--output FILE] [--app-dir DIRECTORY]
+       (resolves the live PR and refuses it unless it is open, from this repository, and by a trusted author)
+  ci:compare-refs --project DIRECTORY --base REF --head REF [--output FILE]
+  ci:find-baseline --sha COMMIT [--platform ios|android]
+  ci:after-capture --output TEMP_DIRECTORY --checkout DIRECTORY...
+       (stops the capture's EAS Simulator sessions and checks capture left each checkout unchanged)
+       (the ci:* commands write their results to $GITHUB_OUTPUT for the next steps)`;
 
 const MAP_QUERIES = `Map queries (for coding agents reading a local exploration map; JSON output, never provision devices):
   summary

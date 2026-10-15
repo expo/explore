@@ -29,7 +29,7 @@ const aliases: Record<string, string> = {
 const first = argv[0] ?? "help";
 const pair = `${first} ${argv[1] ?? ""}`.trim();
 export const command = aliases[pair] ?? first;
-export const resultContract = ["source:verify", "capture:review", "capture:baseline", "ci:report", "ci:publish", "ci:failure", "ci:deploy", "config:platforms", "explore:binary", "explore:session"].includes(command)
+export const resultContract = ["source:verify", "capture:review", "capture:baseline", "ci:report", "ci:publish", "ci:failure", "ci:deploy", "ci:pr", "ci:find-baseline", "ci:compare-refs", "ci:after-capture", "config:platforms", "explore:binary", "explore:session"].includes(command)
   ? "explore.result" : QUERY_CONTRACT;
 const commandArgCount = aliases[pair] ? 2 : 1;
 const args = argv.slice(commandArgCount);
@@ -92,6 +92,10 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
   "ci:publish": { input:"value", "artifact-url":"value", platform:"value", inputs:"value" },
   "ci:failure": { pr:"value", head:"value", base:"value", diagnostics:"value", platform:"value" },
   "ci:deploy": { input:"value", report:"value", "artifact-url":"value", platform:"value", inputs:"value", reports:"value" },
+  "ci:pr": { pr:"value", output:"value", "app-dir":"value", config:"value" },
+  "ci:find-baseline": { sha:"value", platform:"value" },
+  "ci:compare-refs": { project:"value", base:"value", head:"value", title:"value", output:"value" },
+  "ci:after-capture": { output:"value", checkout:"value" },
   compare: {
     baseline: "value",
     current: "value",

@@ -229,20 +229,18 @@ test("capture receives the automatic GitHub token for current PR verification", 
   assert.equal(review.jobs.capture.permissions["pull-requests"], "write");
 });
 
-test("always-run cleanup consumes only explicit retained handoffs before checkout verification", () => {
-  for (const [job, name, sessionFiles] of [
-    [review.jobs.capture, "Stop retained capture sessions", ["head-session", "base-session"]],
-    [baseline.jobs.baseline, "Stop retained baseline session", ["baseline-session"]],
+test("after capture, success or not, ci:after-capture stops the recorded sessions and checks every checkout", () => {
+  for (const [job, condition, output, checkouts] of [
+    [review.jobs.capture, "always() && steps.pr.outcome == 'success'", "explore-review", ["app-base", "app-head"]],
+    [compare.jobs.capture, "always()", "explore-review", ["app-base", "app-head"]],
+    [baseline.jobs.baseline, "always()", "explore-baseline", ["app"]],
   ]) {
-    const index = job.steps.findIndex(step => step.name === name);
-    const cleanup = job.steps[index];
-    assert.equal(cleanup.if, "always()");
+    const cleanup = job.steps.find(step => step.run?.includes("ci:after-capture"));
+    assert.equal(cleanup.if, condition);
     assert.ok(cleanup["timeout-minutes"] <= 5);
     assert.equal(cleanup.env.EXPO_TOKEN, "${{ secrets.EXPO_TOKEN }}");
-    assert.match(cleanup.run, /cleanup-ci-sessions\.mjs/);
-    for (const path of sessionFiles) assert.ok(cleanup.run.includes(path));
-    assert.ok(index < job.steps.findIndex(step => step.name?.startsWith("Verify application checkout")));
-    assert.doesNotMatch(cleanup.run, /simulator:list|--all/);
+    assert.equal(cleanup.run, `node "$TOOLS/dist/cli.js" ci:after-capture --output "$RUNNER_TEMP/${output}" ${checkouts.map(dir => `--checkout ${dir}`).join(" ")}`);
+    assert.ok(job.steps.indexOf(cleanup) < job.steps.findIndex(step => step.uses?.startsWith("actions/upload-artifact@")), "before any upload");
   }
   assert.equal(action.runs.steps.at(-1).name, "Stop retained capture sessions");
   assert.equal(action.runs.steps.at(-1).if, "always() && steps.preflight.outcome == 'success'");
@@ -307,10 +305,9 @@ test("the deploy job is the only post-capture job that holds EXPO_TOKEN, and it 
   assert.ok(downloads.every(step => step.with.name === undefined && step.with["merge-multiple"] === undefined));
   assert.doesNotMatch(JSON.stringify(deploy), /OPENAI_API_KEY|ANTHROPIC_API_KEY/);
   assert.equal(review.jobs.report.outputs, undefined);
-  assert.equal(review.jobs.capture.outputs.preview, "${{ steps.preview.outputs.preview }}");
-  const previewStep = review.jobs.capture.steps.find(step => step.id === "preview");
-  assert.match(previewStep.run, /jq -r '\.preview\.hosting \/\/ ""'/);
-  assert.ok(review.jobs.capture.steps.indexOf(previewStep) < review.jobs.capture.steps.findIndex(step => step.name === "Upload captured review for packaging"));
+  // capture:review writes preview=<hosting> to the step outputs from the reviewed config.
+  assert.equal(review.jobs.capture.outputs.preview, "${{ steps.capture.outputs.preview }}");
+  assert.match(review.jobs.capture.steps.find(step => step.id === "capture").run, /capture:review/);
   assert.deepEqual(review.jobs.failure.needs, ["platforms", "capture", "report", "deploy"]);
   assert.match(review.jobs.failure.if, /needs\.platforms\.result == 'failure'/);
   assert.match(review.jobs.failure.if, /needs\.deploy\.result == 'failure'/);
@@ -341,9 +338,10 @@ test("review captures and reports each configured platform in its own matrix job
     assert.ok(uses.length > 0, command);
     for (const run of uses) assert.match(run, /--platform "\$PLATFORM"/, command);
   }
-  const baselineLookup = review.jobs.capture.steps.find(step => step.name === "Find optional exact-base evidence").with.script;
-  assert.match(baselineLookup, /explore-baseline-\$\{process\.env\.BASE_SHA\}-\$\{process\.env\.PLATFORM\}/);
-  assert.match(baselineLookup, /process\.env\.PLATFORM === 'ios' \? \[`explore-baseline-\$\{process\.env\.BASE_SHA\}`\]/);
+  for (const workflow of [review, compare]) {
+    assert.equal(workflow.jobs.capture.steps.find(step => step.name === "Find optional exact-base evidence").run,
+      'node "$TOOLS/dist/cli.js" ci:find-baseline --sha "$BASE_SHA" --platform "$PLATFORM"');
+  }
   for (const [job, name] of [[review.jobs.capture, "Upload captured review for packaging"], [review.jobs.capture, "Upload planning and failure diagnostics"],
     [review.jobs.report, "Upload hosted review bundle"], [review.jobs.report, "Upload report failure diagnostics"],
     [baseline.jobs.baseline, "Upload exact-commit baseline evidence"], [baseline.jobs.baseline, "Upload planning and baseline diagnostics"]]) {
@@ -363,6 +361,7 @@ test("compare reviews any two refs from a manual run or another workflow, with n
   assert.doesNotMatch(compareSource, /ci:publish|ci:failure|--pull-request/);
   assert.equal(compare.jobs.capture.env.BASE_SHA, "${{ needs.platforms.outputs.base }}", "capture checks out the commits the refs resolved to once");
   assert.equal(compare.jobs.capture.env.HEAD_SHA, "${{ needs.platforms.outputs.head }}");
-  assert.match(compare.jobs.platforms.steps.find(step => step.id === "refs").run, /COMPARE_SAME_COMMIT/);
+  assert.match(compare.jobs.platforms.steps.find(step => step.id === "refs").run, /ci:compare-refs --project app-head --base "\$BASE_REF" --head "\$HEAD_REF"/);
+  assert.match(compare.jobs.capture.steps.find(step => step.id === "capture").run, /printf '%s' "\$COMPARE" > "\$RUNNER_TEMP\/explore-compare\.json"/);
   assert.match(compare.jobs.deploy.steps.at(-1).run, /ci:deploy --inputs/);
 });
