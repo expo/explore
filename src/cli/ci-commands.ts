@@ -74,7 +74,9 @@ export async function ciDeploy(): Promise<void> {
   const result = has("inputs") || has("reports")
     ? await deployPreview({ reports: await collectPlatformReports({ inputsPath: required("inputs"), reportsPath: required("reports") }), onSecret })
     : await deployPreview({ inputPath: required("input"), reportPath: required("report"), artifactUrl: required("artifact-url"), onSecret });
-  output({ ok: true, ...result });
+  // A comparison's token is not masked (see deployPreview), so its link stays out of the log.
+  const { previewUrl, ...unlinked } = result;
+  output({ ok: true, ...(result.linkedFromRunSummary ? unlinked : { previewUrl, ...unlinked }) });
 }
 
 export async function ciPublish(): Promise<void> {

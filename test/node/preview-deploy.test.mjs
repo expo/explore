@@ -499,9 +499,12 @@ test("a comparison of two commits deploys the same way and links its report from
     base: { ref: "v1.3.0", sha: pr.base.sha }, head: { ref: "v1.4.0", sha: pr.head.sha } };
   const { root, inputPath, reportPath, exportPath } = await exportFixture(t, { presentation: comparison });
   const summaryPath = join(root, "summary.md");
-  const eas = easFixture();
+  const eas = easFixture(); const secrets = [];
   const result = await deployPreview({ inputPath, reportPath, artifactUrl, exportPath, environment: { ...deployEnvironment, GITHUB_STEP_SUMMARY: summaryPath },
-    transport: eas.transport, run: eas.run, now: () => Date.parse("2026-09-11T03:07:00Z"), verifyTimeoutMs: 1 });
+    transport: eas.transport, run: eas.run, now: () => Date.parse("2026-09-11T03:07:00Z"), verifyTimeoutMs: 1, onSecret: secret => secrets.push(secret) });
+  // The runner masks registered secrets in job summaries as well; a masked token would make the summary link ***.
+  assert.deepEqual(secrets, [], "a comparison's token is not registered as a mask");
+  assert.equal(result.linkedFromRunSummary, true, "so the CLI keeps the link out of the log");
   assert.deepEqual(eas.calls.map(call => call.args[0]), ["whoami", "init", "deploy"]);
   assert.equal(eas.requests.filter(request => request.url.origin === "https://api.github.com").length, 0, "no pull request to read or comment on");
   const summary = readFileSyncUtf8(summaryPath);

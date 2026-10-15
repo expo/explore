@@ -64,6 +64,8 @@ export type PreviewDeployResult = {
   reportBytes: number;
   reports: Array<{ platform?: ExplorePlatform; artifactUrl: string; reportSha256: string; reportBytes: number }>;
   headSha: string;
+  /** A comparison's link is in the run summary only: callers must not print previewUrl, which is unmasked for it. */
+  linkedFromRunSummary?: true;
 };
 
 export const PREVIEW_EXPORT_PATH = join(TOOL_ROOT, "dist", "hosting-preview");
@@ -241,7 +243,10 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
     reportDirectory, ...(listing ? { listing } : {}), project, ...(first.preview.owner ? { owner: first.preview.owner } : {}),
     ownerHint: "Set report.preview.owner in .expo-explore/config.yaml to the account that should hold the preview project.",
     projectHint: "Give EXPO_TOKEN's account permission to create projects, or set report.preview.project to an existing project it can deploy to.",
-    expiresAt, exportPath, environment, run, transport, now, random, ...(options.sleep ? { sleep: options.sleep } : {}), ...(options.onSecret ? { onSecret: options.onSecret } : {}),
+    expiresAt, exportPath, environment, run, transport, now, random, ...(options.sleep ? { sleep: options.sleep } : {}),
+    // The runner masks secrets in job summaries too, so a masked token would reach a comparison's summary as ***.
+    // Its link appears nowhere else (not in the log), as a PR's appears only in its comment, for the same readers.
+    ...(options.onSecret && pr.origin !== "compare" ? { onSecret: options.onSecret } : {}),
     verifyTimeoutMs: options.verifyTimeoutMs ?? 180_000 });
   } catch (error) {
     // The report job's comment says the report is deploying; it must now offer the download-and-drop flow instead.
@@ -266,7 +271,8 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
     return { previewUrl, expiresAt: expiresAt === null ? null : new Date(expiresAt).toISOString(), deploymentId: hosted.deploymentId, deploymentUrl: hosted.deploymentUrl,
       project, owner: hosted.owner, reportSha256: reports[0]!.sha256, reportBytes: reports[0]!.zip.byteLength,
       reports: reports.map(report => ({ ...(report.entry.platform ? { platform: report.entry.platform } : {}), artifactUrl: report.entry.artifactUrl,
-        reportSha256: report.sha256, reportBytes: report.zip.byteLength })), headSha };
+        reportSha256: report.sha256, reportBytes: report.zip.byteLength })), headSha,
+      ...(pr.origin === "compare" ? { linkedFromRunSummary: true as const } : {}) };
   }
 }
 
