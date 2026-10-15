@@ -11,6 +11,7 @@ import { listScreens, getScreen, listElements, listObservations, getObservation,
 import { compareCommand, exportWeb, view } from "./cli/catalog-commands.js";
 import { ciReport, ciPublish, ciFailure, ciDeploy, ciPullRequest, ciFindBaseline, ciCompareRefs, ciAfterCapture, setup, doctor, sourceVerify, captureReview, captureBaseline, configPlatforms } from "./cli/ci-commands.js";
 import { exploreBinary, exploreSession } from "./cli/binary-commands.js";
+import { reportUpload } from "./cli/report-commands.js";
 
 const handlers: Record<string, () => Promise<void> | void> = {
   setup,
@@ -38,6 +39,7 @@ const handlers: Record<string, () => Promise<void> | void> = {
   "export:web": exportWeb,
   "explore:binary": exploreBinary,
   "explore:session": exploreSession,
+  "report:upload": reportUpload,
   "ci:report": ciReport,
   "ci:publish": ciPublish,
   "ci:failure": ciFailure,
@@ -62,7 +64,7 @@ const handlers: Record<string, () => Promise<void> | void> = {
 };
 
 /** Commands people type at a terminal; everything else answers agents and scripts in JSON. */
-const HUMAN_COMMANDS = new Set(["setup", "doctor", "view", "help", "explore:binary", "explore:session"]);
+const HUMAN_COMMANDS = new Set(["setup", "doctor", "view", "help", "explore:binary", "explore:session", "report:upload"]);
 
 function version(): void {
   console.log(EXPLORE_VERSION);

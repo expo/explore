@@ -22,7 +22,10 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
        (on this machine: checks out both commits in temporary worktrees, captures them with your eas login and your
         local claude or codex login, and opens the report; the base defaults to where HEAD left the default branch)
   view [--catalog FILE] [--port N] [--no-open]
-       (opens a report in the Viewer)`;
+       (opens a report in the Viewer)
+  report:upload <report.zip | report directory>... [--owner ACCOUNT] [--project SLUG] [--expires-in 7d|30d|never] [--json]
+       (hosts reports already on this machine on EAS Hosting behind one link, with your eas login: one per platform
+        of the same review, from capture:review --output or a downloaded explore-review artifact, or one explore:binary report)`;
 
 const BINARY = `Prebuilt apps (no source needed; runs on EAS Simulator with your local claude or codex login):
   explore:binary <app.apk | app.app | app.tar.gz | simulator .ipa> [--output DIRECTORY] [--no-upload] [--json]

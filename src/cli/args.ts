@@ -29,12 +29,14 @@ const aliases: Record<string, string> = {
 const first = argv[0] ?? "help";
 const pair = `${first} ${argv[1] ?? ""}`.trim();
 export const command = aliases[pair] ?? first;
-export const resultContract = ["source:verify", "capture:review", "capture:baseline", "ci:report", "ci:publish", "ci:failure", "ci:deploy", "ci:pr", "ci:find-baseline", "ci:compare-refs", "ci:after-capture", "config:platforms", "explore:binary", "explore:session"].includes(command)
+export const resultContract = ["source:verify", "capture:review", "capture:baseline", "ci:report", "ci:publish", "ci:failure", "ci:deploy", "ci:pr", "ci:find-baseline", "ci:compare-refs", "ci:after-capture", "config:platforms", "explore:binary", "explore:session", "report:upload"].includes(command)
   ? "explore.result" : QUERY_CONTRACT;
 const commandArgCount = aliases[pair] ? 2 : 1;
 const args = argv.slice(commandArgCount);
 /** Commands that take one bare argument before their flags, e.g. `explore:binary ./app.apk`. */
 const POSITIONAL_COMMANDS = new Set(["explore:binary", "explore:session"]);
+/** Commands that take any number of bare arguments among their flags, e.g. `report:upload ios/report.zip android/report.zip`. */
+const VARIADIC_COMMANDS = new Set(["report:upload"]);
 
 const commonFlagKinds: Record<string, "value" | "boolean"> = {
   dir: "value",
@@ -111,6 +113,7 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
 
   },
   view: { port: "value", catalog: "value", "no-open": "boolean" },
+  "report:upload": { owner: "value", project: "value", "expires-in": "value" },
   help: { all: "boolean" },
   "--help": { all: "boolean" },
   "-h": { all: "boolean" },
@@ -132,7 +135,7 @@ export function validateCommandArguments(): void {
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index]!;
     if (!token.startsWith("--")) {
-      if (index === 0 && POSITIONAL_COMMANDS.has(command)) continue;
+      if ((index === 0 && POSITIONAL_COMMANDS.has(command)) || VARIADIC_COMMANDS.has(command)) continue;
       argumentError(`Unexpected argument: ${token}`);
     }
     const name = token.slice(2);
@@ -153,6 +156,18 @@ export function validateCommandArguments(): void {
 export function positional(): string | undefined {
   const first = args[0];
   return POSITIONAL_COMMANDS.has(command) && first !== undefined && !first.startsWith("--") ? first : undefined;
+}
+
+/** The bare arguments of a variadic command, in order: every token that is neither a flag nor a flag's value. */
+export function positionals(): string[] {
+  const allowed = { ...commonFlagKinds, ...flagKinds[command] };
+  const values: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!;
+    if (!token.startsWith("--")) values.push(token);
+    else if (allowed[token.slice(2)] === "value") index += 1;
+  }
+  return values;
 }
 
 export function flag(name: string): string | undefined {

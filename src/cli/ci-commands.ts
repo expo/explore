@@ -252,6 +252,7 @@ async function localReview(): Promise<void> {
   }
   const server = await startLocalReportServer({ reports: zips, ...(has("port") ? { port: nonNegativeInteger("port") } : {}) });
   console.log(`Viewer: ${server.url} (Ctrl+C to stop)`);
+  console.log(`To host it: expo-explore report:upload ${result.reports.map(report => report.zip).join(" ")}`);
   openViewerInBrowser(server.url);
   await new Promise<void>(done => { process.once("SIGINT", () => done()); process.once("SIGTERM", () => done()); });
   await server.close();

@@ -593,14 +593,14 @@ export function platformSectionMerge(state: PublicCommentState, platform: Commen
 }
 
 /** "iPhone 17 Pro 26.0 · light + dark": the device model and OS version the report's head capture ran on, and its appearances when it captured several. */
-export function reviewDevice(state: PublicCommentState): string {
+export function reviewDevice(state: { runtime?: Pick<SimulatorRuntimeMetadata, "deviceModel" | "osVersion" | "colorSchemes"> | undefined }): string {
   const device = [state.runtime?.deviceModel, state.runtime?.osVersion && state.runtime.osVersion !== "unknown" ? state.runtime.osVersion : undefined].filter(Boolean).join(" ");
   const schemes = state.runtime?.colorSchemes;
   return schemes && schemes.length > 1 ? [device, schemes.join(" + ")].filter(Boolean).join(" · ") : device;
 }
 
 /** Surfaces the review calls changed (reviewer verdicts first, raw status otherwise); undefined before the review exists. */
-export function reviewChangeCount(state: PublicCommentState): number | undefined {
+export function reviewChangeCount(state: Pick<PublicCommentState, "review">): number | undefined {
   return state.review?.surfaces.filter(surface => surface.review ? surface.review.status !== "unchanged" && surface.review.status !== "variant"
     : surface.status !== "unchanged").length;
 }

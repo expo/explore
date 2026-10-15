@@ -123,7 +123,7 @@ export function defaultBase(root: string, headSha: string): PullRequestSidePrese
 }
 
 /** owner/name from a github.com `origin`, or a local name; the report shows it and the hosted project is named after it. */
-function repositoryName(root: string, config: ExploreConfig): string {
+export function repositoryName(root: string, config: ExploreConfig): string {
   const remote = git(root, ["remote", "get-url", "origin"]).stdout;
   const match = /github\.com[:/]([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(remote);
   return match ? `${match[1]}/${match[2]}` : `local/${(config.app.name ?? "app").replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "") || "app"}`;

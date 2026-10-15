@@ -44,7 +44,7 @@ npx @expo/explore capture:review --uncommitted       # your uncommitted changes 
 npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all --upload
 ```
 
-- It checks out both commits as temporary worktrees, installs their dependencies, captures every configured platform on EAS Simulator (`--platform` picks one), and opens the report in a local Viewer. `--upload` hosts it and prints the link.
+- It checks out both commits as temporary worktrees, installs their dependencies, captures every configured platform on EAS Simulator (`--platform` picks one), and opens the report in a local Viewer. `--upload` hosts it and prints the link; `report:upload <report.zip>` hosts one you already have.
 - Your checkout, index and branches are never touched. `--uncommitted` takes tracked changes only; `--include-untracked` adds untracked files, which are uploaded with the EAS build.
 - Installs run without credential environment variables. A registry that needs `${NPM_TOKEN}` in the project's `.npmrc` must be authenticated in your own `~/.npmrc`.
 - Captures are cached in `~/.cache/expo-explore`, so the same base is not captured twice (`--no-cache` skips it). Ctrl+C stops the run's simulator sessions.
@@ -229,6 +229,7 @@ report:
 
 - Run `expo-explore setup --workflows` after enabling it to add the `deploy` job.
 - A [comparison of two commits](#compare) links its hosted report from the run's summary instead of a PR comment. `capture:review --upload` on your machine deploys to the same project with your `eas login`.
+- `expo-explore report:upload <report.zip>...` hosts reports already on your machine the same way: a review's reports (one per platform, from `capture:review --output` or a downloaded `explore-review` artifact) or an `explore:binary` report.
 - `EXPO_TOKEN` must be able to create the EAS project, so use a [robot user's](https://docs.expo.dev/accounts/programmatic-access/) token.
 - The report is encrypted, and only a request carrying the link's token can open it. Treat the link like a shared file link; see [report access](docs/private-review.md#hosted-previews).
 

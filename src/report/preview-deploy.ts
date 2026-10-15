@@ -3,10 +3,12 @@ import { spawnSync } from "node:child_process";
 import { appendFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
-import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter, configure } from "@zip.js/zip.js";
+import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter, configure } from "@zip.js/zip.js";
 import { publishCiReportComment, readCiReportInput, type CiReportInput } from "./artifact.js";
 import { reviewChangeCount, reviewDevice } from "./pr-comment-body.js";
 import type { ExplorePlatform } from "../config/explore-config.js";
+import type { ArtifactReport } from "../contracts/artifact-report.js";
+import { EXPLORATION_REPORT_KIND, type ExplorationReport } from "../contracts/standalone-report.js";
 import { compareTitleMarkdown, type CompareReviewPresentation } from "../contracts/review.js";
 import { CiError, toCiError } from "../shared/ci-errors.js";
 import { TOOL_ROOT, packageBin } from "../shared/package-paths.js";
@@ -155,6 +157,46 @@ export async function zipReportDirectory(reportPath: string): Promise<Uint8Array
     await writer.add(names[index]!, new Uint8ArrayReader(bytes), { level: names[index] === reportFile ? 6 : 0 });
   }
   return writer.close();
+}
+
+/** What a report ZIP holds, from its review.json or exploration.json: where to host it and how the platform switch labels it. */
+export type ReportZipSummary = { platform: ExplorePlatform; changes?: number; device?: string }
+  & ({ kind: "review"; repository: string; runId: string; base: string; head: string } | { kind: "exploration" });
+
+/** Reads a report ZIP as `zipReportDirectory` writes it (or GitHub's download of a report artifact): one report file and its assets, nothing else. */
+export async function readReportZip(zip: Uint8Array): Promise<ReportZipSummary> {
+  configure({ useWebWorkers: false });
+  if (zip.byteLength > MAX_REPORT_BYTES) throw new Error("Report exceeds the 256 MiB hosted preview limit");
+  const reader = new ZipReader(new Uint8ArrayReader(zip), { useWebWorkers: false });
+  try {
+    const entries = (await reader.getEntries()).filter(entry => !entry.directory);
+    const names = entries.map(entry => entry.filename);
+    const reportFile = REPORT_FILE_NAMES.find(name => names.includes(name));
+    if (!reportFile || names.some(name => name !== reportFile && !/^assets\/[a-f0-9]{64}\.(png|mp4)$/.test(name))) {
+      throw new Error("A report ZIP must contain review.json (or exploration.json) and assets/<sha256>.png or .mp4 only");
+    }
+    const entry = entries.find(candidate => candidate.filename === reportFile)!;
+    const report = JSON.parse(new TextDecoder().decode(await entry.getData!(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })));
+    if (reportFile === "exploration.json") {
+      const exploration = (report as Partial<ExplorationReport>).exploration;
+      if (report?.kind !== EXPLORATION_REPORT_KIND || !exploration || (exploration.app?.platform !== "ios" && exploration.app?.platform !== "android")) {
+        throw new Error("exploration.json is not an Explore exploration report");
+      }
+      return { kind: "exploration", platform: exploration.app.platform, device: `${exploration.device.model} ${exploration.device.osVersion}`.trim() };
+    }
+    const review = (report as Partial<ArtifactReport>).review;
+    const pr = review?.pullRequest;
+    if (report?.kind !== "explore.report" || !review || !pr || (review.runtime?.platform !== "ios" && review.runtime?.platform !== "android")) {
+      throw new Error("review.json is not an Explore review report");
+    }
+    const changes = reviewChangeCount({ review });
+    const device = reviewDevice({ runtime: { deviceModel: review.runtime.device?.model ?? "", osVersion: review.runtime.device?.osVersion ?? "",
+      ...(review.runtime.colorSchemes ? { colorSchemes: review.runtime.colorSchemes } : {}) } });
+    return { kind: "review", platform: review.runtime.platform, repository: pr.repository, runId: review.runId, base: pr.base.sha, head: pr.head.sha,
+      ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) };
+  } finally {
+    await reader.close();
+  }
 }
 
 /** iv (12 bytes) || AES-256-GCM ciphertext || tag, authenticated with the preview AAD; what the Worker decrypts. */
@@ -344,11 +386,13 @@ async function deploySealedReports(options: {
 
     const who = run(process.execPath, [eas, "whoami"], { cwd: work, env: easEnvironment });
     const accounts = who.status === 0 ? whoamiAccounts(who.stdout) : [];
-    if (!accounts.length) throw deployError("EAS_NOT_AUTHENTICATED", "The EAS CLI could not sign in with EXPO_TOKEN.",
-      "Use a valid EXPO_TOKEN for a robot user of the app's Expo account.", { details: { stderr: lastLine(who.stderr) } });
+    // On a laptop without EXPO_TOKEN the deploy uses your `eas login`, and the messages say so.
+    const login = environment.EXPO_TOKEN?.trim() ? "EXPO_TOKEN" : "Your EAS login";
+    if (!accounts.length) throw deployError("EAS_NOT_AUTHENTICATED", login === "EXPO_TOKEN" ? "The EAS CLI could not sign in with EXPO_TOKEN." : "You are not logged in to EAS.",
+      login === "EXPO_TOKEN" ? "Use a valid EXPO_TOKEN for a robot user of the app's Expo account." : "Run eas login (or set EXPO_TOKEN), then rerun.", { details: { stderr: lastLine(who.stderr) } });
     const owner = options.owner ?? (accounts.length === 1 ? accounts[0]! : undefined);
     if (!owner || !accounts.includes(owner)) throw deployError("PREVIEW_OWNER_AMBIGUOUS",
-      owner ? `EXPO_TOKEN has no access to the Expo account ${owner}.` : `EXPO_TOKEN can deploy to several Expo accounts: ${accounts.join(", ")}.`,
+      owner ? `${login} has no access to the Expo account ${owner}.` : `${login} can deploy to several Expo accounts: ${accounts.join(", ")}.`,
       options.ownerHint, { details: { accounts } });
     await writeFile(join(work, "package.json"), JSON.stringify({ name: project, version: "0.0.0", private: true }));
     await writeFile(join(work, "app.json"), JSON.stringify({ expo: { name: `${project}`, slug: project, owner, web: { output: "server" } } }));
@@ -521,12 +565,14 @@ export async function deployFixturePreview(options: FixturePreviewOptions): Prom
 }
 
 /**
- * A local review's reports (`capture:review --base … --upload`), one per platform, behind one token: the same sealed
- * deployment as a PR preview, from report ZIPs on this machine instead of GitHub artifacts, with the local EAS login.
+ * Report ZIPs on this machine behind one token (`capture:review --upload`, `report:upload`), one per platform: the same
+ * sealed deployment as a PR preview, from ZIPs instead of GitHub artifacts, with the local EAS login or EXPO_TOKEN.
  */
 export async function deployLocalReports(options: {
   reports: Array<{ platform: ExplorePlatform; zip: Uint8Array; changes?: number; device?: string }>;
   project: string; owner?: string; expiresAfterDays: number | null;
+  /** What to change when the owner or project is not usable; defaults name report.preview in config.yaml. */
+  ownerHint?: string; projectHint?: string;
   exportPath?: string; environment?: NodeJS.ProcessEnv; run?: CommandRunner; sleep?: (milliseconds: number) => Promise<void>;
   transport?: typeof fetch; now?: () => number; random?: (bytes: number) => Uint8Array; verifyTimeoutMs?: number;
 }): Promise<HostedDeployment> {
@@ -547,8 +593,8 @@ export async function deployLocalReports(options: {
   return deploySealedReports({
     reports: reports.map(report => ({ zip: report.zip, sha256: report.sha256, file: report.file, query: multi ? `?platform=${report.platform}` : "" })),
     reportDirectory, ...(listing ? { listing } : {}), project: options.project, ...(options.owner ? { owner: options.owner } : {}),
-    ownerHint: "Set report.preview.owner in .expo-explore/config.yaml to the account that should hold the hosted reports.",
-    projectHint: "Make sure your Expo account can create projects, or set report.preview.project to an existing project you can deploy to.",
+    ownerHint: options.ownerHint ?? "Set report.preview.owner in .expo-explore/config.yaml to the account that should hold the hosted reports.",
+    projectHint: options.projectHint ?? "Make sure your Expo account can create projects, or set report.preview.project to an existing project you can deploy to.",
     expiresAt: options.expiresAfterDays === null ? null : now() + options.expiresAfterDays * 86_400_000, exportPath, environment,
     run: options.run ?? defaultRun, ...(options.sleep ? { sleep: options.sleep } : {}), transport: options.transport ?? fetch, now, random,
     verifyTimeoutMs: options.verifyTimeoutMs ?? 180_000 });
