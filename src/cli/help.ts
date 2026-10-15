@@ -17,6 +17,10 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
        (--offline skips EAS and GitHub; --check-model sends one small request with the local provider key)
   doctor --capture [--project DIRECTORY] [--output DIRECTORY] [--platform ios|android] [--yes]
        (captures the committed HEAD like the baseline workflow, with your eas login, and reports each route)
+  capture:review [--base REF] [--head REF | --uncommitted [--include-untracked]] [--platform ios|android] [--scope all|changes]
+       [--upload [--expires-in 7d|30d|never]] [--no-open] [--no-cache] [--output DIRECTORY] [--project DIRECTORY]
+       (on this machine: checks out both commits in temporary worktrees, captures them with your eas login and your
+        local claude or codex login, and opens the report; the base defaults to where HEAD left the default branch)
   view [--catalog FILE] [--port N] [--no-open]
        (opens a report in the Viewer)`;
 

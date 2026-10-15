@@ -520,6 +520,40 @@ export async function deployFixturePreview(options: FixturePreviewOptions): Prom
     ...(options.token ? { token: options.token } : {}) });
 }
 
+/**
+ * A local review's reports (`capture:review --base … --upload`), one per platform, behind one token: the same sealed
+ * deployment as a PR preview, from report ZIPs on this machine instead of GitHub artifacts, with the local EAS login.
+ */
+export async function deployLocalReports(options: {
+  reports: Array<{ platform: ExplorePlatform; zip: Uint8Array; changes?: number; device?: string }>;
+  project: string; owner?: string; expiresAfterDays: number | null;
+  exportPath?: string; environment?: NodeJS.ProcessEnv; run?: CommandRunner; sleep?: (milliseconds: number) => Promise<void>;
+  transport?: typeof fetch; now?: () => number; random?: (bytes: number) => Uint8Array; verifyTimeoutMs?: number;
+}): Promise<HostedDeployment> {
+  const environment = options.environment ?? process.env;
+  if (!options.reports.length || new Set(options.reports.map(report => report.platform)).size !== options.reports.length) {
+    throw previewError("PREVIEW_REPORTS_INVALID", "A local upload needs one report per platform", "Capture each platform once, then upload.");
+  }
+  const exportPath = resolve(options.exportPath ?? PREVIEW_EXPORT_PATH);
+  await assertExport(exportPath);
+  const now = options.now ?? Date.now;
+  const random = options.random ?? (bytes => new Uint8Array(randomBytes(bytes)));
+  const reportDirectory = base32(random(10));
+  const multi = options.reports.length > 1;
+  const reports = options.reports.map(report => ({ ...report, sha256: createHash("sha256").update(report.zip).digest("hex"),
+    file: multi ? `${report.platform}.zip.enc` : "report.zip.enc" }));
+  const listing = multi ? reports.map(report => ({ platform: report.platform, path: `/_report/${reportDirectory}/${report.file}`,
+    ...(report.changes === undefined ? {} : { changes: report.changes }), ...(report.device ? { device: report.device } : {}) })) : undefined;
+  return deploySealedReports({
+    reports: reports.map(report => ({ zip: report.zip, sha256: report.sha256, file: report.file, query: multi ? `?platform=${report.platform}` : "" })),
+    reportDirectory, ...(listing ? { listing } : {}), project: options.project, ...(options.owner ? { owner: options.owner } : {}),
+    ownerHint: "Set report.preview.owner in .expo-explore/config.yaml to the account that should hold the hosted reports.",
+    projectHint: "Make sure your Expo account can create projects, or set report.preview.project to an existing project you can deploy to.",
+    expiresAt: options.expiresAfterDays === null ? null : now() + options.expiresAfterDays * 86_400_000, exportPath, environment,
+    run: options.run ?? defaultRun, ...(options.sleep ? { sleep: options.sleep } : {}), transport: options.transport ?? fetch, now, random,
+    verifyTimeoutMs: options.verifyTimeoutMs ?? 180_000 });
+}
+
 const ARTIFACT_DIRECTORY = /^explore-(capture|review)-\d+-\d+-(ios|android)$/;
 
 /**

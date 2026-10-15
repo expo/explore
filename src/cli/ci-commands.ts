@@ -1,18 +1,21 @@
-import { lstat, mkdtemp, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { runPublicCi, runBaselineCi, runCompareCi } from "../ci/pipeline.js";
 import { exportCiReport, publishCiReportComment } from "../report/artifact.js";
-import { collectPlatformReports, deployPreview } from "../report/preview-deploy.js";
+import { collectPlatformReports, deployLocalReports, deployPreview, previewProjectSlug } from "../report/preview-deploy.js";
+import { startLocalReportServer } from "../report/local-report-server.js";
+import { openViewerInBrowser } from "../map/viewer-server.js";
+import { runLocalReview } from "../ci/local-review.js";
 import { publishFailureComment } from "../report/failure-comment.js";
 import { runExploreSetup } from "../config/setup.js";
 import { installCiFiles } from "../ci/workflow-install.js";
 import { readRouteEntry } from "../ci/route-entry.js";
 import { buildVerifiedPlan } from "../ci/verified-plan.js";
 import { formatCaptureCheck, formatDoctorReport, referencedSecretNames, runCaptureCheck, runDoctor } from "../ci/doctor.js";
-import { readExploreConfig, readExploreInstructions, resolvePlatformConfig, withRunOverrides, configPlatforms as listPlatforms, EXPLORE_PLATFORMS, DEFAULT_EXPLORE_CONFIG_PATH, type ExplorePlatform } from "../config/explore-config.js";
-import { argumentError, output, required, has, flag, flags, oneOf } from "./args.js";
+import { readExploreConfig, readExploreInstructions, resolvePlatformConfig, withRunOverrides, previewDays, configPlatforms as listPlatforms, EXPLORE_PLATFORMS, DEFAULT_EXPLORE_CONFIG_PATH, PREVIEW_DEFAULT_DAYS, type ExplorePlatform } from "../config/explore-config.js";
+import { argumentError, output, required, has, flag, flags, nonNegativeInteger, oneOf } from "./args.js";
 import { help } from "./help.js";
 import { CiError } from "../shared/ci-errors.js";
 import { cleanupAfterCapture, findOptionalBaseline, resolveCompareRefs, resolvePullRequest, writeCaptureOutputs, writeStepOutputs } from "../ci/workflow-steps.js";
@@ -42,7 +45,7 @@ Fix the problems in steps 1–5 before a capture check.`);
   if (!has("yes")) {
     if (!process.stdin.isTTY || has("json")) argumentError("A capture check starts an EAS build and simulator session; pass --yes to confirm.", "yes");
     const terminal = createInterface({ input: process.stdin, output: process.stderr });
-    const answer = await terminal.question(`This builds the app on EAS and runs an EAS Simulator session (EAS usage applies${report.mode === "agent" ? "; agent mode also uses your model API key" : ""}). Continue? (yes/no) `);
+    const answer = await terminal.question(`This builds the app on EAS and runs an EAS Simulator session (EAS usage applies${report.mode === "agent" ? "; agent mode also uses your model API key or local claude/codex login" : ""}). Continue? (yes/no) `);
     terminal.close();
     if (!/^(y|yes)$/i.test(answer.trim())) return;
   }
@@ -193,6 +196,8 @@ export async function sourceVerify(): Promise<void> {
 }
 
 export async function captureReview(): Promise<void> {
+  // Refs without the CI flags: a review on this machine, with your own logins (see runLocalReview).
+  if (!has("base-project") && !has("head-project") && !has("pull-request") && !has("compare")) return localReview();
   const headProject = required("head-project");
   const configPath = flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH;
   const platform = platformFlag();
@@ -213,4 +218,40 @@ export async function captureBaseline(): Promise<void> {
   const platform = platformFlag();
   const config = resolvePlatformConfig(await readExploreConfig(project, flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH), platform);
   output({ ok: true, ...await runBaselineCi({ ...(platform ? { platform } : {}), project, sha: required("sha"), output: required("output"), config, progress: stderrProgress() }) });
+}
+
+/** `capture:review [--base REF] [--head REF | --uncommitted]`: a local review, opened in the Viewer or hosted with --upload. */
+async function localReview(): Promise<void> {
+  const platform = platformFlag();
+  const result = await runLocalReview({ project: flag("project") ?? process.cwd(), base: flag("base"), head: flag("head"),
+    uncommitted: has("uncommitted"), untracked: has("include-untracked"), ...(platform ? { platform } : {}),
+    scope: flag("scope"), expiresIn: flag("expires-in"), cache: !has("no-cache"), configPath: flag("config"), progress: stderrProgress() });
+  if (has("output")) for (const report of result.reports) {
+    const target = resolve(required("output"), report.platform);
+    await cp(report.directory, join(target, "report"), { recursive: true });
+    await cp(report.zip, join(target, "report.zip"));
+    report.directory = join(target, "report"); report.zip = join(target, "report.zip");
+  }
+  const summary = { ok: true, runId: result.runId, base: result.base, head: result.head,
+    reports: result.reports.map(({ platform, directory, zip, changes, device }) => ({ platform, directory, zip, ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) })) };
+  const zips = await Promise.all(result.reports.map(async report => ({ platform: report.platform, zip: new Uint8Array(await readFile(report.zip)),
+    ...(report.changes === undefined ? {} : { changes: report.changes }), ...(report.device ? { device: report.device } : {}) })));
+  if (has("upload")) {
+    const preview = result.config.report?.preview;
+    const hosted = await deployLocalReports({ reports: zips, project: previewProjectSlug(result.repository, preview?.project), ...(preview?.owner ? { owner: preview.owner } : {}),
+      expiresAfterDays: has("expires-in") ? previewDays(required("expires-in"), "--expires-in") : preview?.expiresAfterDays ?? PREVIEW_DEFAULT_DAYS });
+    if (has("json")) output({ ...summary, url: hosted.previewUrl, expiresAt: hosted.expiresAt });
+    else console.log(`Report: ${hosted.previewUrl}${hosted.expiresAt ? ` (until ${hosted.expiresAt.slice(0, 10)})` : ""}`);
+    return;
+  }
+  if (has("json") || has("no-open")) {
+    if (has("json")) output(summary);
+    else for (const report of result.reports) console.log(`${report.platform}: ${report.zip}`);
+    return;
+  }
+  const server = await startLocalReportServer({ reports: zips, ...(has("port") ? { port: nonNegativeInteger("port") } : {}) });
+  console.log(`Viewer: ${server.url} (Ctrl+C to stop)`);
+  openViewerInBrowser(server.url);
+  await new Promise<void>(done => { process.once("SIGINT", () => done()); process.once("SIGTERM", () => done()); });
+  await server.close();
 }

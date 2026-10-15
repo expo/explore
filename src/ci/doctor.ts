@@ -569,7 +569,10 @@ export async function runCaptureCheck(options: { project: string; output: string
     nextAction: "Omit --output to use a new temporary directory, or pass a directory inside the system temporary directory." });
   let failure: CaptureCheckResult["failure"];
   try {
+    // Agent mode with no API key set uses the local claude or codex login, as a local review does.
+    const subscription = config.mode === "agent" && config.agent !== undefined && !(options.environment ?? process.env)[PROVIDERS[config.agent.provider].secret]?.trim();
     await runBaselineCi({ ...(options.platform ? { platform: options.platform } : {}), project, sha: commit, output, config, useLocalEasSession: true,
+      ...(subscription ? { subscription: true } : {}),
       ...(options.environment ? { environment: options.environment } : {}), ...(options.runner ? { runner: options.runner } : {}),
       ...(options.progress ? { progress: options.progress } : {}) });
   } catch (error) {

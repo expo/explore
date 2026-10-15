@@ -437,7 +437,9 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
   now?: () => number; sleep?: (milliseconds: number) => void;
   agentSessionFactory?: PrepareCiExplorationOptions["createSession"]; progress?: Progress;
   /** Use the local `eas login` session instead of EXPO_TOKEN (expo-explore doctor --capture). */
-  useLocalEasSession?: boolean }) {
+  useLocalEasSession?: boolean;
+  /** Agent mode with the local claude or codex login instead of the provider's API key. */
+  subscription?: boolean }) {
   const environment = options.environment ?? process.env;
   assertCheckout(options.project, options.sha);
   const output = resolve(options.output);
@@ -453,7 +455,7 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
   let usagePhase: AgentUsagePhase = "preflight";
   const exploration = await prepareCiExploration(options.config, options.project, environment, active,
     { ...(options.agentSessionFactory ? { createSession: options.agentSessionFactory } : {}),
-      onUsage: recordAgentUsage(output, () => usagePhase) });
+      onUsage: recordAgentUsage(output, () => usagePhase), ...(options.subscription ? { subscription: true } : {}) });
   const directory = join(output, "baseline-export");
   usagePhase = "capture-baseline";
   const result = await runCiMap({ ...captureOptions(options.config, environment, options.runner, { now: options.now, sleep: options.sleep }), progress,
@@ -463,6 +465,7 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
     buildId: `baseline-${options.sha.slice(0, 12)}`, buildVersion: options.sha.slice(0, 8), gitCommit: options.sha,
     side: "head", planPath: join(output, "execution-plan.json"), sessionStatePath: join(output, "baseline-session") });
   const cacheRecipe = await recipe(options.config, plan, "head", environment, exploration.instructionsSha256);
+  if (options.subscription) cacheRecipe.toolsCommit += ":local-subscription";
   const bundle = await readCaptureBundle(directory); bundle.profile = cacheRecipe.profile;
   await writeFile(join(directory, "bundle.json"), JSON.stringify(bundle));
   const cached = await writeCaptureArtifactCache(directory, cacheRecipe);

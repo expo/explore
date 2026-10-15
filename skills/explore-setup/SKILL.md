@@ -150,6 +150,23 @@ Repeat `expo-explore doctor --json` and fix each `fail` until none remain, colle
 
 `setup --check` validates only the config schema and instruction file; it is not runtime verification. When the static checks pass and the user approves the EAS usage (and model usage in agent mode), commit locally and run `expo-explore doctor --capture --yes`. It captures the committed HEAD like the baseline workflow with the local EAS login and reports each route. `CAPTURE_LANDING_UNVERIFIED` means the screen redirected: fix the state that setup or the instructions establish. Open the screenshots of guarded screens and confirm each shows the intended state, not just the right route. Do not start paid builds or simulators merely to validate YAML, and do not weaken capture checks to make a replay pass. A setup that was not run on a device is **authored but not runtime-verified**; say so.
 
+## Review a change on this machine
+
+Once `.expo-explore/config.yaml` is committed, the same review CI runs works locally, between any two commits:
+
+```sh
+npx @expo/explore capture:review                   # HEAD against where it left the default branch
+npx @expo/explore capture:review --uncommitted     # your uncommitted changes to tracked files against HEAD's base
+npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all
+```
+
+- It prints which commits it compares. Each is checked out as a detached worktree in a temporary directory, its dependencies installed (frozen lockfile, no scripts, no Explore credentials in the environment), and removed afterwards; the user's checkout, index and branches are never touched.
+- Logins: `EXPO_TOKEN` and the provider's API key when they are set; otherwise the user's `eas login` and their local `claude` or `codex` login for the configured provider. If `eas whoami` fails, tell them to run `eas login`.
+- `--uncommitted` includes tracked files only. `--include-untracked` adds untracked, non-ignored files, which are uploaded with the EAS build, so check the listed files first and never include secrets.
+- Every configured platform is reviewed unless `--platform` picks one. It opens the report in a local Viewer; `--upload` hosts it instead and prints the link, `--no-open` or `--json` only prints the report paths.
+- Captures are cached in `~/.cache/expo-explore`, so a second review of the same base does not capture it again (`--no-cache` skips the cache). Ctrl+C stops the EAS Simulator sessions the review started.
+- It builds on EAS and runs simulator sessions, like a CI review: expect several minutes and EAS usage per run.
+
 ## Learn from observed failures
 
 When revising an existing setup, read the previous run's diagnostics, navigation trace and screenshots together. Separate an app prerequisite or defect from a controller failure and a provider or configuration failure. A successful tool response alone does not prove recovery: check the field value, destination, or visible content. For agent mode, inspect `agent-usage.jsonl` before proposing another paid run; missing accounting is unknown, not zero, and dollar fields are estimates. Respect exhausted credit and requests to stop paid calls.

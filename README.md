@@ -25,6 +25,29 @@ need to log in to something first, tell me the command.
 
 For apps behind a sign-in, see [Sign-in and other app state](#sign-in-and-other-app-state).
 
+### Review a change before you push it
+
+With [CI set up](#set-up-ci-reviews-on-every-pr), the review a PR gets also runs on your machine, between any two commits, with your `eas login` and your Claude Code or Codex login:
+
+```text
+Review my current changes with Expo Explore. Follow the "Review a change on this machine"
+section of https://unpkg.com/@expo/explore/skills/explore-setup/SKILL.md, compare my
+branch (with my uncommitted changes) against main, and open the report.
+```
+
+<details>
+<summary><strong>Run it yourself</strong></summary>
+
+```sh
+npx @expo/explore capture:review                     # HEAD against where it left the default branch
+npx @expo/explore capture:review --uncommitted       # your uncommitted changes too
+npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all --upload
+```
+
+It checks out both commits in temporary worktrees, captures them on EAS Simulator, and opens the report in a local Viewer (`--upload` hosts it instead). Captures are cached, so the same base is not captured twice.
+
+</details>
+
 <details>
 <summary><strong>Run it yourself</strong></summary>
 
