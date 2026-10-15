@@ -24,7 +24,7 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
         it runs both commits' code as you, so review only commits you would run)
   view [--catalog FILE] [--port N] [--no-open]
        (opens a report in the Viewer)
-  reports [list | open ID | upload ID | rm ID | prune] [--all] [--json]
+  reports [list | open ID | add REPORT... | upload ID | rm ID | prune] [--all] [--json]
        (the runs kept on this machine: local reviews, explorations and uploaded reports, for 30 days or up to 2 GB;
         in a terminal, an arrow-key picker: Enter opens a run in the local Viewer, u hosts it, d deletes it;
         ID is a run's id from reports list, or latest; EXPLORE_INTRO=off skips the title animation)

@@ -26,7 +26,8 @@ const PLAIN: Paint = { white: s => s, text: s => s, dim: s => s, faint: s => s, 
 const sgr = (code: string) => (text: string) => `\x1b[${code}m${text}\x1b[0m`;
 export const COLOR: Paint = { white: sgr("1;97"), text: sgr("97"), dim: sgr("38;5;244"), faint: sgr("38;5;238"), amber: sgr("38;5;214"), green: sgr("38;5;114"),
   yellow: sgr("38;5;221"), blue: sgr("38;5;111"), red: sgr("38;5;203") };
-const SELECT = (text: string) => `\x1b[48;5;236m${text}\x1b[0m`;
+/** The selected row's background, kept across the row's own colour resets so it reaches the end of the line. */
+const SELECT = (text: string) => `\x1b[48;5;236m${text.replaceAll("\x1b[0m", "\x1b[0m\x1b[48;5;236m")}\x1b[0m`;
 
 const visible = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "");
 const length = (text: string) => [...visible(text)].length;

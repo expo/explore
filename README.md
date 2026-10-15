@@ -50,7 +50,12 @@ npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all --uploa
 - Installs run without credential environment variables, which keeps tokens out of reach of a registry a commit's `.npmrc` names; that is not a sandbox. A registry that needs `${NPM_TOKEN}` in the project's `.npmrc` must be authenticated in your own `~/.npmrc`.
 - Captures are cached in `~/.cache/expo-explore`, so the same base is not captured twice (`--no-cache` skips it). Ctrl+C stops the run's simulator sessions.
 - Like a CI review, it builds on EAS (reusing a matching build) and runs simulator sessions: expect several minutes and EAS usage.
-- Every run is kept for 30 days (up to 2 GB in all): `npx @expo/explore reports` lists your local reviews, explorations and uploaded reports with their commits, and opens or hosts one without capturing again.
+- Every run is kept for 30 days (up to 2 GB in all): `npx @expo/explore reports` lists your local reviews, explorations and uploaded reports with their commits, and opens or hosts one without capturing again. `reports add <report.zip>` keeps a report you downloaded, such as a PR's `explore-review` artifact.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-reports-dark.png">
+  <img alt="npx @expo/explore reports in a terminal: the Expo Explore wordmark, then one line per saved run (a local review of HEAD vs main selected, an exploration of an app, and PR #1), and below them the selected run's head and base commits with their messages and its 13 modified, 2 added, 2 removed and 17 need-review screens" src="docs/screenshots/readme-reports-light.png">
+</picture>
 
 </details>
 

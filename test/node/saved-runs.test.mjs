@@ -94,4 +94,10 @@ test('reports lists, opens by id, removes and prunes from the command line', asy
   assert.match(reports('prune').stdout, /Nothing to prune/);
   assert.match(reports('rm', 'latest').stdout, /Deleted Add cats care guide/);
   assert.match(reports().stdout, /No saved runs yet/);
+  // A downloaded report is kept without hosting it.
+  const added = reports('add', join(import.meta.dirname, '../fixtures/example-review-artifact.zip'));
+  assert.equal(added.status, 0, added.stderr);
+  assert.match(added.stdout, new RegExp(`Kept Add cats care guide, retire Sweet Bee, refresh share label as ${run.id}\\.`));
+  assert.deepEqual((await listSavedRuns(environment)).map(each => each.id), [run.id]);
+  assert.match(reports('add').stderr, /Pass the report to keep/);
 });

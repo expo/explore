@@ -182,18 +182,31 @@ function listLines(runs: SavedRun[], now = Date.now()): string[] {
 }
 
 /**
- * `reports [list | open ID | upload ID | rm ID | prune] [--all] [--json]`: the runs kept on this machine. In a terminal
+ * `reports [list | open ID | add REPORT... | upload ID | rm ID | prune] [--all] [--json]`: the runs kept on this machine. In a terminal
  * with no subcommand it is an arrow-key picker (Enter opens the run in the local Viewer, u hosts it); elsewhere it lists.
  * ID is a run's id or `latest`.
  */
 export async function reports(): Promise<void> {
-  const [subcommand = "", id] = positionals();
+  const [subcommand = "", id, ...rest] = positionals();
   const all = await listSavedRuns();
   const repository = currentRepository();
   const scoped = has("all") || !repository || !all.some(run => run.repository === repository) ? all : all.filter(run => run.repository === repository);
   const totalBytes = () => all.reduce((sum, run) => sum + run.bytes, 0);
   switch (subcommand) {
     case "open": return openInViewer(await readSavedReports(await savedRun(id)));
+    case "add": {
+      // A report already on disk (a downloaded explore-review artifact, say), kept like a run made here, without hosting it.
+      const paths = [id, ...rest].filter((path): path is string => !!path);
+      if (!paths.length) argumentError("Pass the report to keep: expo-explore reports add ios/report.zip", undefined, "Run expo-explore reports add with a report.zip or report directory, one per platform of the same review.");
+      const read: ReadReport[] = [];
+      for (const path of paths) read.push(await readReport(path));
+      assertOneReview(read);
+      const review = read[0]!.summary.kind === "review" ? read[0]!.summary : undefined;
+      const head = review && commitSubject(process.cwd(), review.head), base = review && commitSubject(process.cwd(), review.base);
+      const run = await saveRun(read.map(report => ({ platform: report.summary.platform, zip: report.zip })), { subjects: { ...(head ? { head } : {}), ...(base ? { base } : {}) } });
+      if (has("json")) output({ ok: true, run }); else console.log(`Kept ${runTitle(run)} as ${run.id}.`);
+      return;
+    }
     case "upload": return uploadSavedRun(await savedRun(id));
     case "rm": {
       const run = await savedRun(id);
@@ -208,7 +221,7 @@ export async function reports(): Promise<void> {
       return;
     }
     case "list": case "": break;
-    default: argumentError(`Unknown reports subcommand: ${subcommand}`, undefined, "Use expo-explore reports, or reports list, open, upload, rm or prune.");
+    default: argumentError(`Unknown reports subcommand: ${subcommand}`, undefined, "Use expo-explore reports, or reports list, open, add, upload, rm or prune.");
   }
   if (has("json")) { output({ ok: true, runs: scoped, bytes: totalBytes(), directory: savedRunsDirectory() }); return; }
   if (subcommand === "list" || !process.stdin.isTTY || !process.stdout.isTTY || process.env.CI) { for (const line of listLines(scoped)) console.log(line); return; }
