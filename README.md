@@ -25,40 +25,6 @@ need to log in to something first, tell me the command.
 
 For apps behind a sign-in, see [Sign-in and other app state](#sign-in-and-other-app-state).
 
-### Review a change before you push it
-
-Once Explore is [set up](#set-up-ci-reviews-on-every-pr) (`.expo-explore/config.yaml` committed), the review a PR gets also runs on your machine, between any two commits. No tokens or keys to set: it uses your `eas login` and your Claude Code or Codex login.
-
-```text
-Review my current changes with Expo Explore. Follow the "Review a change on this machine"
-section of https://unpkg.com/@expo/explore/skills/explore-setup/SKILL.md, compare my
-branch (with my uncommitted changes) against main, and open the report.
-```
-
-<details>
-<summary><strong>Run it yourself</strong></summary>
-
-```sh
-npx @expo/explore capture:review                     # HEAD against where it left the default branch
-npx @expo/explore capture:review --uncommitted       # your uncommitted changes too
-npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all --upload
-```
-
-- It checks out both commits as temporary worktrees, installs their dependencies, captures every configured platform on EAS Simulator (`--platform` picks one), and opens the report in a local Viewer. `--upload` hosts it and prints the link; `report:upload <report.zip>` hosts one you already have.
-- Your checkout, index and branches are never touched. `--uncommitted` takes tracked changes only; `--include-untracked` adds untracked files, which are uploaded with the EAS build.
-- It runs both commits' code on your machine, as you: installing their dependencies, evaluating the app config, and bundling the JavaScript. That is what checking them out and running them would do, so review only commits you would run, and someone else's branch only if you trust it.
-- Installs run without credential environment variables, which keeps tokens out of reach of a registry a commit's `.npmrc` names; that is not a sandbox. A registry that needs `${NPM_TOKEN}` in the project's `.npmrc` must be authenticated in your own `~/.npmrc`.
-- Captures are cached in `~/.cache/expo-explore`, so the same base is not captured twice (`--no-cache` skips it); a capture unused for 30 days goes, and the cache stays under 2 GB. Ctrl+C stops the run's simulator sessions.
-- Like a CI review, it builds on EAS (reusing a matching build) and runs simulator sessions: expect several minutes and EAS usage.
-- Every run is kept for 30 days (up to 2 GB in all): `npx @expo/explore reports` lists your local reviews, explorations and uploaded reports with their commits, and opens or hosts one without capturing again. `reports add <report.zip>` keeps a report you downloaded, such as a PR's `explore-review` artifact.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-reports-dark.png">
-  <img alt="npx @expo/explore reports in a terminal: the Expo Explore wordmark, then one line per saved run (a local review of HEAD vs main selected, an exploration of an app, and PR #1), and below them the selected run's head and base commits with their messages and its 13 modified, 2 added, 2 removed and 17 need-review screens" src="docs/screenshots/readme-reports-light.png">
-</picture>
-
-</details>
-
 <details>
 <summary><strong>Run it yourself</strong></summary>
 
@@ -107,6 +73,42 @@ npx @expo/explore explore:session <session-id> --env-file path/.env.eas-simulato
 One card per screen the run reached, laid out by how many taps it took, with the tapped control on each edge. There is no before and after; that needs [CI](#set-up-ci-reviews-on-every-pr).
 
 ![The Map of an exploration report for the euxy app: one card per screen the run reached, laid out by taps from the launch screen, each edge labelled with the control that was tapped](docs/screenshots/readme-exploration-light.png)
+
+</details>
+
+### Review a change before you push it
+
+Once Explore is [set up](#set-up-ci-reviews-on-every-pr) (`.expo-explore/config.yaml` committed), the review a PR gets also runs on your machine, between any two commits. No tokens or keys to set: it uses your `eas login` and your Claude Code or Codex login.
+
+```text
+Review my current changes with Expo Explore. Follow the "Review a change on this machine"
+section of https://unpkg.com/@expo/explore/skills/explore-setup/SKILL.md, compare my
+branch (with my uncommitted changes) against main, and open the report.
+```
+
+Every run is kept on your machine for 30 days. `npx @expo/explore reports` lists your local reviews, explorations and uploaded reports with their commits, and reopens or hosts one without capturing again:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-reports-dark.png">
+  <img alt="npx @expo/explore reports in a terminal: the Expo Explore wordmark, then one line per saved run (a local review of HEAD vs main selected, an exploration of an app, and PR #1), and below them the selected run's head and base commits with their messages and its 13 modified, 2 added, 2 removed and 17 need-review screens" src="docs/screenshots/readme-reports-light.png">
+</picture>
+
+<details>
+<summary><strong>Run it yourself</strong></summary>
+
+```sh
+npx @expo/explore capture:review                     # HEAD against where it left the default branch
+npx @expo/explore capture:review --uncommitted       # your uncommitted changes too
+npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all --upload
+```
+
+- It checks out both commits as temporary worktrees, installs their dependencies, captures every configured platform on EAS Simulator (`--platform` picks one), and opens the report in a local Viewer. `--upload` hosts it and prints the link; `report:upload <report.zip>` hosts one you already have.
+- Your checkout, index and branches are never touched. `--uncommitted` takes tracked changes only; `--include-untracked` adds untracked files, which are uploaded with the EAS build.
+- It runs both commits' code on your machine, as you: installing their dependencies, evaluating the app config, and bundling the JavaScript. That is what checking them out and running them would do, so review only commits you would run, and someone else's branch only if you trust it.
+- Installs run without credential environment variables, which keeps tokens out of reach of a registry a commit's `.npmrc` names; that is not a sandbox. A registry that needs `${NPM_TOKEN}` in the project's `.npmrc` must be authenticated in your own `~/.npmrc`.
+- Captures are cached in `~/.cache/expo-explore`, so the same base is not captured twice (`--no-cache` skips it); a capture unused for 30 days goes, and the cache stays under 2 GB. Ctrl+C stops the run's simulator sessions.
+- Like a CI review, it builds on EAS (reusing a matching build) and runs simulator sessions: expect several minutes and EAS usage.
+- Saved runs take up to 2 GB in all, the oldest going first. `reports add <report.zip>` keeps a report you downloaded, such as a PR's `explore-review` artifact.
 
 </details>
 
