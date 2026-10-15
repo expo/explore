@@ -17,8 +17,20 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
        (--offline skips EAS and GitHub; --check-model sends one small request with the local provider key)
   doctor --capture [--project DIRECTORY] [--output DIRECTORY] [--platform ios|android] [--yes]
        (captures the committed HEAD like the baseline workflow, with your eas login, and reports each route)
+  capture:review [--base REF] [--head REF | --uncommitted [--include-untracked]] [--platform ios|android] [--scope all|changes]
+       [--upload [--expires-in 7d|30d|never]] [--no-open] [--no-cache] [--output DIRECTORY] [--project DIRECTORY]
+       (on this machine: checks out both commits in temporary worktrees, captures them with your eas login and your
+        local claude or codex login, and opens the report; the base defaults to where HEAD left the default branch;
+        it runs both commits' code as you, so review only commits you would run)
   view [--catalog FILE] [--port N] [--no-open]
-       (opens a report in the Viewer)`;
+       (opens a report in the Viewer)
+  reports [list | open ID | add REPORT... | upload ID | rm ID | prune] [--all] [--json]
+       (the runs kept on this machine: local reviews, explorations and uploaded reports, for 30 days or up to 2 GB;
+        in a terminal, an arrow-key picker: Enter opens a run in the local Viewer, u hosts it, d deletes it;
+        ID is a run's id from reports list, or latest; EXPLORE_INTRO=off skips the title animation)
+  report:upload <report.zip | report directory>... [--owner ACCOUNT] [--project SLUG] [--expires-in 7d|30d|never] [--config FILE] [--json]
+       (hosts reports already on this machine on EAS Hosting behind one link, with your eas login: one per platform
+        of the same review, from capture:review --output or a downloaded explore-review artifact, or one explore:binary report)`;
 
 const BINARY = `Prebuilt apps (no source needed; runs on EAS Simulator with your local claude or codex login):
   explore:binary <app.apk | app.app | app.tar.gz | simulator .ipa> [--output DIRECTORY] [--no-upload] [--json]
@@ -45,8 +57,9 @@ const BINARY = `Prebuilt apps (no source needed; runs on EAS Simulator with your
 const CI = `CI (the installed workflows run these; they manage remote EAS Simulator sessions):
   config:platforms [--project DIRECTORY] [--config FILE]
        (lists the platforms config.yaml captures; the review workflow's matrix)
-  capture:review --base-project DIRECTORY --head-project DIRECTORY --pull-request FILE
+  capture:review --base-project DIRECTORY --head-project DIRECTORY (--pull-request FILE | --compare FILE)
        --output TEMP_DIRECTORY [--config .expo-explore/config.yaml] [--platform ios|android]
+       (--compare reviews any two commits without a PR: {"origin":"compare","repositoryId","repository","base":{ref,sha},"head":{ref,sha}})
   capture:baseline --project DIRECTORY --sha COMMIT --output TEMP_DIRECTORY [--config FILE] [--platform ios|android]
   source:verify --base-project DIRECTORY --head-project DIRECTORY
        --base-sha COMMIT --head-sha COMMIT --output DIRECTORY [--config FILE] [--scope all|changes] [--platform ios|android]
@@ -58,7 +71,14 @@ const CI = `CI (the installed workflows run these; they manage remote EAS Simula
   ci:publish --input REPORT_INPUT --artifact-url GITHUB_ARTIFACT_URL [--platform ios|android]
   ci:publish --inputs DIRECTORY        (one <platform>/ subdirectory per captured platform)
   ci:deploy --input REPORT_INPUT --report REPORT_DIR --artifact-url GITHUB_ARTIFACT_URL [--platform ios|android]
-  ci:deploy --inputs DIRECTORY --reports DIRECTORY`;
+  ci:deploy --inputs DIRECTORY --reports DIRECTORY
+  ci:pr --pr N [--output FILE] [--app-dir DIRECTORY]
+       (resolves the live PR and refuses it unless it is open, from this repository, and by a trusted author)
+  ci:compare-refs --project DIRECTORY --base REF --head REF [--output FILE]
+  ci:find-baseline --sha COMMIT [--platform ios|android]
+  ci:after-capture --output TEMP_DIRECTORY --checkout DIRECTORY...
+       (stops the capture's EAS Simulator sessions and checks capture left each checkout unchanged)
+       (the ci:* commands write their results to $GITHUB_OUTPUT for the next steps)`;
 
 const MAP_QUERIES = `Map queries (for coding agents reading a local exploration map; JSON output, never provision devices):
   summary

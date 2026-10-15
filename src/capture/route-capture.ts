@@ -1066,6 +1066,7 @@ export async function capturePlannedRoutes(options: {
   };
   if (rootLink) say(`reset: opening ${rootLink} before each route link (capture.reset: root-link)`);
   for (const route of options.routes) {
+    capture.signal?.throwIfAborted();
     if (outcomes[route.id]?.status === "captured" && !setupFailure) continue;
     // The default app link would show this route without the prepared state. Keep the setup capture failure.
     if (prepared.has(route.id) && outcomes[route.id]?.status !== "captured") continue;

@@ -1,12 +1,17 @@
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { appendFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter, configure } from "@zip.js/zip.js";
+import { MAX_METADATA_BYTES } from "./agent-api.js";
 import { publishCiReportComment, readCiReportInput, type CiReportInput } from "./artifact.js";
+import { readZipDirectory, readZipEntry } from "./zip-reader.js";
 import { reviewChangeCount, reviewDevice } from "./pr-comment-body.js";
 import type { ExplorePlatform } from "../config/explore-config.js";
+import type { ArtifactReport } from "../contracts/artifact-report.js";
+import { EXPLORATION_REPORT_KIND, type ExplorationReport } from "../contracts/standalone-report.js";
+import { compareTitleMarkdown, type CompareReviewPresentation } from "../contracts/review.js";
 import { CiError, toCiError } from "../shared/ci-errors.js";
 import { TOOL_ROOT, packageBin } from "../shared/package-paths.js";
 
@@ -63,12 +68,15 @@ export type PreviewDeployResult = {
   reportBytes: number;
   reports: Array<{ platform?: ExplorePlatform; artifactUrl: string; reportSha256: string; reportBytes: number }>;
   headSha: string;
+  /** A comparison's link is in the run summary only: callers must not print previewUrl, which is unmasked for it. */
+  linkedFromRunSummary?: true;
 };
 
 export const PREVIEW_EXPORT_PATH = join(TOOL_ROOT, "dist", "hosting-preview");
 const CIPHER_AAD = "expo-explore-preview/1";
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
-const MAX_REPORT_BYTES = 256 * 1024 * 1024;
+/** The largest report ZIP a hosted preview serves. */
+export const MAX_REPORT_BYTES = 256 * 1024 * 1024;
 const ZIP_DATE = new Date("2000-01-01T00:00:00Z");
 
 function base32(bytes: Uint8Array): string {
@@ -154,6 +162,54 @@ export async function zipReportDirectory(reportPath: string): Promise<Uint8Array
   return writer.close();
 }
 
+/** What a report ZIP holds, from its review.json or exploration.json: where to host it and how the platform switch labels it. */
+export type ReportZipSummary = { platform: ExplorePlatform; changes?: number; device?: string }
+  & ({ kind: "review"; repository: string; runId: string; base: string; head: string } | { kind: "exploration" });
+
+/**
+ * Reads a report ZIP as `zipReportDirectory` writes it (or GitHub's download of a report artifact): one report file and
+ * its assets, nothing else. It uses the hosted reader (zip-reader.ts) with its limits, so a ZIP accepted here is one a
+ * hosted or local Viewer link can serve, and a crafted one cannot inflate past them.
+ */
+export async function readReportZip(zip: Uint8Array): Promise<ReportZipSummary> {
+  if (zip.byteLength > MAX_REPORT_BYTES) throw new Error("Report exceeds the 256 MiB hosted preview limit");
+  const entries = readZipDirectory(zip);
+  if (!entries) throw new Error("Not a ZIP archive a hosted report can read");
+  const names = [...entries.keys()].filter(name => !name.endsWith("/"));
+  const reportFile = REPORT_FILE_NAMES.find(name => names.includes(name));
+  if (!reportFile || names.some(name => name !== reportFile && !/^assets\/[a-f0-9]{64}\.(png|mp4)$/.test(name))) {
+    throw new Error("A report ZIP must contain review.json (or exploration.json) and assets/<sha256>.png or .mp4 only");
+  }
+  const bytes = await readZipEntry(zip, entries.get(reportFile)!, MAX_METADATA_BYTES);
+  if (!bytes) throw new Error(`${reportFile} is unreadable or larger than ${MAX_METADATA_BYTES / 1024 / 1024} MiB`);
+  const report = JSON.parse(new TextDecoder().decode(bytes));
+  if (reportFile === "exploration.json") {
+    const exploration = (report as Partial<ExplorationReport>).exploration;
+    if (report?.kind !== EXPLORATION_REPORT_KIND || !exploration || (exploration.app?.platform !== "ios" && exploration.app?.platform !== "android")) {
+      throw new Error("exploration.json is not an Explore exploration report");
+    }
+    return { kind: "exploration", platform: exploration.app.platform, device: `${exploration.device.model} ${exploration.device.osVersion}`.trim() };
+  }
+  const review = (report as Partial<ArtifactReport>).review;
+  const pr = review?.pullRequest;
+  // Reports from before Android support carry no platform; they are all iOS.
+  const platform = review?.runtime?.platform ?? "ios";
+  if (report?.kind !== "explore.report" || !review || !pr || (platform !== "ios" && platform !== "android")) {
+    throw new Error("review.json is not an Explore review report");
+  }
+  // What the CLI later hands to git and shows in a terminal: full SHAs and plain text, or the ZIP is not a report.
+  const sha = (value: unknown) => typeof value === "string" && /^[0-9a-f]{40}$/i.test(value);
+  const text = (value: unknown) => typeof value === "string" && value.length > 0 && value.length <= 1000;
+  if (!sha(pr.head?.sha) || !sha(pr.base?.sha) || !text(pr.head?.ref) || !text(pr.base?.ref) || !text(pr.repository) || !text(pr.title) || !text(review.runId)) {
+    throw new Error("review.json does not name its repository, title and commits as a report does");
+  }
+  const changes = reviewChangeCount({ review });
+  const device = reviewDevice({ runtime: { deviceModel: review.runtime?.device?.model ?? "", osVersion: review.runtime?.device?.osVersion ?? "",
+    ...(review.runtime?.colorSchemes ? { colorSchemes: review.runtime.colorSchemes } : {}) } });
+  return { kind: "review", platform, repository: pr.repository, runId: review.runId, base: pr.base.sha, head: pr.head.sha,
+    ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) };
+}
+
 /** iv (12 bytes) || AES-256-GCM ciphertext || tag, authenticated with the preview AAD; what the Worker decrypts. */
 export function sealReport(plain: Uint8Array, key: Uint8Array, iv: Uint8Array): Uint8Array {
   const cipher = createCipheriv("aes-256-gcm", key, iv);
@@ -179,11 +235,21 @@ type SealedReport = { entry: PreviewReportInput; input: CiReportInput; zip: Uint
 
 function previewError(code: string, message: string, nextAction: string): CiError { return new CiError({ code, stage: "preflight", message, nextAction }); }
 
+/** A device label for the platform switch, safe in the sealed .env: no `#` (a dotenv comment), markup or control characters, and short. */
+/**
+ * A device label for the platform switch, safe in the sealed .env: letters, digits and a few separators only. `eas
+ * deploy` reads that file with variable expansion, so a `$` (even single-quoted) would pull the deploying process's
+ * environment into the label, and a `#` or a backslash would cut or corrupt the JSON around it.
+ */
+function listingDevice(device: string): string {
+  return device.replace(/[^\p{L}\p{N} .,()+·_:/-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
 /** The worker's EXPLORE_PREVIEW_REPORTS entries, in the order the workflow lists platforms; also what reports.json must echo. */
 export function previewReportListing(reports: ReadonlyArray<Pick<SealedReport, "entry" | "input" | "file">>, reportDirectory: string) {
   return reports.map(report => {
     const changes = reviewChangeCount(report.input.commentState);
-    const device = reviewDevice(report.input.commentState).replace(/[#<>\u0000-\u001f\u007f]/g, "").trim().slice(0, 120);
+    const device = listingDevice(reviewDevice(report.input.commentState));
     return { platform: report.entry.platform!, path: `/_report/${reportDirectory}/${report.file}`,
       ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) };
   });
@@ -212,8 +278,8 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
   if (pr.origin === "local") throw new Error("Local reports cannot be deployed as hosted previews");
   for (const { input } of inputs.slice(1)) {
     const other = input.publicReview;
-    if (!input.preview || other.pullRequest.origin === "local" || other.pullRequest.repository !== pr.repository || other.pullRequest.number !== pr.number
-      || other.pullRequest.head.sha !== pr.head.sha || other.runId !== review.runId || other.runAttempt !== review.runAttempt) {
+    if (!input.preview || other.pullRequest.origin !== pr.origin || other.pullRequest.repository !== pr.repository || other.pullRequest.number !== pr.number
+      || other.pullRequest.head.sha !== pr.head.sha || other.pullRequest.base.sha !== pr.base.sha || other.runId !== review.runId || other.runAttempt !== review.runAttempt) {
       throw previewError("PREVIEW_REPORTS_MISMATCH", "The platform reports do not come from the same review run", "Deploy only the reports this workflow run produced for the same PR head.");
     }
   }
@@ -240,11 +306,14 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
     reportDirectory, ...(listing ? { listing } : {}), project, ...(first.preview.owner ? { owner: first.preview.owner } : {}),
     ownerHint: "Set report.preview.owner in .expo-explore/config.yaml to the account that should hold the preview project.",
     projectHint: "Give EXPO_TOKEN's account permission to create projects, or set report.preview.project to an existing project it can deploy to.",
-    expiresAt, exportPath, environment, run, transport, now, random, ...(options.sleep ? { sleep: options.sleep } : {}), ...(options.onSecret ? { onSecret: options.onSecret } : {}),
+    expiresAt, exportPath, environment, run, transport, now, random, ...(options.sleep ? { sleep: options.sleep } : {}),
+    // The runner masks secrets in job summaries too, so a masked token would reach a comparison's summary as ***.
+    // Its link appears nowhere else (not in the log), as a PR's appears only in its comment, for the same readers.
+    ...(options.onSecret && pr.origin !== "compare" ? { onSecret: options.onSecret } : {}),
     verifyTimeoutMs: options.verifyTimeoutMs ?? 180_000 });
   } catch (error) {
     // The report job's comment says the report is deploying; it must now offer the download-and-drop flow instead.
-    for (const report of reports) {
+    if (pr.origin !== "compare") for (const report of reports) {
       try {
         await publishCiReportComment({ inputPath: report.entry.inputPath, artifactUrl: report.entry.artifactUrl, environment, transport,
           ...(report.entry.platform ? { platform: report.entry.platform } : {}), previewFailed: true });
@@ -253,9 +322,11 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
     throw error;
   }
   const previewUrl = hosted.previewUrl;
+  // A comparison has no pull request: its link goes to the run's summary, which the same repository readers see.
+  if (pr.origin === "compare") await writeCompareSummary(environment, pr, previewUrl, expiresAt, reports.map(report => report.input));
   {
     let headSha = pr.head.sha;
-    for (const report of reports) {
+    if (pr.origin !== "compare") for (const report of reports) {
       const published = await publishCiReportComment({ inputPath: report.entry.inputPath, artifactUrl: report.entry.artifactUrl, environment, transport,
         ...(report.entry.platform ? { platform: report.entry.platform } : {}), preview: { url: previewUrl, expiresAt } });
       headSha = published.headSha;
@@ -263,8 +334,28 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
     return { previewUrl, expiresAt: expiresAt === null ? null : new Date(expiresAt).toISOString(), deploymentId: hosted.deploymentId, deploymentUrl: hosted.deploymentUrl,
       project, owner: hosted.owner, reportSha256: reports[0]!.sha256, reportBytes: reports[0]!.zip.byteLength,
       reports: reports.map(report => ({ ...(report.entry.platform ? { platform: report.entry.platform } : {}), artifactUrl: report.entry.artifactUrl,
-        reportSha256: report.sha256, reportBytes: report.zip.byteLength })), headSha };
+        reportSha256: report.sha256, reportBytes: report.zip.byteLength })), headSha,
+      ...(pr.origin === "compare" ? { linkedFromRunSummary: true as const } : {}) };
   }
+}
+
+/** The comparison's job summary: what was compared, the hosted link, and each platform's change count. */
+export function renderCompareSummary(comparison: CompareReviewPresentation, previewUrl: string, expiresAt: number | null, inputs: CiReportInput[]): string {
+  const platforms = inputs.map(input => {
+    const changes = reviewChangeCount(input.commentState);
+    const device = reviewDevice(input.commentState);
+    return `- ${input.publicReview.runtime.platform === "android" ? "Android" : "iOS"}${device ? ` (${device})` : ""}: ${changes === undefined ? "no review" : `${changes} ${changes === 1 ? "change" : "changes"}`}`;
+  });
+  return [`### Explore: ${compareTitleMarkdown(comparison)}`, "",
+    `[Open the report](${previewUrl}) · [${comparison.base.sha.slice(0, 8)}..${comparison.head.sha.slice(0, 8)}](${comparison.url})`
+      + (expiresAt === null ? "" : ` · link expires ${new Date(expiresAt).toISOString().slice(0, 10)}`), "",
+    ...platforms, ""].join("\n");
+}
+
+async function writeCompareSummary(environment: NodeJS.ProcessEnv, comparison: CompareReviewPresentation, previewUrl: string, expiresAt: number | null, inputs: CiReportInput[]) {
+  const path = environment.GITHUB_STEP_SUMMARY;
+  if (!path) return;
+  await appendFile(path, renderCompareSummary(comparison, previewUrl, expiresAt, inputs));
 }
 
 type HostedReportInput = { zip: Uint8Array; sha256: string; file: string; query: string };
@@ -316,11 +407,13 @@ async function deploySealedReports(options: {
 
     const who = run(process.execPath, [eas, "whoami"], { cwd: work, env: easEnvironment });
     const accounts = who.status === 0 ? whoamiAccounts(who.stdout) : [];
-    if (!accounts.length) throw deployError("EAS_NOT_AUTHENTICATED", "The EAS CLI could not sign in with EXPO_TOKEN.",
-      "Use a valid EXPO_TOKEN for a robot user of the app's Expo account.", { details: { stderr: lastLine(who.stderr) } });
+    // On a laptop without EXPO_TOKEN the deploy uses your `eas login`, and the messages say so.
+    const login = environment.EXPO_TOKEN?.trim() ? "EXPO_TOKEN" : "Your EAS login";
+    if (!accounts.length) throw deployError("EAS_NOT_AUTHENTICATED", login === "EXPO_TOKEN" ? "The EAS CLI could not sign in with EXPO_TOKEN." : "You are not logged in to EAS.",
+      login === "EXPO_TOKEN" ? "Use a valid EXPO_TOKEN for a robot user of the app's Expo account." : "Run eas login (or set EXPO_TOKEN), then rerun.", { details: { stderr: lastLine(who.stderr) } });
     const owner = options.owner ?? (accounts.length === 1 ? accounts[0]! : undefined);
     if (!owner || !accounts.includes(owner)) throw deployError("PREVIEW_OWNER_AMBIGUOUS",
-      owner ? `EXPO_TOKEN has no access to the Expo account ${owner}.` : `EXPO_TOKEN can deploy to several Expo accounts: ${accounts.join(", ")}.`,
+      owner ? `${login} has no access to the Expo account ${owner}.` : `${login} can deploy to several Expo accounts: ${accounts.join(", ")}.`,
       options.ownerHint, { details: { accounts } });
     await writeFile(join(work, "package.json"), JSON.stringify({ name: project, version: "0.0.0", private: true }));
     await writeFile(join(work, "app.json"), JSON.stringify({ expo: { name: `${project}`, slug: project, owner, web: { output: "server" } } }));
@@ -396,6 +489,8 @@ async function deploySealedReports(options: {
 export type ExplorationDeployOptions = {
   /** The `explore:binary` report directory (exploration.json plus assets/). */
   reportPath: string;
+  /** The explored app's platform, listed so the Worker does not take the report for iOS. */
+  platform?: ExplorePlatform;
   project: string;
   owner?: string;
   /** Days until the hosted link stops serving the report; null never expires. */
@@ -431,7 +526,10 @@ export async function deployExplorationReport(options: ExplorationDeployOptions)
   const random = options.random ?? (bytes => new Uint8Array(randomBytes(bytes)));
   const now = options.now ?? Date.now;
   const sha256 = createHash("sha256").update(zip).digest("hex");
-  const hosted = await deploySealedReports({ reports: [{ zip, sha256, file: "report.zip.enc", query: "" }], reportDirectory: base32(random(10)), project: options.project,
+  const reportDirectory = base32(random(10));
+  const file = options.platform ? `${options.platform}.zip.enc` : "report.zip.enc";
+  const hosted = await deploySealedReports({ reports: [{ zip, sha256, file, query: options.platform ? `?platform=${options.platform}` : "" }], reportDirectory,
+    ...(options.platform ? { listing: [{ platform: options.platform, path: `/_report/${reportDirectory}/${file}` }] } : {}), project: options.project,
     ...(options.owner ? { owner: options.owner } : {}), ownerHint: "Pass --owner with the Expo account that should host the report.",
     projectHint: "Give this EAS login permission to create projects under the owner, or pass --project with an existing slug.",
     expiresAt: options.expiresAfterDays === null ? null : now() + options.expiresAfterDays * 86_400_000, exportPath, environment, run: options.run ?? defaultRun, ...(options.sleep ? { sleep: options.sleep } : {}),
@@ -490,6 +588,43 @@ export async function deployFixturePreview(options: FixturePreviewOptions): Prom
     expiresAt: null, exportPath, environment, run: options.run ?? defaultRun, ...(options.sleep ? { sleep: options.sleep } : {}), transport: options.transport ?? fetch, now: options.now ?? Date.now, random,
     ...(options.onSecret ? { onSecret: options.onSecret } : {}), verifyTimeoutMs: options.verifyTimeoutMs ?? 180_000, alias: options.alias,
     ...(options.token ? { token: options.token } : {}) });
+}
+
+/**
+ * Report ZIPs on this machine behind one token (`capture:review --upload`, `report:upload`), one per platform: the same
+ * sealed deployment as a PR preview, from ZIPs instead of GitHub artifacts, with the local EAS login or EXPO_TOKEN.
+ */
+export async function deployLocalReports(options: {
+  reports: Array<{ platform: ExplorePlatform; zip: Uint8Array; changes?: number; device?: string }>;
+  project: string; owner?: string; expiresAfterDays: number | null;
+  /** What to change when the owner or project is not usable; defaults name report.preview in config.yaml. */
+  ownerHint?: string; projectHint?: string;
+  exportPath?: string; environment?: NodeJS.ProcessEnv; run?: CommandRunner; sleep?: (milliseconds: number) => Promise<void>;
+  transport?: typeof fetch; now?: () => number; random?: (bytes: number) => Uint8Array; verifyTimeoutMs?: number;
+}): Promise<HostedDeployment> {
+  const environment = options.environment ?? process.env;
+  if (!options.reports.length || new Set(options.reports.map(report => report.platform)).size !== options.reports.length) {
+    throw previewError("PREVIEW_REPORTS_INVALID", "A local upload needs one report per platform", "Capture each platform once, then upload.");
+  }
+  const exportPath = resolve(options.exportPath ?? PREVIEW_EXPORT_PATH);
+  await assertExport(exportPath);
+  const now = options.now ?? Date.now;
+  const random = options.random ?? (bytes => new Uint8Array(randomBytes(bytes)));
+  const reportDirectory = base32(random(10));
+  // Always listed, even alone: the Worker takes an unlisted report for iOS, so an Android one would be mislabelled.
+  const reports = options.reports.map(report => ({ ...report, sha256: createHash("sha256").update(report.zip).digest("hex"), file: `${report.platform}.zip.enc` }));
+  const listing = reports.map(report => {
+    const device = report.device ? listingDevice(report.device) : "";
+    return { platform: report.platform, path: `/_report/${reportDirectory}/${report.file}`, ...(report.changes === undefined ? {} : { changes: report.changes }), ...(device ? { device } : {}) };
+  });
+  return deploySealedReports({
+    reports: reports.map(report => ({ zip: report.zip, sha256: report.sha256, file: report.file, query: `?platform=${report.platform}` })),
+    reportDirectory, listing, project: options.project, ...(options.owner ? { owner: options.owner } : {}),
+    ownerHint: options.ownerHint ?? "Set report.preview.owner in .expo-explore/config.yaml to the account that should hold the hosted reports.",
+    projectHint: options.projectHint ?? "Make sure your Expo account can create projects, or set report.preview.project to an existing project you can deploy to.",
+    expiresAt: options.expiresAfterDays === null ? null : now() + options.expiresAfterDays * 86_400_000, exportPath, environment,
+    run: options.run ?? defaultRun, ...(options.sleep ? { sleep: options.sleep } : {}), transport: options.transport ?? fetch, now, random,
+    verifyTimeoutMs: options.verifyTimeoutMs ?? 180_000 });
 }
 
 const ARTIFACT_DIRECTORY = /^explore-(capture|review)-\d+-\d+-(ios|android)$/;
@@ -591,10 +726,12 @@ async function verifyDeployment(check: { origin: string; token: string; reports:
       "Rerun the deploy job; the deployment's report listing did not match.", { details: { status: list.status } });
   }
   const other = check.token.endsWith("a") ? `${check.token.slice(0, -1)}b` : `${check.token.slice(0, -1)}a`;
-  for (const path of ["/", `/p/${other}`, `/p/${other}/report.zip`, `/p/${check.token}/viewer/index.html`]) {
+  // Errors name each probe by its shape: the near-miss token differs from the real one in its last character only.
+  for (const [path, shape] of [["/", "/"], [`/p/${other}`, "/p/<wrong token>"], [`/p/${other}/report.zip`, "/p/<wrong token>/report.zip"],
+    [`/p/${check.token}/viewer/index.html`, "/p/<token>/viewer/index.html"]] as const) {
     const response = await get(path);
-    if (response.status !== 404) throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview answered HTTP ${response.status} without a valid token at ${path}.`,
-      "Do not share this deployment; delete it in the EAS Hosting dashboard and report the issue to Explore.", { details: { path, status: response.status } });
+    if (response.status !== 404) throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview answered HTTP ${response.status} without a valid token at ${shape}.`,
+      "Do not share this deployment; delete it in the EAS Hosting dashboard and report the issue to Explore.", { details: { path: shape, status: response.status } });
   }
   return { liveAfterMs };
 }

@@ -4,7 +4,8 @@ export type PullRequestRef = {
 };
 
 export type PullRequestPresentation = {
-  origin?: "local";
+  /** "compare": two commits reviewed without a pull request; `url` is github.com's compare page and there is no number. */
+  origin?: "local" | "compare";
   number?: number | undefined;
   title: string;
   url?: string | undefined;
@@ -159,6 +160,21 @@ function pullRequestRef(value: unknown): PullRequestRef | undefined {
   return ref && sha ? { ref, sha } : undefined;
 }
 
+/** github.com's two-dot compare page for exactly these two commits, or nothing. */
+function githubCompareUrl(value: unknown, baseSha: string, headSha: string): string | undefined {
+  const string = nonEmptyString(value);
+  if (!string) return undefined;
+  try {
+    const url = new URL(string);
+    if (url.protocol !== "https:" || url.hostname !== "github.com" || url.username || url.password || url.search || url.hash
+      || !/^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/compare\/[0-9a-f]{40}\.\.[0-9a-f]{40}$/.test(url.pathname)
+      || !url.pathname.endsWith(`/compare/${baseSha}..${headSha}`)) return undefined;
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
 function githubPullRequestUrl(value: unknown, number: number): string | undefined {
   const string = nonEmptyString(value);
   if (!string) return undefined;
@@ -186,6 +202,13 @@ function githubPullRequestUrl(value: unknown, number: number): string | undefine
 function pullRequest(value: unknown): PullRequestPresentation | undefined {
   const candidate = record(value);
   if (!candidate) return undefined;
+  if (candidate.origin === "compare") {
+    const title = nonEmptyString(candidate.title);
+    const base = pullRequestRef(candidate.base);
+    const head = pullRequestRef(candidate.head);
+    const url = base && head ? githubCompareUrl(candidate.url, base.sha, head.sha) : undefined;
+    return title && base && head && url ? { origin: "compare", title, url, base, head } : undefined;
+  }
   const number = candidate.number;
   if (!Number.isSafeInteger(number) || (number as number) <= 0) return undefined;
   const title = nonEmptyString(candidate.title);

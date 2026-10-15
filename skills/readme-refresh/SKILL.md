@@ -38,6 +38,21 @@ node scripts/readme-screenshots.mjs --report ~/euxy-report/ios.zip --select /set
 
 `docs/screenshots/readme-exploration-light.png` is the black-box map and comes from a euxy `explore:binary` run (`npx @expo/explore explore:binary <euxy simulator build> --no-upload`, then `expo-explore view --dir <output>` at 1760×1000, Map, Fit canvas). It has no dark variant and is a plain Markdown image. Regenerate it when the Map's rendering of edges or labels changed; otherwise keep it, and say so in the PR.
 
+`docs/screenshots/readme-reports-light.png` and `-dark.png` show `npx @expo/explore reports` in a terminal window on the same stage as the PR comment image. They are laid out in Paper (Brent's "Patient umbrella" file, page "README — reports picker image", one artboard per theme), from the real picker over real saved runs. Refresh them when the picker's layout or colours change:
+
+```sh
+npx @expo/explore reports list                                         # your saved runs: note a euxy local review's id
+export EXPLORE_CACHE_DIR=$(mktemp -d)                                  # a scratch store for the image, not your own runs
+cd ~/code/euxy                                                         # inside euxy, so the commit messages are found
+npx @expo/explore reports add ~/.cache/expo-explore/reports/<that id>/ios.zip
+npx @expo/explore reports add ~/euxy-report/ios.zip                    # the PR report from step 1
+npx @expo/explore reports add <an explore:binary report directory>     # an exploration, so all three kinds show
+cd - && npm run build:cli && node scripts/readme-reports-rows.mjs > /tmp/reports-rows.html
+```
+
+- The script renders the picker as the CLI draws it (96 columns, the newest run selected) and writes the terminal body as HTML: each coloured piece is exactly its characters wide, so columns line up, and the wordmark is drawn as cell rectangles, since a design tool's font does not draw `█▀▄` cell for cell.
+- In Paper, replace the frame named "Terminal" inside each artboard's window with that HTML, check both artboards in a screenshot (crisp wordmark, aligned columns, the selected row highlighted to the end, coloured counts), and export both at 2x as `readme-reports-light.png` and `readme-reports-dark.png`. The window's title bar reads `npx @expo/explore reports`, as people run it.
+
 Look at every PNG you produced before committing, light and dark: the selected screen should be the one you asked for, the Compare view must show Before and After with outlines, the Screens grid must show the Added/Removed/Modified badges, the PR comment must show the heading links and result glyphs. Describe each in its Markdown alt text as what the picture shows, not what the feature is.
 
 ## 3. Pass over the content as a first-time user
@@ -45,7 +60,7 @@ Look at every PNG you produced before committing, light and dark: the selected s
 Read the README top to bottom once without opening a collapsible. At that level it may only answer, in this order:
 
 1. What Explore is (one short paragraph), the hero image, and the link to the live euxy example (`explore-example--euxy.expo.app`, redeployed on every merge to main by `.github/workflows/example-report.yml`).
-2. **Try it on your app**: one sentence and a prompt to paste into Claude Code or Codex that gets a simulator build of any app (Expo or not, or just a build) and runs `explore:binary` on it.
+2. **Try it on your app**: one sentence and a prompt to paste into Claude Code or Codex that gets a simulator build of any app (Expo or not, or just a build) and runs `explore:binary` on it. Under it, **Review a change before you push it**: one sentence and a prompt that runs `capture:review` locally (the explore-setup skill's "Review a change on this machine" section) on a set-up app.
 3. **Set up CI: reviews on every PR**: one sentence and the setup prompt.
 4. **What you get**: the PR comment, Compare, and Screens, each a heading, one line, and its picture, then a prompt for asking an agent about a report.
 

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,36 +6,41 @@ import test from "node:test";
 import { parse } from "yaml";
 
 const workflow = parse(await readFile(new URL("../../templates/explore-review.yml", import.meta.url), "utf8"));
-const require = createRequire(import.meta.url);
-const scriptFor = (job, name) => workflow.jobs[job].steps.find(step => step.name === name).with.script;
-const execute = (source, github, context, core, processEnv) => new Function("github", "context", "core", "require", "process",
-  `return (async () => {${source}\n})();`)(github, context, core, require, { env: processEnv });
-const context = { repo: { owner: "acme", repo: "app" }, runId: 1234 };
+const { resolvePullRequest, findBaselineArtifact, findOptionalBaseline } = await import("../../dist/ci/workflow-steps.js");
+const environment = { GITHUB_REPOSITORY: "acme/app", GITHUB_TOKEN: "test-token" };
 const samplePr = () => ({
   state: "open", draft: false, number: 91, title: "PR", html_url: "https://github.com/acme/app/pull/91", user: { login: "author" },
-  base: { ref: "main", sha: "a".repeat(40), repo: { id: 12, full_name: "acme/app" } },
+  base: { ref: "main", sha: "a".repeat(40), repo: { id: 12, full_name: "acme/app", default_branch: "main" } },
   head: { ref: "feature/settings", sha: "b".repeat(40), repo: { full_name: "acme/app" } },
 });
 
-async function authorize(t, { pr = samplePr(), permission = "write", number = "91", config } = {}) {
-  const directory = await mkdtemp(join(tmpdir(), "explore-workflow-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const outputs = {};
-  await execute(scriptFor("capture", "Resolve the live pull request and authorize its source"), { rest: {
-    pulls: { get: async () => ({ data: pr }) },
-    repos: {
-      getCollaboratorPermissionLevel: async () => ({ data: { permission } }),
-      getContent: async ({ path }) => {
-        assert.equal(path, ".expo-explore/config.yaml");
-        if (config === undefined) throw Object.assign(new Error("Not Found"), { status: 404 });
-        return { data: { content: Buffer.from(config).toString("base64") } };
-      },
-    },
-  } }, context, { setOutput: (key, value) => { outputs[key] = value; } }, {
-    RUNNER_TEMP: directory, PR_NUMBER: number,
-  });
-  return { metadata: JSON.parse(await readFile(join(directory, "explore-pr.json"), "utf8")), outputs };
+/** `ci:pr` against a GitHub that answers with this PR, the author's permission, and the default branch's config. */
+async function authorize(t, { pr = samplePr(), permission = "write", number = "91", config, configStatus } = {}) {
+  const transport = async (input, init = {}) => {
+    const url = new URL(input);
+    assert.equal(init.headers?.authorization, "Bearer test-token");
+    if (url.pathname === "/repos/acme/app/pulls/91") return Response.json(pr);
+    if (url.pathname === `/repos/acme/app/collaborators/${encodeURIComponent(pr.user.login)}/permission`) return Response.json({ permission });
+    if (url.pathname === "/repos/acme/app/contents/.expo-explore/config.yaml") {
+      assert.equal(url.searchParams.get("ref"), "main", "trust comes from the default branch, never the PR");
+      if (configStatus) return new Response("boom", { status: configStatus });
+      return config === undefined ? new Response("Not Found", { status: 404 }) : Response.json({ content: Buffer.from(config).toString("base64") });
+    }
+    throw new Error(`unexpected request ${url}`);
+  };
+  const { presentation } = await resolvePullRequest({ number: Number(number), environment, transport });
+  return { metadata: presentation, outputs: { pr_number: presentation.number } };
 }
+
+test("the review workflow resolves and authorizes the PR with ci:pr from the installed release, in both jobs that need it", () => {
+  for (const job of ["platforms", "capture"]) {
+    const step = workflow.jobs[job].steps.find(step => step.id === "pr");
+    assert.match(step.run, /cli\.js" ci:pr --pr "\$PR_NUMBER"/);
+    assert.equal(step.env.GITHUB_TOKEN, "${{ github.token }}");
+    assert.ok(workflow.jobs[job].steps.indexOf(step) < workflow.jobs[job].steps.findIndex(step => step.uses?.startsWith("actions/checkout@")), `${job}: authorize before checking out PR code`);
+  }
+  assert.equal(JSON.stringify(workflow).includes("actions/github-script"), false);
+});
 
 test("live API metadata is used for public and private PR branch identity", async t => {
   for (const privateRepo of [true, false]) {
@@ -52,14 +56,13 @@ test("forks, closed/draft PRs, invalid numbers, and revoked author write permiss
   for (const mutate of [pr => { pr.head.repo.full_name = "fork/app"; }, pr => { pr.head.repo = null; },
     pr => { pr.draft = true; }, pr => { pr.state = "closed"; }]) {
     const pr = samplePr(); mutate(pr);
-    await assert.rejects(authorize(t, { pr }), /SOURCE_NOT_TRUSTED/);
+    await assert.rejects(authorize(t, { pr }), /Capture requires an open, non-draft same-repository pull request/);
   }
   for (const permission of ["read", "triage", "none"]) await assert.rejects(authorize(t, { permission }), /write access/);
-  for (const number of ["", "NaN", "0", "-2", "1.5"]) await assert.rejects(authorize(t, { number }), /PR_NUMBER_INVALID/);
+  for (const number of ["", "NaN", "0", "-2", "1.5"]) await assert.rejects(authorize(t, { number }), error => error.code === "PR_NUMBER_INVALID");
 });
 
 test("baseline restore rejects foreign workflows, revisions, branches, and unfinished runs", async () => {
-  const outputs = {};
   const valid = { id: 20, workflow_id: 77, conclusion: "success", head_sha: "a".repeat(40), head_branch: "main",
     event: "push", head_repository: { full_name: "acme/app" } };
   const mutations = [
@@ -70,15 +73,30 @@ test("baseline restore rejects foreign workflows, revisions, branches, and unfin
   runs[20] = valid;
   const artifacts = Object.keys(runs).map(id => ({ id: Number(id), workflow_run: { id: Number(id) }, expired: false }));
   artifacts.push({ id: 99, expired: true, workflow_run: { id: 99 } });
-  await execute(scriptFor("capture", "Find optional exact-base evidence"), {
-    paginate: async () => artifacts,
-    rest: {
-      repos: { get: async () => ({ data: { default_branch: "main" } }) },
-      actions: { getWorkflow: async () => ({ data: { id: 77 } }), listArtifactsForRepo() {},
-        getWorkflowRun: async ({ run_id }) => ({ data: runs[run_id] }) },
-    },
-  }, context, { setOutput: (key, value) => { outputs[key] = value; } }, { BASE_SHA: "a".repeat(40) });
-  assert.deepEqual(outputs, { id: 20, run: 20 });
+  const names = [];
+  const transport = async input => {
+    const url = new URL(input);
+    if (url.pathname === "/repos/acme/app") return Response.json({ default_branch: "main" });
+    if (url.pathname === "/repos/acme/app/actions/workflows/explore-baseline.yml") return Response.json({ id: 77 });
+    if (url.pathname === "/repos/acme/app/actions/artifacts") {
+      names.push(url.searchParams.get("name"));
+      return Response.json({ artifacts: url.searchParams.get("name").endsWith("-ios") ? artifacts : [] });
+    }
+    const run = /^\/repos\/acme\/app\/actions\/runs\/(\d+)$/.exec(url.pathname);
+    if (run) return Response.json(runs[run[1]]);
+    throw new Error(`unexpected request ${url}`);
+  };
+  assert.deepEqual(await findBaselineArtifact({ sha: "a".repeat(40), platform: "ios", environment, transport }), { id: 20, run: 20 });
+  assert.deepEqual(names, [`explore-baseline-${"a".repeat(40)}-ios`, `explore-baseline-${"a".repeat(40)}`], "iOS also accepts the unsuffixed name older baselines used");
+});
+
+test("a failed baseline lookup is a warning and no baseline, never an error a failure comment could blame", async () => {
+  const outage = async () => new Response("bad gateway", { status: 502 });
+  const result = await findOptionalBaseline({ sha: "a".repeat(40), platform: "ios", environment, transport: outage });
+  assert.equal(result.baseline, undefined);
+  assert.equal(result.warning.code, "GITHUB_REQUEST_FAILED");
+  assert.match(result.warning.message, /^No baseline is reused, so capture captures the base too: GitHub answered HTTP 502/);
+  assert.deepEqual(await findOptionalBaseline({ sha: "a".repeat(40), environment, transport: async () => new Response("", { status: 404 }) }), {}, "no baseline workflow: nothing to say");
 });
 
 const { publishFailureComment } = await import("../../dist/report/failure-comment.js");
@@ -233,13 +251,20 @@ test("ci.trustedAuthors on the default branch admits listed authors without writ
   await assert.rejects(authorize(t, { pr: bot, permission: "read", config: "ci:\n  trustedAuthors: []\n" }), /write access/);
   await assert.rejects(authorize(t, { pr: bot, permission: "read", config: "report:\n  preview:\n    hosting: eas\n" }), /write access/);
   const fork = samplePr(); fork.user.login = "devin-ai-integration[bot]"; fork.head.repo.full_name = "fork/app";
-  await assert.rejects(authorize(t, { pr: fork, permission: "read", config: block }), /SOURCE_NOT_TRUSTED/);
+  await assert.rejects(authorize(t, { pr: fork, permission: "read", config: block }), error => error.code === "SOURCE_NOT_TRUSTED");
   const draft = samplePr(); draft.user.login = "devin-ai-integration[bot]"; draft.draft = true;
-  await assert.rejects(authorize(t, { pr: draft, permission: "read", config: block }), /SOURCE_NOT_TRUSTED/);
+  await assert.rejects(authorize(t, { pr: draft, permission: "read", config: block }), error => error.code === "SOURCE_NOT_TRUSTED");
   await assert.rejects(authorize(t, { pr: bot, permission: "read", config: "x: [\n" }), /write access/);
+  // A list that fails validation trusts no one, and the refusal says the list was ignored and why.
+  await assert.rejects(authorize(t, { pr: bot, permission: "read", config: "ci:\n  trustedAuthors: [\"devin-ai-integration[bot]\", \"not a login\"]\n" }), error => {
+    assert.equal(error.code, "SOURCE_NOT_TRUSTED");
+    assert.match(error.message, /The default branch's ci\.trustedAuthors was ignored: .*trustedAuthors\[1\]/);
+    assert.match(error.nextAction, /^Fix ci\.trustedAuthors/);
+    return true;
+  });
+  // Only the list is read: a default-branch config written for another release, with keys this one does not know,
+  // still trusts its bots.
+  assert.equal((await authorize(t, { pr: bot, permission: "read", config: "ci:\n  trustedAuthors: [\"devin-ai-integration[bot]\"]\n  someLaterKey: true\nlaterSection: {}\n" })).outputs.pr_number, 91);
   const server = samplePr(); server.user.login = "devin-ai-integration[bot]";
-  await assert.rejects(execute(scriptFor("capture", "Resolve the live pull request and authorize its source"), { rest: {
-    pulls: { get: async () => ({ data: server }) },
-    repos: { getCollaboratorPermissionLevel: async () => ({ data: { permission: "read" } }), getContent: async () => { throw Object.assign(new Error("boom"), { status: 500 }); } },
-  } }, context, { setOutput() {} }, { RUNNER_TEMP: tmpdir(), PR_NUMBER: "91" }), /boom/);
+  await assert.rejects(authorize(t, { pr: server, permission: "read", configStatus: 500 }), error => error.code === "GITHUB_REQUEST_FAILED" && error.retryable);
 });

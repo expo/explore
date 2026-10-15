@@ -132,7 +132,7 @@ function ReportDropScreen({ status, identity, error, workflowUrl, downloadUrl, e
     </div> : <>
       <h1 className="report-drop-title">{identity ? "Open this report" : "Open a report"}</h1>
       <ol className="report-drop-steps" aria-label="How to open a report">
-        <li>Open the Explore comment on your pull request</li>
+        <li>Open the Explore comment on your pull request, or the summary of the Explore workflow run</li>
         <li>Download {downloadUrl
           ? <a className="report-drop-file" href={downloadUrl} target="_blank" rel="noopener noreferrer" title="Download from GitHub">{fileName}</a>
           : fileName}</li>

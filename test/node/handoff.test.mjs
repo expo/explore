@@ -6,13 +6,14 @@ const { claudeDeepLink, codexDeepLink, handoffPageUrl, handoffPrompt } = await t
 
 const TOKEN = "exwitrhlayedwcxt7ogiwauyiugp4vpk";
 
-test("only a hosted preview has a link an agent can fetch", () => {
+test("a hosted preview and a local review's Viewer have a link an agent can fetch; other pages do not", () => {
   assert.equal(
     handoffPageUrl(new URL(`https://app-explore--abc.expo.app/p/${TOKEN}?platform=android&screen=x#/map`)),
     `https://app-explore--abc.expo.app/p/${TOKEN}?platform=android`,
   );
   assert.equal(handoffPageUrl(new URL(`https://app-explore--abc.expo.app/p/${TOKEN}/`)), `https://app-explore--abc.expo.app/p/${TOKEN}`);
   assert.equal(handoffPageUrl(new URL("http://127.0.0.1:4319/#/map")), undefined);
+  assert.equal(handoffPageUrl(new URL(`http://127.0.0.1:4319/p/${TOKEN}?platform=ios`)), `http://127.0.0.1:4319/p/${TOKEN}?platform=ios`, "a local review's Viewer serves the agent API too");
   assert.equal(handoffPageUrl(new URL("https://explore.expo.app/r?repo=a/b&run=1&attempt=1")), undefined);
 });
 
@@ -45,4 +46,20 @@ test("a report without a pull request is reviewed by app name, in one appearance
 test("deep links carry the encoded prompt", () => {
   assert.equal(claudeDeepLink("a & b\nc"), "claude-cli://open?q=a%20%26%20b%0Ac");
   assert.equal(codexDeepLink("a & b\nc"), "codex://new?prompt=a%20%26%20b%0Ac");
+});
+
+test("a comparison of two commits is reviewed by its refs", () => {
+  const sha = c => c.repeat(40);
+  const prompt = handoffPrompt({ ...input, pullRequest: { origin: "compare", title: "v1.4.0 vs v1.3.0",
+    url: `https://github.com/brentvatne/euxy/compare/${sha("a")}..${sha("b")}`, base: { ref: "v1.3.0", sha: sha("a") }, head: { ref: "v1.4.0", sha: sha("b") } } });
+  assert.match(prompt, /^Review the visual changes from v1\.3\.0 to v1\.4\.0 of brentvatne\/euxy\.\n/);
+});
+
+test("a local review is reviewed by its refs, and its prompt says the link is local and lives while capture:review runs", () => {
+  const prompt = handoffPrompt({ ...input, pageUrl: `http://127.0.0.1:4319/p/${TOKEN}`,
+    pullRequest: { origin: "local", title: "HEAD vs main", base: { ref: "main", sha: "a".repeat(40) }, head: { ref: "HEAD", sha: "b".repeat(40) } } });
+  assert.match(prompt, /^Review the visual changes from main to HEAD\.\n/);
+  assert.ok(prompt.includes("Fetch the link first (from this machine, with curl if your fetch tool refuses local addresses)."));
+  assert.match(prompt, /stops working when it exits\.$/);
+  assert.ok(!handoffPrompt(input).includes("this machine"), "a hosted link's prompt is unchanged");
 });

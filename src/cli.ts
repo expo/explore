@@ -9,8 +9,9 @@ import { command, resultContract, argumentError, validateCommandArguments, flag,
 import { help } from "./cli/help.js";
 import { listScreens, getScreen, listElements, listObservations, getObservation, nextFrontier, listAttempts, getAttempt, listTransitions, getTransition, neighbors, pathQuery, listJourneys, getJourney, listFrontier, listGaps, summary, search, status, validate, exportArtifacts } from "./cli/map-commands.js";
 import { compareCommand, exportWeb, view } from "./cli/catalog-commands.js";
-import { ciReport, ciPublish, ciFailure, ciDeploy, setup, doctor, sourceVerify, captureReview, captureBaseline, configPlatforms } from "./cli/ci-commands.js";
+import { ciReport, ciPublish, ciFailure, ciDeploy, ciPullRequest, ciFindBaseline, ciCompareRefs, ciAfterCapture, setup, doctor, sourceVerify, captureReview, captureBaseline, configPlatforms } from "./cli/ci-commands.js";
 import { exploreBinary, exploreSession } from "./cli/binary-commands.js";
+import { reports, reportUpload } from "./cli/report-commands.js";
 
 const handlers: Record<string, () => Promise<void> | void> = {
   setup,
@@ -38,10 +39,16 @@ const handlers: Record<string, () => Promise<void> | void> = {
   "export:web": exportWeb,
   "explore:binary": exploreBinary,
   "explore:session": exploreSession,
+  "report:upload": reportUpload,
+  reports,
   "ci:report": ciReport,
   "ci:publish": ciPublish,
   "ci:failure": ciFailure,
   "ci:deploy": ciDeploy,
+  "ci:pr": ciPullRequest,
+  "ci:find-baseline": ciFindBaseline,
+  "ci:compare-refs": ciCompareRefs,
+  "ci:after-capture": ciAfterCapture,
   "capture:review": captureReview,
   "capture:baseline": captureBaseline,
   "source:verify": sourceVerify,
@@ -58,7 +65,7 @@ const handlers: Record<string, () => Promise<void> | void> = {
 };
 
 /** Commands people type at a terminal; everything else answers agents and scripts in JSON. */
-const HUMAN_COMMANDS = new Set(["setup", "doctor", "view", "help", "explore:binary", "explore:session"]);
+const HUMAN_COMMANDS = new Set(["setup", "doctor", "view", "help", "explore:binary", "explore:session", "report:upload", "reports"]);
 
 function version(): void {
   console.log(EXPLORE_VERSION);

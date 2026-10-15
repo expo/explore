@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { prepareCaptureReview } from "../../dist/review/capture-review.js";
 import { createSourceCapturePlan } from "../../dist/source/capture-plan.js";
 import { writeCiReportInput, exportCiReport } from "../../dist/report/artifact.js";
-import { collectPlatformReports, deployExplorationReport, deployFixturePreview, deployPreview, previewProjectSlug, sealReport, whoamiAccounts, zipReportDirectory } from "../../dist/report/preview-deploy.js";
+import { collectPlatformReports, deployExplorationReport, deployFixturePreview, deployLocalReports, deployPreview, previewProjectSlug, readReportZip, sealReport, whoamiAccounts, zipReportDirectory } from "../../dist/report/preview-deploy.js";
+import { spawnSync } from "node:child_process";
 import { createDecipheriv } from "node:crypto";
 import { ZipReader, Uint8ArrayReader, TextWriter, configure } from "@zip.js/zip.js";
 import { viewerLinks } from "../../dist/report/viewer-links.js";
@@ -20,7 +21,7 @@ const pr = { repositoryId: "123", repository: "expo/explore-playground", number:
 const artifactUrl = "https://github.com/expo/explore-playground/actions/runs/10/artifacts/20";
 const environment = { GITHUB_TOKEN: "test-token", GITHUB_RUN_ID: "10", GITHUB_RUN_ATTEMPT: "1", GITHUB_REPOSITORY: pr.repository };
 
-async function fixture(t, { verified = true, preview = { hosting: "eas", expiresAfterDays: 7 } } = {}) {
+async function fixture(t, { verified = true, preview = { hosting: "eas", expiresAfterDays: 7 }, presentation = pr } = {}) {
   const root = await mkdtemp(join(tmpdir(), "explore-artifact-ci-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const files = new Map([["app/index.tsx", "export default function Home() { return null; }"]]);
@@ -37,12 +38,12 @@ async function fixture(t, { verified = true, preview = { hosting: "eas", expires
         buildId: "build", capturedAt: "2026-09-15T00:00:00Z" } },
       outcomes: { [id]: { status: "captured", attempts: 1, landing: verified ? "verified" : "unverified" } } }));
   }
-  const prepared = await prepareCaptureReview({ plan, pullRequest: pr, baseDirectory: join(root, "base"),
+  const prepared = await prepareCaptureReview({ plan, pullRequest: presentation, baseDirectory: join(root, "base"),
     headDirectory: join(root, "head"), runId: "10", runAttempt: "1", assertCurrentHead: async () => {},
     ...(verified ? { assessments: { [id]: { review: { status: "unchanged", description: "No visible change" } } } } : {}) });
   const inputPath = join(root, "report-input.json");
   await writeCiReportInput({ inputPath, publicReview: prepared.review, assets: prepared.assets,
-    commentState: { phase: "capturing", pullRequest: pr, mode: "all", executionMode: "deterministic", configPath: ".expo-explore/config.yaml",
+    commentState: { phase: "capturing", pullRequest: presentation, mode: "all", executionMode: "deterministic", configPath: ".expo-explore/config.yaml",
       startedAt: 1, updatedAt: 2, artifactOnly: true,
       links: viewerLinks({ repository: pr.repository, headSha: pr.head.sha, runId: "10", runAttempt: "1", configPath: ".expo-explore/config.yaml" }) },
     ...(preview ? { preview } : {}) });
@@ -271,6 +272,23 @@ test("ci:deploy rejects a deployment that serves the report without the token", 
   assert.doesNotMatch(JSON.parse(posted[0].options.body).body, /acme-explore--/);
 });
 
+test("a deployment that leaks past the token is named by the path's shape, never the token", async t => {
+  const { inputPath, reportPath, exportPath } = await exportFixture(t);
+  const eas = easFixture();
+  const leaky = async (input, options) => {
+    const url = new URL(input);
+    if (/^\/p\/[a-z2-7]{32}\/viewer\/index\.html$/.test(url.pathname)) return new Response("<!doctype html>", { status: 200 });
+    return eas.transport(input, options);
+  };
+  await assert.rejects(deployPreview({ inputPath, reportPath, artifactUrl, exportPath, environment: deployEnvironment, transport: leaky, run: eas.run, verifyTimeoutMs: 1 }), error => {
+    const token = eas.captured.env.EXPLORE_PREVIEW_TOKEN;
+    assert.equal(error.code, "PREVIEW_VERIFY_FAILED");
+    assert.match(error.message, /at \/p\/<token>\/viewer\/index\.html\.$/);
+    assert.ok(!JSON.stringify({ message: error.message, details: error.details }).includes(token.slice(0, 31)), "neither the token nor its near miss");
+    return true;
+  });
+});
+
 test("the preview owner comes from config or the token's single account; several accounts need report.preview.owner", async t => {
   assert.deepEqual(whoamiAccounts("Devin (robot) (authenticated using EXPO_TOKEN)\nAccounts:\n• brent-org (Role: Developer)\n• acme (Role: Owner)\n"), ["brent-org", "acme"]);
   assert.deepEqual(whoamiAccounts("brentvatne\n"), ["brentvatne"]);
@@ -493,3 +511,143 @@ test("ci:deploy writes its own deployments line over the one report jobs carried
   assert.match(JSON.parse(patched.options.body).body, /^<!-- expo-explore-ci -->\n<!-- expo-explore-deployments:explore-playground-explore--1lcbdcpwn3 -->\n/);
 });
 
+
+test("a comparison of two commits deploys the same way and links its report from the run summary, not a pull request", async t => {
+  const comparison = { origin: "compare", repositoryId: "123", repository: pr.repository,
+    base: { ref: "v1.3.0", sha: pr.base.sha }, head: { ref: "v1.4.0", sha: pr.head.sha } };
+  const { root, inputPath, reportPath, exportPath } = await exportFixture(t, { presentation: comparison });
+  const summaryPath = join(root, "summary.md");
+  const eas = easFixture(); const secrets = [];
+  const result = await deployPreview({ inputPath, reportPath, artifactUrl, exportPath, environment: { ...deployEnvironment, GITHUB_STEP_SUMMARY: summaryPath },
+    transport: eas.transport, run: eas.run, now: () => Date.parse("2026-09-11T03:07:00Z"), verifyTimeoutMs: 1, onSecret: secret => secrets.push(secret) });
+  // The runner masks registered secrets in job summaries as well; a masked token would make the summary link ***.
+  assert.deepEqual(secrets, [], "a comparison's token is not registered as a mask");
+  assert.equal(result.linkedFromRunSummary, true, "so the CLI keeps the link out of the log");
+  assert.deepEqual(eas.calls.map(call => call.args[0]), ["whoami", "init", "deploy"]);
+  assert.equal(eas.requests.filter(request => request.url.origin === "https://api.github.com").length, 0, "no pull request to read or comment on");
+  const summary = readFileSyncUtf8(summaryPath);
+  assert.match(summary, /^### Explore: `v1\.4\.0` vs `v1\.3\.0`$/m);
+  assert.ok(summary.includes(`[Open the report](${result.previewUrl})`));
+  assert.ok(summary.includes(`(https://github.com/${pr.repository}/compare/${pr.base.sha}..${pr.head.sha})`));
+  assert.match(summary, /link expires 2026-09-18/);
+});
+
+test("readReportZip reads a review ZIP's platform, run and labels, and rejects anything that is not a report", async t => {
+  const { reportPath } = await exportFixture(t);
+  const zip = await zipReportDirectory(reportPath);
+  const { platform, device: _device, ...summary } = await readReportZip(zip);
+  assert.ok(["ios", "android"].includes(platform));
+  assert.deepEqual(summary, { kind: "review", repository: pr.repository, runId: "10", base: pr.base.sha, head: pr.head.sha, changes: 0 });
+
+  // GitHub's artifact download lists directories as entries of their own.
+  const { ZipWriter, Uint8ArrayWriter } = await import("@zip.js/zip.js");
+  const entries = new ZipReader(new Uint8ArrayReader(zip));
+  const withDirectory = new ZipWriter(new Uint8ArrayWriter());
+  await withDirectory.add("assets/", undefined, { directory: true });
+  for (const entry of await entries.getEntries()) await withDirectory.add(entry.filename, new Uint8ArrayReader(await entry.getData(new Uint8ArrayWriter())));
+  const extra = new ZipWriter(new Uint8ArrayWriter());
+  for (const entry of await entries.getEntries()) await extra.add(entry.filename, new Uint8ArrayReader(await entry.getData(new Uint8ArrayWriter())));
+  await extra.add("notes.txt", new Uint8ArrayReader(new TextEncoder().encode("hi")));
+  await entries.close();
+  assert.equal((await readReportZip(await withDirectory.close())).kind, "review");
+  await assert.rejects(readReportZip(await extra.close()), /review.json \(or exploration.json\) and assets/);
+  await assert.rejects(readReportZip(new Uint8Array([1, 2, 3])));
+
+  // Commits are full SHAs and the names are text: what the CLI hands to git and prints is never anything else.
+  const original = await readFile(join(reportPath, "review.json"), "utf8");
+  for (const [field, value] of [["head", { ref: "x", sha: "--output=/tmp/explore-victim" }], ["title", 42]]) {
+    const report = JSON.parse(original);
+    report.review.pullRequest[field] = value;
+    await writeFile(join(reportPath, "review.json"), JSON.stringify(report));
+    await assert.rejects(readReportZip(await zipReportDirectory(reportPath)), /does not name its repository, title and commits/, field);
+  }
+  await writeFile(join(reportPath, "review.json"), original);
+
+  // A review renamed to exploration.json is neither.
+  await rename(join(reportPath, "review.json"), join(reportPath, "exploration.json"));
+  await assert.rejects(readReportZip(await zipReportDirectory(reportPath)), /not an Explore exploration report/);
+  await writeFile(join(reportPath, "exploration.json"), JSON.stringify({ kind: "explore.exploration-report",
+    exploration: { app: { name: "Acme", bundleId: "com.acme", platform: "android" }, device: { model: "Pixel 9", osVersion: "16" } } }));
+  assert.deepEqual(await readReportZip(await zipReportDirectory(reportPath)), { kind: "exploration", platform: "android", device: "Pixel 9 16" });
+});
+
+test("deployLocalReports hosts one review's platforms behind one link, labelled from each ZIP", async t => {
+  const { reportPath, exportPath } = await exportFixture(t);
+  const zip = await zipReportDirectory(reportPath);
+  const eas = easFixture();
+  const result = await deployLocalReports({ reports: [{ platform: "ios", zip, changes: 3, device: "iPhone 17 26.5" }, { platform: "android", zip }],
+    project: "acme-explore", expiresAfterDays: null, exportPath, environment: deployEnvironment, transport: eas.transport, run: eas.run, now: () => now, verifyTimeoutMs: 1 });
+  assert.match(result.previewUrl, /^https:\/\/acme-explore--1lcbdcpwn3\.expo\.app\/p\/[a-z2-7]{32}$/);
+  assert.equal(result.owner, "brent-org", "the only account of the login holds the project");
+  assert.equal(result.expiresAt, null);
+  assert.deepEqual(captureListing(eas.captured.listing), [
+    { platform: "ios", path: "ios.zip.enc", changes: 3, device: "iPhone 17 26.5" },
+    { platform: "android", path: "android.zip.enc" },
+  ]);
+  await assert.rejects(deployLocalReports({ reports: [{ platform: "ios", zip }, { platform: "ios", zip }], project: "acme-explore", expiresAfterDays: 7, exportPath,
+    environment: deployEnvironment, transport: eas.transport, run: eas.run }), error => error.code === "PREVIEW_REPORTS_INVALID");
+
+  // One Android report is still listed, so the Worker does not take it for iOS; a label with `#` cannot cut the sealed .env short.
+  await deployLocalReports({ reports: [{ platform: "android", zip, changes: 1, device: "Pixel #9 <Pro>\n" }], project: "acme-explore", expiresAfterDays: 7, exportPath,
+    environment: deployEnvironment, transport: eas.transport, run: eas.run, now: () => now, verifyTimeoutMs: 1 });
+  assert.equal(eas.captured.env.EXPLORE_PREVIEW_REPORT, undefined);
+  assert.deepEqual(captureListing(eas.captured.listing), [{ platform: "android", path: "android.zip.enc", changes: 1, device: "Pixel 9 Pro" }]);
+  // eas deploy expands $VARIABLES in that .env, even single-quoted: a label never carries one in, nor a backslash.
+  await deployLocalReports({ reports: [{ platform: "ios", zip, device: "iPhone ${EXPO_TOKEN} $EXPLORE_PREVIEW_KEY \\$ · light + dark" }], project: "acme-explore",
+    expiresAfterDays: 7, exportPath, environment: deployEnvironment, transport: eas.transport, run: eas.run, now: () => now, verifyTimeoutMs: 1 });
+  assert.deepEqual(captureListing(eas.captured.listing), [{ platform: "ios", path: "ios.zip.enc", device: "iPhone EXPO_TOKEN EXPLORE_PREVIEW_KEY · light + dark" }]);
+});
+
+test("an explore:binary report names its platform, so an Android exploration is not served as iOS", async t => {
+  const { reportPath, exportPath } = await exportFixture(t);
+  await rename(join(reportPath, "review.json"), join(reportPath, "exploration.json"));
+  const eas = easFixture();
+  await deployExplorationReport({ reportPath, platform: "android", project: "acme-explore", owner: "brent-org", expiresAfterDays: 7, exportPath,
+    environment: deployEnvironment, transport: eas.transport, run: eas.run, now: () => now, verifyTimeoutMs: 1 });
+  assert.deepEqual(captureListing(eas.captured.listing), [{ platform: "android", path: "android.zip.enc" }]);
+});
+
+test("readReportZip stops inflating a report file once it passes the size its header declares", async () => {
+  const { deflateRawSync } = await import("node:zlib");
+  const name = Buffer.from("review.json");
+  const data = deflateRawSync(Buffer.alloc(32 * 1024 * 1024, 32));
+  const header = size => {
+    const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(data.length, 18); local.writeUInt32LE(size, 22); local.writeUInt16LE(name.length, 26);
+    return local;
+  };
+  // The directory claims 10 bytes of JSON; the entry inflates to 32 MiB.
+  const local = Buffer.concat([header(10), name, data]);
+  const central = Buffer.alloc(46); central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6); central.writeUInt16LE(8, 10);
+  central.writeUInt32LE(data.length, 20); central.writeUInt32LE(10, 24); central.writeUInt16LE(name.length, 28); central.writeUInt32LE(0, 42);
+  const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(46 + name.length, 12); end.writeUInt32LE(local.length, 16);
+  const zip = new Uint8Array(Buffer.concat([local, central, name, end]));
+  const before = process.memoryUsage().arrayBuffers;
+  await assert.rejects(readReportZip(zip), /review\.json is unreadable or larger than 64 MiB/);
+  assert.ok(process.memoryUsage().arrayBuffers - before < 16 * 1024 * 1024, "the inflated bytes were never all held");
+});
+
+test("report:upload checks its reports before it deploys anything", async t => {
+  const { root, reportPath } = await exportFixture(t);
+  const cli = join(import.meta.dirname, "../../dist/cli.js");
+  const upload = (...args) => {
+    const result = spawnSync(process.execPath, [cli, "report:upload", ...args], { cwd: root, encoding: "utf8", env: { ...process.env, EXPO_TOKEN: "", EXPLORE_CACHE_DIR: join(root, "cache") } });
+    return { status: result.status, output: `${result.stdout}${result.stderr}` };
+  };
+  const zip = await zipReportDirectory(reportPath);
+  await writeFile(join(root, "one.zip"), zip); await writeFile(join(root, "two.zip"), zip);
+  await writeFile(join(root, "notes.txt"), "not a report");
+  const other = JSON.parse(await readFile(join(reportPath, "review.json"), "utf8"));
+  other.review.runtime.platform = other.review.runtime.platform === "ios" ? "android" : "ios";
+  await mkdir(join(root, "other")); await writeFile(join(root, "other/review.json"), JSON.stringify({ ...other, review: { ...other.review, runId: "11" } }));
+  await cp(join(reportPath, "assets"), join(root, "other/assets"), { recursive: true });
+
+  assert.match(upload().output, /Pass the report to host/);
+  assert.match(upload("missing.zip").output, /There is no report at missing\.zip/);
+  assert.match(upload("notes.txt").output, /notes\.txt is not an Explore report/);
+  assert.match(upload("one.zip", "--expires-in", "7d", "two.zip").output, /More than one (ios|android) report/, "a value flag between paths is not read as a path");
+  assert.match(upload("one.zip", "other").output, /one\.zip and other are not the same review's platforms/, "another run's report of the other platform");
+  assert.match(upload("one.zip", "--alias", "x").output, /Unknown flag for report:upload: --alias/);
+  for (const result of [upload(), upload("one.zip", "two.zip")]) assert.equal(result.status, 1);
+});

@@ -403,7 +403,7 @@ test("a hosted preview link downloads the report from its own token route, opens
     preview: { ...preview, token: "cdefghijklmnopqrstuvwxyz23456723", status: 410, body: JSON.stringify({ error: "expired", expiredAt: "2030-01-01T00:00:00.000Z" }) } });
   const goneShell = gone.page.locator(".report-loading-shell");
   await expect(goneShell).toHaveAttribute("data-loading-status", "failed");
-  await expect(goneShell).toContainText("This preview link expired on Jan 1, 2030. Download the report from the pull request instead");
+  await expect(goneShell).toContainText("This preview link expired on Jan 1, 2030. Download the report from the pull request or workflow run instead");
   await expect(gone.page.locator(".report-drop-input")).toHaveCount(0);
   assert.deepEqual(gone.errors, []);
 });

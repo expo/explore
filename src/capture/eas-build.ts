@@ -483,9 +483,11 @@ async function prepareHostedRepack(options: {
 }): Promise<string> {
   const staged = join(options.root, "project");
   await mkdir(staged, { mode: 0o700 });
+  // Paths relative to the app directory, which is what is staged. With --full-name they were relative to the
+  // repository root, so an app in a monorepo subdirectory (apps/mobile) copied apps/mobile/apps/mobile/... .
   const listed = options.runner({
     command: "git",
-    args: ["ls-files", "-z", "--cached", "--full-name"],
+    args: ["ls-files", "-z", "--cached"],
     cwd: options.project,
     environment: options.restrictedEnvironment,
     timeoutMs: 60_000,

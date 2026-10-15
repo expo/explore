@@ -29,12 +29,14 @@ const aliases: Record<string, string> = {
 const first = argv[0] ?? "help";
 const pair = `${first} ${argv[1] ?? ""}`.trim();
 export const command = aliases[pair] ?? first;
-export const resultContract = ["source:verify", "capture:review", "capture:baseline", "ci:report", "ci:publish", "ci:failure", "ci:deploy", "config:platforms", "explore:binary", "explore:session"].includes(command)
+export const resultContract = ["source:verify", "capture:review", "capture:baseline", "ci:report", "ci:publish", "ci:failure", "ci:deploy", "ci:pr", "ci:find-baseline", "ci:compare-refs", "ci:after-capture", "config:platforms", "explore:binary", "explore:session", "report:upload", "reports"].includes(command)
   ? "explore.result" : QUERY_CONTRACT;
 const commandArgCount = aliases[pair] ? 2 : 1;
 const args = argv.slice(commandArgCount);
 /** Commands that take one bare argument before their flags, e.g. `explore:binary ./app.apk`. */
 const POSITIONAL_COMMANDS = new Set(["explore:binary", "explore:session"]);
+/** Commands that take any number of bare arguments among their flags, e.g. `report:upload ios/report.zip android/report.zip`. */
+const VARIADIC_COMMANDS = new Set(["report:upload", "reports"]);
 
 const commonFlagKinds: Record<string, "value" | "boolean"> = {
   dir: "value",
@@ -78,7 +80,8 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
   validate: {},
   export: { output: "value" },
   "export:web": {catalog:"value",output:"value"},
-  "capture:review": { "base-project":"value", "head-project":"value", "pull-request":"value", output:"value", config:"value", platform:"value" },
+  "capture:review": { "base-project":"value", "head-project":"value", "pull-request":"value", compare:"value", output:"value", config:"value", platform:"value", scope:"value", "expires-in":"value",
+    base:"value", head:"value", project:"value", uncommitted:"boolean", "include-untracked":"boolean", upload:"boolean", "no-open":"boolean", "no-cache":"boolean", port:"value" },
 
 
 
@@ -92,6 +95,10 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
   "ci:publish": { input:"value", "artifact-url":"value", platform:"value", inputs:"value" },
   "ci:failure": { pr:"value", head:"value", base:"value", diagnostics:"value", platform:"value" },
   "ci:deploy": { input:"value", report:"value", "artifact-url":"value", platform:"value", inputs:"value", reports:"value" },
+  "ci:pr": { pr:"value", output:"value", "app-dir":"value", config:"value" },
+  "ci:find-baseline": { sha:"value", platform:"value" },
+  "ci:compare-refs": { project:"value", base:"value", head:"value", title:"value", output:"value" },
+  "ci:after-capture": { output:"value", checkout:"value" },
   compare: {
     baseline: "value",
     current: "value",
@@ -106,6 +113,8 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
 
   },
   view: { port: "value", catalog: "value", "no-open": "boolean" },
+  "report:upload": { owner: "value", project: "value", "expires-in": "value", config: "value" },
+  reports: { all: "boolean", owner: "value", project: "value", "expires-in": "value", config: "value", port: "value", "no-open": "boolean", "no-intro": "boolean" },
   help: { all: "boolean" },
   "--help": { all: "boolean" },
   "-h": { all: "boolean" },
@@ -127,7 +136,7 @@ export function validateCommandArguments(): void {
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index]!;
     if (!token.startsWith("--")) {
-      if (index === 0 && POSITIONAL_COMMANDS.has(command)) continue;
+      if ((index === 0 && POSITIONAL_COMMANDS.has(command)) || VARIADIC_COMMANDS.has(command)) continue;
       argumentError(`Unexpected argument: ${token}`);
     }
     const name = token.slice(2);
@@ -148,6 +157,18 @@ export function validateCommandArguments(): void {
 export function positional(): string | undefined {
   const first = args[0];
   return POSITIONAL_COMMANDS.has(command) && first !== undefined && !first.startsWith("--") ? first : undefined;
+}
+
+/** The bare arguments of a variadic command, in order: every token that is neither a flag nor a flag's value. */
+export function positionals(): string[] {
+  const allowed = { ...commonFlagKinds, ...flagKinds[command] };
+  const values: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!;
+    if (!token.startsWith("--")) values.push(token);
+    else if (allowed[token.slice(2)] === "value") index += 1;
+  }
+  return values;
 }
 
 export function flag(name: string): string | undefined {

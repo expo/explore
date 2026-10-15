@@ -134,7 +134,7 @@ Adapt this to the app; do not copy sign-in guidance into an app without sign-in.
 
 ## Step 6: install the CI files
 
-Run `expo-explore setup --workflows` from the app directory. It installs `explore-review.yml` and `explore-baseline.yml` at the repository root with the app and install directories and the package manager's install command, pins both to this CLI's `@expo/explore` version, and forwards every `{{secret:NAME}}` from the config and instructions to both capture steps. Existing workflows keep their edits; setup only updates the version and adds missing secret lines. Rerun it after adding a new secret reference. Replace a superseded Explore workflow only after identifying it, to avoid duplicate captures and comments.
+Run `expo-explore setup --workflows` from the app directory. It installs `explore-review.yml`, `explore-baseline.yml` and `explore-compare.yml` at the repository root with the app and install directories and the package manager's install command, pins them to this CLI's `@expo/explore` version, and forwards every `{{secret:NAME}}` from the config and instructions to each capture step. Existing workflows keep their edits; setup only updates the version and adds missing secret lines. Rerun it after adding a new secret reference. Replace a superseded Explore workflow only after identifying it, to avoid duplicate captures and comments.
 
 The review workflow runs on `pull_request_target`, so GitHub runs the default branch's copy of the workflow and its `EXPLORE_VERSION`; a pull request cannot replace the tools that capture and publish its own review. This does not sandbox the app's build. If an app still has `.github/vendor/expo-explore` or an `EXPLORE_TOOLS_COMMIT` workflow from an older setup, `doctor` reports it: delete them and rerun `setup --workflows`.
 
@@ -149,6 +149,26 @@ The templates capture open, non-draft, same-repository PRs whose authors have wr
 Repeat `expo-explore doctor --json` and fix each `fail` until none remain, collecting the items only the user can do. A check marked `skip` did not run (for example `--offline`, or no GitHub remote yet); the setup is complete only when a run without skips passes. Listing repository variables and secrets needs GitHub admin access. Review each `warn`: a `ROUTE_GUARD_UNPREPARED` warning means guarded screens start in the app's initial state.
 
 `setup --check` validates only the config schema and instruction file; it is not runtime verification. When the static checks pass and the user approves the EAS usage (and model usage in agent mode), commit locally and run `expo-explore doctor --capture --yes`. It captures the committed HEAD like the baseline workflow with the local EAS login and reports each route. `CAPTURE_LANDING_UNVERIFIED` means the screen redirected: fix the state that setup or the instructions establish. Open the screenshots of guarded screens and confirm each shows the intended state, not just the right route. Do not start paid builds or simulators merely to validate YAML, and do not weaken capture checks to make a replay pass. A setup that was not run on a device is **authored but not runtime-verified**; say so.
+
+## Review a change on this machine
+
+Once `.expo-explore/config.yaml` is committed, the same review CI runs works locally, between any two commits:
+
+```sh
+npx @expo/explore capture:review                   # HEAD against where it left the default branch
+npx @expo/explore capture:review --uncommitted     # your uncommitted changes to tracked files against HEAD's base
+npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all
+```
+
+- It prints which commits it compares. Each is checked out as a detached worktree in a temporary directory, its dependencies installed (frozen lockfile, no scripts, no Explore credentials in the environment), and removed afterwards; the user's checkout, index and branches are never touched.
+- It runs both commits' code as the user (dependency installs, the app config, bundling). Before reviewing a branch the user did not write, say so and ask; credential-free installs are not a sandbox.
+- Logins: `EXPO_TOKEN` and the provider's API key when they are set; otherwise the user's `eas login` and their local `claude` or `codex` login for the configured provider. If `eas whoami` fails, tell them to run `eas login`.
+- `--uncommitted` includes tracked files only. `--include-untracked` adds untracked, non-ignored files, which are uploaded with the EAS build, so check the listed files first and never include secrets.
+- Every configured platform is reviewed unless `--platform` picks one. It opens the report in a local Viewer; `--upload` hosts it instead and prints the link, `--no-open` or `--json` only prints the report paths.
+- Every run is kept on this machine for 30 days: `npx @expo/explore reports list` (or `--json`) shows them, `reports open <id|latest>` reopens one in the local Viewer, and `reports upload <id>` hosts it without capturing again. Run bare in a terminal, `reports` is an arrow-key picker for the user.
+- To host a report after the fact, run `npx @expo/explore report:upload <report.zip>...` with the paths it printed (or the `--output` directory's `<platform>/report.zip`), one per platform. It uses the same project as `--upload` and does not capture again.
+- Captures are cached in `~/.cache/expo-explore`, so a second review of the same base does not capture it again (`--no-cache` skips the cache). Ctrl+C stops the EAS Simulator sessions the review started.
+- It builds on EAS and runs simulator sessions, like a CI review: expect several minutes and EAS usage per run.
 
 ## Learn from observed failures
 

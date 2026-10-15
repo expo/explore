@@ -3,7 +3,8 @@ import { basename, join, resolve } from "node:path";
 import { DEFAULT_BINARY_PROJECT, runBinaryExploration, runSessionExploration } from "../binary/run.js";
 import { openViewerInBrowser, startViewerServer, waitForViewerShutdown } from "../map/viewer-server.js";
 import { writeExplorationReport } from "../binary/report.js";
-import { assertHostingExport, deployExplorationReport } from "../report/preview-deploy.js";
+import { assertHostingExport, deployExplorationReport, zipReportDirectory } from "../report/preview-deploy.js";
+import { keepReports } from "./report-commands.js";
 import { argumentError, flag, flags, has, nonNegativeInteger, oneOf, output, positional, positiveInteger } from "./args.js";
 
 const MAX_EXPIRY_DAYS = 90;
@@ -54,10 +55,11 @@ export async function exploreBinary(): Promise<void> {
   });
   say(`exploration ${result.exploration.stopReason}: ${result.exploration.screens} screens, ${result.exploration.observations} captures, ${result.exploration.actions} actions`);
   const report = await writeExplorationReport(result, join(outputDirectory, "report"));
+  await keepReports(async () => [{ platform: result.archive.platform, zip: await zipReportDirectory(report.reportPath) }]);
   let hosted: Awaited<ReturnType<typeof deployExplorationReport>> | undefined;
   if (!has("no-upload")) {
     say("hosting the report on EAS Hosting");
-    hosted = await deployExplorationReport({ reportPath: report.reportPath, project: flag("project") ?? DEFAULT_BINARY_PROJECT, owner: result.session.owner, expiresAfterDays, ...stableLinkOptions() });
+    hosted = await deployExplorationReport({ reportPath: report.reportPath, platform: result.archive.platform, project: flag("project") ?? DEFAULT_BINARY_PROJECT, owner: result.session.owner, expiresAfterDays, ...stableLinkOptions() });
     say(`report: ${hosted.previewUrl}${hosted.expiresAt ? ` (expires ${hosted.expiresAt})` : ""}`);
   }
   const summary = { ok: true,
@@ -111,10 +113,11 @@ export async function exploreSession(): Promise<void> {
   });
   say(`exploration ${result.exploration.stopReason}: ${result.exploration.screens} screens, ${result.exploration.observations} captures, ${result.exploration.actions} actions`);
   const report = await writeExplorationReport(result, join(outputDirectory, "report"));
+  await keepReports(async () => [{ platform: result.app.platform, zip: await zipReportDirectory(report.reportPath) }]);
   let hosted: Awaited<ReturnType<typeof deployExplorationReport>> | undefined;
   if (has("upload")) {
     say("hosting the report on EAS Hosting");
-    hosted = await deployExplorationReport({ reportPath: report.reportPath, project: flag("project") ?? DEFAULT_BINARY_PROJECT, ...(flag("owner") ? { owner: flag("owner")! } : {}), expiresAfterDays, ...stableLinkOptions() });
+    hosted = await deployExplorationReport({ reportPath: report.reportPath, platform: result.app.platform, project: flag("project") ?? DEFAULT_BINARY_PROJECT, ...(flag("owner") ? { owner: flag("owner")! } : {}), expiresAfterDays, ...stableLinkOptions() });
     say(`report: ${hosted.previewUrl}${hosted.expiresAt ? ` (expires ${hosted.expiresAt})` : ""}`);
   }
   const summary = { ok: true, app: result.app, device: { model: result.runtime.deviceModel, osVersion: result.runtime.osVersion },

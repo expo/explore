@@ -1487,7 +1487,7 @@ function ViewerApp() {
     onOpenChange: setChangesOpen,
   } : undefined;
 
-  // A hosted preview serves an agent-readable index of this report, so it can be handed to an agent.
+  // A hosted preview, or a local review's Viewer, serves an agent-readable index of this report, so it can be handed to an agent.
   const handoffUrl = typeof window === "undefined" ? undefined : handoffPageUrl(new URL(window.location.href));
   const handoffInput = handoffUrl ? {
     pageUrl: handoffUrl,

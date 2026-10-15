@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { projectPullRequestPresentation } from "../../dist/contracts/review.js";
+import { projectPullRequestPresentation, projectReviewPresentation } from "../../dist/contracts/review.js";
 
 const input = {
   repositoryId: "123456789",
@@ -25,4 +25,51 @@ test("rejects PR URLs and metadata that can escape the fixed repository", () => 
     () => projectPullRequestPresentation({ ...input, extra: "secret" }),
     /unsupported field/,
   );
+});
+
+const comparison = {
+  origin: "compare",
+  repositoryId: "123456789",
+  repository: "expo/explore-playground",
+  base: { ref: "v1.3.0", sha: "a".repeat(40) },
+  head: { ref: "v1.4.0-rc.1", sha: "b".repeat(40) },
+};
+
+test("a comparison of two commits gets github.com's compare URL and a title from its refs", () => {
+  assert.deepEqual(projectReviewPresentation(comparison), {
+    ...comparison, title: "v1.4.0-rc.1 vs v1.3.0",
+    url: `https://github.com/expo/explore-playground/compare/${"a".repeat(40)}..${"b".repeat(40)}`,
+  });
+  const bySha = projectReviewPresentation({ ...comparison, head: { ref: "b".repeat(40), sha: "b".repeat(40) } });
+  assert.equal(bySha.title, "bbbbbbbb vs v1.3.0", "a ref given as a SHA reads as its short form");
+  assert.equal(projectReviewPresentation({ ...comparison, title: "Nightly" }).title, "Nightly");
+  const projected = projectReviewPresentation(comparison);
+  assert.deepEqual(projectReviewPresentation(projected), projected, "projection is stable, so a stored comparison validates again");
+});
+
+test("rejects comparisons that name another URL, a PR number, or one commit twice", () => {
+  assert.throws(() => projectReviewPresentation({ ...comparison, url: "https://example.com/compare" }), /compare URL/);
+  assert.throws(() => projectReviewPresentation({ ...comparison, number: 7 }), /unsupported field/);
+  assert.throws(() => projectReviewPresentation({ ...comparison, head: comparison.base }), /different commits/);
+  assert.throws(() => projectReviewPresentation({ ...comparison, repositoryId: "x" }), /decimal GitHub id/);
+});
+
+test("a run's scope and link lifetime override the reviewed config only where the workflow set them", async () => {
+  const { withRunOverrides } = await import("../../dist/config/explore-config.js");
+  const config = { exploration: { scope: "changes" }, report: { preview: { hosting: "eas", expiresAfterDays: 30 } } };
+  assert.deepEqual(withRunOverrides(config, {}), config);
+  assert.deepEqual(withRunOverrides(config, { scope: "all", expiresIn: "never" }),
+    { exploration: { scope: "all" }, report: { preview: { hosting: "eas", expiresAfterDays: null } } });
+  assert.equal(withRunOverrides(config, { expiresIn: "90d" }).report.preview.expiresAfterDays, 90);
+  assert.deepEqual(withRunOverrides({ exploration: { scope: "changes" } }, { expiresIn: "never" }), { exploration: { scope: "changes" } }, "no hosting, nothing to expire");
+  assert.throws(() => withRunOverrides(config, { scope: "everything" }), /--scope must be changes or all/);
+  assert.throws(() => withRunOverrides(config, { expiresIn: "forever" }), /--expires-in/);
+  assert.throws(() => withRunOverrides({ exploration: { scope: "changes" } }, { expiresIn: "forevr" }), /--expires-in/, "a typo fails even before hosting is on");
+});
+
+test("a comparison links GitHub's direct two-dot diff, which matches what capture compares, also for a rollback", () => {
+  // Three dots diff from the merge base: comparing a newer base to an older head would show nothing there.
+  const rollback = projectReviewPresentation({ ...comparison, base: comparison.head, head: comparison.base });
+  assert.equal(rollback.url, `https://github.com/expo/explore-playground/compare/${"b".repeat(40)}..${"a".repeat(40)}`);
+  assert.throws(() => projectReviewPresentation({ ...comparison, url: `https://github.com/expo/explore-playground/compare/${"a".repeat(40)}...${"b".repeat(40)}` }), /compare URL/);
 });

@@ -1,20 +1,25 @@
-import { lstat, mkdtemp } from "node:fs/promises";
+import { cp, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { commitSubject, keepReports } from "./report-commands.js";
 import { createInterface } from "node:readline/promises";
-import { runPublicCi, runBaselineCi } from "../ci/pipeline.js";
+import { runPublicCi, runBaselineCi, runCompareCi } from "../ci/pipeline.js";
 import { exportCiReport, publishCiReportComment } from "../report/artifact.js";
-import { collectPlatformReports, deployPreview } from "../report/preview-deploy.js";
+import { collectPlatformReports, deployLocalReports, deployPreview, previewProjectSlug } from "../report/preview-deploy.js";
+import { startLocalReportServer } from "../report/local-report-server.js";
+import { openViewerInBrowser } from "../map/viewer-server.js";
+import { runLocalReview } from "../ci/local-review.js";
 import { publishFailureComment } from "../report/failure-comment.js";
 import { runExploreSetup } from "../config/setup.js";
 import { installCiFiles } from "../ci/workflow-install.js";
 import { readRouteEntry } from "../ci/route-entry.js";
 import { buildVerifiedPlan } from "../ci/verified-plan.js";
 import { formatCaptureCheck, formatDoctorReport, referencedSecretNames, runCaptureCheck, runDoctor } from "../ci/doctor.js";
-import { readExploreConfig, readExploreInstructions, resolvePlatformConfig, configPlatforms as listPlatforms, EXPLORE_PLATFORMS, DEFAULT_EXPLORE_CONFIG_PATH, type ExplorePlatform } from "../config/explore-config.js";
-import { argumentError, output, required, has, flag, flags, oneOf } from "./args.js";
+import { readExploreConfig, readExploreInstructions, resolvePlatformConfig, withRunOverrides, previewDays, configPlatforms as listPlatforms, EXPLORE_PLATFORMS, DEFAULT_EXPLORE_CONFIG_PATH, PREVIEW_DEFAULT_DAYS, type ExplorePlatform } from "../config/explore-config.js";
+import { argumentError, output, required, has, flag, flags, nonNegativeInteger, oneOf } from "./args.js";
 import { help } from "./help.js";
 import { CiError } from "../shared/ci-errors.js";
+import { cleanupAfterCapture, findOptionalBaseline, resolveCompareRefs, resolvePullRequest, writeCaptureOutputs, writeStepOutputs } from "../ci/workflow-steps.js";
 import { stderrProgress } from "../shared/progress.js";
 
 export async function doctor(): Promise<void> {
@@ -41,7 +46,7 @@ Fix the problems in steps 1–5 before a capture check.`);
   if (!has("yes")) {
     if (!process.stdin.isTTY || has("json")) argumentError("A capture check starts an EAS build and simulator session; pass --yes to confirm.", "yes");
     const terminal = createInterface({ input: process.stdin, output: process.stderr });
-    const answer = await terminal.question(`This builds the app on EAS and runs an EAS Simulator session (EAS usage applies${report.mode === "agent" ? "; agent mode also uses your model API key" : ""}). Continue? (yes/no) `);
+    const answer = await terminal.question(`This builds the app on EAS and runs an EAS Simulator session (EAS usage applies${report.mode === "agent" ? "; agent mode also uses your model API key or local claude/codex login" : ""}). Continue? (yes/no) `);
     terminal.close();
     if (!/^(y|yes)$/i.test(answer.trim())) return;
   }
@@ -73,7 +78,9 @@ export async function ciDeploy(): Promise<void> {
   const result = has("inputs") || has("reports")
     ? await deployPreview({ reports: await collectPlatformReports({ inputsPath: required("inputs"), reportsPath: required("reports") }), onSecret })
     : await deployPreview({ inputPath: required("input"), reportPath: required("report"), artifactUrl: required("artifact-url"), onSecret });
-  output({ ok: true, ...result });
+  // A comparison's token is not masked (see deployPreview), so its link stays out of the log.
+  const { previewUrl, ...unlinked } = result;
+  output({ ok: true, ...(result.linkedFromRunSummary ? unlinked : { previewUrl, ...unlinked }) });
 }
 
 export async function ciPublish(): Promise<void> {
@@ -91,6 +98,41 @@ export async function ciFailure(): Promise<void> {
   if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0) { output({ ok: true, posted: false, reason: "No PR number: the capture job never started." }); return; }
   output({ ok: true, ...await publishFailureComment({ repository, pullNumber, headSha: required("head"), baseSha: required("base"), runId, runAttempt,
     ...(has("diagnostics") ? { diagnosticsPath: required("diagnostics") } : {}), ...(platform ? { platform } : {}) }) });
+}
+
+/** `ci:pr --pr N [--output FILE]`: the live, authorized pull request; its commits go to the step outputs. */
+export async function ciPullRequest(): Promise<void> {
+  const { presentation, author } = await resolvePullRequest({ number: Number(required("pr")),
+    ...(has("app-dir") ? { appDirectory: required("app-dir") } : {}), ...(has("config") ? { configPath: required("config") } : {}) });
+  if (has("output")) await writeFile(required("output"), JSON.stringify(presentation));
+  await writeStepOutputs(process.env, { pr_number: String(presentation.number), base: presentation.base.sha, head: presentation.head.sha });
+  output({ ok: true, pullRequest: presentation, author });
+}
+
+/** `ci:find-baseline --sha SHA [--platform P]`: a reusable baseline artifact of the base commit, if one exists. */
+export async function ciFindBaseline(): Promise<void> {
+  const platform = platformFlag();
+  const { baseline, warning } = await findOptionalBaseline({ sha: required("sha"), ...(platform ? { platform } : {}) });
+  if (baseline) await writeStepOutputs(process.env, { id: String(baseline.id), run: String(baseline.run) });
+  if (warning && process.env.GITHUB_ACTIONS) console.log(`::warning title=${warning.code}::${warning.message.replace(/[\r\n]+/g, " ")}`);
+  output({ ok: true, baseline: baseline ?? null, ...(warning ? { warning } : {}) });
+}
+
+/** `ci:compare-refs --project DIR --base REF --head REF [--output FILE]`: the two commits a comparison captures. */
+export async function ciCompareRefs(): Promise<void> {
+  const comparison = resolveCompareRefs({ project: required("project"), base: required("base"), head: required("head"),
+    ...(has("title") ? { title: required("title") } : {}) });
+  if (has("output")) await writeFile(required("output"), JSON.stringify(comparison));
+  await writeStepOutputs(process.env, { base: comparison.base.sha, head: comparison.head.sha, compare: JSON.stringify(comparison) });
+  output({ ok: true, comparison });
+}
+
+/** `ci:after-capture --output DIR --checkout DIR...`: stop recorded sessions and check the checkouts are untouched; fails after reporting every problem. */
+export async function ciAfterCapture(): Promise<void> {
+  const result = await cleanupAfterCapture({ output: required("output"), checkouts: flags("checkout") });
+  for (const failure of result.failures) console.error(`::error title=${failure.code}::${failure.message} ${failure.nextAction}`);
+  output({ ok: result.failures.length === 0, ...result });
+  if (result.failures.length) process.exitCode = 1;
 }
 
 /** The `--platform` flag, when given; capture then reads that platform's fields from config.yaml. */
@@ -155,13 +197,20 @@ export async function sourceVerify(): Promise<void> {
 }
 
 export async function captureReview(): Promise<void> {
+  // Refs without the CI flags: a review on this machine, with your own logins (see runLocalReview).
+  if (!has("base-project") && !has("head-project") && !has("pull-request") && !has("compare")) return localReview();
   const headProject = required("head-project");
   const configPath = flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH;
   const platform = platformFlag();
   const rawConfig = await readExploreConfig(headProject, configPath);
-  const config = resolvePlatformConfig(rawConfig, platform);
-  const result = await runPublicCi({ ...(platform ? { platform } : {}), platforms: listPlatforms(rawConfig), baseProject: required("base-project"), headProject,
-    pullRequestPath: required("pull-request"), output: required("output"), config, configPath, progress: stderrProgress() });
+  const config = withRunOverrides(resolvePlatformConfig(rawConfig, platform), { scope: flag("scope"), expiresIn: flag("expires-in") });
+  if (has("pull-request") === has("compare")) argumentError("Pass --pull-request FILE for a pull request, or --compare FILE for any two commits.", has("compare") ? "compare" : "pull-request");
+  const common = { ...(platform ? { platform } : {}), platforms: listPlatforms(rawConfig), baseProject: required("base-project"), headProject,
+    output: required("output"), config, configPath, progress: stderrProgress() };
+  const result = has("compare") ? await runCompareCi({ ...common, comparePath: required("compare") })
+    : await runPublicCi({ ...common, pullRequestPath: required("pull-request") });
+  // The deploy job runs only when the reviewed config asks for a hosted report.
+  await writeCaptureOutputs(result.inputPath);
   output({ ok: true, inputPath: result.inputPath });
 }
 
@@ -170,4 +219,57 @@ export async function captureBaseline(): Promise<void> {
   const platform = platformFlag();
   const config = resolvePlatformConfig(await readExploreConfig(project, flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH), platform);
   output({ ok: true, ...await runBaselineCi({ ...(platform ? { platform } : {}), project, sha: required("sha"), output: required("output"), config, progress: stderrProgress() }) });
+}
+
+/** `capture:review [--base REF] [--head REF | --uncommitted]`: a local review, opened in the Viewer or hosted with --upload. */
+async function localReview(): Promise<void> {
+  const platform = platformFlag();
+  const result = await runLocalReview({ project: flag("project") ?? process.cwd(), base: flag("base"), head: flag("head"),
+    uncommitted: has("uncommitted"), untracked: has("include-untracked"), ...(platform ? { platform } : {}),
+    scope: flag("scope"), expiresIn: flag("expires-in"), cache: !has("no-cache"), configPath: flag("config"), progress: stderrProgress() });
+  if (has("output")) {
+    for (const report of result.reports) {
+      const target = resolve(required("output"), report.platform);
+      await cp(report.directory, join(target, "report"), { recursive: true });
+      await cp(report.zip, join(target, "report.zip"));
+      report.directory = join(target, "report"); report.zip = join(target, "report.zip");
+    }
+    // The reports now live under --output; the temporary copies are not needed.
+    await rm(result.work, { recursive: true, force: true });
+  }
+  const summary = { ok: true, runId: result.runId, base: result.base, head: result.head,
+    reports: result.reports.map(({ platform, directory, zip, changes, device }) => ({ platform, directory, zip, ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) })) };
+  const zips = await Promise.all(result.reports.map(async report => ({ platform: report.platform, zip: new Uint8Array(await readFile(report.zip)),
+    ...(report.changes === undefined ? {} : { changes: report.changes }), ...(report.device ? { device: report.device } : {}) })));
+  // Kept among the saved runs, with the commits' subjects (an uncommitted head is named by the commit under it).
+  const project = resolve(flag("project") ?? process.cwd());
+  const headSubject = commitSubject(project, result.head.uncommitted ? `${result.head.sha}^` : result.head.sha), baseSubject = commitSubject(project, result.base.sha);
+  const saved = await keepReports(zips.map(({ platform, zip }) => ({ platform, zip })), { subjects: { ...(headSubject ? { head: headSubject } : {}), ...(baseSubject ? { base: baseSubject } : {}) },
+    ...(result.head.uncommitted?.length ? { uncommittedFiles: result.head.uncommitted.length } : {}) });
+  if (has("upload")) {
+    const preview = result.config.report?.preview;
+    const hosted = await deployLocalReports({ reports: zips, project: previewProjectSlug(result.repository, preview?.project), ...(preview?.owner ? { owner: preview.owner } : {}),
+      // null is expiresAfter: never, which must not fall back to the default.
+      expiresAfterDays: has("expires-in") ? previewDays(required("expires-in"), "--expires-in") : preview ? preview.expiresAfterDays : PREVIEW_DEFAULT_DAYS });
+    // Hosted, the temporary copies are not needed (a failed upload keeps them for report:upload); --output keeps its own.
+    const copied = has("output");
+    if (!copied) await rm(result.work, { recursive: true, force: true });
+    if (has("json")) output({ ...summary, ...(copied ? {} : { reports: summary.reports.map(({ directory: _directory, zip: _zip, ...report }) => report) }),
+      url: hosted.previewUrl, expiresAt: hosted.expiresAt });
+    else console.log(`Report: ${hosted.previewUrl}${hosted.expiresAt ? ` (until ${hosted.expiresAt.slice(0, 10)})` : ""}`);
+    return;
+  }
+  if (has("json") || has("no-open")) {
+    if (has("json")) output(summary);
+    else for (const report of result.reports) console.log(`${report.platform}: ${report.zip}`);
+    return;
+  }
+  const server = await startLocalReportServer({ reports: zips, ...(has("port") ? { port: nonNegativeInteger("port") } : {}) });
+  console.log(`Viewer: ${server.url} (Ctrl+C to stop)`);
+  if (saved) console.log(`Saved as ${saved.id}: expo-explore reports reopens it, and reports upload ${saved.id} hosts it.`);
+  openViewerInBrowser(server.url);
+  await new Promise<void>(done => { process.once("SIGINT", () => done()); process.once("SIGTERM", () => done()); });
+  await server.close();
+  // The Viewer served the reports from memory, and the saved run keeps them; the temporary copy is no longer needed.
+  if (saved) await rm(result.work, { recursive: true, force: true });
 }

@@ -64,7 +64,11 @@ test("failure reporting downloads only this run attempt's failed-job diagnostics
     assert.equal(step.with["run-id"], undefined, "download-artifact defaults to this run");
     assert.equal(step.with.repository, undefined);
   }
-  const resolve = workflow.jobs.capture.steps.findIndex(step => step.id === "pr");
-  const install = workflow.jobs.capture.steps.findIndex(step => step.name === "Install Explore");
-  assert.ok(resolve >= 0 && resolve < install, "authorized PR identity survives early tool settings failures");
+  // A capture job that fails before it resolves the PR (its tool install, say) still gets its failure comment:
+  // the platforms job already resolved and authorized the same PR.
+  const report = job.steps.find(step => step.name === "Report failure only on the current PR");
+  for (const [env, output] of [["PR_NUMBER", "pr_number"], ["HEAD_SHA", "head"], ["BASE_SHA", "base"]]) {
+    assert.equal(report.env[env], `\${{ needs.capture.outputs.${output} || needs.platforms.outputs.${output} }}`);
+    assert.equal(workflow.jobs.platforms.outputs[output], `\${{ steps.pr.outputs.${output} }}`);
+  }
 });

@@ -159,7 +159,9 @@ export async function reportCiError(error: unknown, options: {
   const renderOptions = { secrets };
   const diagnostic = serializeCiError(error, renderOptions);
   const write = options.write ?? ((value: string) => process.stderr.write(`${value}\n`));
-  write(renderCiErrorAnnotation(error, renderOptions));
+  // An annotation in Actions; in a terminal (a local capture:review) the same redacted text, readable.
+  write(env.GITHUB_ACTIONS === "true" || env.GITHUB_STEP_SUMMARY ? renderCiErrorAnnotation(error, renderOptions)
+    : `Error [${diagnostic.code}]: ${diagnostic.message}\nNext action: ${diagnostic.nextAction}`);
   const outputs: Array<{ label: string; operation: Promise<unknown> }> = [];
   if (env.GITHUB_STEP_SUMMARY) outputs.push({ label: "job summary", operation: appendFile(env.GITHUB_STEP_SUMMARY, `${renderCiErrorSummary(error, renderOptions)}\n`) });
   if (options.diagnosticsPath) outputs.push({ label: "diagnostics file", operation: (async () => {
