@@ -241,6 +241,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
   process.on("SIGTERM", interrupt);
   options.interrupt?.addEventListener("abort", interrupt, { once: true });
   const factory = options.agentSessionFactory;
+  let failed = false;
   try {
     // The commits.
     const headRef = options.head ?? "HEAD";
@@ -349,7 +350,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     for (const entry of await readdir(work)) if (![...platforms, "base", "head"].includes(entry)) await rm(join(work, entry), { recursive: true, force: true });
     return { runId, base, head, work, reports, config: rawConfig, repository };
   } catch (error) {
-    progress(`kept this review's files for inspection: ${work}`);
+    failed = true;
     // A capture interrupted mid-session reports its cleanup; the interruption is what happened.
     throw abort.signal.aborted ? abort.signal.reason : error;
   } finally {
@@ -360,5 +361,10 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     if (!options.runner) await stopRecordedSessions(outputs, environment).catch(() => []);
     for (const tree of worktrees) git(root, ["worktree", "remove", "--force", tree]);
     git(root, ["worktree", "prune"]);
+    // A failed run keeps what it produced for inspection; one that failed before producing anything leaves nothing.
+    if (failed) {
+      if ((await readdir(work).catch(() => [])).length) progress(`kept this review's files for inspection: ${work}`);
+      else await rm(work, { recursive: true, force: true });
+    }
   }
 }

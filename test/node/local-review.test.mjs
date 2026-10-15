@@ -143,6 +143,7 @@ test('a local review captures two commits of the repository in its own worktrees
   const result = await runLocalReview({ project: f.headProject, base: f.baseSha, head: f.headSha, environment,
     install: async (checkout, side) => { installs.push(side); await writeCaptureObserverPackages(checkout, { provider: 'expo-router' }); },
     runner: f.runner, now: f.now, sleep: f.sleep });
+  t.after(() => rm(result.work, { recursive: true, force: true }));
   assert.deepEqual(installs, ['head', 'base'], 'installed once, only once there is capture work');
   assert.match(result.runId, /^local-\d{14}-[0-9a-f]{6}$/);
   assert.deepEqual([result.base.sha, result.head.sha], [f.baseSha, f.headSha]);
@@ -174,6 +175,8 @@ test('Ctrl+C stops the review, and the checkouts are removed while its files are
     install: async checkout => { await writeCaptureObserverPackages(checkout, { provider: 'expo-router' }); ctrlC.abort(); },
     runner: f.runner, now: f.now, sleep: f.sleep }), error => error.code === 'LOCAL_REVIEW_INTERRUPTED');
   assert.equal(git(f.headProject, 'worktree', 'list').split('\n').length, 2, 'the review\'s checkouts are removed');
-  assert.ok(messages.some(message => /^kept this review's files for inspection: /.test(message)));
+  const kept = messages.map(message => /^kept this review's files for inspection: (.+)$/.exec(message)?.[1]).find(Boolean);
+  assert.ok(kept, 'a failed run says where its files are');
+  t.after(() => rm(kept, { recursive: true, force: true }));
   assert.equal(process.listenerCount('SIGINT'), listeners, 'its handlers are gone, so a later Ctrl+C behaves normally');
 });

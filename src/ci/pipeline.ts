@@ -418,7 +418,7 @@ export async function runCiReview(options: {
       }
     }
     await preserveReport();
-    progress(pr.origin === "compare" ? "writing the report" : "writing the report and updating the pull request comment");
+    progress(pr.origin === "compare" || pr.origin === "local" ? "writing the report" : "writing the report and updating the pull request comment");
     await assertCurrentHead(); await postComment();
     return { ...result, evidence, inputPath };
   } catch (error) {

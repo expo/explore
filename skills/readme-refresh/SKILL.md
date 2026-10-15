@@ -45,7 +45,7 @@ Look at every PNG you produced before committing, light and dark: the selected s
 Read the README top to bottom once without opening a collapsible. At that level it may only answer, in this order:
 
 1. What Explore is (one short paragraph), the hero image, and the link to the live euxy example (`explore-example--euxy.expo.app`, redeployed on every merge to main by `.github/workflows/example-report.yml`).
-2. **Try it on your app**: one sentence and a prompt to paste into Claude Code or Codex that gets a simulator build of any app (Expo or not, or just a build) and runs `explore:binary` on it.
+2. **Try it on your app**: one sentence and a prompt to paste into Claude Code or Codex that gets a simulator build of any app (Expo or not, or just a build) and runs `explore:binary` on it. Under it, **Review a change before you push it**: one sentence and a prompt that runs `capture:review` locally (the explore-setup skill's "Review a change on this machine" section) on a set-up app.
 3. **Set up CI: reviews on every PR**: one sentence and the setup prompt.
 4. **What you get**: the PR comment, Compare, and Screens, each a heading, one line, and its picture, then a prompt for asking an agent about a report.
 

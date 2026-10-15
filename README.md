@@ -27,7 +27,7 @@ For apps behind a sign-in, see [Sign-in and other app state](#sign-in-and-other-
 
 ### Review a change before you push it
 
-With [CI set up](#set-up-ci-reviews-on-every-pr), the review a PR gets also runs on your machine, between any two commits, with your `eas login` and your Claude Code or Codex login:
+Once Explore is [set up](#set-up-ci-reviews-on-every-pr) (`.expo-explore/config.yaml` committed), the review a PR gets also runs on your machine, between any two commits. No tokens or keys to set: it uses your `eas login` and your Claude Code or Codex login.
 
 ```text
 Review my current changes with Expo Explore. Follow the "Review a change on this machine"
@@ -44,7 +44,11 @@ npx @expo/explore capture:review --uncommitted       # your uncommitted changes 
 npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all --upload
 ```
 
-It checks out both commits in temporary worktrees, captures them on EAS Simulator, and opens the report in a local Viewer (`--upload` hosts it instead). Captures are cached, so the same base is not captured twice.
+- It checks out both commits as temporary worktrees, installs their dependencies, captures every configured platform on EAS Simulator (`--platform` picks one), and opens the report in a local Viewer. `--upload` hosts it and prints the link.
+- Your checkout, index and branches are never touched. `--uncommitted` takes tracked changes only; `--include-untracked` adds untracked files, which are uploaded with the EAS build.
+- Installs run without credential environment variables. A registry that needs `${NPM_TOKEN}` in the project's `.npmrc` must be authenticated in your own `~/.npmrc`.
+- Captures are cached in `~/.cache/expo-explore`, so the same base is not captured twice (`--no-cache` skips it). Ctrl+C stops the run's simulator sessions.
+- Like a CI review, it builds on EAS (reusing a matching build) and runs simulator sessions: expect several minutes and EAS usage.
 
 </details>
 
@@ -133,6 +137,7 @@ what to merge and how to start the first review.
 ```sh
 expo-explore doctor            # check every step; exits 1 until ready
 expo-explore doctor --capture  # capture the committed app on EAS once, before the first PR
+expo-explore capture:review    # or see a whole review of your branch on this machine first
 ```
 
 A failed run shows an error code and a next action in the PR comment; see [CI troubleshooting](docs/quickstart-ci.md#diagnose-a-failed-run).
@@ -223,6 +228,7 @@ report:
 ```
 
 - Run `expo-explore setup --workflows` after enabling it to add the `deploy` job.
+- A [comparison of two commits](#compare) links its hosted report from the run's summary instead of a PR comment. `capture:review --upload` on your machine deploys to the same project with your `eas login`.
 - `EXPO_TOKEN` must be able to create the EAS project, so use a [robot user's](https://docs.expo.dev/accounts/programmatic-access/) token.
 - The report is encrypted, and only a request carrying the link's token can open it. Treat the link like a shared file link; see [report access](docs/private-review.md#hosted-previews).
 
@@ -277,7 +283,7 @@ jobs:
 
 - A PR that adds a guarded screen or a dynamic route should also update `config.yaml`.
 - Renamed identifiers or labels break deterministic setup steps.
-- To update Explore, run `npx @expo/explore@latest setup --workflows` and commit the new version.
+- To update Explore, run `npx @expo/explore@latest setup --workflows` and commit the new version. It also adds `explore-compare.yml` if you don't have it, and `doctor` warns when it is missing.
 
 </details>
 
@@ -388,6 +394,8 @@ curl -s "$LINK/api/v1/screens?status=modified" | jq '.items[] | {route, status, 
 3. It builds both revisions and captures each screen on EAS Simulator, reusing a baseline of the base commit when one exists.
 4. It compares the captures. A screen with a source change is **Modified** if its captures differ.
 5. It uploads the report to GitHub Actions and posts a PR comment.
+
+The same review runs for any two commits without a PR ([`explore-compare.yml`](#compare), linking the report from the run summary) and on your machine (`capture:review`, [above](#review-a-change-before-you-push-it)). The workflows' logic lives in `expo-explore ci:*` commands, so a fix reaches CI with the `@expo/explore` version the workflows pin.
 
 Reports and baselines are kept for 30 days and diagnostics for 7. Hosted deployments are never deleted automatically; see [report access](docs/private-review.md).
 
