@@ -245,7 +245,15 @@ report:
 </details>
 
 <details>
-<summary id="compare"><strong>Review any two commits: releases, nightlies, any event</strong></summary>
+<summary id="compare"><strong>Explore a release or release candidate, or any two commits</strong></summary>
+
+There are a few ways to snapshot a release:
+
+- **On demand:** in your repository's Actions tab, open **Expo Explore compare**, choose **Run workflow**, and set `base` to the last release's tag (`v1.3.0`), `head` to the new tag or release candidate (`v1.4.0-rc.1`), `scope` to `all` and `expires-in` to `never`. The run's summary links the report.
+- **Automatically, on every tag:** add the `release-review.yml` below. It compares each tag, release candidates included, with the last stable tag, so a release candidate is reviewed against what people have now.
+- **On your machine, without CI:** `npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all --upload`, with your `eas login`. `npx @expo/explore reports` lists the runs you have kept.
+
+`scope: all` captures every screen, not only those whose source changed, so the report shows the whole release with what changed since the last one marked; `expires-in: never` keeps its link.
 
 `.github/workflows/explore-compare.yml` reviews a `head` against a `base`, each a branch, tag or commit SHA, with no pull request. It captures, compares and reports exactly like a PR review, and links the report from the run's summary.
 
@@ -282,7 +290,7 @@ jobs:
 - Pick whatever `base` the event calls for: `main` for a release branch, yesterday's tag for a nightly, the last stable tag for a release candidate.
 - `scope` and `expires-in` are optional and override `exploration.scope` and `report.preview.expiresAfter` for that run. Without them a comparison captures what a PR review would (`scope: changes` captures only screens whose source changed), and the hosted link expires like a PR's.
 - The run summary links each platform's report (**Open** and **zip**, like a PR comment) and, with hosting, the hosted report.
-- `setup --workflows` installs it. The caller grants `contents: read` and `actions: read`; `secrets: inherit` passes `EXPO_TOKEN` and any app-test secrets.
+- `setup --workflows` installs it from 0.19.0; `npx @expo/explore@latest setup --workflows` adds it to an existing setup. The caller grants `contents: read` and `actions: read`; `secrets: inherit` passes `EXPO_TOKEN` and any app-test secrets.
 - Call it once per workflow run. A called workflow runs inside its caller's run, so a second call in the same run would reuse the first one's artifact names; use separate workflows instead.
 - When the baseline workflow captured `base` in the last 30 days, that capture is reused and only `head` is captured. The report artifact is kept 30 days; only a hosted link with `expires-in: never` lasts longer.
 
