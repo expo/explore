@@ -170,6 +170,16 @@ npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all
 - Captures are cached in `~/.cache/expo-explore`, so a second review of the same base does not capture it again (`--no-cache` skips the cache). Ctrl+C stops the EAS Simulator sessions the review started.
 - It builds on EAS and runs simulator sessions, like a CI review: expect several minutes and EAS usage per run.
 
+## Compare any two commits
+
+`explore-compare.yml` (installed by `setup --workflows` from 0.19.0; run `npx @expo/explore@latest setup --workflows` to add it to an existing setup) reviews a `head` against a `base`, each a branch, tag or commit SHA, with no pull request. It captures, compares and reports like a PR review and links the report from the run's summary. Its inputs are `base`, `head`, and the optional `scope` (`changes` or `all`) and `expires-in` (such as `30d`, or `never`).
+
+- **Releases.** Unless the user asks otherwise, compare each release with the last stable release, with `scope: all` (every screen, so the report shows the whole release with what changed marked) and, when hosted previews are on, `expires-in: never` (the link outlives the 30-day artifact). For every tag as it is pushed, add the `release-review.yml` from the README's "Compare any two commits" section: it finds the newest earlier tag without a `-` (so a release candidate is compared with the last stable release) and calls `explore-compare.yml` with `secrets: inherit` and `permissions: { contents: read, actions: read }`. A nightly compares with yesterday's tag; a release branch with `main`.
+- **Once, on demand.** The workflow must be on the default branch to be dispatched: `gh workflow run explore-compare.yml -f base=<ref> -f head=<ref> -f scope=all -f expires-in=never`, or **Run workflow** under Actions → Expo Explore compare.
+- **Without CI.** `npx @expo/explore capture:review --base <ref> --head <ref> --scope all --upload` runs the same comparison on this machine (see the previous section).
+- Call the workflow once per workflow run (a second call in the same run reuses the first one's artifact names). A `base` the baseline workflow captured in the last 30 days is reused, so only `head` is captured.
+- To verify, run it once on the latest tag and open the run's summary: it lists each platform's result and links the report.
+
 ## Learn from observed failures
 
 When revising an existing setup, read the previous run's diagnostics, navigation trace and screenshots together. Separate an app prerequisite or defect from a controller failure and a provider or configuration failure. A successful tool response alone does not prove recovery: check the field value, destination, or visible content. For agent mode, inspect `agent-usage.jsonl` before proposing another paid run; missing accounting is unknown, not zero, and dollar fields are estimates. Respect exhausted credit and requests to stop paid calls.

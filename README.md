@@ -9,6 +9,17 @@ Explore maps your app: a screenshot of every screen, connected by the taps betwe
 
 **See a real report:** [euxy](https://explore-example--euxy.expo.app/p/rfcoic27ccgnrmzgijubxkmuzmptcrva?platform=ios), a MIDI sequencer, reviewed by Explore. It is redeployed with the current Viewer on every merge to main.
 
+<details>
+<summary><strong>Requirements</strong></summary>
+
+- An iOS app, an Android app, or both. Explore is in v0; Android capture is newer than iOS.
+- Expo SDK 57 or newer, with Expo Router (57 or newer) or React Navigation (6 or newer).
+- An EAS build profile per platform: `ios.simulator: true` for iOS, `android.buildType: apk` for Android. Its EAS environment cannot have secret-visibility variables.
+- EAS Simulator access (in preview, [join the waitlist](https://expo.dev/services/simulators)).
+- Node.js 24.12 or newer, and admin access to the GitHub repository.
+
+</details>
+
 ## Try it on your app
 
 Paste this into Claude Code or Codex from your app's directory. It explores a build you point to, or an Expo project straight from its source:
@@ -70,7 +81,7 @@ npx @expo/explore explore:session <session-id> --env-file path/.env.eas-simulato
 <details>
 <summary><strong>What a run without source shows</strong></summary>
 
-One card per screen the run reached, laid out by how many taps it took, with the tapped control on each edge. There is no before and after; that needs [CI](#set-up-ci-reviews-on-every-pr).
+One card per screen the run reached, laid out by how many taps it took, with the tapped control on each edge. There is no before and after; that needs [CI](#set-up-ci).
 
 ![The Map of an exploration report for the euxy app: one card per screen the run reached, laid out by taps from the launch screen, each edge labelled with the control that was tapped](docs/screenshots/readme-exploration-light.png)
 
@@ -78,7 +89,7 @@ One card per screen the run reached, laid out by how many taps it took, with the
 
 ### Review a change before you push it
 
-Once Explore is [set up](#set-up-ci-reviews-on-every-pr) (`.expo-explore/config.yaml` committed), the review a PR gets also runs on your machine, between any two commits. No tokens or keys to set: it uses your `eas login` and your Claude Code or Codex login.
+Once Explore is [set up](#set-up-ci) (`.expo-explore/config.yaml` committed), the review a PR gets also runs on your machine, between any two commits. No tokens or keys to set: it uses your `eas login` and your Claude Code or Codex login.
 
 ```text
 Review my current changes with Expo Explore. Follow the "Review a change on this machine"
@@ -112,9 +123,13 @@ npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all --uploa
 
 </details>
 
-## Set up CI: reviews on every PR
+## Set up CI
 
-Paste this into Claude Code or Codex from your app's repository:
+Explore runs in your repository's GitHub Actions in two ways, both from the same setup: a review on every pull request, and a comparison of any two commits, such as a release against the last one.
+
+### Review on every PR
+
+Each pull request gets a comment linking its report: the screens it added, removed or changed, before and after, on each platform you capture. Paste this into Claude Code or Codex from your app's repository:
 
 ```text
 Set up this app for Expo Explore CI reviews. Follow
@@ -126,45 +141,45 @@ what to merge and how to start the first review.
 ```
 
 <details>
-<summary><strong>Requirements</strong></summary>
+<summary id="hosted-previews"><strong>Hosted previews</strong></summary>
 
-- An iOS app, an Android app, or both. Explore is in v0; Android capture is newer than iOS.
-- Expo SDK 57 or newer, with Expo Router (57 or newer) or React Navigation (6 or newer).
-- An EAS build profile per platform: `ios.simulator: true` for iOS, `android.buildType: apk` for Android. Its EAS environment cannot have secret-visibility variables.
-- EAS Simulator access (in preview, [join the waitlist](https://expo.dev/services/simulators)).
-- Node.js 24.12 or newer, and admin access to the GitHub repository.
+By default reviewers download the report from GitHub. With hosted previews, the comment's **Explore report** link opens it in one click, even in private repositories.
+
+```yaml
+report:
+  preview:
+    hosting: eas        # default: off
+    expiresAfter: 30d   # default 30d, max 365d, or never
+    # project: acme-explore   # default <repository name>-explore, created on first run
+```
+
+- Run `expo-explore setup --workflows` after enabling it to add the `deploy` job.
+- A [comparison of two commits](#compare-any-two-commits) links its hosted report from the run's summary instead of a PR comment. `capture:review --upload` on your machine deploys to the same project with your `eas login`.
+- `expo-explore report:upload <report.zip>...` hosts reports already on your machine the same way: a review's reports (one per platform, from `capture:review --output` or a downloaded `explore-review` artifact) or an `explore:binary` report.
+- `EXPO_TOKEN` must be able to create the EAS project, so use a [robot user's](https://docs.expo.dev/accounts/programmatic-access/) token.
+- The report is encrypted, and only a request carrying the link's token can open it. Treat the link like a shared file link; see [report access](docs/private-review.md#hosted-previews).
 
 </details>
 
 <details>
-<summary><strong>After setup: your first review</strong></summary>
+<summary><strong>Manual setup</strong></summary>
 
-1. Set the repository secrets that `expo-explore doctor` lists, such as `EXPO_TOKEN`.
-2. Merge the setup to the default branch and run **Expo Explore baseline** from GitHub Actions.
-3. Open a PR. **Expo Explore review** runs and posts a comment with the report.
+The prompt above walks through these steps with you. To do them yourself:
 
-```sh
-expo-explore doctor            # check every step; exits 1 until ready
-expo-explore doctor --capture  # capture the committed app on EAS once, before the first PR
-expo-explore capture:review    # or see a whole review of your branch on this machine first
-```
+1. Run `npx @expo/explore setup` in your app's directory (in a monorepo, add `--project apps/mobile`). It writes `.expo-explore/config.yaml` and the workflows.
+2. Run `npx @expo/explore doctor` and fix each problem it reports, until it exits 0. `doctor --capture` captures the committed app on EAS once, to check every screen before your first PR.
+3. Set the repository secrets `doctor` lists:
+   - `EXPO_TOKEN`: create it in [Expo access tokens](https://expo.dev/settings/access-tokens). For [hosted previews](#hosted-previews), use a [robot user](https://docs.expo.dev/accounts/programmatic-access/) that can create projects.
+   - A secret for each `{{secret:NAME}}` in your setup steps. Run `npx @expo/explore setup --workflows` after you add one.
+4. Commit, merge to the default branch, and run **Expo Explore baseline** from GitHub Actions.
+5. Open a PR. **Expo Explore review** runs and posts a comment with the report. To see a whole review of your branch first, run `npx @expo/explore capture:review` on your machine.
 
 A failed run shows an error code and a next action in the PR comment; see [CI troubleshooting](docs/quickstart-ci.md#diagnose-a-failed-run).
 
 </details>
 
 <details>
-<summary><strong>Set up without a coding agent</strong></summary>
-
-```sh
-npx @expo/explore setup    # writes .expo-explore/config.yaml and the workflows; in a monorepo: --project apps/mobile
-npx @expo/explore doctor   # fix each problem it reports, then commit
-```
-
-</details>
-
-<details>
-<summary><strong>Choose a capture mode</strong></summary>
+<summary><strong>Capture modes: deterministic or agent</strong></summary>
 
 | | **Deterministic** (recommended to start) | **Agent** |
 | --- | --- | --- |
@@ -175,10 +190,7 @@ npx @expo/explore doctor   # fix each problem it reports, then commit
 
 Both modes use the same comparison rules and report. You can change modes later.
 
-</details>
-
-<details>
-<summary><strong>Configure agent mode</strong></summary>
+**To use agent mode:**
 
 1. Create an [Anthropic](https://platform.claude.com/settings/keys) or [OpenAI](https://platform.openai.com/api-keys) API key.
 2. Set `mode: agent` and an `agent.model` your account can use.
@@ -190,15 +202,7 @@ The model navigates and recovers on each uncaptured revision; see [agent usage](
 </details>
 
 <details>
-<summary><strong>Repository settings</strong></summary>
-
-- `EXPO_TOKEN`: create it in [Expo access tokens](https://expo.dev/settings/access-tokens). For [hosted previews](#hosted-previews), use a [robot user](https://docs.expo.dev/accounts/programmatic-access/) that can create projects.
-- A secret for each `{{secret:NAME}}` in your setup steps. Run `expo-explore setup --workflows` after you add one.
-
-</details>
-
-<details>
-<summary id="platforms"><strong>Android and several platforms</strong></summary>
+<summary id="platforms"><strong>iOS, Android, or both</strong></summary>
 
 `app.platform` names the primary platform, and a `platforms` map adds the other. Each entry can set its own `device`, `bundleId`, and `easProfile`.
 
@@ -224,36 +228,36 @@ platforms:
 </details>
 
 <details>
-<summary id="hosted-previews"><strong>Hosted previews</strong></summary>
+<summary><strong>Keep your setup current</strong></summary>
 
-By default reviewers download the report from GitHub. With hosted previews, the comment's **Explore report** link opens it in one click, even in private repositories.
-
-```yaml
-report:
-  preview:
-    hosting: eas        # default: off
-    expiresAfter: 30d   # default 30d, max 365d, or never
-    # project: acme-explore   # default <repository name>-explore, created on first run
-```
-
-- Run `expo-explore setup --workflows` after enabling it to add the `deploy` job.
-- A [comparison of two commits](#compare) links its hosted report from the run's summary instead of a PR comment. `capture:review --upload` on your machine deploys to the same project with your `eas login`.
-- `expo-explore report:upload <report.zip>...` hosts reports already on your machine the same way: a review's reports (one per platform, from `capture:review --output` or a downloaded `explore-review` artifact) or an `explore:binary` report.
-- `EXPO_TOKEN` must be able to create the EAS project, so use a [robot user's](https://docs.expo.dev/accounts/programmatic-access/) token.
-- The report is encrypted, and only a request carrying the link's token can open it. Treat the link like a shared file link; see [report access](docs/private-review.md#hosted-previews).
+- A PR that adds a guarded screen or a dynamic route should also update `config.yaml`.
+- Renamed identifiers or labels break deterministic setup steps.
+- To update Explore, run `npx @expo/explore@latest setup --workflows` and commit the new version. It also adds `explore-compare.yml` if you don't have it, and `doctor` warns when it is missing.
 
 </details>
 
-<details>
-<summary id="compare"><strong>Explore a release or release candidate, or any two commits</strong></summary>
+### Compare any two commits
+
+A release, a release candidate, a nightly: any two branches, tags or commits, reviewed like a PR without one, with the report linked from the run's summary. Once CI reviews PRs, paste this into Claude Code or Codex:
+
+```text
+Set up Expo Explore to review this app's releases. Follow the "Compare any two commits"
+section of https://unpkg.com/@expo/explore/skills/explore-setup/SKILL.md: make sure
+explore-compare.yml is installed, add a workflow that compares each release tag (and
+release candidate) with the last stable release, then run it once on the latest tag and
+give me the report link.
+```
 
 There are a few ways to snapshot a release:
 
 - **On demand:** in your repository's Actions tab, open **Expo Explore compare**, choose **Run workflow**, and set `base` to the last release's tag (`v1.3.0`), `head` to the new tag or release candidate (`v1.4.0-rc.1`), `scope` to `all` and `expires-in` to `never`. The run's summary links the report.
-- **Automatically, on every tag:** add the `release-review.yml` below. It compares each tag, release candidates included, with the last stable tag, so a release candidate is reviewed against what people have now.
+- **Automatically, on every tag:** add the `release-review.yml` in [The comparison workflow](#compare) below. It compares each tag, release candidates included, with the last stable tag, so a release candidate is reviewed against what people have now.
 - **On your machine, without CI:** `npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all --upload`, with your `eas login`. `npx @expo/explore reports` lists the runs you have kept.
 
 `scope: all` captures every screen, not only those whose source changed, so the report shows the whole release with what changed since the last one marked; `expires-in: never` keeps its link.
+
+<details>
+<summary id="compare"><strong>The comparison workflow</strong></summary>
 
 `.github/workflows/explore-compare.yml` reviews a `head` against a `base`, each a branch, tag or commit SHA, with no pull request. It captures, compares and reports exactly like a PR review, and links the report from the run's summary.
 
@@ -293,15 +297,6 @@ jobs:
 - `setup --workflows` installs it from 0.19.0; `npx @expo/explore@latest setup --workflows` adds it to an existing setup. The caller grants `contents: read` and `actions: read`; `secrets: inherit` passes `EXPO_TOKEN` and any app-test secrets.
 - Call it once per workflow run. A called workflow runs inside its caller's run, so a second call in the same run would reuse the first one's artifact names; use separate workflows instead.
 - When the baseline workflow captured `base` in the last 30 days, that capture is reused and only `head` is captured. The report artifact is kept 30 days; only a hosted link with `expires-in: never` lasts longer.
-
-</details>
-
-<details>
-<summary><strong>Keep your setup current</strong></summary>
-
-- A PR that adds a guarded screen or a dynamic route should also update `config.yaml`.
-- Renamed identifiers or labels break deterministic setup steps.
-- To update Explore, run `npx @expo/explore@latest setup --workflows` and commit the new version. It also adds `explore-compare.yml` if you don't have it, and `doctor` warns when it is missing.
 
 </details>
 
@@ -402,7 +397,7 @@ curl -s "$LINK/api/v1/screens?status=modified" | jq '.items[] | {route, status, 
 
 </details>
 
-## More
+## Additional information
 
 <details>
 <summary><strong>How it works</strong></summary>
@@ -413,7 +408,7 @@ curl -s "$LINK/api/v1/screens?status=modified" | jq '.items[] | {route, status, 
 4. It compares the captures. A screen with a source change is **Modified** if its captures differ.
 5. It uploads the report to GitHub Actions and posts a PR comment.
 
-The same review runs for any two commits without a PR ([`explore-compare.yml`](#compare), linking the report from the run summary) and on your machine (`capture:review`, [above](#review-a-change-before-you-push-it)). The workflows' logic lives in `expo-explore ci:*` commands, so a fix reaches CI with the `@expo/explore` version the workflows pin.
+The same review runs for any two commits without a PR ([`explore-compare.yml`](#compare-any-two-commits), linking the report from the run summary) and on your machine (`capture:review`, [above](#review-a-change-before-you-push-it)). The workflows' logic lives in `expo-explore ci:*` commands, so a fix reaches CI with the `@expo/explore` version the workflows pin.
 
 Reports and baselines are kept for 30 days and diagnostics for 7. Hosted deployments are never deleted automatically; see [report access](docs/private-review.md).
 
