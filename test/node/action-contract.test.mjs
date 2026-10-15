@@ -366,6 +366,9 @@ test("compare reviews any two refs from a manual run or another workflow, with n
   assert.match(compare.jobs.report.steps.find(step => step.name === "Link the report from the run summary").run, /ci:publish --input .* --artifact-url "\$ARTIFACT_URL" --platform "\$PLATFORM"/);
   assert.equal(compare.jobs.capture.env.BASE_SHA, "${{ needs.platforms.outputs.base }}", "capture checks out the commits the refs resolved to once");
   assert.equal(compare.jobs.capture.env.HEAD_SHA, "${{ needs.platforms.outputs.head }}");
+  assert.equal(compare.concurrency.group, "explore-compare-${{ inputs.base }}..${{ inputs.head }}", "\"..\" cannot appear in a ref, so groups never collide");
+  const diagnostics = compare.jobs.report.steps.find(step => step.name === "Upload report failure diagnostics");
+  assert.deepEqual([diagnostics.if, diagnostics.with.path], ["always()", "${{ runner.temp }}/explore-diagnostics"]);
   assert.match(compare.jobs.platforms.steps.find(step => step.id === "refs").run, /ci:compare-refs --project app-head --base "\$BASE_REF" --head "\$HEAD_REF"/);
   assert.match(compare.jobs.capture.steps.find(step => step.id === "capture").run, /printf '%s' "\$COMPARE" > "\$RUNNER_TEMP\/explore-compare\.json"/);
   assert.match(compare.jobs.deploy.steps.at(-1).run, /ci:deploy --inputs/);

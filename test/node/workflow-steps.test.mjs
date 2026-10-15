@@ -31,7 +31,7 @@ test("ci:compare-refs resolves tags, branches and SHAs to the comparison a captu
   const { root, first, second } = await repository(t);
   assert.deepEqual(resolveCompareRefs({ project: root, base: "v1.0.0", head: "release", environment }), {
     origin: "compare", repositoryId: "42", repository: "acme/app", title: "release vs v1.0.0",
-    url: `https://github.com/acme/app/compare/${first}...${second}`,
+    url: `https://github.com/acme/app/compare/${first}..${second}`,
     base: { ref: "v1.0.0", sha: first }, head: { ref: "release", sha: second } });
   assert.equal(resolveCompareRefs({ project: root, base: first, head: "HEAD", environment }).title, `HEAD vs ${first.slice(0, 8)}`);
   for (const [base, head, code] of [["v1.0.0", "v1.0.0", "COMPARE_SAME_COMMIT"], ["v9", "main", "COMPARE_REF_NOT_FOUND"],

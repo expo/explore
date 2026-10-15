@@ -376,8 +376,10 @@ export function withRunOverrides(config: ExploreConfig, overrides: { scope?: str
     if (overrides.scope !== "changes" && overrides.scope !== "all") fail("--scope must be changes or all", "--scope");
     result = { ...result, exploration: { ...result.exploration, scope: overrides.scope } };
   }
-  if (overrides.expiresIn !== undefined && result.report?.preview) {
-    result = { ...result, report: { ...result.report, preview: { ...result.report.preview, expiresAfterDays: previewDays(overrides.expiresIn, "--expires-in") } } };
+  if (overrides.expiresIn !== undefined) {
+    // Validated even without hosting, so a typo in a release workflow surfaces before hosting is turned on.
+    const expiresAfterDays = previewDays(overrides.expiresIn, "--expires-in");
+    if (result.report?.preview) result = { ...result, report: { ...result.report, preview: { ...result.report.preview, expiresAfterDays } } };
   }
   return result;
 }

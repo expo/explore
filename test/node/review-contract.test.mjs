@@ -38,7 +38,7 @@ const comparison = {
 test("a comparison of two commits gets github.com's compare URL and a title from its refs", () => {
   assert.deepEqual(projectReviewPresentation(comparison), {
     ...comparison, title: "v1.4.0-rc.1 vs v1.3.0",
-    url: `https://github.com/expo/explore-playground/compare/${"a".repeat(40)}...${"b".repeat(40)}`,
+    url: `https://github.com/expo/explore-playground/compare/${"a".repeat(40)}..${"b".repeat(40)}`,
   });
   const bySha = projectReviewPresentation({ ...comparison, head: { ref: "b".repeat(40), sha: "b".repeat(40) } });
   assert.equal(bySha.title, "bbbbbbbb vs v1.3.0", "a ref given as a SHA reads as its short form");
@@ -64,4 +64,12 @@ test("a run's scope and link lifetime override the reviewed config only where th
   assert.deepEqual(withRunOverrides({ exploration: { scope: "changes" } }, { expiresIn: "never" }), { exploration: { scope: "changes" } }, "no hosting, nothing to expire");
   assert.throws(() => withRunOverrides(config, { scope: "everything" }), /--scope must be changes or all/);
   assert.throws(() => withRunOverrides(config, { expiresIn: "forever" }), /--expires-in/);
+  assert.throws(() => withRunOverrides({ exploration: { scope: "changes" } }, { expiresIn: "forevr" }), /--expires-in/, "a typo fails even before hosting is on");
+});
+
+test("a comparison links GitHub's direct two-dot diff, which matches what capture compares, also for a rollback", () => {
+  // Three dots diff from the merge base: comparing a newer base to an older head would show nothing there.
+  const rollback = projectReviewPresentation({ ...comparison, base: comparison.head, head: comparison.base });
+  assert.equal(rollback.url, `https://github.com/expo/explore-playground/compare/${"b".repeat(40)}..${"a".repeat(40)}`);
+  assert.throws(() => projectReviewPresentation({ ...comparison, url: `https://github.com/expo/explore-playground/compare/${"a".repeat(40)}...${"b".repeat(40)}` }), /compare URL/);
 });

@@ -284,7 +284,7 @@ export function renderCompareSummary(comparison: CompareReviewPresentation, prev
     return `- ${input.publicReview.runtime.platform === "android" ? "Android" : "iOS"}${device ? ` (${device})` : ""}: ${changes === undefined ? "no review" : `${changes} ${changes === 1 ? "change" : "changes"}`}`;
   });
   return [`### Explore: ${compareTitleMarkdown(comparison)}`, "",
-    `[Open the report](${previewUrl}) · [${comparison.base.sha.slice(0, 8)}...${comparison.head.sha.slice(0, 8)}](${comparison.url})`
+    `[Open the report](${previewUrl}) · [${comparison.base.sha.slice(0, 8)}..${comparison.head.sha.slice(0, 8)}](${comparison.url})`
       + (expiresAt === null ? "" : ` · link expires ${new Date(expiresAt).toISOString().slice(0, 10)}`), "",
     ...platforms, ""].join("\n");
 }

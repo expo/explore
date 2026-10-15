@@ -36,7 +36,8 @@ env:
   TOOLS_PREFIX: explore-tools
   TOOLS: explore-tools/package
 concurrency:
-  group: explore-compare-${{ inputs.base }}-${{ inputs.head }}
+  # ".." cannot appear in a ref name, so no two different comparisons share a group.
+  group: explore-compare-${{ inputs.base }}..${{ inputs.head }}
   cancel-in-progress: false
 jobs:
   # Resolves both refs to commits once, and lists the platforms .expo-explore/config.yaml captures at head.
@@ -249,6 +250,14 @@ jobs:
           ARTIFACT_URL: ${{ steps.report.outputs.artifact-url }}
         shell: bash
         run: node "$TOOLS/dist/cli.js" ci:publish --input "$RUNNER_TEMP/explore-review/report-input.json" --artifact-url "$ARTIFACT_URL" --platform "$PLATFORM"
+      - name: Upload report failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: explore-report-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform }}
+          path: ${{ runner.temp }}/explore-diagnostics
+          retention-days: 7
+          if-no-files-found: ignore
   # Hosted report (opt-in, report.preview in config.yaml): one token-gated EAS Hosting deployment serving every platform's report.
   # This is the only job after capture that holds EXPO_TOKEN; it writes the link to the run summary.
   deploy:

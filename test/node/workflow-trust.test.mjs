@@ -6,7 +6,7 @@ import test from "node:test";
 import { parse } from "yaml";
 
 const workflow = parse(await readFile(new URL("../../templates/explore-review.yml", import.meta.url), "utf8"));
-const { resolvePullRequest, findBaselineArtifact } = await import("../../dist/ci/workflow-steps.js");
+const { resolvePullRequest, findBaselineArtifact, findOptionalBaseline } = await import("../../dist/ci/workflow-steps.js");
 const environment = { GITHUB_REPOSITORY: "acme/app", GITHUB_TOKEN: "test-token" };
 const samplePr = () => ({
   state: "open", draft: false, number: 91, title: "PR", html_url: "https://github.com/acme/app/pull/91", user: { login: "author" },
@@ -88,6 +88,15 @@ test("baseline restore rejects foreign workflows, revisions, branches, and unfin
   };
   assert.deepEqual(await findBaselineArtifact({ sha: "a".repeat(40), platform: "ios", environment, transport }), { id: 20, run: 20 });
   assert.deepEqual(names, [`explore-baseline-${"a".repeat(40)}-ios`, `explore-baseline-${"a".repeat(40)}`], "iOS also accepts the unsuffixed name older baselines used");
+});
+
+test("a failed baseline lookup is a warning and no baseline, never an error a failure comment could blame", async () => {
+  const outage = async () => new Response("bad gateway", { status: 502 });
+  const result = await findOptionalBaseline({ sha: "a".repeat(40), platform: "ios", environment, transport: outage });
+  assert.equal(result.baseline, undefined);
+  assert.equal(result.warning.code, "GITHUB_REQUEST_FAILED");
+  assert.match(result.warning.message, /^No baseline is reused, so capture captures the base too: GitHub answered HTTP 502/);
+  assert.deepEqual(await findOptionalBaseline({ sha: "a".repeat(40), environment, transport: async () => new Response("", { status: 404 }) }), {}, "no baseline workflow: nothing to say");
 });
 
 const { publishFailureComment } = await import("../../dist/report/failure-comment.js");
@@ -246,6 +255,13 @@ test("ci.trustedAuthors on the default branch admits listed authors without writ
   const draft = samplePr(); draft.user.login = "devin-ai-integration[bot]"; draft.draft = true;
   await assert.rejects(authorize(t, { pr: draft, permission: "read", config: block }), error => error.code === "SOURCE_NOT_TRUSTED");
   await assert.rejects(authorize(t, { pr: bot, permission: "read", config: "x: [\n" }), /write access/);
+  // A list that fails validation trusts no one, and the refusal says the list was ignored and why.
+  await assert.rejects(authorize(t, { pr: bot, permission: "read", config: "ci:\n  trustedAuthors: [\"devin-ai-integration[bot]\", \"not a login\"]\n" }), error => {
+    assert.equal(error.code, "SOURCE_NOT_TRUSTED");
+    assert.match(error.message, /The default branch's ci\.trustedAuthors was ignored: .*trustedAuthors\[1\]/);
+    assert.match(error.nextAction, /^Fix ci\.trustedAuthors/);
+    return true;
+  });
   // Only the list is read: a default-branch config written for another release, with keys this one does not know,
   // still trusts its bots.
   assert.equal((await authorize(t, { pr: bot, permission: "read", config: "ci:\n  trustedAuthors: [\"devin-ai-integration[bot]\"]\n  someLaterKey: true\nlaterSection: {}\n" })).outputs.pr_number, 91);

@@ -160,15 +160,15 @@ function pullRequestRef(value: unknown): PullRequestRef | undefined {
   return ref && sha ? { ref, sha } : undefined;
 }
 
-/** github.com's compare page for exactly these two commits, or nothing. */
+/** github.com's two-dot compare page for exactly these two commits, or nothing. */
 function githubCompareUrl(value: unknown, baseSha: string, headSha: string): string | undefined {
   const string = nonEmptyString(value);
   if (!string) return undefined;
   try {
     const url = new URL(string);
     if (url.protocol !== "https:" || url.hostname !== "github.com" || url.username || url.password || url.search || url.hash
-      || !/^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/compare\/[0-9a-f]{40}\.\.\.[0-9a-f]{40}$/.test(url.pathname)
-      || !url.pathname.endsWith(`/compare/${baseSha}...${headSha}`)) return undefined;
+      || !/^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/compare\/[0-9a-f]{40}\.\.[0-9a-f]{40}$/.test(url.pathname)
+      || !url.pathname.endsWith(`/compare/${baseSha}..${headSha}`)) return undefined;
     return url.href;
   } catch {
     return undefined;

@@ -105,7 +105,7 @@ export function AppPill(props: AppPillProps) {
   const prDetails = pullRequest
     ? `${pullRequest.title}\n${pullRequest.head.ref} → ${pullRequest.base.ref}\n${device}`
     : device;
-  // The URL is validated as https://github.com/owner/repo/pull/N (or /compare/<base>...<head>), so its parent is the repository.
+  // The URL is validated as https://github.com/owner/repo/pull/N (or /compare/<base>..<head>), so its parent is the repository.
   const repositoryUrl = pullRequest?.url && pullRequest.origin !== "local" ? pullRequest.url.replace(/\/(pull\/\d+|compare\/.+)$/, "") : undefined;
   const appTitle = device ? `${applicationName} · ${device}` : applicationName;
   // Reports of a multi-platform review name every platform; the other ones are one menu away.

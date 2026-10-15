@@ -63,8 +63,12 @@ export function compareTitleMarkdown(comparison: CompareReviewPresentation): str
   return `${code(name(comparison.head))} vs ${code(name(comparison.base))}`;
 }
 
+/**
+ * github.com's two-dot comparison: the direct diff between the two commits, as capture compares them. The three-dot
+ * form diffs from their merge base, which shows nothing for a rollback and drops base-only changes on diverged branches.
+ */
 export function compareUrl(repository: string, base: PullRequestSidePresentation, head: PullRequestSidePresentation): string {
-  return `https://github.com/${repository}/compare/${base.sha}...${head.sha}`;
+  return `https://github.com/${repository}/compare/${base.sha}..${head.sha}`;
 }
 
 export function projectReviewPresentation(value: unknown): ReviewPresentation {

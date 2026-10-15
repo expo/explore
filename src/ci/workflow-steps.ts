@@ -78,11 +78,13 @@ export async function resolvePullRequest(options: { number: number; appDirectory
     message: "Capture requires an open, non-draft same-repository pull request.", nextAction: "Run Explore for an open pull request from a branch of this repository." });
   const author = pr.user?.login ?? "";
   const permission = await githubGet<{ permission?: string }>(`repos/${context.repository}/collaborators/${encodeURIComponent(author)}/permission`, context, transport);
-  if (!["admin", "maintain", "write"].includes(permission?.permission ?? "")
-    && !(await trustedAuthors(context, transport, pr.base.repo.default_branch, options.appDirectory, options.configPath)).includes(author.toLowerCase())) {
-    throw new CiError({ code: "SOURCE_NOT_TRUSTED", stage: "preflight",
-      message: `${author || "The PR author"} has no write access to this repository and is not listed in ci.trustedAuthors.`,
-      nextAction: "The PR author must have current repository write access, or be listed in ci.trustedAuthors of .expo-explore/config.yaml on the default branch." });
+  if (!["admin", "maintain", "write"].includes(permission?.permission ?? "")) {
+    const trusted = await trustedAuthors(context, transport, pr.base.repo.default_branch, options.appDirectory, options.configPath);
+    if (!trusted.logins.includes(author.toLowerCase())) throw new CiError({ code: "SOURCE_NOT_TRUSTED", stage: "preflight",
+      message: `${author || "The PR author"} has no write access to this repository and is not listed in ci.trustedAuthors.`
+        + (trusted.invalid ? ` The default branch's ci.trustedAuthors was ignored: ${trusted.invalid}` : ""),
+      nextAction: trusted.invalid ? "Fix ci.trustedAuthors in .expo-explore/config.yaml on the default branch, then rerun Explore."
+        : "The PR author must have current repository write access, or be listed in ci.trustedAuthors of .expo-explore/config.yaml on the default branch." });
   }
   for (const side of [pr.base, pr.head]) if (!SHA.test(side.sha)) throw new CiError({ code: "PR_COMMIT_INVALID", stage: "preflight",
     message: "GitHub returned an invalid commit for the pull request.", nextAction: "Refresh the PR and rerun Explore." });
@@ -90,15 +92,14 @@ export async function resolvePullRequest(options: { number: number; appDirectory
     number: pr.number, title: pr.title, url: pr.html_url, base: { ref: pr.base.ref, sha: pr.base.sha }, head: { ref: pr.head.ref, sha: pr.head.sha } }) };
 }
 
-/** ci.trustedAuthors from the default branch's config: a pull request cannot add its own author. */
-async function trustedAuthors(context: { repository: string; token: string }, transport: typeof fetch, branch: string, appDirectory = ".", configPath = DEFAULT_EXPLORE_CONFIG_PATH): Promise<string[]> {
+/** ci.trustedAuthors from the default branch's config: a pull request cannot add its own author. An invalid list trusts no one, and says why. */
+async function trustedAuthors(context: { repository: string; token: string }, transport: typeof fetch, branch: string, appDirectory = ".", configPath = DEFAULT_EXPLORE_CONFIG_PATH): Promise<{ logins: string[]; invalid?: string }> {
   const directory = appDirectory.replace(/^\.(\/|$)/, "").replace(/\/$/, "");
   const path = `${directory ? `${directory}/` : ""}${configPath}`;
   const file = await githubGet<{ content?: string }>(`repos/${context.repository}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(branch)}`, context, transport);
-  if (!file?.content) return [];
-  // A default branch whose config does not parse trusts no one beyond write access; its own capture reports the config error.
-  try { return parseTrustedAuthors(Buffer.from(file.content, "base64").toString("utf8")).map(login => login.toLowerCase()); }
-  catch { return []; }
+  if (!file?.content) return { logins: [] };
+  try { return { logins: parseTrustedAuthors(Buffer.from(file.content, "base64").toString("utf8")).map(login => login.toLowerCase()) }; }
+  catch (error) { return { logins: [], invalid: error instanceof Error ? error.message : String(error) }; }
 }
 
 type GithubArtifact = { id: number; expired: boolean; workflow_run?: { id?: number } };
@@ -132,6 +133,22 @@ export async function findBaselineArtifact(options: { sha: string; platform?: st
     return { id: artifact.id, run: artifact.workflow_run.id };
   }
   return undefined;
+}
+
+/**
+ * `ci:find-baseline` as the workflow runs it: a baseline is optional, so a lookup that fails (a GitHub 5xx, a rate
+ * limit) is a warning and no baseline, never an error. A `ci:*` error would write explore-diagnostics/error.json,
+ * which the failure comment would then report as the cause of an unrelated failure, possibly on another platform.
+ */
+export async function findOptionalBaseline(options: Parameters<typeof findBaselineArtifact>[0]):
+  Promise<{ baseline?: { id: number; run: number }; warning?: { code: string; message: string } }> {
+  try {
+    const baseline = await findBaselineArtifact(options);
+    return baseline ? { baseline } : {};
+  } catch (error) {
+    return { warning: { code: error instanceof CiError ? error.code : "BASELINE_LOOKUP_FAILED",
+      message: `No baseline is reused, so capture captures the base too: ${error instanceof Error ? error.message : String(error)}` } };
+  }
 }
 
 /**

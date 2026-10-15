@@ -20,7 +20,7 @@ test('any two commits: a capture and report like a pull request\'s, with no pull
     environment: { ...f.environment, GITHUB_TOKEN: '' }, runner: f.runner, now: f.now, sleep: f.sleep });
 
   assert.deepEqual(result.review.pullRequest, { origin: 'compare', repositoryId: '123', repository: 'acme/example', title: 'v1.1.0 vs v1.0.0',
-    url: `https://github.com/acme/example/compare/${f.baseSha}...${f.headSha}`,
+    url: `https://github.com/acme/example/compare/${f.baseSha}..${f.headSha}`,
     base: { ref: 'v1.0.0', sha: f.baseSha }, head: { ref: 'v1.1.0', sha: f.headSha } });
   for (const status of ['added', 'removed', 'modified']) assert.ok(result.review.surfaces.some(row => row.status === status), `a ${status} screen`);
   assert.equal(f.comments.length, 0, 'no pull request comment');
@@ -55,7 +55,7 @@ test('any two commits: a capture and report like a pull request\'s, with no pull
   await writeCaptureOutputs(hosted, { GITHUB_OUTPUT: outputs });
   assert.equal(await readFile(outputs, 'utf8'), 'preview=\npreview=eas\n');
   assert.match(summary, /\[Open the report\]\(https:\/\/example\.expo\.app\/p\/token\)/);
-  assert.match(summary, new RegExp(`\\(https://github\\.com/acme/example/compare/${f.baseSha}\\.\\.\\.${f.headSha}\\)`));
+  assert.match(summary, new RegExp(`\\(https://github\\.com/acme/example/compare/${f.baseSha}\\.\\.${f.headSha}\\)`));
   assert.match(summary, /^- iOS.*: \d+ changes?$/m);
 
   assert.equal(git(f.baseProject, 'status', '--porcelain'), '');

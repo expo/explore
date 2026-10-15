@@ -527,6 +527,6 @@ test("a comparison of two commits deploys the same way and links its report from
   const summary = readFileSyncUtf8(summaryPath);
   assert.match(summary, /^### Explore: `v1\.4\.0` vs `v1\.3\.0`$/m);
   assert.ok(summary.includes(`[Open the report](${result.previewUrl})`));
-  assert.ok(summary.includes(`(https://github.com/${pr.repository}/compare/${pr.base.sha}...${pr.head.sha})`));
+  assert.ok(summary.includes(`(https://github.com/${pr.repository}/compare/${pr.base.sha}..${pr.head.sha})`));
   assert.match(summary, /link expires 2026-09-18/);
 });

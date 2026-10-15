@@ -50,6 +50,6 @@ test("deep links carry the encoded prompt", () => {
 test("a comparison of two commits is reviewed by its refs", () => {
   const sha = c => c.repeat(40);
   const prompt = handoffPrompt({ ...input, pullRequest: { origin: "compare", title: "v1.4.0 vs v1.3.0",
-    url: `https://github.com/brentvatne/euxy/compare/${sha("a")}...${sha("b")}`, base: { ref: "v1.3.0", sha: sha("a") }, head: { ref: "v1.4.0", sha: sha("b") } } });
+    url: `https://github.com/brentvatne/euxy/compare/${sha("a")}..${sha("b")}`, base: { ref: "v1.3.0", sha: sha("a") }, head: { ref: "v1.4.0", sha: sha("b") } } });
   assert.match(prompt, /^Review the visual changes from v1\.3\.0 to v1\.4\.0 of brentvatne\/euxy\.\n/);
 });

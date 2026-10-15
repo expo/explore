@@ -15,7 +15,7 @@ import { readExploreConfig, readExploreInstructions, resolvePlatformConfig, with
 import { argumentError, output, required, has, flag, flags, oneOf } from "./args.js";
 import { help } from "./help.js";
 import { CiError } from "../shared/ci-errors.js";
-import { cleanupAfterCapture, findBaselineArtifact, resolveCompareRefs, resolvePullRequest, writeCaptureOutputs, writeStepOutputs } from "../ci/workflow-steps.js";
+import { cleanupAfterCapture, findOptionalBaseline, resolveCompareRefs, resolvePullRequest, writeCaptureOutputs, writeStepOutputs } from "../ci/workflow-steps.js";
 import { stderrProgress } from "../shared/progress.js";
 
 export async function doctor(): Promise<void> {
@@ -108,9 +108,10 @@ export async function ciPullRequest(): Promise<void> {
 /** `ci:find-baseline --sha SHA [--platform P]`: a reusable baseline artifact of the base commit, if one exists. */
 export async function ciFindBaseline(): Promise<void> {
   const platform = platformFlag();
-  const found = await findBaselineArtifact({ sha: required("sha"), ...(platform ? { platform } : {}) });
-  if (found) await writeStepOutputs(process.env, { id: String(found.id), run: String(found.run) });
-  output({ ok: true, baseline: found ?? null });
+  const { baseline, warning } = await findOptionalBaseline({ sha: required("sha"), ...(platform ? { platform } : {}) });
+  if (baseline) await writeStepOutputs(process.env, { id: String(baseline.id), run: String(baseline.run) });
+  if (warning && process.env.GITHUB_ACTIONS) console.log(`::warning title=${warning.code}::${warning.message.replace(/[\r\n]+/g, " ")}`);
+  output({ ok: true, baseline: baseline ?? null, ...(warning ? { warning } : {}) });
 }
 
 /** `ci:compare-refs --project DIR --base REF --head REF [--output FILE]`: the two commits a comparison captures. */
