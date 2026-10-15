@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { copyFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { runCiReview } from "./pipeline.js";
 import { resolveCommit } from "./workflow-steps.js";
@@ -18,6 +18,7 @@ import { exportCiReport, readCiReportInput } from "../report/artifact.js";
 import { reviewChangeCount, reviewDevice, type PublicCommentState } from "../report/pr-comment-body.js";
 import { zipReportDirectory } from "../report/preview-deploy.js";
 import { CiError } from "../shared/ci-errors.js";
+import { exploreCacheRoot } from "../shared/cache-root.js";
 import { packageBin } from "../shared/package-paths.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
 
@@ -174,8 +175,7 @@ export async function installDependencies(project: string, logFile: string, envi
 
 /** `~/.cache/expo-explore/captures/<platform>/<sha>`: one capture per commit and platform, reused while its recipe matches. */
 export function captureCacheDirectory(environment: NodeJS.ProcessEnv, platform: ExplorePlatform, sha: string): string {
-  const root = environment.EXPLORE_CACHE_DIR || join(environment.XDG_CACHE_HOME || join(environment.HOME || homedir(), ".cache"), "expo-explore");
-  return join(root, "captures", platform, sha);
+  return join(exploreCacheRoot(environment), "captures", platform, sha);
 }
 
 async function exists(path: string): Promise<boolean> { try { await lstat(path); return true; } catch { return false; } }

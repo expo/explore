@@ -1,6 +1,7 @@
 import { cp, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { commitSubject, keepReports } from "./report-commands.js";
 import { createInterface } from "node:readline/promises";
 import { runPublicCi, runBaselineCi, runCompareCi } from "../ci/pipeline.js";
 import { exportCiReport, publishCiReportComment } from "../report/artifact.js";
@@ -240,6 +241,11 @@ async function localReview(): Promise<void> {
     reports: result.reports.map(({ platform, directory, zip, changes, device }) => ({ platform, directory, zip, ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) })) };
   const zips = await Promise.all(result.reports.map(async report => ({ platform: report.platform, zip: new Uint8Array(await readFile(report.zip)),
     ...(report.changes === undefined ? {} : { changes: report.changes }), ...(report.device ? { device: report.device } : {}) })));
+  // Kept among the saved runs, with the commits' subjects (an uncommitted head is named by the commit under it).
+  const project = resolve(flag("project") ?? process.cwd());
+  const headSubject = commitSubject(project, result.head.uncommitted ? `${result.head.sha}^` : result.head.sha), baseSubject = commitSubject(project, result.base.sha);
+  const saved = await keepReports(zips.map(({ platform, zip }) => ({ platform, zip })), { subjects: { ...(headSubject ? { head: headSubject } : {}), ...(baseSubject ? { base: baseSubject } : {}) },
+    ...(result.head.uncommitted?.length ? { uncommittedFiles: result.head.uncommitted.length } : {}) });
   if (has("upload")) {
     const preview = result.config.report?.preview;
     const hosted = await deployLocalReports({ reports: zips, project: previewProjectSlug(result.repository, preview?.project), ...(preview?.owner ? { owner: preview.owner } : {}),
@@ -260,7 +266,7 @@ async function localReview(): Promise<void> {
   }
   const server = await startLocalReportServer({ reports: zips, ...(has("port") ? { port: nonNegativeInteger("port") } : {}) });
   console.log(`Viewer: ${server.url} (Ctrl+C to stop)`);
-  console.log(`To host it: expo-explore report:upload ${result.reports.map(report => report.zip).join(" ")}`);
+  if (saved) console.log(`Saved as ${saved.id}: expo-explore reports reopens it, and reports upload ${saved.id} hosts it.`);
   openViewerInBrowser(server.url);
   await new Promise<void>(done => { process.once("SIGINT", () => done()); process.once("SIGTERM", () => done()); });
   await server.close();

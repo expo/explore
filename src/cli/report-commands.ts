@@ -5,8 +5,13 @@ import { DEFAULT_BINARY_PROJECT } from "../binary/run.js";
 import { repositoryName } from "../ci/local-review.js";
 import { readExploreConfig, previewDays, DEFAULT_EXPLORE_CONFIG_PATH, PREVIEW_DEFAULT_DAYS, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { assertHostingExport, deployLocalReports, previewProjectSlug, readReportZip, zipReportDirectory, MAX_REPORT_BYTES, type ReportZipSummary } from "../report/preview-deploy.js";
+import { startLocalReportServer } from "../report/local-report-server.js";
+import { findSavedRun, listSavedRuns, pruneSavedRuns, readSavedReports, removeSavedRun, saveRun, savedRunsDirectory, SAVED_RUN_LIMITS, type SavedReport, type SavedRun } from "../report/saved-runs.js";
+import { openViewerInBrowser } from "../map/viewer-server.js";
+import { formatBytes, friendlyTime, kindLabel, runPicker, runTitle } from "./reports-picker.js";
+import { pickIntro } from "./title-intros.js";
 import { CiError, toCiError } from "../shared/ci-errors.js";
-import { argumentError, flag, has, output, positionals, required } from "./args.js";
+import { argumentError, flag, has, nonNegativeInteger, output, positionals, required } from "./args.js";
 
 /** explore:binary's default: an exploration link is for a quick look. */
 const EXPLORATION_DEFAULT_DAYS = 7;
@@ -63,18 +68,11 @@ async function repositoryPreview(repository: string): Promise<{ preview: Preview
   return repositoryName(root, config) === repository ? { preview: config.report?.preview, source: file } : undefined;
 }
 
-/**
- * `report:upload <report.zip | report directory>...`: hosts reports already on this machine behind one token-gated EAS
- * Hosting link, as `capture:review --upload` and `explore:binary` do for the report they just wrote. Several reports
- * must be one review's platforms; a review goes to the repository's preview project, an exploration to expo-explore.
- */
-export async function reportUpload(): Promise<void> {
-  const paths = positionals();
-  if (!paths.length) argumentError("Pass the report to host: expo-explore report:upload ios/report.zip", undefined,
-    "Run expo-explore report:upload with a report.zip or report directory, one per platform of the same review.");
-  const reports = [];
-  for (const path of paths) reports.push(await readReport(path));
-  const [first, ...others] = reports as [typeof reports[number], ...typeof reports];
+type ReadReport = Awaited<ReturnType<typeof readReport>>;
+
+/** Several reports share one link only as one review's platforms; an exploration goes up on its own. */
+function assertOneReview(reports: ReadReport[]): void {
+  const [first, ...others] = reports as [ReadReport, ...ReadReport[]];
   const platforms = new Set<ExplorePlatform>([first.summary.platform]);
   for (const report of others) {
     if (platforms.has(report.summary.platform)) throw new CiError({ code: "PREVIEW_REPORTS_INVALID", stage: "preflight",
@@ -86,7 +84,12 @@ export async function reportUpload(): Promise<void> {
         nextAction: "Upload the reports of one review together (one per platform), and anything else on its own." });
     }
   }
+}
+
+/** Hosts checked reports in the project `--upload` would have used (flags win), and prints the link. */
+async function hostReports(reports: ReadReport[]): Promise<void> {
   await assertHostingExport();
+  const first = reports[0]!;
   const review = first.summary.kind === "review" ? first.summary : undefined;
   const found = review ? await repositoryPreview(review.repository) : undefined;
   const preview = found?.preview;
@@ -108,4 +111,112 @@ export async function reportUpload(): Promise<void> {
   }
   console.log(`Report: ${hosted.previewUrl}${hosted.expiresAt ? ` (until ${hosted.expiresAt.slice(0, 10)})` : ""}`);
   console.log(`Hosted on @${hosted.owner}/${hosted.project}. Anyone with the link can open it.`);
+}
+
+/** Keeps reports among the saved runs; a failure to keep them never fails the command that made them. */
+export async function keepReports(reports: SavedReport[] | (() => Promise<SavedReport[]>), extra: Parameters<typeof saveRun>[1] = {}): Promise<SavedRun | undefined> {
+  try { return await saveRun(typeof reports === "function" ? await reports() : reports, extra); }
+  catch (error) { process.stderr.write(`Could not keep this run in expo-explore reports: ${error instanceof Error ? error.message : String(error)}\n`); return undefined; }
+}
+
+/** The subject line of a commit, when this checkout has it. */
+export function commitSubject(cwd: string, sha: string): string | undefined {
+  const result = spawnSync("git", ["log", "-1", "--format=%s", sha], { cwd, encoding: "utf8" });
+  return result.status === 0 && result.stdout.trim() ? result.stdout.trim() : undefined;
+}
+
+/**
+ * `report:upload <report.zip | report directory>...`: hosts reports already on this machine behind one token-gated EAS
+ * Hosting link, as `capture:review --upload` and `explore:binary` do for the report they just wrote. Several reports
+ * must be one review's platforms; a review goes to the repository's preview project, an exploration to expo-explore.
+ * The reports are also kept among the saved runs (`expo-explore reports`).
+ */
+export async function reportUpload(): Promise<void> {
+  const paths = positionals();
+  if (!paths.length) argumentError("Pass the report to host: expo-explore report:upload ios/report.zip", undefined,
+    "Run expo-explore report:upload with a report.zip or report directory, one per platform of the same review.");
+  const reports: ReadReport[] = [];
+  for (const path of paths) reports.push(await readReport(path));
+  assertOneReview(reports);
+  const review = reports[0]!.summary.kind === "review" ? reports[0]!.summary : undefined;
+  const head = review && commitSubject(process.cwd(), review.head), base = review && commitSubject(process.cwd(), review.base);
+  await keepReports(reports.map(report => ({ platform: report.summary.platform, zip: report.zip })), { subjects: { ...(head ? { head } : {}), ...(base ? { base } : {}) } });
+  await hostReports(reports);
+}
+
+/** Serves reports in the local Viewer, opens it, and waits for Ctrl+C. */
+export async function openInViewer(reports: SavedReport[]): Promise<void> {
+  const server = await startLocalReportServer({ reports, ...(has("port") ? { port: nonNegativeInteger("port") } : {}) });
+  console.log(`Viewer: ${server.url} (Ctrl+C to stop)`);
+  if (!has("no-open")) openViewerInBrowser(server.url);
+  await new Promise<void>(done => { process.once("SIGINT", () => done()); process.once("SIGTERM", () => done()); });
+  await server.close();
+}
+
+/** This checkout's GitHub repository (owner/name), which saved reviews name; undefined outside one. */
+function currentRepository(): string | undefined {
+  const remote = spawnSync("git", ["remote", "get-url", "origin"], { cwd: process.cwd(), encoding: "utf8" });
+  const match = remote.status === 0 ? /github\.com[:/]([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(remote.stdout.trim()) : null;
+  return match ? `${match[1]}/${match[2]}` : undefined;
+}
+
+async function savedRun(id: string | undefined): Promise<SavedRun> {
+  if (!id) argumentError("Name the run: an id from expo-explore reports list, or latest", undefined, "Run expo-explore reports list to see the saved runs.");
+  const run = await findSavedRun(id);
+  if (!run) throw new CiError({ code: "REPORT_RUN_NOT_FOUND", stage: "preflight", message: id === "latest" ? "There are no saved runs yet." : `There is no saved run ${id}.`,
+    nextAction: "Run expo-explore reports list to see the saved runs." });
+  return run;
+}
+
+async function uploadSavedRun(run: SavedRun): Promise<void> {
+  const reports: ReadReport[] = [];
+  for (const report of await readSavedReports(run)) reports.push({ path: `${run.id}/${report.platform}.zip`, zip: report.zip, summary: await readReportZip(report.zip) });
+  await hostReports(reports);
+}
+
+function listLines(runs: SavedRun[], now = Date.now()): string[] {
+  if (!runs.length) return ["No saved runs yet. expo-explore capture:review reviews your branch on this machine, and its report is kept here."];
+  const idWidth = Math.max(...runs.map(run => run.id.length));
+  return [...runs.map(run => `${run.id.padEnd(idWidth)}  ${kindLabel(run).padEnd(9)}${runTitle(run)}  (${run.platforms.join(", ")}, ${friendlyTime(run.createdAt, now)})`),
+    "", "Open one with: expo-explore reports open <id>"];
+}
+
+/**
+ * `reports [list | open ID | upload ID | rm ID | prune] [--all] [--json]`: the runs kept on this machine. In a terminal
+ * with no subcommand it is an arrow-key picker (Enter opens the run in the local Viewer, u hosts it); elsewhere it lists.
+ * ID is a run's id or `latest`.
+ */
+export async function reports(): Promise<void> {
+  const [subcommand = "", id] = positionals();
+  const all = await listSavedRuns();
+  const repository = currentRepository();
+  const scoped = has("all") || !repository || !all.some(run => run.repository === repository) ? all : all.filter(run => run.repository === repository);
+  const totalBytes = () => all.reduce((sum, run) => sum + run.bytes, 0);
+  switch (subcommand) {
+    case "open": return openInViewer(await readSavedReports(await savedRun(id)));
+    case "upload": return uploadSavedRun(await savedRun(id));
+    case "rm": {
+      const run = await savedRun(id);
+      await removeSavedRun(run.id);
+      if (has("json")) output({ ok: true, removed: run.id }); else console.log(`Deleted ${runTitle(run)} (${run.id}).`);
+      return;
+    }
+    case "prune": {
+      const removed = await pruneSavedRuns();
+      if (has("json")) output({ ok: true, removed: removed.map(run => run.id) });
+      else console.log(removed.length ? `Removed ${removed.length} run${removed.length === 1 ? "" : "s"} kept longer than ${SAVED_RUN_LIMITS.maxAgeDays} days or past ${formatBytes(SAVED_RUN_LIMITS.maxBytes)}.` : "Nothing to prune.");
+      return;
+    }
+    case "list": case "": break;
+    default: argumentError(`Unknown reports subcommand: ${subcommand}`, undefined, "Use expo-explore reports, or reports list, open, upload, rm or prune.");
+  }
+  if (has("json")) { output({ ok: true, runs: scoped, bytes: totalBytes(), directory: savedRunsDirectory() }); return; }
+  if (subcommand === "list" || !process.stdin.isTTY || !process.stdout.isTTY || process.env.CI) { for (const line of listLines(scoped)) console.log(line); return; }
+  const color = !process.env.NO_COLOR && process.env.TERM !== "dumb";
+  const action = await runPicker({ runs: all, ...(repository ? { repository } : {}),
+    scope: scoped === all ? "all" : "repository", filter: "", filtering: false, selected: 0, offset: 0 },
+  { input: process.stdin, output: process.stdout, color, intro: color && !has("no-intro") ? pickIntro(process.env) : undefined,
+    remove: async run => { await removeSavedRun(run.id); all.splice(all.findIndex(each => each.id === run.id), 1); }, totalBytes });
+  if (action.type === "open") { console.log(`${runTitle(action.run)}`); await openInViewer(await readSavedReports(action.run)); }
+  else if (action.type === "upload") { console.log(`Hosting ${runTitle(action.run)}…`); await uploadSavedRun(action.run); }
 }

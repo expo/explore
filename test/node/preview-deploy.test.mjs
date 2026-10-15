@@ -618,7 +618,7 @@ test("report:upload checks its reports before it deploys anything", async t => {
   const { root, reportPath } = await exportFixture(t);
   const cli = join(import.meta.dirname, "../../dist/cli.js");
   const upload = (...args) => {
-    const result = spawnSync(process.execPath, [cli, "report:upload", ...args], { cwd: root, encoding: "utf8", env: { ...process.env, EXPO_TOKEN: "" } });
+    const result = spawnSync(process.execPath, [cli, "report:upload", ...args], { cwd: root, encoding: "utf8", env: { ...process.env, EXPO_TOKEN: "", EXPLORE_CACHE_DIR: join(root, "cache") } });
     return { status: result.status, output: `${result.stdout}${result.stderr}` };
   };
   const zip = await zipReportDirectory(reportPath);

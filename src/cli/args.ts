@@ -29,14 +29,14 @@ const aliases: Record<string, string> = {
 const first = argv[0] ?? "help";
 const pair = `${first} ${argv[1] ?? ""}`.trim();
 export const command = aliases[pair] ?? first;
-export const resultContract = ["source:verify", "capture:review", "capture:baseline", "ci:report", "ci:publish", "ci:failure", "ci:deploy", "ci:pr", "ci:find-baseline", "ci:compare-refs", "ci:after-capture", "config:platforms", "explore:binary", "explore:session", "report:upload"].includes(command)
+export const resultContract = ["source:verify", "capture:review", "capture:baseline", "ci:report", "ci:publish", "ci:failure", "ci:deploy", "ci:pr", "ci:find-baseline", "ci:compare-refs", "ci:after-capture", "config:platforms", "explore:binary", "explore:session", "report:upload", "reports"].includes(command)
   ? "explore.result" : QUERY_CONTRACT;
 const commandArgCount = aliases[pair] ? 2 : 1;
 const args = argv.slice(commandArgCount);
 /** Commands that take one bare argument before their flags, e.g. `explore:binary ./app.apk`. */
 const POSITIONAL_COMMANDS = new Set(["explore:binary", "explore:session"]);
 /** Commands that take any number of bare arguments among their flags, e.g. `report:upload ios/report.zip android/report.zip`. */
-const VARIADIC_COMMANDS = new Set(["report:upload"]);
+const VARIADIC_COMMANDS = new Set(["report:upload", "reports"]);
 
 const commonFlagKinds: Record<string, "value" | "boolean"> = {
   dir: "value",
@@ -114,6 +114,7 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
   },
   view: { port: "value", catalog: "value", "no-open": "boolean" },
   "report:upload": { owner: "value", project: "value", "expires-in": "value", config: "value" },
+  reports: { all: "boolean", owner: "value", project: "value", "expires-in": "value", config: "value", port: "value", "no-open": "boolean", "no-intro": "boolean" },
   help: { all: "boolean" },
   "--help": { all: "boolean" },
   "-h": { all: "boolean" },

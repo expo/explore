@@ -192,13 +192,15 @@ export async function readReportZip(zip: Uint8Array): Promise<ReportZipSummary> 
   }
   const review = (report as Partial<ArtifactReport>).review;
   const pr = review?.pullRequest;
-  if (report?.kind !== "explore.report" || !review || !pr || (review.runtime?.platform !== "ios" && review.runtime?.platform !== "android")) {
+  // Reports from before Android support carry no platform; they are all iOS.
+  const platform = review?.runtime?.platform ?? "ios";
+  if (report?.kind !== "explore.report" || !review || !pr || (platform !== "ios" && platform !== "android")) {
     throw new Error("review.json is not an Explore review report");
   }
   const changes = reviewChangeCount({ review });
-  const device = reviewDevice({ runtime: { deviceModel: review.runtime.device?.model ?? "", osVersion: review.runtime.device?.osVersion ?? "",
-    ...(review.runtime.colorSchemes ? { colorSchemes: review.runtime.colorSchemes } : {}) } });
-  return { kind: "review", platform: review.runtime.platform, repository: pr.repository, runId: review.runId, base: pr.base.sha, head: pr.head.sha,
+  const device = reviewDevice({ runtime: { deviceModel: review.runtime?.device?.model ?? "", osVersion: review.runtime?.device?.osVersion ?? "",
+    ...(review.runtime?.colorSchemes ? { colorSchemes: review.runtime.colorSchemes } : {}) } });
+  return { kind: "review", platform, repository: pr.repository, runId: review.runId, base: pr.base.sha, head: pr.head.sha,
     ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) };
 }
 

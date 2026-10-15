@@ -599,6 +599,18 @@ export function reviewDevice(state: { runtime?: Pick<SimulatorRuntimeMetadata, "
   return schemes && schemes.length > 1 ? [device, schemes.join(" + ")].filter(Boolean).join(" · ") : device;
 }
 
+/** Each changed surface's group, as the comment lists it: what a summary of the review counts. */
+export function reviewChanges(review: PublicReview): Map<string, ChangeGroup> {
+  const evidenceBased = review.surfaces.some(surface => surface.review);
+  const changes = new Map<string, ChangeGroup>();
+  for (const surface of review.surfaces) {
+    if ((surface.head ?? surface.base)?.kind === "redirect") continue;
+    const group = groupOf(surface, evidenceBased);
+    if (group !== "unchanged" && group !== "variant") changes.set(surface.id, group);
+  }
+  return changes;
+}
+
 /** Surfaces the review calls changed (reviewer verdicts first, raw status otherwise); undefined before the review exists. */
 export function reviewChangeCount(state: Pick<PublicCommentState, "review">): number | undefined {
   return state.review?.surfaces.filter(surface => surface.review ? surface.review.status !== "unchanged" && surface.review.status !== "variant"
