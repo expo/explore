@@ -277,11 +277,11 @@ function localEvidencePath(side: PublicEvidenceSide, relativePath: string): stri
 
 /**
  * The verdict combines the source scope with the evidence. Only a source change makes a surface a
- * review target: a changed screen is Modified when evidence differs and Needs review when nothing
- * visible differs. A source-unchanged screen is never a review target: a difference there is the
- * same screen captured in another runtime state (a screen variant), not a change. When only
- * app-wide inputs changed, a screen without a visible difference stays Unchanged; the PR comment
- * names the app-wide change once.
+ * review target: a changed screen is Modified when its evidence differs, Needs review when the
+ * comparison could not tell, and Unchanged when both captures show the same thing. Explore reports
+ * visual changes, so a source change nobody can see is not one. A source-unchanged screen is never a
+ * review target: a difference there is the same screen captured in another runtime state (a screen
+ * variant), not a change. The PR comment names an app-wide change once.
  */
 export function decideReview(scope: SurfaceSourceScope, visual: PublicVisualVerdict, summary?: WhatChangedSummary): PublicSurfaceReview {
   const facts = summary?.facts.map((fact) => ({ category: fact.category, templateId: fact.templateId, bullet: truncate(fact.bullet) })) ?? [];
@@ -303,8 +303,7 @@ export function decideReview(scope: SurfaceSourceScope, visual: PublicVisualVerd
   if (inconclusive) {
     return { status: "needs-review", description: truncate(visual.verdict === "needs-review" ? visualReasonText(visual) : issue ?? "Needs review") };
   }
-  if (scope === "app-wide") return { status: "unchanged", description: "No visible change" };
-  return { status: "needs-review", description: "Source changed; no visible difference was captured." };
+  return { status: "unchanged", description: "No visible change" };
 }
 
 function captureDiagnostic(surface: PlanSurface, side: "base" | "head", evidence: PublicEvidenceSide, surfaceId: string = surface.id): PublicEvidenceDiagnostic | undefined {

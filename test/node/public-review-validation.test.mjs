@@ -172,7 +172,7 @@ test("reader never shows malformed original verdicts, capture outcomes, or prove
 });
 
 test("a source scope allows only its verdicts, and legacy source-unchanged differences read as variants", () => {
-  const allowed = { screen: ["modified", "needs-review"], "app-wide": ["modified", "needs-review", "unchanged"], none: ["unchanged", "variant"] };
+  const allowed = { screen: ["modified", "needs-review", "unchanged"], "app-wide": ["modified", "needs-review", "unchanged"], none: ["unchanged", "variant"] };
   for (const [scope, statuses] of Object.entries(allowed)) {
     for (const status of ["modified", "needs-review", "unchanged", "variant"]) {
       const input = review();
@@ -194,6 +194,13 @@ test("a source scope allows only its verdicts, and legacy source-unchanged diffe
   const read = normalizePublicReviewForReading(legacy);
   assert.deepEqual(read.surfaces[0].review, { status: "variant", description: "Runtime state differs: Removed text “84”." });
   assert.deepEqual(read.surfaces[1].review, legacy.surfaces[1].review, "a legacy source-changed verdict has no scope to re-judge");
+  // A report from before 0.19.1 called a source change with matching captures "needs review": it reads as unchanged.
+  const older = review();
+  older.surfaces[0].review = { status: "needs-review", description: "Source changed; no visible difference was captured." };
+  older.surfaces[1].review = { status: "needs-review", description: "Visual comparison was inconclusive" };
+  const reread = normalizePublicReviewForReading(older);
+  assert.deepEqual(reread.surfaces[0].review, { status: "unchanged", description: "No visible change" });
+  assert.equal(reread.surfaces[1].review.status, "needs-review", "an inconclusive comparison still needs a look");
 });
 
 test("launch evidence carries verified splash and settled frames, an mp4 with provenance, and a splash verdict only when both sides observed one", () => {

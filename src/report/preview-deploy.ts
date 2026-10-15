@@ -10,6 +10,7 @@ import { readZipDirectory, readZipEntry } from "./zip-reader.js";
 import { reviewChangeCount, reviewDevice } from "./pr-comment-body.js";
 import type { ExplorePlatform } from "../config/explore-config.js";
 import type { ArtifactReport } from "../contracts/artifact-report.js";
+import { normalizePublicReviewForReading } from "../contracts/review-validation.js";
 import { EXPLORATION_REPORT_KIND, type ExplorationReport } from "../contracts/standalone-report.js";
 import { compareTitleMarkdown, type CompareReviewPresentation } from "../contracts/review.js";
 import { CiError, toCiError } from "../shared/ci-errors.js";
@@ -203,7 +204,7 @@ export async function readReportZip(zip: Uint8Array): Promise<ReportZipSummary> 
   if (!sha(pr.head?.sha) || !sha(pr.base?.sha) || !text(pr.head?.ref) || !text(pr.base?.ref) || !text(pr.repository) || !text(pr.title) || !text(review.runId)) {
     throw new Error("review.json does not name its repository, title and commits as a report does");
   }
-  const changes = reviewChangeCount({ review });
+  const changes = reviewChangeCount({ review: normalizePublicReviewForReading(review) });
   const device = reviewDevice({ runtime: { deviceModel: review.runtime?.device?.model ?? "", osVersion: review.runtime?.device?.osVersion ?? "",
     ...(review.runtime?.colorSchemes ? { colorSchemes: review.runtime.colorSchemes } : {}) } });
   return { kind: "review", platform, repository: pr.repository, runId: review.runId, base: pr.base.sha, head: pr.head.sha,

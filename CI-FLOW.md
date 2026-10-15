@@ -139,7 +139,7 @@ A failure at any stage is recorded in `state.failure`, a partial report is writt
 | Source change \ evidence | Differs | Same | Not comparable |
 | --- | --- | --- | --- |
 | Route added / removed | Added / Removed | Added / Removed | Added / Removed |
-| Screen source changed (`screen`) | Modified | Needs review | Needs review |
+| Screen source changed (`screen`) | Modified | Unchanged (not counted as a change) | Needs review |
 | Only app-wide inputs changed (`app-wide`) | Modified | Unchanged (one line in the PR comment) | Needs review |
 | No source change (`none`) | Screen variant (listed apart from Changes) | Unchanged | Unchanged |
 

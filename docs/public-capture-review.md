@@ -164,7 +164,7 @@ imported source changed), `app-wide` (only app-wide inputs such as dependencies,
 | Source \ Evidence | Differs | No visible difference | Inconclusive |
 | --- | --- | --- | --- |
 | Added / removed route | Added / Removed | Added / Removed | Added / Removed |
-| Screen source changed | Modified | Needs review | Needs review |
+| Screen source changed | Modified | Unchanged (not counted as a change) | Needs review |
 | Only app-wide inputs changed | Modified | Unchanged (the PR comment names the app-wide change once) | Needs review |
 | Source unchanged | Screen variant | Unchanged | Unchanged |
 
@@ -172,10 +172,10 @@ imported source changed), `app-wide` (only app-wide inputs such as dependencies,
 | --- | --- |
 | Added / Removed | Route presence differs between source inventories |
 | Modified | The screen's source changed and comparable evidence differs |
-| Needs review | The screen's source changed but no visible difference was captured, or its evidence is inconclusive; still a review target |
+| Needs review | The screen's source changed and the comparison could not tell whether it looks different; a review target |
 | Screen variant | No source change reaches the screen, but its captures differ in runtime UI state (balances, timestamps, loaded content). Listed apart from changes |
 | Source-affected | Source impact without a comparison |
-| Unchanged | No visible difference and no screen-specific source change |
+| Unchanged | No visible difference, whether or not the screen's source changed. Explore reports visual changes; reports before 0.19.1 called a source change with no visible difference Needs review |
 | Not compared | No comparison was performed |
 
 A difference that rounds to 0.00% of pixels is rendering noise and counts as no difference.

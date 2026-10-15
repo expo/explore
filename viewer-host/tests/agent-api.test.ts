@@ -4,7 +4,7 @@ import { webcrypto, createHash } from "node:crypto";
 import { deflateRawSync } from "node:zlib";
 import { readFileSync } from "node:fs";
 import { PREVIEW_CIPHER, previewResponse, type PreviewEnvironment } from "../src/server/preview";
-import { loadReport, prefersHtml, prefersMarkdown } from "../../src/report/agent-api";
+import { agentApiReply, loadReport, prefersHtml, prefersMarkdown } from "../../src/report/agent-api";
 import { readZipDirectory } from "../../src/report/zip-reader";
 
 const subtle = webcrypto.subtle as SubtleCrypto;
@@ -285,4 +285,24 @@ test("Accept negotiation honours quality values and listing order, and wildcards
   assert.equal(prefersMarkdown("application/json;q=0.5, text/markdown;q=0.9"), true);
   assert.equal(prefersMarkdown("text/markdown;q=0"), false);
   assert.equal(prefersMarkdown("*/*"), false);
+});
+
+test("screens count and filter by what changed visibly: a source change with matching captures is unchanged, even from an older report", async () => {
+  const surface = (id: string, status: string, review: { status: string; description: string }) =>
+    ({ id, status, sourceScope: "screen", head: { route: `/${id}`, kind: "screen" }, base: { route: `/${id}`, kind: "screen" }, review });
+  const report = { kind: "explore.report", review: { contract: "explore.review", pullRequest: { origin: "local", repository: "a/b", title: "HEAD vs main", base: { ref: "main", sha: "a".repeat(40) }, head: { ref: "HEAD", sha: "b".repeat(40) } },
+    runtime: { platform: "ios" }, surfaces: [
+      surface("tempo", "modified", { status: "modified", description: "Added text “Beat pulse”." }),
+      surface("enable-midi", "modified", { status: "needs-review", description: "Source changed; no visible difference was captured." }),
+      surface("lane-editor", "modified", { status: "needs-review", description: "Visual comparison was inconclusive" }),
+    ] }, assets: [] };
+  const loaded = (await loadReport(zip({ "review.json": new TextEncoder().encode(JSON.stringify(report)) })))!;
+  const context = { pageUrl: "http://127.0.0.1:1/p/t", platforms: ["ios"], expiresAt: null };
+  const summary = JSON.parse((await agentApiReply(context, loaded, "", new URLSearchParams(), "application/json")).body as string);
+  assert.deepEqual(summary.screens, { total: 3, modified: 1, unchanged: 1, "needs-review": 1 });
+  const modified = JSON.parse((await agentApiReply(context, loaded, "/screens", new URLSearchParams("status=modified"), "application/json")).body as string);
+  assert.deepEqual(modified.items.map((item: { id: string }) => item.id), ["tempo"]);
+  const all = JSON.parse((await agentApiReply(context, loaded, "/screens", new URLSearchParams(), "application/json")).body as string);
+  const midi = all.items.find((item: { id: string }) => item.id === "enable-midi");
+  assert.deepEqual([midi.status, midi.sourceStatus], ["unchanged", "modified"], "its source status is still there");
 });

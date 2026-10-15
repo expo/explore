@@ -8,12 +8,13 @@ const REVIEW_STATUSES = new Set(["added", "modified", "removed", "unchanged", "n
 const SOURCE_SCOPES = new Set(["screen", "app-wide", "none"]);
 /** Verdicts each source scope allows: only a source change makes a screen a review target. */
 const SCOPE_VERDICTS: Record<string, readonly string[]> = {
-  screen: ["modified", "needs-review"],
+  screen: ["modified", "needs-review", "unchanged"],
   "app-wide": ["modified", "needs-review", "unchanged"],
   none: ["unchanged", "variant"],
 };
 const VISUAL_VERDICTS = new Set(["unchanged", "modified", "needs-review"]);
 const MAX_REVIEW_DESCRIPTION = 160;
+const LEGACY_NO_VISIBLE_DIFFERENCE = "Source changed; no visible difference was captured.";
 
 /** Source analysis belongs to capture planning; delivered reports contain runtime review evidence. */
 /** Capture shrinks the app icon to at most this many pixels on a side. */
@@ -206,6 +207,12 @@ export function normalizePublicReviewForReading(review: PublicReview, onGap?: (g
       const description = `Runtime state differs: ${surface.review.description}`;
       surface = { ...surface, review: { ...surface.review, status: "variant",
         description: description.length > MAX_REVIEW_DESCRIPTION ? `${description.slice(0, MAX_REVIEW_DESCRIPTION - 1)}…` : description } };
+    }
+    // Reports before 0.19.1 called a screen whose source changed but whose captures matched "needs review". It has no
+    // visible change, so it reads as unchanged and is not counted as a change.
+    if (surface.review?.status === "needs-review" && surface.review.description === LEGACY_NO_VISIBLE_DIFFERENCE) {
+      changed = true;
+      surface = { ...surface, review: { ...surface.review, status: "unchanged", description: "No visible change" } };
     }
     const comparisonVerdict = surface.review && surface.review.status !== "added" && surface.review.status !== "removed";
     if (!((!hasVerifiedPair(surface) && (comparisonVerdict || surface.visual)) || surface.visual?.reason === "diff-failed")) return surface;

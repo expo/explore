@@ -98,7 +98,8 @@ function reviewSurfaceItem(context: AgentContext, surface: Json): Json {
   const visual = rec(surface.visual), review = rec(surface.review);
   const id = str(surface.id) ?? "";
   return defined({
-    id, route: str(route.route), kind: str(route.kind), routeFile: str(route.routeFile), status: str(surface.status), colorScheme: str(surface.colorScheme),
+    id, route: str(route.route), kind: str(route.kind), routeFile: str(route.routeFile), status: verdictOf(surface),
+    sourceStatus: verdictOf(surface) === str(surface.status) ? undefined : str(surface.status), colorScheme: str(surface.colorScheme),
     review: surface.review === undefined ? undefined : defined({ status: str(review.status), description: str(review.description), facts: arr(review.facts).map(fact => str(rec(fact).bullet)).filter(Boolean) }),
     visual: surface.visual === undefined ? undefined : defined({ verdict: str(visual.verdict), reason: str(visual.reason), mismatchPercentage: num(visual.mismatchPercentage), threshold: num(visual.threshold) }),
     note: str(rec(surface.note).text),
@@ -120,10 +121,22 @@ function reviewSurfaceDetail(context: AgentContext, review: Json, surface: Json)
 }
 const edgeItem = (edge: Json): Json => defined({ from: str(edge.from), to: str(edge.to), kind: str(edge.kind), sourceFile: str(edge.sourceFile), provenance: str(edge.provenance) });
 
+/**
+ * A screen's status as the Viewer and the PR comment show it: the review's verdict where there is one, so `modified`
+ * means a visible change. A screen whose source changed but whose captures match is unchanged, including in reports
+ * from before 0.19.1, which called it "needs review".
+ */
+function verdictOf(surface: Json): string | undefined {
+  const review = rec(surface.review);
+  const status = str(review.status);
+  if (status === "needs-review" && str(review.description) === "Source changed; no visible difference was captured.") return "unchanged";
+  return status ?? str(surface.status);
+}
+
 function reviewSummary(context: AgentContext, review: Json): Json {
   const surfaces = arr(review.surfaces).map(rec);
   const counts: Record<string, number> = {};
-  for (const surface of surfaces) { const status = str(surface.status) ?? "unknown"; counts[status] = (counts[status] ?? 0) + 1; }
+  for (const surface of surfaces) { const status = verdictOf(surface) ?? "unknown"; counts[status] = (counts[status] ?? 0) + 1; }
   const pr = rec(review.pullRequest), runtime = rec(review.runtime);
   return defined({
     kind: "pr-review", api: AGENT_API_VERSION, contract: str(review.contract),
@@ -339,7 +352,7 @@ export async function agentApiReply(context: AgentContext, loaded: LoadedReport,
         const surfaces = arr(loaded.json.surfaces).map(rec);
         if (id !== undefined) { const surface = surfaces.find(s => s.id === id); return surface ? json(reviewSurfaceDetail(context, loaded.json, surface)) : notFound(); }
         const statuses = params.get("status")?.split(",").filter(Boolean);
-        const items = surfaces.filter(s => !statuses || statuses.includes(str(s.status) ?? "")).map(s => reviewSurfaceItem(context, s));
+        const items = surfaces.filter(s => !statuses || statuses.includes(verdictOf(s) ?? "")).map(s => reviewSurfaceItem(context, s));
         const paged = page(items, params);
         if (!paged) return json({ error: "bad_request", message: `limit must be 1-${MAX_LIMIT} and cursor a non-negative integer` }, 400);
         return wantsMarkdown ? markdown(screensMarkdown(loaded, paged.items, paged.total)) : json(paged);

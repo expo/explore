@@ -210,10 +210,9 @@ test("the verdict table: source scope decides whether a screen is a review targe
   const head = await side(root, "head", manifests.head);
   const assess = (overrides, mismatches = {}) => assessPublicEvidence({ plan: plan("all", overrides), base, head,
     profile: "explore:bundle", agentDeviceCommand: "/nonexistent/agent-device", measure: measurer(mismatches) });
-  // Screen-specific source change, identical evidence: still a review target.
+  // Screen-specific source change, identical evidence: not a visible change, so Unchanged and not counted.
   let result = await assess({});
-  assert.equal(result.surfaces.pixels.review.status, "needs-review");
-  assert.equal(result.surfaces.pixels.review.description, "Source changed; no visible difference was captured.");
+  assert.deepEqual(result.surfaces.pixels.review, { status: "unchanged", description: "No visible change" });
   assert.equal(result.surfaces.changed.review.status, "modified", "an accessibility fact is a visible difference");
   // Only app-wide inputs changed: no visible difference is Unchanged; a difference is Modified.
   result = await assess({ pixels: { status: "modified", reasons: ["App configuration changed: package.json"] },
