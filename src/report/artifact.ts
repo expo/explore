@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { assertPublicReview, projectPublicReviewForReport } from "../contracts/review-validation.js";
 import { createHash } from "node:crypto";
 import type { ArtifactReport } from "../contracts/artifact-report.js";
-import { projectReviewPresentation } from "../contracts/review.js";
+import { compareTitleMarkdown, projectReviewPresentation, type CompareReviewPresentation } from "../contracts/review.js";
 import { renderPublicComment, platformSectionMerge, type PublicCommentState } from "./pr-comment-body.js";
 import type { ExplorePlatform } from "../config/explore-config.js";
 import { upsertStickyComment } from "./pr-comment.js";
@@ -203,7 +203,7 @@ export async function publishCiReportComment(options: {
  * with the same Open (central Viewer) and zip links a PR comment carries for this platform.
  */
 async function publishCompareSummary(input: CiReportInput, options: { artifactUrl: string; platform?: ExplorePlatform }, environment: NodeJS.ProcessEnv) {
-  const review = input.publicReview; const comparison = review.pullRequest;
+  const review = input.publicReview; const comparison = review.pullRequest as CompareReviewPresentation;
   if (review.runId !== environment.GITHUB_RUN_ID || review.runAttempt !== environment.GITHUB_RUN_ATTEMPT
     || (environment.GITHUB_REPOSITORY && environment.GITHUB_REPOSITORY !== comparison.repository)) {
     throw new CiError({ code: "REPORT_RUN_MISMATCH", stage: "publication",
@@ -217,7 +217,7 @@ async function publishCompareSummary(input: CiReportInput, options: { artifactUr
   const count = changes.surfaces.filter(surface => surface.review ? surface.review.status !== "unchanged" && surface.review.status !== "variant" : surface.status !== "unchanged").length;
   const platform = (options.platform ?? review.runtime.platform) === "android" ? "Android" : "iOS";
   if (environment.GITHUB_STEP_SUMMARY) {
-    await appendFile(environment.GITHUB_STEP_SUMMARY, `- ${platform} report of ${comparison.title}: [Open](${links.viewer!.open}) · [zip](${links.download!}) · ${count} ${count === 1 ? "change" : "changes"}\n`);
+    await appendFile(environment.GITHUB_STEP_SUMMARY, `- ${platform} report of ${compareTitleMarkdown(comparison)}: [Open](${links.viewer!.open}) · [zip](${links.download!}) · ${count} ${count === 1 ? "change" : "changes"}\n`);
   }
   return { artifactUrl: links.viewer!.open, headSha: comparison.head.sha };
 }

@@ -7,6 +7,7 @@ import { parseTrustedAuthors, DEFAULT_EXPLORE_CONFIG_PATH } from "../config/expl
 import { compareTitle, compareUrl, projectComparePresentation, projectPullRequestPresentation,
   type CompareReviewPresentation, type PullRequestPresentation } from "../contracts/review.js";
 import { CiError } from "../shared/ci-errors.js";
+import { readCiReportInput } from "../report/artifact.js";
 import { TOOL_ROOT, packageBin } from "../shared/package-paths.js";
 
 /**
@@ -22,6 +23,11 @@ const SHA = /^[0-9a-f]{40}$/;
 export async function writeStepOutputs(environment: Environment, values: Record<string, string>): Promise<void> {
   if (!environment.GITHUB_OUTPUT) return;
   await appendFile(environment.GITHUB_OUTPUT, Object.entries(values).map(([name, value]) => `${name}=${value.replace(/[\r\n]+/g, " ")}\n`).join(""));
+}
+
+/** `capture:review`'s step output: `preview=eas` when the reviewed config hosts the report, which is what starts the deploy job. */
+export async function writeCaptureOutputs(inputPath: string, environment: Environment = process.env): Promise<void> {
+  await writeStepOutputs(environment, { preview: (await readCiReportInput(inputPath)).preview?.hosting ?? "" });
 }
 
 function githubContext(environment: Environment) {

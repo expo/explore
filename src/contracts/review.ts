@@ -52,6 +52,17 @@ export function compareTitle(base: PullRequestSidePresentation, head: PullReques
   return `${name(head)} vs ${name(base)}`;
 }
 
+/**
+ * The title for Markdown (job summaries): refs may contain ] ) < >, which would break a line's links, so each
+ * ref, or a caller's own title, is a code span.
+ */
+export function compareTitleMarkdown(comparison: CompareReviewPresentation): string {
+  const code = (value: string) => `\`${value.replace(/`/g, "'")}\``;
+  if (comparison.title !== compareTitle(comparison.base, comparison.head)) return code(comparison.title);
+  const name = (side: PullRequestSidePresentation) => /^[0-9a-f]{40}$/i.test(side.ref) ? side.sha.slice(0, 8) : side.ref;
+  return `${code(name(comparison.head))} vs ${code(name(comparison.base))}`;
+}
+
 export function compareUrl(repository: string, base: PullRequestSidePresentation, head: PullRequestSidePresentation): string {
   return `https://github.com/${repository}/compare/${base.sha}...${head.sha}`;
 }

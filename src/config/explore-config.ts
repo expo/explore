@@ -402,11 +402,15 @@ function ciConfig(value: unknown): ExploreConfig["ci"] {
   const ci = record(value, "ci");
   exactKeys(ci, ["trustedAuthors"], "ci");
   if (ci.trustedAuthors === undefined) return {};
-  if (!Array.isArray(ci.trustedAuthors)) fail("ci.trustedAuthors must be a list of GitHub logins", "ci.trustedAuthors");
-  if (ci.trustedAuthors.length > TRUSTED_AUTHORS_MAX) {
+  return { trustedAuthors: trustedAuthorList(ci.trustedAuthors) };
+}
+
+function trustedAuthorList(value: unknown): string[] {
+  if (!Array.isArray(value)) fail("ci.trustedAuthors must be a list of GitHub logins", "ci.trustedAuthors");
+  if (value.length > TRUSTED_AUTHORS_MAX) {
     fail(`ci.trustedAuthors lists at most ${TRUSTED_AUTHORS_MAX} logins`, "ci.trustedAuthors");
   }
-  const trustedAuthors = ci.trustedAuthors.map((entry, index) => {
+  const trustedAuthors = value.map((entry, index) => {
     const login = text(entry, `ci.trustedAuthors[${index}]`, 64);
     if (!GITHUB_LOGIN.test(login)) {
       fail(`ci.trustedAuthors[${index}] must be a GitHub login such as devin-ai-integration[bot]`, `ci.trustedAuthors[${index}]`);
@@ -416,7 +420,7 @@ function ciConfig(value: unknown): ExploreConfig["ci"] {
   if (new Set(trustedAuthors.map(login => login.toLowerCase())).size !== trustedAuthors.length) {
     fail("ci.trustedAuthors lists a login twice", "ci.trustedAuthors");
   }
-  return { trustedAuthors };
+  return trustedAuthors;
 }
 
 function reportConfig(value: unknown): ExploreConfig["report"] {
@@ -443,13 +447,14 @@ function reportConfig(value: unknown): ExploreConfig["report"] {
 }
 
 /**
- * ci.trustedAuthors alone, from a config the rest of which may be incomplete or from another release:
- * the review workflow's trust check reads only this list from the default branch.
+ * ci.trustedAuthors alone, from a config the rest of which may be incomplete or from another release: the review
+ * workflow's trust check reads only this list from the default branch, and other keys, under ci: too, are ignored.
  */
 export function parseTrustedAuthors(source: string): string[] {
   const value = plainDocument(source);
   const ci = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).ci : undefined;
-  return ciConfig(ci)?.trustedAuthors ?? [];
+  const list = ci && typeof ci === "object" && !Array.isArray(ci) ? (ci as Record<string, unknown>).trustedAuthors : undefined;
+  return list === undefined ? [] : trustedAuthorList(list);
 }
 
 /** Parse YAML as plain data: no anchors, aliases, merge keys, or custom tags. */

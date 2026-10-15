@@ -3,6 +3,7 @@ import test from 'node:test';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runCompareCi } from '../../dist/ci/pipeline.js';
+import { writeCaptureOutputs } from '../../dist/ci/workflow-steps.js';
 import { exportCiReport, publishCiReportComment, readCiReportInput } from '../../dist/report/artifact.js';
 import { renderCompareSummary } from '../../dist/report/preview-deploy.js';
 import { readCaptureBundle } from '../../dist/review/capture-review.js';
@@ -36,11 +37,23 @@ test('any two commits: a capture and report like a pull request\'s, with no pull
   await publishCiReportComment({ inputPath: result.inputPath, artifactUrl: 'https://github.com/acme/example/actions/runs/1234/artifacts/900',
     environment: { ...f.environment, GITHUB_TOKEN: '', GITHUB_STEP_SUMMARY: runSummary }, transport: async input => assert.fail(`no GitHub request: ${input}`) });
   const line = await readFile(runSummary, 'utf8');
-  assert.match(line, /^- iOS report of v1\.1\.0 vs v1\.0\.0: \[Open\]\(https:\/\/explore-preview\.expo\.app\/\?repo=acme%2Fexample&run=1234&attempt=1&artifact=900\) · \[zip\]\(https:\/\/github\.com\/acme\/example\/actions\/runs\/1234\/artifacts\/900\) · \d+ changes?\n$/);
+  assert.match(line, /^- iOS report of `v1\.1\.0` vs `v1\.0\.0`: \[Open\]\(https:\/\/explore-preview\.expo\.app\/\?repo=acme%2Fexample&run=1234&attempt=1&artifact=900\) · \[zip\]\(https:\/\/github\.com\/acme\/example\/actions\/runs\/1234\/artifacts\/900\) · \d+ changes?\n$/);
   assert.equal(f.comments.length, 0);
 
   const summary = renderCompareSummary(result.review.pullRequest, 'https://example.expo.app/p/token', null, [await readCiReportInput(result.inputPath)]);
-  assert.match(summary, /^### Explore: v1\.1\.0 vs v1\.0\.0$/m);
+  assert.match(summary, /^### Explore: `v1\.1\.0` vs `v1\.0\.0`$/m);
+  // Refs are code spans: one with ] ( ) would otherwise break the line's links. A caller's own title is one span.
+  const odd = { ...result.review.pullRequest, base: { ...result.review.pullRequest.base, ref: 'x](evil)' }, title: 'v1.1.0 vs x](evil)' };
+  assert.match(renderCompareSummary(odd, 'https://example.expo.app/p/token', null, []), /^### Explore: `v1\.1\.0` vs `x\]\(evil\)`$/m);
+  assert.match(renderCompareSummary({ ...odd, title: 'Nightly `build`' }, 'https://example.expo.app/p/token', null, []), /^### Explore: `Nightly 'build'`$/m);
+
+  // capture:review's preview output starts the deploy job only when the reviewed config hosts the report.
+  const outputs = join(f.root, 'outputs');
+  await writeCaptureOutputs(result.inputPath, { GITHUB_OUTPUT: outputs });
+  const hosted = join(f.root, 'hosted-input.json');
+  await writeFile(hosted, JSON.stringify({ ...JSON.parse(await readFile(result.inputPath, 'utf8')), preview: { hosting: 'eas', expiresAfterDays: null } }));
+  await writeCaptureOutputs(hosted, { GITHUB_OUTPUT: outputs });
+  assert.equal(await readFile(outputs, 'utf8'), 'preview=\npreview=eas\n');
   assert.match(summary, /\[Open the report\]\(https:\/\/example\.expo\.app\/p\/token\)/);
   assert.match(summary, new RegExp(`\\(https://github\\.com/acme/example/compare/${f.baseSha}\\.\\.\\.${f.headSha}\\)`));
   assert.match(summary, /^- iOS.*: \d+ changes?$/m);

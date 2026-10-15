@@ -271,6 +271,23 @@ test("ci:deploy rejects a deployment that serves the report without the token", 
   assert.doesNotMatch(JSON.parse(posted[0].options.body).body, /acme-explore--/);
 });
 
+test("a deployment that leaks past the token is named by the path's shape, never the token", async t => {
+  const { inputPath, reportPath, exportPath } = await exportFixture(t);
+  const eas = easFixture();
+  const leaky = async (input, options) => {
+    const url = new URL(input);
+    if (/^\/p\/[a-z2-7]{32}\/viewer\/index\.html$/.test(url.pathname)) return new Response("<!doctype html>", { status: 200 });
+    return eas.transport(input, options);
+  };
+  await assert.rejects(deployPreview({ inputPath, reportPath, artifactUrl, exportPath, environment: deployEnvironment, transport: leaky, run: eas.run, verifyTimeoutMs: 1 }), error => {
+    const token = eas.captured.env.EXPLORE_PREVIEW_TOKEN;
+    assert.equal(error.code, "PREVIEW_VERIFY_FAILED");
+    assert.match(error.message, /at \/p\/<token>\/viewer\/index\.html\.$/);
+    assert.ok(!JSON.stringify({ message: error.message, details: error.details }).includes(token.slice(0, 31)), "neither the token nor its near miss");
+    return true;
+  });
+});
+
 test("the preview owner comes from config or the token's single account; several accounts need report.preview.owner", async t => {
   assert.deepEqual(whoamiAccounts("Devin (robot) (authenticated using EXPO_TOKEN)\nAccounts:\n• brent-org (Role: Developer)\n• acme (Role: Owner)\n"), ["brent-org", "acme"]);
   assert.deepEqual(whoamiAccounts("brentvatne\n"), ["brentvatne"]);
@@ -508,7 +525,7 @@ test("a comparison of two commits deploys the same way and links its report from
   assert.deepEqual(eas.calls.map(call => call.args[0]), ["whoami", "init", "deploy"]);
   assert.equal(eas.requests.filter(request => request.url.origin === "https://api.github.com").length, 0, "no pull request to read or comment on");
   const summary = readFileSyncUtf8(summaryPath);
-  assert.match(summary, /^### Explore: v1\.4\.0 vs v1\.3\.0$/m);
+  assert.match(summary, /^### Explore: `v1\.4\.0` vs `v1\.3\.0`$/m);
   assert.ok(summary.includes(`[Open the report](${result.previewUrl})`));
   assert.ok(summary.includes(`(https://github.com/${pr.repository}/compare/${pr.base.sha}...${pr.head.sha})`));
   assert.match(summary, /link expires 2026-09-18/);

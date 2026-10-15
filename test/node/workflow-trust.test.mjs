@@ -246,6 +246,9 @@ test("ci.trustedAuthors on the default branch admits listed authors without writ
   const draft = samplePr(); draft.user.login = "devin-ai-integration[bot]"; draft.draft = true;
   await assert.rejects(authorize(t, { pr: draft, permission: "read", config: block }), error => error.code === "SOURCE_NOT_TRUSTED");
   await assert.rejects(authorize(t, { pr: bot, permission: "read", config: "x: [\n" }), /write access/);
+  // Only the list is read: a default-branch config written for another release, with keys this one does not know,
+  // still trusts its bots.
+  assert.equal((await authorize(t, { pr: bot, permission: "read", config: "ci:\n  trustedAuthors: [\"devin-ai-integration[bot]\"]\n  someLaterKey: true\nlaterSection: {}\n" })).outputs.pr_number, 91);
   const server = samplePr(); server.user.login = "devin-ai-integration[bot]";
   await assert.rejects(authorize(t, { pr: server, permission: "read", configStatus: 500 }), error => error.code === "GITHUB_REQUEST_FAILED" && error.retryable);
 });

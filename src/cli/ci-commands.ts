@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { runPublicCi, runBaselineCi, runCompareCi } from "../ci/pipeline.js";
-import { exportCiReport, publishCiReportComment, readCiReportInput } from "../report/artifact.js";
+import { exportCiReport, publishCiReportComment } from "../report/artifact.js";
 import { collectPlatformReports, deployPreview } from "../report/preview-deploy.js";
 import { publishFailureComment } from "../report/failure-comment.js";
 import { runExploreSetup } from "../config/setup.js";
@@ -15,7 +15,7 @@ import { readExploreConfig, readExploreInstructions, resolvePlatformConfig, with
 import { argumentError, output, required, has, flag, flags, oneOf } from "./args.js";
 import { help } from "./help.js";
 import { CiError } from "../shared/ci-errors.js";
-import { cleanupAfterCapture, findBaselineArtifact, resolveCompareRefs, resolvePullRequest, writeStepOutputs } from "../ci/workflow-steps.js";
+import { cleanupAfterCapture, findBaselineArtifact, resolveCompareRefs, resolvePullRequest, writeCaptureOutputs, writeStepOutputs } from "../ci/workflow-steps.js";
 import { stderrProgress } from "../shared/progress.js";
 
 export async function doctor(): Promise<void> {
@@ -203,7 +203,7 @@ export async function captureReview(): Promise<void> {
   const result = has("compare") ? await runCompareCi({ ...common, comparePath: required("compare") })
     : await runPublicCi({ ...common, pullRequestPath: required("pull-request") });
   // The deploy job runs only when the reviewed config asks for a hosted report.
-  await writeStepOutputs(process.env, { preview: (await readCiReportInput(result.inputPath)).preview?.hosting ?? "" });
+  await writeCaptureOutputs(result.inputPath);
   output({ ok: true, inputPath: result.inputPath });
 }
 

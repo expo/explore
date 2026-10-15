@@ -7,7 +7,7 @@ import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter, configure } from "@zip.j
 import { publishCiReportComment, readCiReportInput, type CiReportInput } from "./artifact.js";
 import { reviewChangeCount, reviewDevice } from "./pr-comment-body.js";
 import type { ExplorePlatform } from "../config/explore-config.js";
-import type { CompareReviewPresentation } from "../contracts/review.js";
+import { compareTitleMarkdown, type CompareReviewPresentation } from "../contracts/review.js";
 import { CiError, toCiError } from "../shared/ci-errors.js";
 import { TOOL_ROOT, packageBin } from "../shared/package-paths.js";
 
@@ -283,7 +283,7 @@ export function renderCompareSummary(comparison: CompareReviewPresentation, prev
     const device = reviewDevice(input.commentState);
     return `- ${input.publicReview.runtime.platform === "android" ? "Android" : "iOS"}${device ? ` (${device})` : ""}: ${changes === undefined ? "no review" : `${changes} ${changes === 1 ? "change" : "changes"}`}`;
   });
-  return [`### Explore: ${comparison.title}`, "",
+  return [`### Explore: ${compareTitleMarkdown(comparison)}`, "",
     `[Open the report](${previewUrl}) · [${comparison.base.sha.slice(0, 8)}...${comparison.head.sha.slice(0, 8)}](${comparison.url})`
       + (expiresAt === null ? "" : ` · link expires ${new Date(expiresAt).toISOString().slice(0, 10)}`), "",
     ...platforms, ""].join("\n");
@@ -619,10 +619,12 @@ async function verifyDeployment(check: { origin: string; token: string; reports:
       "Rerun the deploy job; the deployment's report listing did not match.", { details: { status: list.status } });
   }
   const other = check.token.endsWith("a") ? `${check.token.slice(0, -1)}b` : `${check.token.slice(0, -1)}a`;
-  for (const path of ["/", `/p/${other}`, `/p/${other}/report.zip`, `/p/${check.token}/viewer/index.html`]) {
+  // Errors name each probe by its shape: the near-miss token differs from the real one in its last character only.
+  for (const [path, shape] of [["/", "/"], [`/p/${other}`, "/p/<wrong token>"], [`/p/${other}/report.zip`, "/p/<wrong token>/report.zip"],
+    [`/p/${check.token}/viewer/index.html`, "/p/<token>/viewer/index.html"]] as const) {
     const response = await get(path);
-    if (response.status !== 404) throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview answered HTTP ${response.status} without a valid token at ${path}.`,
-      "Do not share this deployment; delete it in the EAS Hosting dashboard and report the issue to Explore.", { details: { path, status: response.status } });
+    if (response.status !== 404) throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview answered HTTP ${response.status} without a valid token at ${shape}.`,
+      "Do not share this deployment; delete it in the EAS Hosting dashboard and report the issue to Explore.", { details: { path: shape, status: response.status } });
   }
   return { liveAfterMs };
 }
