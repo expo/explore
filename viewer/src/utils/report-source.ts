@@ -92,8 +92,8 @@ export class ReportSource {
   private async download(url: string): Promise<void> {
     try {
       const response = await fetch(url, { credentials: "omit", cache: "no-store" });
-      if (response.status === 410) throw new ReportFileError("invalid", `This preview link expired${await expiredOn(response)}. Download the report from the pull request instead, or rerun Explore for a fresh link.`);
-      if (response.status === 404) throw new ReportFileError("invalid", "This preview link is not valid, or its deployment was deleted. Ask for a new review, or download the report from the pull request.");
+      if (response.status === 410) throw new ReportFileError("invalid", `This preview link expired${await expiredOn(response)}. Download the report from the pull request or workflow run instead, or rerun Explore for a fresh link.`);
+      if (response.status === 404) throw new ReportFileError("invalid", "This preview link is not valid, or its deployment was deleted. Ask for a new review, or download the report from the pull request or workflow run.");
       if (!response.ok || !response.body) throw new ReportFileError("invalid", `The report could not be downloaded (HTTP ${response.status}).`);
       const total = Number(response.headers.get("content-length")) || undefined;
       const reader = response.body.getReader();

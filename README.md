@@ -213,7 +213,7 @@ report:
 Run it from the Actions tab, or call it from a workflow on any event:
 
 ```yaml
-# .github/workflows/release-review.yml: each release tag against the release before it
+# .github/workflows/release-review.yml: each release tag (or release candidate) against the last stable release
 on:
   push:
     tags: ['v*']
@@ -224,19 +224,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
+      # The newest earlier tag that is not a prerelease (v1.4.0-rc.1 has a "-"); none for the first release.
       - id: tag
-        run: echo "tag=$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^")" >> "$GITHUB_OUTPUT"
+        run: echo "tag=$(git describe --tags --abbrev=0 --exclude '*-*' "$GITHUB_REF_NAME^" 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
   explore:
     needs: previous
+    if: needs.previous.outputs.tag != ''
     permissions: { contents: read, actions: read }
     uses: ./.github/workflows/explore-compare.yml
-    with: { base: '${{ needs.previous.outputs.tag }}', head: '${{ github.ref_name }}' }
+    with:
+      base: '${{ needs.previous.outputs.tag }}'
+      head: '${{ github.ref_name }}'
+      scope: all          # every screen, not only those whose source changed
+      expires-in: never   # keep the hosted link (with report.preview.hosting: eas)
     secrets: inherit
 ```
 
 - Pick whatever `base` the event calls for: `main` for a release branch, yesterday's tag for a nightly, the last stable tag for a release candidate.
+- `scope` and `expires-in` are optional and override `exploration.scope` and `report.preview.expiresAfter` for that run. Without them a comparison captures what a PR review would (`scope: changes` captures only screens whose source changed), and the hosted link expires like a PR's.
+- The run summary links each platform's report (**Open** and **zip**, like a PR comment) and, with hosting, the hosted report.
 - `setup --workflows` installs it. The caller grants `contents: read` and `actions: read`; `secrets: inherit` passes `EXPO_TOKEN` and any app-test secrets.
-- When the baseline workflow captured `base` in the last 30 days, that capture is reused and only `head` is captured.
+- When the baseline workflow captured `base` in the last 30 days, that capture is reused and only `head` is captured. The report artifact is kept 30 days; only a hosted link with `expires-in: never` lasts longer.
 
 </details>
 

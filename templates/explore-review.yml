@@ -43,6 +43,7 @@ jobs:
         with: { node-version: 24, package-manager-cache: false }
       - &install-explore
         name: Install Explore
+        id: explore
         shell: bash
         run: |
           set -euo pipefail

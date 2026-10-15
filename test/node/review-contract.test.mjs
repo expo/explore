@@ -53,3 +53,15 @@ test("rejects comparisons that name another URL, a PR number, or one commit twic
   assert.throws(() => projectReviewPresentation({ ...comparison, head: comparison.base }), /different commits/);
   assert.throws(() => projectReviewPresentation({ ...comparison, repositoryId: "x" }), /decimal GitHub id/);
 });
+
+test("a run's scope and link lifetime override the reviewed config only where the workflow set them", async () => {
+  const { withRunOverrides } = await import("../../dist/config/explore-config.js");
+  const config = { exploration: { scope: "changes" }, report: { preview: { hosting: "eas", expiresAfterDays: 30 } } };
+  assert.deepEqual(withRunOverrides(config, {}), config);
+  assert.deepEqual(withRunOverrides(config, { scope: "all", expiresIn: "never" }),
+    { exploration: { scope: "all" }, report: { preview: { hosting: "eas", expiresAfterDays: null } } });
+  assert.equal(withRunOverrides(config, { expiresIn: "90d" }).report.preview.expiresAfterDays, 90);
+  assert.deepEqual(withRunOverrides({ exploration: { scope: "changes" } }, { expiresIn: "never" }), { exploration: { scope: "changes" } }, "no hosting, nothing to expire");
+  assert.throws(() => withRunOverrides(config, { scope: "everything" }), /--scope must be changes or all/);
+  assert.throws(() => withRunOverrides(config, { expiresIn: "forever" }), /--expires-in/);
+});

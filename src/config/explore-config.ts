@@ -365,6 +365,23 @@ export function resolvePlatformConfig(config: ExploreConfig, platform: ExplorePl
     device: { name: entry.device ?? (primary ? config.device.name : platform === "android" ? DEFAULT_ANDROID_DEVICE : config.device.name) } };
 }
 
+/**
+ * One run's choices over the reviewed config, from the workflow that started it: a release comparison can capture
+ * every screen (`scope: all`) and keep its hosted link (`expiresIn: never`). `expiresIn` changes nothing when the
+ * config hosts no report.
+ */
+export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined }): ExploreConfig {
+  let result = config;
+  if (overrides.scope !== undefined) {
+    if (overrides.scope !== "changes" && overrides.scope !== "all") fail("--scope must be changes or all", "--scope");
+    result = { ...result, exploration: { ...result.exploration, scope: overrides.scope } };
+  }
+  if (overrides.expiresIn !== undefined && result.report?.preview) {
+    result = { ...result, report: { ...result.report, preview: { ...result.report.preview, expiresAfterDays: previewDays(overrides.expiresIn, "--expires-in") } } };
+  }
+  return result;
+}
+
 /** `expiresAfter` is a whole number of days (`30d`, `30 days`, or `30`), at most PREVIEW_MAX_DAYS, or `never` (null). */
 export function previewDays(value: unknown, field: string): number | null {
   if (value === undefined) return PREVIEW_DEFAULT_DAYS;

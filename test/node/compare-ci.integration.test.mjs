@@ -31,8 +31,13 @@ test('any two commits: a capture and report like a pull request\'s, with no pull
   const report = JSON.parse(await readFile(join(packaged.outputPath, 'review.json'), 'utf8'));
   assert.equal(report.review.pullRequest.origin, 'compare');
   assert.ok(packaged.imageCount > 0);
-  await assert.rejects(publishCiReportComment({ inputPath: result.inputPath, artifactUrl: 'https://github.com/acme/example/actions/runs/1234/artifacts/900',
-    environment: f.environment, transport: f.transport }), error => error.code === 'REPORT_NOT_A_PULL_REQUEST');
+  // ci:publish links a comparison from the run summary, with the Open and zip links a PR comment would carry.
+  const runSummary = join(f.root, 'run-summary.md');
+  await publishCiReportComment({ inputPath: result.inputPath, artifactUrl: 'https://github.com/acme/example/actions/runs/1234/artifacts/900',
+    environment: { ...f.environment, GITHUB_TOKEN: '', GITHUB_STEP_SUMMARY: runSummary }, transport: async input => assert.fail(`no GitHub request: ${input}`) });
+  const line = await readFile(runSummary, 'utf8');
+  assert.match(line, /^- iOS report of v1\.1\.0 vs v1\.0\.0: \[Open\]\(https:\/\/explore-preview\.expo\.app\/\?repo=acme%2Fexample&run=1234&attempt=1&artifact=900\) · \[zip\]\(https:\/\/github\.com\/acme\/example\/actions\/runs\/1234\/artifacts\/900\) · \d+ changes?\n$/);
+  assert.equal(f.comments.length, 0);
 
   const summary = renderCompareSummary(result.review.pullRequest, 'https://example.expo.app/p/token', null, [await readCiReportInput(result.inputPath)]);
   assert.match(summary, /^### Explore: v1\.1\.0 vs v1\.0\.0$/m);

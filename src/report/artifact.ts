@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFile, mkdir, lstat, readFile, realpath, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, lstat, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { assertPublicReview, projectPublicReviewForReport } from "../contracts/review-validation.js";
 import { createHash } from "node:crypto";
@@ -123,10 +123,11 @@ export async function publishCiReportComment(options: {
   previewFailed?: boolean;
 }) {
   const environment = options.environment ?? process.env; const transport = options.transport ?? fetch;
+  const input = await readInput(options.inputPath); const review = input.publicReview; const pr = review.pullRequest;
+  if (pr.origin === "compare") return publishCompareSummary(input, options, environment);
   if (!environment.GITHUB_TOKEN?.trim()) throw new CiError({ code: "GITHUB_TOKEN_MISSING", stage: "preflight",
     message: "GITHUB_TOKEN is required to publish the PR report comment",
     nextAction: "Pass GITHUB_TOKEN to the publish job with Actions read and PR comment write permissions." });
-  const input = await readInput(options.inputPath); const review = input.publicReview; const pr = review.pullRequest;
   if (review.runId !== environment.GITHUB_RUN_ID || review.runAttempt !== environment.GITHUB_RUN_ATTEMPT
     || (environment.GITHUB_REPOSITORY && environment.GITHUB_REPOSITORY !== pr.repository)) {
     throw new CiError({ code: "REPORT_RUN_MISMATCH", stage: "publication",
@@ -134,9 +135,6 @@ export async function publishCiReportComment(options: {
       nextAction: "Publish the report-input.json produced by this repository's current workflow run and attempt." });
   }
   if (pr.origin === "local") throw new Error("Local reports cannot be published as GitHub PR comments");
-  if (pr.origin === "compare") throw new CiError({ code: "REPORT_NOT_A_PULL_REQUEST", stage: "publication",
-    message: "A comparison of two commits has no pull request to comment on",
-    nextAction: "Remove ci:publish from the comparison workflow; ci:deploy writes its link to the job summary." });
   const links = viewerLinks({ repository: pr.repository, headSha: pr.head.sha, runId: review.runId,
     runAttempt: review.runAttempt, configPath: input.commentState.configPath, artifactUrl: options.artifactUrl,
     ...(options.platform ? { platform: options.platform } : {}) });
@@ -198,4 +196,28 @@ export async function publishCiReportComment(options: {
     nextAction: "Grant the GitHub token PR comment write permission and retry publication for the current PR head." }); }
   return { artifactUrl: links.viewer!.open, headSha: pr.head.sha, ...(links.preview ? { previewUrl: links.preview.open } : {}),
     ...(previousBody !== undefined ? { previousBody } : {}) };
+}
+
+/**
+ * A comparison has no pull request to comment on: `ci:publish` links its report from the run summary instead,
+ * with the same Open (central Viewer) and zip links a PR comment carries for this platform.
+ */
+async function publishCompareSummary(input: CiReportInput, options: { artifactUrl: string; platform?: ExplorePlatform }, environment: NodeJS.ProcessEnv) {
+  const review = input.publicReview; const comparison = review.pullRequest;
+  if (review.runId !== environment.GITHUB_RUN_ID || review.runAttempt !== environment.GITHUB_RUN_ATTEMPT
+    || (environment.GITHUB_REPOSITORY && environment.GITHUB_REPOSITORY !== comparison.repository)) {
+    throw new CiError({ code: "REPORT_RUN_MISMATCH", stage: "publication",
+      message: "Report input is not from the current repository run and attempt",
+      nextAction: "Publish the report-input.json produced by this repository's current workflow run and attempt." });
+  }
+  const links = viewerLinks({ repository: comparison.repository, headSha: comparison.head.sha, runId: review.runId,
+    runAttempt: review.runAttempt, configPath: input.commentState.configPath, artifactUrl: options.artifactUrl,
+    ...(options.platform ? { platform: options.platform } : {}) });
+  const changes = input.commentState.review ?? review;
+  const count = changes.surfaces.filter(surface => surface.review ? surface.review.status !== "unchanged" && surface.review.status !== "variant" : surface.status !== "unchanged").length;
+  const platform = (options.platform ?? review.runtime.platform) === "android" ? "Android" : "iOS";
+  if (environment.GITHUB_STEP_SUMMARY) {
+    await appendFile(environment.GITHUB_STEP_SUMMARY, `- ${platform} report of ${comparison.title}: [Open](${links.viewer!.open}) · [zip](${links.download!}) · ${count} ${count === 1 ? "change" : "changes"}\n`);
+  }
+  return { artifactUrl: links.viewer!.open, headSha: comparison.head.sha };
 }

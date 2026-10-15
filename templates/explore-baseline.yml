@@ -33,6 +33,7 @@ jobs:
         with: { node-version: 24, package-manager-cache: false }
       - &install-explore
         name: Install Explore
+        id: explore
         shell: bash
         run: |
           set -euo pipefail
@@ -109,7 +110,7 @@ jobs:
           node "$TOOLS/dist/cli.js" capture:baseline --project "$GITHUB_WORKSPACE/app/$APP_PROJECT_DIR" \
             --sha "$GITHUB_SHA" --config .expo-explore/config.yaml --output "$RUNNER_TEMP/explore-baseline" --platform "$PLATFORM"
       - name: Stop the capture session and check the checkout
-        if: always()
+        if: always() && steps.explore.outcome == 'success'
         timeout-minutes: 5
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}

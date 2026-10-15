@@ -232,8 +232,8 @@ test("capture receives the automatic GitHub token for current PR verification", 
 test("after capture, success or not, ci:after-capture stops the recorded sessions and checks every checkout", () => {
   for (const [job, condition, output, checkouts] of [
     [review.jobs.capture, "always() && steps.pr.outcome == 'success'", "explore-review", ["app-base", "app-head"]],
-    [compare.jobs.capture, "always()", "explore-review", ["app-base", "app-head"]],
-    [baseline.jobs.baseline, "always()", "explore-baseline", ["app"]],
+    [compare.jobs.capture, "always() && steps.explore.outcome == 'success'", "explore-review", ["app-base", "app-head"]],
+    [baseline.jobs.baseline, "always() && steps.explore.outcome == 'success'", "explore-baseline", ["app"]],
   ]) {
     const cleanup = job.steps.find(step => step.run?.includes("ci:after-capture"));
     assert.equal(cleanup.if, condition);
@@ -351,14 +351,19 @@ test("review captures and reports each configured platform in its own matrix job
 
 test("compare reviews any two refs from a manual run or another workflow, with no pull request access", () => {
   for (const trigger of ["workflow_dispatch", "workflow_call"]) {
-    assert.deepEqual(Object.keys(compare.on[trigger].inputs).sort(), ["base", "head"]);
-    for (const input of Object.values(compare.on[trigger].inputs)) assert.equal(input.required, true);
+    assert.deepEqual(Object.keys(compare.on[trigger].inputs).sort(), ["base", "expires-in", "head", "scope"]);
+    for (const name of ["base", "head"]) assert.equal(compare.on[trigger].inputs[name].required, true);
+    for (const name of ["scope", "expires-in"]) assert.deepEqual([compare.on[trigger].inputs[name].required, compare.on[trigger].inputs[name].default], [false, ""]);
   }
   assert.deepEqual(Object.keys(compare.on).sort(), ["workflow_call", "workflow_dispatch"]);
   for (const job of Object.values(compare.jobs)) assert.equal(job.permissions["pull-requests"], undefined, "a comparison never touches pull requests");
   const capture = compare.jobs.capture.steps.find(step => step.name === "Capture review");
   assert.match(capture.run, /capture:review[\s\S]*--compare "\$RUNNER_TEMP\/explore-compare\.json"/);
-  assert.doesNotMatch(compareSource, /ci:publish|ci:failure|--pull-request/);
+  assert.doesNotMatch(compareSource, /ci:failure|--pull-request/);
+  // Each override reaches the CLI only when the caller set it; the CLI validates the value.
+  assert.match(capture.run, /\$\{SCOPE:\+--scope "\$SCOPE"\} \$\{EXPIRES_IN:\+--expires-in "\$EXPIRES_IN"\}/);
+  assert.match(compare.jobs.capture.steps.find(step => step.name === "Verify deterministic source planning").run, /\$\{SCOPE:\+--scope "\$SCOPE"\}/);
+  assert.match(compare.jobs.report.steps.find(step => step.name === "Link the report from the run summary").run, /ci:publish --input .* --artifact-url "\$ARTIFACT_URL" --platform "\$PLATFORM"/);
   assert.equal(compare.jobs.capture.env.BASE_SHA, "${{ needs.platforms.outputs.base }}", "capture checks out the commits the refs resolved to once");
   assert.equal(compare.jobs.capture.env.HEAD_SHA, "${{ needs.platforms.outputs.head }}");
   assert.match(compare.jobs.platforms.steps.find(step => step.id === "refs").run, /ci:compare-refs --project app-head --base "\$BASE_REF" --head "\$HEAD_REF"/);

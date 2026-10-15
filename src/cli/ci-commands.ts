@@ -11,7 +11,7 @@ import { installCiFiles } from "../ci/workflow-install.js";
 import { readRouteEntry } from "../ci/route-entry.js";
 import { buildVerifiedPlan } from "../ci/verified-plan.js";
 import { formatCaptureCheck, formatDoctorReport, referencedSecretNames, runCaptureCheck, runDoctor } from "../ci/doctor.js";
-import { readExploreConfig, readExploreInstructions, resolvePlatformConfig, configPlatforms as listPlatforms, EXPLORE_PLATFORMS, DEFAULT_EXPLORE_CONFIG_PATH, type ExplorePlatform } from "../config/explore-config.js";
+import { readExploreConfig, readExploreInstructions, resolvePlatformConfig, withRunOverrides, configPlatforms as listPlatforms, EXPLORE_PLATFORMS, DEFAULT_EXPLORE_CONFIG_PATH, type ExplorePlatform } from "../config/explore-config.js";
 import { argumentError, output, required, has, flag, flags, oneOf } from "./args.js";
 import { help } from "./help.js";
 import { CiError } from "../shared/ci-errors.js";
@@ -194,7 +194,7 @@ export async function captureReview(): Promise<void> {
   const configPath = flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH;
   const platform = platformFlag();
   const rawConfig = await readExploreConfig(headProject, configPath);
-  const config = resolvePlatformConfig(rawConfig, platform);
+  const config = withRunOverrides(resolvePlatformConfig(rawConfig, platform), { scope: flag("scope"), expiresIn: flag("expires-in") });
   if (has("pull-request") === has("compare")) argumentError("Pass --pull-request FILE for a pull request, or --compare FILE for any two commits.", has("compare") ? "compare" : "pull-request");
   const common = { ...(platform ? { platform } : {}), platforms: listPlatforms(rawConfig), baseProject: required("base-project"), headProject,
     output: required("output"), config, configPath, progress: stderrProgress() };

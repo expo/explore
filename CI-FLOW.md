@@ -37,21 +37,21 @@ Older setups vendored the tools into `.github/vendor/expo-explore` and pinned th
 | `explore-baseline.yml` | `push` to the default branch, `workflow_dispatch` | Default branch only | Captures every route of one commit per configured platform and uploads `explore-baseline-<sha>-<platform>` for later PRs to reuse |
 | `explore-compare.yml` | `workflow_dispatch` or `workflow_call` with `base` and `head` (branch, tag or SHA) | Whoever can run or call workflows (write access) | Captures base and head, compares, packages a report like a PR review (`capture:review --compare`), and links it from the run summary; no PR comment |
 
-Both workflows start with a `platforms` job: it installs the pinned CLI and runs `expo-explore config:platforms`, whose JSON list (`["ios"]`, `["ios","android"]`) becomes the matrix of the capture, report, and baseline jobs (`fail-fast: false`). Every matrix job passes `--platform ${{ matrix.platform }}`, so one platform's failure neither cancels nor hides the other's report.
+Each workflow starts with a `platforms` job: it installs the pinned CLI and runs `expo-explore config:platforms`, whose JSON list (`["ios"]`, `["ios","android"]`) becomes the matrix of the capture, report, and baseline jobs (`fail-fast: false`). Every matrix job passes `--platform ${{ matrix.platform }}`, so one platform's failure neither cancels nor hides the other's report.
 
 ### 2.2 `explore-review.yml`
 
 | Job | Step | What it does |
 | --- | --- | --- |
-| capture (matrix: platform) | Resolve the live pull request and authorize its source | Reads the PR through the API. Forks, drafts and authors without write access (unless listed in `ci.trustedAuthors` of the default branch's `config.yaml`, read through the API) fail with `SOURCE_NOT_TRUSTED`. Writes `explore-pr.json` (repository, number, base/head ref and SHA). |
+| platforms | Install Explore, resolve and authorize the live pull request | As in the capture job below; it exports the PR's number and commits so the failure job can comment even when a capture job fails before resolving the PR itself. Then checks out head and lists the platforms. |
+| capture (matrix: platform) | Install Explore | Validates `EXPLORE_VERSION`, `npm pack`s that release into `$TOOLS_PREFIX`, then `npm ci --omit=dev --include=optional --ignore-scripts` against the release's shrinkwrap. The agent runtimes and `eas-cli` are optional dependencies, so `--include=optional` is what makes capture possible. The step is defined once per workflow file (a YAML anchor) and reused in every job. |
+| | Resolve and authorize the live pull request | `ci:pr` reads the PR through the API. Forks, drafts and authors without write access (unless listed in `ci.trustedAuthors` of the default branch's `config.yaml`, read through the API) fail with `SOURCE_NOT_TRUSTED`. Writes `explore-pr.json` (repository, number, base/head ref and SHA) and the step outputs. Runs before any PR code is checked out. |
 | | checkout `app-base`, `app-head` | Checks out the exact base and head SHAs with full history and without persisted credentials. |
-| | Install Explore | Validates `EXPLORE_VERSION`, `npm pack`s that release into `$TOOLS_PREFIX`, then `npm ci --omit=dev --include=optional --ignore-scripts` against the release's shrinkwrap. The agent runtimes and `eas-cli` are optional dependencies, so `--include=optional` is what makes capture possible. |
 | | Verify deterministic source planning | `source:verify` builds the capture plan from source alone in two fresh processes and compares the bytes. Runs before any build or simulator work and needs no credentials. |
 | | Install app dependencies | `npm ci --ignore-scripts` in both checkouts (`APP_INSTALL_DIR` for monorepos). |
-| | Find / Download optional exact-base evidence | Looks for a successful `explore-baseline-<base sha>-<platform>` artifact (iOS also accepts the older unsuffixed `explore-baseline-<base sha>`) from the baseline workflow on the default branch and downloads it as `EXPLORE_CAPTURE_CACHE`. Missing evidence is not an error. |
-| | Capture review | `capture:review` (§3). `EXPO_TOKEN`, the provider key and the app's `{{secret:NAME}}` values reach only this step. The sticky PR comment is updated while it runs. |
-| | Stop retained capture sessions | `always()`: stops the EAS Simulator sessions named in `head-session` / `base-session`, nothing else. |
-| | Verify application checkouts remain clean | A capture that modified an app checkout fails with `CHECKOUT_MODIFIED`. |
+| | Find / Download optional exact-base evidence | `ci:find-baseline` looks for a successful `explore-baseline-<base sha>-<platform>` artifact (iOS also accepts the older unsuffixed `explore-baseline-<base sha>`) from the baseline workflow on the default branch and downloads it as `EXPLORE_CAPTURE_CACHE`. Missing evidence is not an error. |
+| | Capture review | `capture:review` (§3). `EXPO_TOKEN`, the provider key and the app's `{{secret:NAME}}` values reach only this step. The sticky PR comment is updated while it runs. It writes `preview=<hosting>` to the step outputs, which decides whether the deploy job runs. |
+| | Stop capture sessions and check the checkouts | `ci:after-capture`, whenever the PR was resolved, success or not: stops the EAS Simulator sessions named in `head-session` / `base-session`, nothing else, then fails with `CHECKOUT_MODIFIED` if capture modified an app checkout. |
 | | Upload captured review / diagnostics | `explore-capture-<run>-<attempt>-<platform>` feeds the report job. On failure `explore-diagnostics-<run>-<attempt>-<platform>` keeps plans, exports and agent diagnostics for 7 days. |
 | report (matrix: platform) | Install Explore, download the capture | Runs without Expo or model credentials. |
 | | Package hosted review bundle | `ci:report` writes the report directory. |
@@ -64,7 +64,11 @@ A reviewer downloads the report ZIP and drops it on the hosted Viewer; downloadi
 
 ### 2.3 `explore-baseline.yml`
 
-Validate baseline source → Install Explore → Verify deterministic source planning (base = head = this SHA) → Install app dependencies → Capture complete single-commit baseline (`capture:baseline`; any missing route fails the job) → Stop retained baseline session → Verify application checkout remains clean → Upload exact-commit baseline evidence (`explore-baseline-<sha>`, 30 days) and, on failure, `explore-baseline-diagnostics-<run>-<attempt>`.
+Validate baseline source → Install Explore → Verify deterministic source planning (base = head = this SHA) → Install app dependencies → Capture complete single-commit baseline (`capture:baseline`; any missing route fails the job) → Stop the capture session and check the checkout (`ci:after-capture`) → Upload exact-commit baseline evidence (`explore-baseline-<sha>`, 30 days) and, on failure, `explore-baseline-diagnostics-<run>-<attempt>`.
+
+### 2.4 `explore-compare.yml`
+
+The same jobs as a PR review, for any `base` and `head` without a pull request. The `platforms` job resolves both refs once with `ci:compare-refs` (a tag wins over a branch of the same name; the same commit twice fails with `COMPARE_SAME_COMMIT`) and passes the comparison to the capture jobs, which run `capture:review --compare` with no GitHub requests. The optional `scope` and `expires-in` inputs override `exploration.scope` and `report.preview.expiresAfter` for that run. The report job's `ci:publish` writes each platform's **Open** and **zip** links to the run summary, and the deploy job adds the hosted link there; nothing comments on a pull request.
 
 ## 3. Inside `capture:review` (`runCiReview`)
 

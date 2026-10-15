@@ -78,7 +78,7 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
   validate: {},
   export: { output: "value" },
   "export:web": {catalog:"value",output:"value"},
-  "capture:review": { "base-project":"value", "head-project":"value", "pull-request":"value", compare:"value", output:"value", config:"value", platform:"value" },
+  "capture:review": { "base-project":"value", "head-project":"value", "pull-request":"value", compare:"value", output:"value", config:"value", platform:"value", scope:"value", "expires-in":"value" },
 
 
 
