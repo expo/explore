@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { copyFile, cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { copyFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { runCiReview } from "./pipeline.js";
@@ -9,6 +10,8 @@ import { ciLayout, installCommand, type PackageManager } from "./workflow-instal
 import { configPlatforms, readExploreConfig, resolvePlatformConfig, withRunOverrides, DEFAULT_EXPLORE_CONFIG_PATH, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { AGENT_PROVIDERS } from "../config/setup.js";
 import type { PrepareCiExplorationOptions } from "../capture/agent/exploration.js";
+import { createCiAgentSession } from "../capture/agent/session.js";
+import { createLocalCiAgentSession } from "../capture/agent/session-local.js";
 import type { CommandRunner } from "../capture/run.js";
 import type { LocalReviewPresentation, PullRequestSidePresentation } from "../contracts/review.js";
 import { exportCiReport, readCiReportInput } from "../report/artifact.js";
@@ -40,8 +43,10 @@ export type LocalReviewOptions = {
   configPath?: string | undefined;
   environment?: NodeJS.ProcessEnv;
   progress?: Progress;
-  /** Tests: replace the dependency install and the capture process. */
-  install?: (checkout: string, side: "base" | "head") => Promise<void>;
+  /** Behaves like Ctrl+C when aborted: for callers (and tests) that stop a review without a signal. */
+  interrupt?: AbortSignal | undefined;
+  /** Tests: replace the dependency install (given the app directory in that side's checkout) and the capture process. */
+  install?: (project: string, side: "base" | "head") => Promise<void>;
   runner?: CommandRunner; now?: () => number; sleep?: (milliseconds: number) => void;
   agentSessionFactory?: PrepareCiExplorationOptions["createSession"];
 };
@@ -95,16 +100,26 @@ export async function snapshotWorkingTree(root: string, options: { untracked?: b
   return { sha, changed, untracked: untracked.filter(file => changed.includes(file)) };
 }
 
-/** The base when none is given: where HEAD's branch left the default branch (what it would merge), named after it. */
+/**
+ * The base when none is given: where HEAD left the default branch (what it would merge), named after it. Both the
+ * local branch and origin's are considered, by exact ref (a tag of the same name never counts), and the newer fork
+ * point wins, so neither a stale local `main` nor an unfetched `origin/main` adds other people's changes.
+ */
 export function defaultBase(root: string, headSha: string): PullRequestSidePresentation {
   const remote = git(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
-  const branch = remote.ok ? remote.stdout.replace(/^origin\//, "")
-    : ["main", "master"].find(name => git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]).ok);
-  if (!branch) throw new CiError({ code: "LOCAL_REVIEW_BASE_REQUIRED", stage: "preflight", message: "This repository has no default branch to compare with.",
+  for (const branch of remote.ok ? [remote.stdout.replace(/^origin\//, "")] : ["main", "master"]) {
+    const tips = [`refs/heads/${branch}`, `refs/remotes/origin/${branch}`]
+      .map(ref => git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])).filter(result => result.ok).map(result => result.stdout);
+    if (!tips.length) continue;
+    const forks = tips.map(tip => git(root, ["merge-base", tip, headSha])).filter(result => result.ok).map(result => result.stdout);
+    if (!forks.length) throw new CiError({ code: "LOCAL_REVIEW_BASE_REQUIRED", stage: "preflight", message: `${branch} and the head share no history.`,
+      nextAction: "Pass --base with a commit the head descends from." });
+    // Each fork point is an ancestor of the other; the newer one is where the head actually branched off.
+    const fork = forks.reduce((older, newer) => git(root, ["merge-base", "--is-ancestor", older, newer]).ok ? newer : older);
+    return { ref: tips.includes(fork) ? branch : `${branch} (merge base)`, sha: fork };
+  }
+  throw new CiError({ code: "LOCAL_REVIEW_BASE_REQUIRED", stage: "preflight", message: "This repository has no default branch to compare with.",
     nextAction: "Pass --base with a branch, tag or commit SHA." });
-  const tip = resolveCommit(root, branch, "base");
-  const mergeBase = must(git(root, ["merge-base", tip, headSha]), `${branch} and the head share no history`, "Pass --base with a commit the head descends from.");
-  return { ref: mergeBase === tip ? branch : `${branch} (merge base)`, sha: mergeBase };
 }
 
 /** owner/name from a github.com `origin`, or a local name; the report shows it and the hosted project is named after it. */
@@ -115,12 +130,14 @@ function repositoryName(root: string, config: ExploreConfig): string {
 }
 
 /**
- * The environment of app installs: without Explore's credentials (EAS, GitHub, model providers). Package-registry
- * tokens stay, since a private registry needs them, and installs run with --ignore-scripts.
+ * The environment of app installs: no variable named like a credential. A reviewed commit's .npmrc or .yarnrc.yml
+ * could otherwise send `${NPM_TOKEN}` or `${CLAUDE_CODE_OAUTH_TOKEN}` to a registry it chooses, even with
+ * --ignore-scripts. Proxy, certificate, cache and SSH-agent settings stay. This matches CI, whose install step
+ * gets no secrets; registry auth in your own ~/.npmrc is scoped to its host and still applies.
  */
 export function appEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(environment).filter(([key]) =>
-    !/^(EXPO_TOKEN|EXPO_SESSION_SECRET|GITHUB_TOKEN|GH_TOKEN|ANTHROPIC_.*|OPENAI_.*|.*_API_KEY)$/i.test(key)));
+    key === "SSH_AUTH_SOCK" || !/(TOKEN|SECRET|PASSWORD|KEY|AUTH|CREDENTIAL|SESSION|COOKIE)/i.test(key)));
 }
 
 /** The frozen-lockfile install setup derives for CI, without `corepack enable` (that changes your Node install). */
@@ -128,15 +145,17 @@ export function localInstallCommand(manager: PackageManager, directory: string):
   return installCommand(manager, directory).replace(/^corepack enable && /, "");
 }
 
-async function installDependencies(checkout: string, logFile: string, environment: NodeJS.ProcessEnv): Promise<void> {
-  const layout = await ciLayout(checkout);
+/** Install from the app directory: the lockfile is the nearest one at or above it, as `setup` finds it for CI. */
+export async function installDependencies(project: string, logFile: string, environment: NodeJS.ProcessEnv): Promise<void> {
+  const layout = await ciLayout(project);
   if (!layout.manager) throw new CiError({ code: "LOCAL_REVIEW_LOCKFILE_MISSING", stage: "preflight", message: "The app has no lockfile at this commit.",
     nextAction: "Commit the app's lockfile, then rerun." });
   const command = localInstallCommand(layout.manager, layout.installDir);
   const result = spawnSync("sh", ["-c", command], { cwd: layout.root, env: appEnvironment(environment), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   await writeFile(logFile, `$ ${command}\n${result.stdout ?? ""}${result.stderr ?? ""}`);
   if (result.status !== 0) throw new CiError({ code: "LOCAL_REVIEW_INSTALL_FAILED", stage: "preflight", message: `Installing the app's dependencies failed: ${command}`,
-    nextAction: `Read ${logFile}; ${layout.manager === "npm" ? "" : `make sure ${layout.manager.replace("-classic", "")} is installed, and `}check the lockfile at that commit.` });
+    nextAction: `Read ${logFile}; ${layout.manager === "npm" ? "" : `make sure ${layout.manager.replace("-classic", "")} is installed, and `}check the lockfile at that commit. `
+      + "Installs run without credential environment variables: a registry that needs ${NPM_TOKEN} in the project's .npmrc must be authenticated in your own ~/.npmrc instead." });
 }
 
 /** `~/.cache/expo-explore/captures/<platform>/<sha>`: one capture per commit and platform, reused while its recipe matches. */
@@ -147,16 +166,47 @@ export function captureCacheDirectory(environment: NodeJS.ProcessEnv, platform: 
 
 async function exists(path: string): Promise<boolean> { try { await lstat(path); return true; } catch { return false; } }
 
+const CACHE_METADATA = "cache-metadata.json";
+async function cacheRecipe(directory: string): Promise<{ recipe: string; images: number } | undefined> {
+  try {
+    const metadata = JSON.parse(await readFile(join(directory, CACHE_METADATA), "utf8")) as { recipe?: unknown };
+    const bundle = JSON.parse(await readFile(join(directory, "bundle.json"), "utf8")) as { images?: Record<string, unknown> };
+    return typeof metadata.recipe === "string" ? { recipe: metadata.recipe, images: Object.keys(bundle.images ?? {}).length } : undefined;
+  } catch { return undefined; }
+}
+
+/**
+ * Keep an export as a commit's cached capture. Only exports whose evidence validated carry cache metadata. An entry
+ * from another recipe (an Explore upgrade, a config change) is replaced; one with the same recipe only by an export
+ * with at least as many screens, so a partial capture never shrinks a fuller one.
+ */
+export async function keepCapture(exported: string, target: string): Promise<boolean> {
+  const next = await cacheRecipe(exported);
+  if (!next) return false;
+  const current = await cacheRecipe(target);
+  if (current && current.recipe === next.recipe && current.images > next.images) return false;
+  await rm(target, { recursive: true, force: true }); await mkdir(resolve(target, ".."), { recursive: true });
+  await cp(exported, target, { recursive: true });
+  return true;
+}
+
+function recordedSessionIds(outputs: string[]): string[] {
+  return outputs.flatMap(output => ["head-session", "base-session"].flatMap(name => {
+    try { const id = readFileSync(join(output, name), "utf8").trim(); return /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(id) ? [id] : []; } catch { return []; }
+  }));
+}
+
 /** Stop the EAS Simulator sessions a capture recorded and did not stop itself (an interrupted run), with the local login. */
 export async function stopRecordedSessions(outputs: string[], environment: NodeJS.ProcessEnv, runner: (args: string[]) => { status: number | null } =
-  args => spawnSync(packageBin("eas-cli", "eas"), args, { env: environment, encoding: "utf8", timeout: 120_000 })): Promise<string[]> {
+  args => spawnSync(packageBin("eas-cli", "eas"), args, { env: environment, encoding: "utf8", timeout: 120_000 }), quiet = false): Promise<string[]> {
   const stopped: string[] = [];
   for (const output of outputs) for (const name of ["head-session", "base-session"]) {
     const file = join(output, name);
     const id = (await readFile(file, "utf8").catch(() => "")).trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(id)) continue;
     if (runner(["simulator:stop", "--id", id, "--json", "--non-interactive"]).status === 0) { stopped.push(id); await rm(file, { force: true }); }
-    else process.stderr.write(`Could not stop EAS Simulator session ${id}; stop it with: eas simulator:stop --id ${id}\n`);
+    // During an interrupt the capture may stop the same session first; only the final pass reports a failure.
+    else if (!quiet) process.stderr.write(`Could not stop EAS Simulator session ${id}; stop it with: eas simulator:stop --id ${id}\n`);
   }
   return stopped;
 }
@@ -171,15 +221,26 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
   const work = await realpath(await mkdtemp(join(tmpdir(), "expo-explore-review-")));
   const worktrees: string[] = [];
   const outputs: string[] = [];
+  // The first Ctrl+C aborts model requests and stops the recorded simulator sessions, so the capture fails fast and
+  // unwinds through its own cleanup and the finally below. A second one quits now, naming any session left running.
+  const abort = new AbortController();
+  let interrupts = 0;
   const interrupt = () => {
-    process.stderr.write("\nStopping: ending the EAS Simulator sessions this review started…\n");
-    void stopRecordedSessions(outputs, environment).finally(() => {
-      for (const tree of worktrees) git(root, ["worktree", "remove", "--force", tree]);
-      process.exit(130);
-    });
+    interrupts += 1;
+    if (interrupts === 1) {
+      process.stderr.write("\nStopping the review and its EAS Simulator sessions… (Ctrl+C again to quit now)\n");
+      abort.abort(new CiError({ code: "LOCAL_REVIEW_INTERRUPTED", stage: "capture", message: "The review was interrupted.", nextAction: "Rerun it when you are ready." }));
+      if (!options.runner) void stopRecordedSessions(outputs, environment, undefined, true);
+      return;
+    }
+    for (const tree of worktrees) git(root, ["worktree", "remove", "--force", tree]);
+    for (const id of recordedSessionIds(outputs)) process.stderr.write(`Still running: stop it with eas simulator:stop --id ${id}\n`);
+    process.exit(130);
   };
-  process.once("SIGINT", interrupt);
-  process.once("SIGTERM", interrupt);
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", interrupt);
+  options.interrupt?.addEventListener("abort", interrupt, { once: true });
+  const factory = options.agentSessionFactory;
   try {
     // The commits.
     const headRef = options.head ?? "HEAD";
@@ -190,7 +251,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
       const snapshot = await snapshotWorkingTree(root, { untracked: options.untracked, work });
       head = snapshot ? { ref: "uncommitted changes", sha: snapshot.sha, uncommitted: snapshot.changed } : { ref: "HEAD", sha: resolveCommit(root, "HEAD", "head") };
       if (snapshot) progress(`head: your uncommitted changes to ${snapshot.changed.length} file${snapshot.changed.length === 1 ? "" : "s"}`
-        + (snapshot.untracked.length ? ` (untracked, uploaded with the build: ${snapshot.untracked.join(", ")})` : ""));
+        + (snapshot.untracked.length ? ` (untracked, uploaded with the build and kept in .git/objects until git gc: ${snapshot.untracked.join(", ")})` : ""));
       else progress("head: no uncommitted changes, reviewing HEAD");
     } else head = { ref: headRef, sha: resolveCommit(root, headRef, "head") };
     const base = options.base ? { ref: options.base, sha: resolveCommit(root, options.base, "base") } : defaultBase(root, head.sha);
@@ -222,9 +283,9 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     if (subscription) progress(`model: your local ${rawConfig.agent!.provider === "anthropic" ? "claude" : "codex"} login (no ${AGENT_PROVIDERS[rawConfig.agent!.provider].secret} set)`);
 
     let installed = false;
-    const install = options.install ?? (async (checkout: string, side: "base" | "head") => {
+    const install = options.install ?? (async (project: string, side: "base" | "head") => {
       progress(`installing the ${side} commit's dependencies`);
-      await installDependencies(checkout, join(work, `install-${side}.log`), environment);
+      await installDependencies(project, join(work, `install-${side}.log`), environment);
     });
     const reports: LocalReviewReport[] = [];
     for (const platform of platforms) {
@@ -234,7 +295,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
       const platformEnvironment = { ...environment };
       delete platformEnvironment.EXPLORE_CAPTURE_CACHE;
       const cachedBase = captureCacheDirectory(environment, platform, base.sha);
-      if (options.cache !== false && await exists(join(cachedBase, "bundle.json"))) platformEnvironment.EXPLORE_CAPTURE_CACHE = cachedBase;
+      if (options.cache !== false && await exists(join(cachedBase, CACHE_METADATA))) platformEnvironment.EXPLORE_CAPTURE_CACHE = cachedBase;
       const presentation: LocalReviewPresentation = { origin: "local", repository, runId, title: `${head.ref} vs ${base.ref}`,
         base: { ref: base.ref, sha: base.sha }, head: { ref: head.ref, sha: head.sha } };
       const state: PublicCommentState = { phase: "pending", pullRequest: presentation, mode: config.exploration.scope, executionMode: config.mode,
@@ -245,13 +306,20 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
       const result = await runCiReview({ projects, output, config, presentation, runId, runAttempt: "1", state, environment: platformEnvironment,
         ...(platforms.length > 1 ? { platforms } : {}), subscription, useLocalEasSession, progress: message => progress(`${platform}: ${message}`),
         ...(options.runner ? { runner: options.runner } : {}), ...(options.now ? { now: options.now } : {}), ...(options.sleep ? { sleep: options.sleep } : {}),
-        ...(options.agentSessionFactory ? { agentSessionFactory: options.agentSessionFactory } : {}),
+        // Model requests end on Ctrl+C: the session kills its own process group and restores any login it changed.
+        agentSessionFactory: (configuration, sessionOptions) => {
+          const session = (factory ?? (subscription ? createLocalCiAgentSession : createCiAgentSession))(configuration, sessionOptions);
+          return { ...session,
+            preflight: preflightOptions => session.preflight({ ...preflightOptions, signal: preflightOptions?.signal ? AbortSignal.any([preflightOptions.signal, abort.signal]) : abort.signal }),
+            run: request => session.run({ ...request, signal: request.signal ? AbortSignal.any([request.signal, abort.signal]) : abort.signal }) };
+        },
         prepareCapture: async () => {
           if (installed) return;
-          for (const side of ["head", "base"] as const) await install(checkouts[side], side);
+          for (const side of ["head", "base"] as const) await install(projects[side], side);
           installed = true;
         },
         assertCurrentHead: async () => {
+          abort.signal.throwIfAborted();
           for (const side of ["base", "head"] as const) {
             if (git(projects[side], ["rev-parse", "HEAD"]).stdout !== (side === "base" ? base.sha : head.sha)
               || git(checkouts[side], ["status", "--porcelain", "--untracked-files=normal"]).stdout) {
@@ -270,20 +338,24 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
       reports.push({ platform, directory, zip, ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) });
       // Keep both sides' captures for later reviews of these commits; a working-tree snapshot is never reviewed again.
       if (options.cache !== false) for (const side of ["base", "head"] as const) {
-        const sha = side === "base" ? base.sha : head.sha;
         if (side === "head" && head.uncommitted) continue;
-        const exported = join(output, `${side}-export`);
-        if (!await exists(join(exported, "bundle.json"))) continue;
-        const target = captureCacheDirectory(environment, platform, sha);
-        if (target === platformEnvironment.EXPLORE_CAPTURE_CACHE) continue;
-        await rm(target, { recursive: true, force: true }); await mkdir(resolve(target, ".."), { recursive: true });
-        await cp(exported, target, { recursive: true });
+        await keepCapture(join(output, `${side}-export`), captureCacheDirectory(environment, platform, side === "base" ? base.sha : head.sha));
       }
+      // The report is all that is kept; the captures, maps and checkouts are the bulk of the run.
+      for (const entry of await readdir(output)) if (entry !== "report" && entry !== "report.zip") await rm(join(output, entry), { recursive: true, force: true });
+      abort.signal.throwIfAborted();
     }
+    // The install logs and snapshot index go too; the checkouts are removed with git below.
+    for (const entry of await readdir(work)) if (![...platforms, "base", "head"].includes(entry)) await rm(join(work, entry), { recursive: true, force: true });
     return { runId, base, head, work, reports, config: rawConfig, repository };
+  } catch (error) {
+    progress(`kept this review's files for inspection: ${work}`);
+    // A capture interrupted mid-session reports its cleanup; the interruption is what happened.
+    throw abort.signal.aborted ? abort.signal.reason : error;
   } finally {
     process.off("SIGINT", interrupt);
     process.off("SIGTERM", interrupt);
+    options.interrupt?.removeEventListener("abort", interrupt);
     // A capture stops its own sessions; this catches one that ended before it could. Tests inject their own runner.
     if (!options.runner) await stopRecordedSessions(outputs, environment).catch(() => []);
     for (const tree of worktrees) git(root, ["worktree", "remove", "--force", tree]);

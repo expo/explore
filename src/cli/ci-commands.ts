@@ -239,7 +239,8 @@ async function localReview(): Promise<void> {
   if (has("upload")) {
     const preview = result.config.report?.preview;
     const hosted = await deployLocalReports({ reports: zips, project: previewProjectSlug(result.repository, preview?.project), ...(preview?.owner ? { owner: preview.owner } : {}),
-      expiresAfterDays: has("expires-in") ? previewDays(required("expires-in"), "--expires-in") : preview?.expiresAfterDays ?? PREVIEW_DEFAULT_DAYS });
+      // null is expiresAfter: never, which must not fall back to the default.
+      expiresAfterDays: has("expires-in") ? previewDays(required("expires-in"), "--expires-in") : preview ? preview.expiresAfterDays : PREVIEW_DEFAULT_DAYS });
     if (has("json")) output({ ...summary, url: hosted.previewUrl, expiresAt: hosted.expiresAt });
     else console.log(`Report: ${hosted.previewUrl}${hosted.expiresAt ? ` (until ${hosted.expiresAt.slice(0, 10)})` : ""}`);
     return;

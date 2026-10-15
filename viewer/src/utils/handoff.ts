@@ -8,6 +8,8 @@ import type { PullRequestPresentation } from "./review-model";
  */
 export function handoffPageUrl(page: URL): string | undefined {
   if (!isPreviewPath(page.pathname)) return undefined;
+  // A local review's Viewer (capture:review on this machine) serves the same /p/<token> path, without the agent API.
+  if (["127.0.0.1", "localhost", "[::1]"].includes(page.hostname)) return undefined;
   const url = new URL(page.origin + page.pathname.replace(/\/$/, ""));
   const platform = page.searchParams.get("platform");
   if (platform) url.searchParams.set("platform", platform);

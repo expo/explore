@@ -13,6 +13,8 @@ test("only a hosted preview has a link an agent can fetch", () => {
   );
   assert.equal(handoffPageUrl(new URL(`https://app-explore--abc.expo.app/p/${TOKEN}/`)), `https://app-explore--abc.expo.app/p/${TOKEN}`);
   assert.equal(handoffPageUrl(new URL("http://127.0.0.1:4319/#/map")), undefined);
+  assert.equal(handoffPageUrl(new URL(`http://127.0.0.1:4319/p/${TOKEN}`)), undefined, "a local review's Viewer has no agent API");
+  assert.equal(handoffPageUrl(new URL(`http://localhost:4319/p/${TOKEN}`)), undefined);
   assert.equal(handoffPageUrl(new URL("https://explore.expo.app/r?repo=a/b&run=1&attempt=1")), undefined);
 });
 
