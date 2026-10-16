@@ -5,6 +5,7 @@ import { StatusGlyph } from "../shared/status-icon";
 import { Tooltip } from "../shared/tooltip";
 import { DIFF_LABELS, type DiffStatus } from "../../utils/build-diff";
 import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
+import { setMeasurementsShown, useMeasurementsShown } from "../../utils/measurements-setting";
 import type { ComparePicker } from "./compare-section";
 
 /**
@@ -92,11 +93,29 @@ export function CompareSteps(props: {
  * findings as bullets, then what changed for assistive technology under its own heading, then the
  * notes about the comparison under a hairline.
  */
-export function WhatChangedContent(props: { facts: string[]; assistive?: string[]; accessibilityOnly?: boolean | undefined; notes: string[] }) {
+export function WhatChangedContent(props: {
+  facts: string[];
+  assistive?: string[];
+  accessibilityOnly?: boolean | undefined;
+  /** Set when every changed area only moved: a line per direction (layoutShiftSummary). */
+  layoutShift?: string[] | undefined;
+  /** Some outlined area moved, so its outline can be labelled with how far. */
+  measurable?: boolean | undefined;
+  notes: string[];
+}) {
   const assistive = props.assistive ?? [];
   const assistiveTitle = useId();
+  const measurements = useMeasurementsShown();
   return (
     <div className="what-changed-content" role="region" aria-label="What changed on this screen">
+      {props.layoutShift ? (
+        <div className="what-changed-shift">
+          <p>Layout shifted. Nothing on this screen changed content.</p>
+          <ul className="what-changed-content-list">
+            {props.layoutShift.map((line) => <li key={line}>{line}</li>)}
+          </ul>
+        </div>
+      ) : null}
       {props.facts.length > 0 ? (
         <ul className="what-changed-content-list">
           {props.facts.map((fact) => <li key={fact}>{fact}</li>)}
@@ -123,6 +142,16 @@ export function WhatChangedContent(props: { facts: string[]; assistive?: string[
           {props.notes.map((note) => <p key={note}>{note}</p>)}
         </div>
       ) : null}
+      {props.measurable ? (
+        <label className="what-changed-measurements">
+          <span className="what-changed-measurements-text">
+            <span>Show measurements</span>
+            <small>How far each outlined area moved</small>
+          </span>
+          <input type="checkbox" role="switch" className="what-changed-switch" checked={measurements}
+            onChange={(event) => setMeasurementsShown(event.target.checked)} />
+        </label>
+      ) : null}
     </div>
   );
 }
@@ -136,13 +165,15 @@ export function WhatChangedPopover(props: {
   facts: string[];
   assistive?: string[];
   accessibilityOnly?: boolean | undefined;
+  layoutShift?: string[] | undefined;
+  measurable?: boolean | undefined;
   notes: string[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const { open, onOpenChange } = props;
-  const empty = props.facts.length === 0 && !props.assistive?.length && props.notes.length === 0;
+  const empty = props.facts.length === 0 && !props.assistive?.length && !props.layoutShift && props.notes.length === 0;
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
@@ -173,10 +204,10 @@ export function WhatChangedPopover(props: {
       {open ? (
         <div className="compare-what-changed-popover" role="dialog" aria-modal="false" aria-label="What changed">
           {/* A screen that changed only for assistive technology has nothing else to title. */}
-          {props.facts.length > 0 || props.notes.length > 0
+          {props.facts.length > 0 || props.notes.length > 0 || props.layoutShift
             ? <strong className="compare-what-changed-popover-title">What changed</strong> : null}
           <WhatChangedContent facts={props.facts} {...(props.assistive ? { assistive: props.assistive } : {})}
-            accessibilityOnly={props.accessibilityOnly} notes={props.notes} />
+            accessibilityOnly={props.accessibilityOnly} layoutShift={props.layoutShift} measurable={props.measurable} notes={props.notes} />
         </div>
       ) : null}
     </div>

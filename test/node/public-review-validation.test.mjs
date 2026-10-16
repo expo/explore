@@ -253,3 +253,21 @@ test("quarantine: a report-level contract failure still throws", () => {
   assert.throws(() => quarantineReviewContract(provenance), /disagree with their build provenance/);
 });
 
+
+test('a visual region may carry the shift its content moved by, and a malformed one is rejected', async () => {
+  const { assertPublicReview } = await import('../../dist/contracts/review-validation.js');
+  const valid = JSON.parse(JSON.stringify(reviewWithRegion({ x: 0, y: -4.17 })));
+  assert.doesNotThrow(() => assertPublicReview(valid));
+  for (const shift of [{ x: 0 }, { x: 0, y: Number.NaN }, { x: 0, y: 500 }, 'up']) {
+    assert.throws(() => assertPublicReview(reviewWithRegion(shift)), /visual verdict is inconsistent/, JSON.stringify(shift));
+  }
+});
+
+function reviewWithRegion(shift) {
+  const input = review();
+  input.surfaces[0].review = { status: "modified", description: "Updated visual styling in the main content area." };
+  input.surfaces[0].visual = { verdict: "modified", reason: "repeated-cross-build-delta", mismatchPercentage: 1, threshold: 0.1, tool: "agent-device",
+    regions: [{ rect: { x: 0, y: 0, width: 1, height: 1 }, normalizedRect: { x: 0, y: 0, width: 100, height: 100 },
+      differentPixels: 1, shareOfDiffPercentage: 100, dominantChange: "mixed", location: "center", shift }] };
+  return input;
+}

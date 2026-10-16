@@ -4,7 +4,7 @@ import type { ChangesMenuData } from "../panels/changes-menu";
 import { diffLabel, ACCESSIBILITY_ONLY_HIGHLIGHT, type BuildDiff, type ScreenDiff } from "../../utils/build-diff";
 import type { MapIndex } from "../../utils/model";
 import type { ChangedScreen } from "../../utils/changed-screens";
-import { groupVisualRegions, type VisualChange } from "../../utils/visual-diff";
+import { groupVisualRegions, layoutShiftSummary, type VisualChange } from "../../utils/visual-diff";
 import { formatShortcut, matchesShortcut, SHORTCUTS, shortcutsLive } from "../../utils/shortcuts";
 import { HOLD_INITIAL_DELAY_MS, holdIntervalMs } from "../../utils/key-hold";
 import { optionalStorage } from "../../utils/embedded-report";
@@ -101,9 +101,13 @@ export function useCompareController(options: CompareControllerOptions) {
   );
   // Only what CI found on this screen. The generic summary ("Shared app source changed.") is
   // not a finding about this screen, so it leaves the list empty and the button disabled.
+  // Every changed area only moved: say how far, in place of CI's generic pixel finding ("Updated visual styling…").
+  const layoutShift = useMemo(() => layoutShiftSummary(areas), [areas]);
+  const measurable = areas.some((area) => area.move);
   const facts = useMemo(
-    () => presentedChanges(screenDiff).filter((change) => change.id !== "legacy-summary"),
-    [screenDiff],
+    () => presentedChanges(screenDiff).filter((change) => change.id !== "legacy-summary"
+      && !(layoutShift && change.fact?.category === "visual")),
+    [screenDiff, layoutShift],
   );
   // What changed for assistive technology is listed under its own heading.
   const split = useMemo(() => splitForAssistiveTechnology(facts, screenDiff), [facts, screenDiff]);
@@ -241,7 +245,7 @@ export function useCompareController(options: CompareControllerOptions) {
   const chosenMode: CompareMode = phone ? phoneMode : desktopMode;
   const modesDisabled = !comparable;
   return {
-    screen, screenDiff, route, position, previous, next, comparable, areas, facts, split,
+    screen, screenDiff, route, position, previous, next, comparable, areas, facts, split, layoutShift, measurable,
     mode, chosenMode, modesDisabled, chooseMode, modeOptions, outlines, shownOutlines, statusBarIgnored, homeIndicatorIgnored, toggleOutlines,
     activeArea, setActiveArea, stepArea, flipSide, flip, swipePosition, setSwipePosition,
     aspect, setAspect, factsOpen, setFactsOpen,
@@ -355,7 +359,7 @@ export function CompareSection(props: CompareSectionProps) {
             </button>
           </Tooltip>
           <WhatChangedPopover facts={factCopies} assistive={assistive} accessibilityOnly={screenDiff.accessibilityOnly}
-            notes={notes} open={factsOpen} onOpenChange={setFactsOpen} />
+            layoutShift={compare.layoutShift} measurable={compare.measurable} notes={notes} open={factsOpen} onOpenChange={setFactsOpen} />
         </div>
       </header>
 
@@ -490,7 +494,7 @@ export function CompareStage(props: StageProps) {
           ))}
         </figcaption>
         <div className="compare-frame-wrap">
-          <button type="button" className="compare-frame compare-flip-frame"
+          <button type="button" className="compare-frame compare-flip-frame" data-side={showing}
             aria-label={`Show ${showing === "after" ? "Before" : "After"}`} onClick={props.onFlip}>
             <CompareImage src={showing === "after" ? after : before} alt={`${props.title}, ${showing}`}
               placeholder="No screenshot" onAspect={props.onAspect} />

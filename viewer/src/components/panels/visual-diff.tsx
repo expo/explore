@@ -1,36 +1,42 @@
 import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { ChevronsLeftRight } from "lucide-react";
-import { outlineRect, type VisualChange } from "../../utils/visual-diff";
+import { formatMove, outlineRect, type VisualChange } from "../../utils/visual-diff";
+import { useMeasurementsShown } from "../../utils/measurements-setting";
 import { HOME_INDICATOR_BAND_PERCENT_BY_PLATFORM, STATUS_BAR_BAND_PERCENT } from "../../../../src/contracts/capture";
 import { ScreenshotImage } from "../shared/screenshot-image";
 import "./visual-diff.css";
 
 /**
- * Outlines over a screenshot, one per changed area. The same rectangles go on Before and After:
- * CI compares the two images pixel for pixel, so an area has one position, not one per side.
- * The parent must be positioned.
+ * Outlines over a screenshot, one per changed area. An area whose content changed has one position, the same
+ * on Before and After. An area that only moved is dashed and drawn where its content is on each side, labelled
+ * with how far it moved while measurements are shown. The parent must be positioned.
  */
 export function ChangeOutlines(props: {
   changes: readonly VisualChange[];
   activeIndex?: number | undefined;
 }) {
+  const measurements = useMeasurementsShown();
   return (
     <span
       className={`visual-change-outlines${props.activeIndex !== undefined ? " has-active" : ""}`}
       aria-hidden="true">
       {props.changes.map((change, index) => {
         const rect = outlineRect(change);
+        // A moved area sits where its content is on each side: the Before side (--outline-before: 1) draws it
+        // back by the move, so the outline jumps by the amount on its label when the sides flip.
+        const back = (offset: number, move: number | undefined) => (move ? `calc(${offset}% - var(--outline-before, 0) * ${move}%)` : `${offset}%`);
         return (
           <span
             key={index}
-            className={`visual-change-outline${props.activeIndex === index ? " active" : ""}`}
+            className={`visual-change-outline${change.move ? " moved" : ""}${props.activeIndex === index ? " active" : ""}`}
             style={{
-              left: `${rect.x}%`,
-              top: `${rect.y}%`,
+              left: back(rect.x, change.move?.x),
+              top: back(rect.y, change.move?.y),
               width: `${rect.width}%`,
               height: `${rect.height}%`,
-            }}
-          />
+            }}>
+            {change.move && measurements ? <span className="visual-change-measure">{formatMove(change)}</span> : null}
+          </span>
         );
       })}
     </span>

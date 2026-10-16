@@ -172,6 +172,11 @@ export type PublicVisualVerdict = {
     rect: { x: number; y: number; width: number; height: number };
     normalizedRect: { x: number; y: number; width: number; height: number };
     differentPixels: number; shareOfDiffPercentage: number; dominantChange: string; location: string;
+    /**
+     * Set when the region's content is the same in both screenshots, only moved: how far, in screenshot pixels
+     * (right and down are positive). Absent when the content itself changed.
+     */
+    shift?: { x: number; y: number };
   }>;
   tool: string;
   /** Diff regions inside the iOS status-bar band that were excluded from the verdict. */

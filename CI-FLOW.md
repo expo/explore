@@ -159,6 +159,16 @@ invisible on a device.
 
 A pixel mismatch that rounds to 0.00% is noise and counts as "same". Diff regions inside the status-bar band are excluded from the verdict and reported as `ignoredStatusBarRegions`; the Viewer marks that band in Compare.
 
+Each changed region also records whether its content only moved. CI searches for the shift (up to 12 screenshot
+pixels vertically and 4 horizontally, to a sixth of a pixel) that best lines Before up with After inside the region;
+when that shift explains most of the region's difference, the region gets `shift: { x, y }` in screenshot pixels
+(right and down positive). A move of half a pixel or less needs a quarter of the difference explained, since text is
+re-rasterized rather than moved at that size; a larger move needs 60%. New text, another colour or a caret is not a
+move. The Viewer draws moved areas dashed, at each side's own position, labelled with how far they moved ("↑4pt"),
+and says "Layout shifted" in What changed when every area moved; the labels can be turned off there. iOS screenshots
+are one pixel per point, so labels read in points; Android's are labelled in screenshot pixels, since the report
+does not know the screen's density.
+
 ## 7. Local CI test
 
 `test/ci/run.mjs` runs the production pipeline against an app folder in this repository (`test/ci/apps/wallet`) and a scenario (`test/ci/scenarios/<app>/<name>/`: `scenario.json`, `overlay/`, `expected.json`, optional `setup.yaml`). The [local CI test harness README](test/ci/README.md) covers prerequisites, scenarios, expectations, the matrix runner and how to revisit a result. In outline:

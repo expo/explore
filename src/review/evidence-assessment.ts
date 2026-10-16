@@ -27,6 +27,7 @@ import {
 } from "./visual-evidence.js";
 import { AGENT_DEVICE_VERSION } from "../shared/agent-device-version.js";
 import { STATUS_BAR_BAND_PERCENT } from "../shared/png-evidence.js";
+import { measureRegionShifts } from "./region-shift.js";
 
 export const DEFAULT_VISUAL_THRESHOLD = 0.1;
 export const DEFAULT_EVIDENCE_TIME_BUDGET_MS = 10 * 60_000;
@@ -139,6 +140,19 @@ function visualVerdict(assessment: VisualEvidenceAssessment, threshold: number):
     ...(regions && regions.length > 0 ? { regions } : {}),
     tool: VISUAL_TOOL,
   };
+}
+
+/**
+ * Each region with how far its content moved, where a move explains it: a layout that shifted by a device pixel
+ * reads as moved, not as changed. A measurement that fails leaves the regions as they were.
+ */
+async function withRegionShifts(basePath: string, headPath: string, regions: NonNullable<PublicVisualVerdict["regions"]>): Promise<NonNullable<PublicVisualVerdict["regions"]>> {
+  try {
+    const shifts = await measureRegionShifts(basePath, headPath, regions.map(region => region.rect));
+    return regions.map((region, index) => (shifts[index] ? { ...region, shift: shifts[index] } : region));
+  } catch {
+    return regions;
+  }
 }
 
 /** Remove status-bar-only diff regions from a measurement and recompute its verdict inputs. */
@@ -463,6 +477,7 @@ export async function assessPublicEvidence(options: {
             representative: measurement,
           });
           visual = visualVerdict(assessment, threshold);
+          if (visual.verdict === "modified" && visual.regions?.length) visual.regions = await withRegionShifts(basePath, headPath, visual.regions);
           if (ignoredTop > 0) visual.ignoredStatusBarRegions = ignoredTop;
           if (ignoredBottom > 0) visual.ignoredHomeIndicatorRegions = ignoredBottom;
           visualCounts.compared += 1;

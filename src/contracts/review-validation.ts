@@ -75,13 +75,21 @@ function assertReviewFields(surface: Surface, enforceComparisonEvidence: boolean
   }
 }
 
+/** A region's move between the screenshots: finite, and small enough to be layout drift rather than another screen. */
+function validShift(shift: unknown): boolean {
+  if (!shift || typeof shift !== "object") return false;
+  const { x, y } = shift as { x?: unknown; y?: unknown };
+  return typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y) && Math.abs(x) <= 64 && Math.abs(y) <= 64;
+}
+
 function assertVisualVerdict(visual: PublicVisualVerdict, enforceComparisonEvidence: boolean, paired: boolean): void {
   if (!visual || typeof visual !== "object" || !VISUAL_VERDICTS.has(visual.verdict)
     || typeof visual.reason !== "string" || (enforceComparisonEvidence && visual.reason === "diff-failed") || typeof visual.tool !== "string"
     || typeof visual.threshold !== "number" || !Number.isFinite(visual.threshold)
     || (visual.mismatchPercentage !== undefined
       && (typeof visual.mismatchPercentage !== "number" || !Number.isFinite(visual.mismatchPercentage) || visual.mismatchPercentage < 0))
-    || (visual.regions !== undefined && (!Array.isArray(visual.regions) || visual.regions.length > 64))
+    || (visual.regions !== undefined && (!Array.isArray(visual.regions) || visual.regions.length > 64
+      || visual.regions.some(region => region?.shift !== undefined && !validShift(region.shift))))
     || !paired) {
     throw new Error("Public visual verdict is inconsistent");
   }

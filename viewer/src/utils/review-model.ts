@@ -67,6 +67,12 @@ export type ReviewRuntimeEvidenceComparison = {
   current?: ReviewRuntimeEvidence;
 };
 
+/**
+ * How far an area's content moved from Before to After when it is otherwise the same: in percent of the image
+ * (to place the Before outline) and in the screenshot's own units (to label it). Right and down are positive.
+ */
+export type RegionMove = { x: number; y: number; amount: { x: number; y: number }; unit: "pt" | "px" };
+
 /** One area of the screenshot that differs, in percent of the image width and height (0–100). */
 export type VisualDiffRegion = {
   x: number;
@@ -75,6 +81,8 @@ export type VisualDiffRegion = {
   height: number;
   /** This region's share of all differing pixels, in percent. */
   share: number;
+  /** Set when the area only moved; absent when its content changed. */
+  move?: RegionMove;
 };
 
 /** The CI pixel comparison of the before and after screenshots. */
@@ -260,7 +268,17 @@ function visualDiffRegion(value: unknown): VisualDiffRegion | undefined {
   const [x, y, width, height, share] = ["x", "y", "width", "height", "share"].map((key) => percent(candidate?.[key]));
   if (x === undefined || y === undefined || width === undefined || height === undefined || share === undefined) return undefined;
   if (width <= 0 || height <= 0 || x + width > 100.01 || y + height > 100.01) return undefined;
-  return { x, y, width, height, share };
+  const move = regionMove(candidate?.move);
+  return { x, y, width, height, share, ...(move ? { move } : {}) };
+}
+
+function regionMove(value: unknown): RegionMove | undefined {
+  const candidate = record(value);
+  const amount = record(candidate?.amount);
+  const finite = (entry: unknown): entry is number => typeof entry === "number" && Number.isFinite(entry) && Math.abs(entry) <= 100;
+  if (!candidate || !amount || !finite(candidate.x) || !finite(candidate.y) || !finite(amount.x) || !finite(amount.y)
+    || (candidate.unit !== "pt" && candidate.unit !== "px")) return undefined;
+  return { x: candidate.x, y: candidate.y, amount: { x: amount.x, y: amount.y }, unit: candidate.unit };
 }
 
 export function visualDiff(value: unknown): ReviewVisualDiff | undefined {
