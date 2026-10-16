@@ -446,7 +446,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     await writeFile(dotenvPath, SIMULATOR_DOTENV_HEADER, { flag: "wx", mode: 0o600 });
     let startError: unknown;
     try { eas(["simulator:start", "--name", sessionName, "--platform", options.platform, "--device", options.device,
-      "--type", "agent-device", "--package-version", AGENT_DEVICE_VERSION, "--build-id", easBuildId,
+      "--type", "agent-device", "--package-version", AGENT_DEVICE_VERSION, "--build-id", easBuildId, "--public-link",
       "--max-duration-minutes", String(options.maxDurationMinutes), "--out-config-type", "dotenv", "--non-interactive"], 20 * 60_000, simulatorProject); }
     catch (error) { startError = error; }
     const handoff = await readSimulatorDotenvHandoff(dotenvPath);

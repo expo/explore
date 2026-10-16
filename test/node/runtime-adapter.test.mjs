@@ -15,7 +15,7 @@ function execution(overrides = {}) {
     provider: "eas-simulator",
     controller: "agent-device",
     controllerPackageVersion: AGENT_DEVICE_VERSION,
-    easCliVersion: "24.4.2",
+    easCliVersion: "25.0.0",
     platform: "ios",
     deviceModel: "iPhone 17",
     osVersion: "26.0",
@@ -188,7 +188,7 @@ test("projects one map surface into the five runtime evidence groups", () => {
   assert.equal(result.groups.interaction.transitionCount.value, 1);
   assert.equal(result.groups.ui.landmarks.value.length, 0);
   assert.equal(result.groups.environment.controllerPackageVersion?.value, AGENT_DEVICE_VERSION);
-  assert.equal(result.groups.environment.easCliVersion?.value, "24.4.2");
+  assert.equal(result.groups.environment.easCliVersion?.value, "25.0.0");
 });
 
 test("normalizes multi-line labels and treats only open parser gaps as truncation", () => {

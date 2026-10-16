@@ -1,6 +1,6 @@
 import { CiError } from "../shared/ci-errors.js";
 
-export const EAS_CLI_VERSION = "24.4.2";
+export const EAS_CLI_VERSION = "25.0.0";
 export { AGENT_DEVICE_VERSION } from "../shared/agent-device-version.js";
 
 export const CONTROLLER_SESSION = "expo-explore-runtime";

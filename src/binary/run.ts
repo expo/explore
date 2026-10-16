@@ -610,7 +610,7 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
     await writeFile(dotenvPath, SIMULATOR_DOTENV_HEADER, { flag: "wx", mode: 0o600 });
     let startError: unknown;
     try {
-      const started = eas(["simulator:start", "--name", sessionName, "--platform", platform, "--device", device, "--type", "agent-device", "--package-version", AGENT_DEVICE_VERSION,
+      const started = eas(["simulator:start", "--name", sessionName, "--platform", platform, "--device", device, "--type", "agent-device", "--package-version", AGENT_DEVICE_VERSION, "--public-link",
         "--max-duration-minutes", String(limits.maxDurationMinutes + 5), "--out-config-type", "dotenv", "--non-interactive"], 20 * 60_000);
       if (started.status !== 0) throw new Error(started.stderr || started.stdout || "eas simulator:start failed");
     } catch (error) { startError = error; }
