@@ -1341,6 +1341,32 @@ test("← and → step through the Screens cards in page order, with focus, and 
   await expect(card(ids[1]!)).toHaveClass(/selected/);
 });
 
+test("→ steps the Screens cards right after Screens is opened from the toolbar, and from a pick that Changed hides", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/map");
+  await page.getByRole("group", { name: "Canvas view" }).getByRole("button", { name: "Screens", exact: true }).click();
+  const grid = page.getByRole("main", { name: "Screens" });
+  const cells = grid.locator(".screens-grid .screens-cell");
+  await expect(cells.first()).toBeVisible();
+  // Focus is still on the toolbar's Screens button.
+  await page.keyboard.press("ArrowRight");
+  await expect(cells.first().locator(".screen-screenshot-card")).toHaveClass(/selected/);
+
+  // Pick a screen that Changed hides, then show Changed: → goes to the next changed card after it in the tree.
+  await grid.getByRole("button", { name: /^All/ }).click();
+  const all = await cells.evaluateAll(elements => elements.map(element => element.getAttribute("data-screen-id")!));
+  await grid.getByRole("button", { name: /^Changed/ }).click();
+  const changed = await cells.evaluateAll(elements => elements.map(element => element.getAttribute("data-screen-id")!));
+  const hidden = all.find((id, position) => !changed.includes(id) && all.slice(position + 1).some(next => changed.includes(next)));
+  test.skip(!hidden, "the fixture has no unchanged screen before a changed one");
+  await grid.getByRole("button", { name: /^All/ }).click();
+  await grid.locator(`.screens-cell[data-screen-id="${hidden}"] .screen-screenshot-target`).click();
+  await grid.getByRole("button", { name: /^Changed/ }).click();
+  const expected = all.slice(all.indexOf(hidden!) + 1).find(id => changed.includes(id))!;
+  await page.keyboard.press("ArrowRight");
+  await expect(grid.locator(`.screens-cell[data-screen-id="${expected}"] .screen-screenshot-card`)).toHaveClass(/selected/);
+});
+
 test("reuses the Map screenshot card in Screens, with the route under the screenshot at the card's left edge", async ({ page }) => {
   await serveWorkspace(page);
   await page.goto("/screens");

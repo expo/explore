@@ -5,7 +5,7 @@ import { primaryScreenshotForScreen, screenshotSize } from "../../utils/screen-i
 import { diffClass, type BuildDiff, type DiffStatus } from "../../utils/build-diff";
 import { focusStatusOf, isCapturedChange } from "../../utils/changed-screens";
 import { displayPathForScreen, screenLabel } from "../../utils/screen-path";
-import { screenTree, treeIndex, treeNodeKey, type ScreenTree, type ScreenTreeNode } from "../../utils/screen-tree";
+import { screenTree, treeIndex, treeNodeKey, treeScreenOrder, type ScreenTree, type ScreenTreeNode } from "../../utils/screen-tree";
 import type { Appearance } from "../../utils/appearance";
 import type { FocusRequest, FocusStatus } from "../../utils/navigation";
 import { shortcutsLive } from "../../utils/shortcuts";
@@ -224,6 +224,9 @@ export function ScreensView(props: ScreensViewProps) {
   const sections = tree.sections
     .map(section => ({ ...section, screenIds: section.screenIds.filter(id => shown.has(id)) }))
     .filter(section => section.screenIds.length > 0);
+  // The desktop grid reads in the tree's order, not the sections' (screen-tree.ts).
+  const treeOrder = useMemo(() => treeScreenOrder(tree), [tree]);
+  const order = props.phone ? sections.flatMap(section => section.screenIds) : treeOrder.filter(id => shown.has(id));
   const others = [...new Set([...(props.changedElsewhere?.values() ?? [])].flat())];
 
   // Folding. All keeps the reader's folds and remembers them per report. Changed folds separately, starting
@@ -323,29 +326,43 @@ export function ScreensView(props: ScreensViewProps) {
     requestAnimationFrame(() => document.getElementById(cardId(id))?.scrollIntoView({ block: "center", behavior: "smooth" }));
   };
 
-  // ← and → step through the cards in their order on the page, as the arrows step through screens in Compare. A step
-  // picks the screen as the tree does, leaving the Inspector as it is, and focus follows it; with nothing picked, → starts
-  // at the first card. The tree's rows fold with ← and →, and controls outside the page (the Inspector, the toolbar)
-  // keep their keys.
-  const order = sections.flatMap(section => section.screenIds);
+  // On desktop, ← and → step through the cards in their order on the page (`order`), as the arrows step through screens
+  // in Compare. A step picks the screen as the tree does, leaving the Inspector as it is, and focus follows it; with
+  // nothing picked, → starts at the first card, and a pick that Changed hides steps from where it sits in the tree. The
+  // tree's rows fold with ← and →; the Inspector's controls keep their keys. Phones are left as they were.
   const orderRef = useRef(order);
   orderRef.current = order;
+  const treeOrderRef = useRef(treeOrder);
+  treeOrderRef.current = treeOrder;
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const pickRef = useRef(props.onPickScreen ?? props.onSelectScreen);
   pickRef.current = props.onPickScreen ?? props.onSelectScreen;
   useEffect(() => {
+    if (props.phone) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.code !== "ArrowLeft" && event.code !== "ArrowRight") return;
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.defaultPrevented || !shortcutsLive(event)) return;
       const target = event.target instanceof Element ? event.target : null;
-      const onPage = !target || target === document.body || target.closest(".screens-page") !== null;
+      // The page, or the bottom toolbar that Screens was just opened from; its buttons have no arrow keys of their own.
+      const onPage = !target || target === document.body || target.closest(".screens-page, .canvas-toolbar") !== null;
       if (!onPage || target?.closest(".screens-tree-list")) return;
       const ids = orderRef.current;
-      const at = selectedRef.current ? ids.indexOf(selectedRef.current) : -1;
       const forward = event.code === "ArrowRight";
-      const next = at === -1 ? (forward ? 0 : ids.length - 1) : at + (forward ? 1 : -1);
-      const id = ids[next];
+      const selected = selectedRef.current;
+      let id: string | undefined;
+      if (selected && ids.includes(selected)) {
+        id = ids[ids.indexOf(selected) + (forward ? 1 : -1)];
+      } else if (selected && treeOrderRef.current.includes(selected)) {
+        // Picked, but hidden by Changed: the nearest shown card past it in the tree's order.
+        const shownIds = new Set(ids);
+        const all = treeOrderRef.current;
+        const from = all.indexOf(selected);
+        const rest = forward ? all.slice(from + 1) : all.slice(0, from).reverse();
+        id = rest.find(candidate => shownIds.has(candidate));
+      } else {
+        id = forward ? ids[0] : ids[ids.length - 1];
+      }
       if (!id) return;
       event.preventDefault();
       pickRef.current(id);
@@ -353,7 +370,7 @@ export function ScreensView(props: ScreensViewProps) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [props.phone]);
 
   // The Inspector floats over the right edge; the page keeps its content clear of it.
   const { visibleFrame } = useCanvasVisibleFrame();
@@ -436,7 +453,7 @@ export function ScreensView(props: ScreensViewProps) {
           )) : (
             // On desktop the tree beside the page already shows the folders, so every screen sits in one evenly
             // spaced grid in the tree's order, without headings between them.
-            <div className="screens-grid">{sections.flatMap(section => section.screenIds).map(cell)}</div>
+            <div className="screens-grid">{order.map(cell)}</div>
           )}
         </div>
       </div>

@@ -215,9 +215,25 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.14);
 }
 /* The image box hugs the screenshot, so its corners and shadow are the screenshot's and no box shows around it. */
-.screens-page:not(.phone) .screens-cell .screen-node-image img { width: auto; height: 100%; background: transparent; }
-/* No screenshot: the placeholder takes the well's height and a screenshot's proportions, like the image beside it. */
-.screens-page:not(.phone) .screens-cell .screen-node-image > .image-placeholder { width: auto; height: calc(100% - 2 * var(--frame-border)); }
+/* The screenshot fits the well both ways at its own proportions (styles.css's max-width and max-height), so a
+   landscape capture is framed as itself, not letterboxed inside a portrait-sized box. */
+.screens-page:not(.phone) .screens-cell .screen-node-image img { width: auto; height: auto; background: transparent; }
+/* No screenshot: the well has a size here, so the placeholder fits it the way styles.css fits it to a Map slot,
+   at the screenshot's proportions, rather than by the cell's width as a phone's cell does (phone.css). */
+.screens-page:not(.phone) .screens-cell .screen-node-image:has(> .image-placeholder) { container-type: size; }
+.screens-page:not(.phone) .screens-cell .screen-node-image > .image-placeholder {
+  width: min(
+    100cqw - 2 * var(--frame-border),
+    (100cqh - 2 * var(--frame-border)) * var(--screenshot-width) / var(--screenshot-height),
+    var(--screenshot-width) * 1px
+  );
+  height: min(
+    100cqh - 2 * var(--frame-border),
+    (100cqw - 2 * var(--frame-border)) * var(--screenshot-height) / var(--screenshot-width),
+    var(--screenshot-height) * 1px
+  );
+  aspect-ratio: auto;
+}
 /* A selected card's button is pressed, and a focused pressed button brightens (styles.css). Here that would wash out
    the screenshot and, as a filter, become the box the status is placed in, lifting it into the well. Keyboard focus
    rings the card instead. */

@@ -3,7 +3,7 @@ import test from "node:test";
 
 const { tsImport } = await import("tsx/esm/api");
 const { indexMap } = await tsImport("../../viewer/src/utils/model.ts", import.meta.url);
-const { screenTree } = await tsImport("../../viewer/src/utils/screen-tree.ts", import.meta.url);
+const { screenTree, treeScreenOrder } = await tsImport("../../viewer/src/utils/screen-tree.ts", import.meta.url);
 
 const at = (second) => `2026-10-13T00:00:${String(second).padStart(2, "0")}.000Z`;
 function screen(id, title, depth, extra = {}) {
@@ -47,6 +47,20 @@ test("with route files, sections follow the app directory and the tabs lead", ()
   ]);
   const folders = tree.tree.filter((node) => node.kind === "folder").map((node) => node.label);
   assert.deepEqual(folders, ["(tabs)/"]);
+});
+
+test("the screens' order is the tree's, depth first: a nested folder's screens come right after their parent's", () => {
+  // The folders are found as settings, feed, settings/security: sections keep that order, while the tree nests
+  // security under settings. The Screens grid and its arrow keys follow the tree, as the sidebar reads.
+  const screens = [screen("profile", "A profile", 1), screen("feed", "B feed", 1), screen("security", "C security", 1), screen("loose", "D loose", 1)];
+  const routeFiles = new Map([
+    ["profile", "app/settings/profile.tsx"],
+    ["feed", "app/feed/index.tsx"],
+    ["security", "app/settings/security/index.tsx"],
+  ]);
+  const tree = screenTree(screens, indexMap(map({ screens })), routeFiles);
+  assert.deepEqual(tree.sections.flatMap(section => section.screenIds), ["profile", "feed", "security", "loose"]);
+  assert.deepEqual(treeScreenOrder(tree), ["profile", "security", "feed", "loose"]);
 });
 
 test("a black-box exploration groups by the tab each screen was opened from", () => {

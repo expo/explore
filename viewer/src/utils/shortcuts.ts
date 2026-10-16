@@ -19,6 +19,12 @@ export type Shortcut = {
 const APPLE = typeof navigator !== "undefined"
   && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 
+/**
+ * Whether Ctrl+1–3 reach the page. On Apple keyboards ⌃ is free (the browser's tab keys are ⌘1–9); elsewhere the
+ * browser keeps Ctrl+1–8 for its tabs, so those keys are neither handled nor printed there.
+ */
+export const CANVAS_NUMBER_KEYS = APPLE;
+
 function mod(code: string, key: string): Shortcut {
   return { code, key, mod: true };
 }
@@ -74,7 +80,7 @@ export const SHORTCUTS = {
     screens: plain("KeyS", "S"),
     compare: plain("KeyC", "C"),
   },
-  /** The canvases by their place in the toolbar, as tabs are numbered elsewhere. */
+  /** The canvases by their place in the toolbar, as tabs are numbered elsewhere. Apple keyboards only (CANVAS_NUMBER_KEYS). */
   canvasByNumber: {
     map: ctrl("Digit1", "1"),
     screens: ctrl("Digit2", "2"),
