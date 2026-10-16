@@ -62,6 +62,42 @@ test("a best fit at the edge of the search is not a move: repeating content line
     for (let i = 3; i < data.length; i += 4) data[i] = 255;
     return { width, height, data };
   };
-  const [shift] = regionShifts(stripes(0), stripes(5), [{ x: 0, y: 20, width: 60, height: 60 }]);
-  assert.ok(!shift || Math.abs(shift.y) <= 10.5, JSON.stringify(shift));
+  // Moved down 5 also fits as up 7: two fits that good are ambiguous, so the region is not a move rather than a wrong one.
+  assert.deepEqual(regionShifts(stripes(0), stripes(5), [{ x: 0, y: 20, width: 60, height: 60 }]), [undefined]);
+});
+
+/** A frame painted by `paint(x, y)` (dark where true) on a light background, optionally in colour. */
+function painted(width, height, paint, colour = [30, 30, 30]) {
+  const data = Buffer.alloc(width * height * 4, 240);
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const offset = (y * width + x) * 4;
+    if (paint(x, y)) { data[offset] = colour[0]; data[offset + 1] = colour[1]; data[offset + 2] = colour[2]; }
+    data[offset + 3] = 255;
+  }
+  return { width, height, data };
+}
+
+test("content that is the same all along one axis is measured along the other: full-width bars and hairlines", () => {
+  const bar = offset => painted(80, 100, (x, y) => y >= 40 + offset && y < 46 + offset);
+  assert.deepEqual(regionShifts(bar(0), bar(2), [{ x: 0, y: 30, width: 80, height: 30 }]), [{ x: 0, y: 2 }]);
+  const hairline = offset => painted(80, 100, (x, y) => y === 50 + offset);
+  assert.deepEqual(regionShifts(hairline(0), hairline(1), [{ x: 0, y: 44, width: 80, height: 12 }]), [{ x: 0, y: 1 }]);
+  assert.deepEqual(regionShifts(hairline(0), hairline(-3), [{ x: 0, y: 40, width: 80, height: 16 }]), [{ x: 0, y: -3 }]);
+});
+
+test("a region that moved and also changed is not a move: the leftover after aligning it gives the change away", () => {
+  // Three bars moved down 2px, plus a new short bar inside the region, as a digit that changed in a row that moved.
+  const bars = (offset, extra) => painted(120, 160, (x, y) => (x >= 10 && x < 90 && ((y >= 20 + offset && y < 26 + offset)
+    || (y >= 34 + offset && y < 38 + offset) || (y >= 60 + offset && y < 68 + offset))) || (extra && x >= 95 && x < 105 && y >= 45 && y < 48));
+  assert.deepEqual(regionShifts(bars(0, false), bars(2, false), [region]), [{ x: 0, y: 2 }]);
+  assert.deepEqual(regionShifts(bars(0, false), bars(2, true), [region]), [undefined]);
+  // Another colour of the same brightness, moved: luminance alone would call it moved.
+  const red = painted(120, 160, (x, y) => x >= 10 && x < 90 && y >= 20 && y < 40, [200, 40, 40]);
+  const green = painted(120, 160, (x, y) => x >= 10 && x < 90 && y >= 22 && y < 42, [40, 112, 40]);
+  assert.deepEqual(regionShifts(red, green, [region]), [undefined]);
+});
+
+test("a half-pixel move up and down is judged alike", () => {
+  const up = regionShifts(frame(0), frame(-0.5), [region])[0], down = regionShifts(frame(0), frame(0.5), [region])[0];
+  assert.deepEqual([up?.y, down?.y], [-0.5, 0.5]);
 });

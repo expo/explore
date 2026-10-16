@@ -159,15 +159,22 @@ invisible on a device.
 
 A pixel mismatch that rounds to 0.00% is noise and counts as "same". Diff regions inside the status-bar band are excluded from the verdict and reported as `ignoredStatusBarRegions`; the Viewer marks that band in Compare.
 
-Each changed region also records whether its content only moved. CI searches for the shift (up to 12 screenshot
-pixels vertically and 4 horizontally, to a sixth of a pixel) that best lines Before up with After inside the region;
-when that shift explains most of the region's difference, the region gets `shift: { x, y }` in screenshot pixels
-(right and down positive). A move of half a pixel or less needs a quarter of the difference explained, since text is
-re-rasterized rather than moved at that size; a larger move needs 60%. New text, another colour or a caret is not a
-move. The Viewer draws moved areas dashed, at each side's own position, labelled with how far they moved ("↑4pt"),
-and says "Layout shifted" in What changed when every area moved; the labels can be turned off there. iOS screenshots
-are one pixel per point, so labels read in points; Android's are labelled in screenshot pixels, since the report
-does not know the screen's density.
+Each changed region also records whether its content only moved. CI searches for the shift (up to 20 screenshot
+pixels vertically and 4 horizontally, whole pixels and then sixths of one) that best lines Before up with After inside
+the region; near-ties go to the smallest move, and a second fit nearly as good two or more pixels away (repeating
+content) or a best fit at the edge of the search leaves the region unmeasured. When the shift explains most of the
+region's difference (a quarter for a move of half a pixel or less, where text re-rasterizes rather than moves; 60%
+above that) and, aligned by it, no more than two pixels still differ by over 140 in any channel, the region gets
+`shift: { x, y }` in screenshot pixels (right and down positive). New text, another colour or a caret is not a move.
+Every region the comparison found is measured, not only the eight it publishes, and `allRegionsMoved: true` says all
+of them moved. Moves are measured while the comparison's time budget lasts.
+
+The Viewer draws moved areas dashed, at each side's own position, labelled with how far they moved to a tenth
+("↑4.1pt"); areas whose moves are within a third of each other merge into one outline, never around a changed area.
+When every region moved, What changed says how far per direction in place of the generic visual finding, and adds
+"Nothing on this screen changed content" when no other finding remains. A switch there turns the labels off. iOS
+screenshots are one pixel per point, so labels read in points; Android's are labelled in screenshot pixels, since the
+report does not know the screen's density.
 
 ## 7. Local CI test
 

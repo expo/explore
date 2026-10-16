@@ -143,15 +143,25 @@ function visualVerdict(assessment: VisualEvidenceAssessment, threshold: number):
 }
 
 /**
- * Each region with how far its content moved, where a move explains it: a layout that shifted by a device pixel
- * reads as moved, not as changed. A measurement that fails leaves the regions as they were.
+ * The published regions with how far their content moved, where a move explains it: a layout that shifted by a
+ * device pixel reads as moved, not as changed. Every region the comparison found is measured, not only the ones
+ * published, so `allRegionsMoved` can say nothing else on the screen changed. A measurement that fails leaves the
+ * regions as they were.
  */
-async function withRegionShifts(basePath: string, headPath: string, regions: NonNullable<PublicVisualVerdict["regions"]>): Promise<NonNullable<PublicVisualVerdict["regions"]>> {
+async function withRegionShifts(basePath: string, headPath: string, all: readonly VisualDiffRegion[], published: NonNullable<PublicVisualVerdict["regions"]>):
+  Promise<Pick<PublicVisualVerdict, "regions" | "allRegionsMoved">> {
   try {
-    const shifts = await measureRegionShifts(basePath, headPath, regions.map(region => region.rect));
-    return regions.map((region, index) => (shifts[index] ? { ...region, shift: shifts[index] } : region));
+    const shifts = await measureRegionShifts(basePath, headPath, all.map(region => region.rect));
+    const shiftOf = new Map(all.map((region, index) => [region.rect, shifts[index]] as const));
+    return {
+      regions: published.map(region => {
+        const shift = shiftOf.get(region.rect);
+        return shift ? { ...region, shift } : region;
+      }),
+      ...(all.length > 0 && shifts.every(Boolean) ? { allRegionsMoved: true as const } : {}),
+    };
   } catch {
-    return regions;
+    return { regions: published };
   }
 }
 
@@ -477,7 +487,10 @@ export async function assessPublicEvidence(options: {
             representative: measurement,
           });
           visual = visualVerdict(assessment, threshold);
-          if (visual.verdict === "modified" && visual.regions?.length) visual.regions = await withRegionShifts(basePath, headPath, visual.regions);
+          // Measuring moves is extra: once the comparison budget is spent, regions go out unmeasured.
+          if (visual.verdict === "modified" && visual.regions?.length && now() <= deadline) {
+            Object.assign(visual, await withRegionShifts(basePath, headPath, measurement.regions, visual.regions));
+          }
           if (ignoredTop > 0) visual.ignoredStatusBarRegions = ignoredTop;
           if (ignoredBottom > 0) visual.ignoredHomeIndicatorRegions = ignoredBottom;
           visualCounts.compared += 1;

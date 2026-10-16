@@ -271,3 +271,18 @@ function reviewWithRegion(shift) {
       differentPixels: 1, shareOfDiffPercentage: 100, dominantChange: "mixed", location: "center", shift }] };
   return input;
 }
+
+test('allRegionsMoved is only true, and only where every published region carries its shift', async () => {
+  const { assertPublicReview } = await import('../../dist/contracts/review-validation.js');
+  const moved = reviewWithRegion({ x: 0, y: 1 });
+  moved.surfaces[0].visual.allRegionsMoved = true;
+  assert.doesNotThrow(() => assertPublicReview(moved));
+  for (const [label, mutate] of [['false', visual => { visual.allRegionsMoved = false; }],
+    ['a region without a shift', visual => { delete visual.regions[0].shift; }],
+    ['no regions', visual => { delete visual.regions; }]]) {
+    const input = reviewWithRegion({ x: 0, y: 1 });
+    input.surfaces[0].visual.allRegionsMoved = true;
+    mutate(input.surfaces[0].visual);
+    assert.throws(() => assertPublicReview(input), /visual verdict is inconsistent/, label);
+  }
+});

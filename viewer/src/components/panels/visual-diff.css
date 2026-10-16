@@ -45,8 +45,9 @@
   transform: translate(4px, -60%);
 }
 :root[data-theme="dark"] .visual-change-measure { color: #0b0c0e; }
-/* The Before side draws moved areas where their content was (see ChangeOutlines). */
-[data-side="before"] { --outline-before: 1; }
+/* The Before side draws moved areas where their content was (see ChangeOutlines): Compare's sides and the
+   Inspector's side-by-side pair. */
+.compare-side[data-side="before"], .compare-flip-frame[data-side="before"], [data-diff-side="before"] { --outline-before: 1; }
 
 /* The status-bar band CI does not compare: blurred out, explained by its tooltip on hover. */
 .visual-status-bar-band {

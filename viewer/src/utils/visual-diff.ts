@@ -8,26 +8,38 @@ export type VisualChange = PercentRect & {
   /** This change's share of all differing pixels, in percent. */
   share: number;
   regionCount: number;
-  /** Set when every region in it only moved, and by about the same amount: their average, placing the outline. */
+  /** Set when every region in it only moved, by the same amount: their average, which places and labels the outline. */
   move?: RegionMove;
-  /** The least and most its regions moved, in the screenshot's units, so a label can say "↓1.5–2pt". */
+  /** The least and most its regions moved, in the screenshot's units, which keeps a merged outline to one amount. */
   moveRange?: { x: [number, number]; y: [number, number] };
 };
 
-/** Moves this close, in the screenshot's units, are one amount: measuring a move from pixels is good to about this. */
-const SAME_MOVE = 0.5;
-/** Areas whose moves together span at most this, the same way, moved together (rows that drift 1–2pt as a list). */
-const MAX_MOVE_SPREAD = 1;
+/**
+ * Areas moved by the same amount when their moves are within this of each other, in the screenshot's units. Parts of
+ * one rigid sheet measure up to a third apart (re-rasterized text), so a third is the same move; rows that drifted by
+ * half a point or more (1, 1.5, 2pt down a list) keep their own outlines.
+ */
+const SAME_MOVE = 0.34;
+/**
+ * The most the regions in one outline may differ, together. Measuring a move from re-rasterized text is good to
+ * about this: a sheet that moved 4.17pt as a whole measures 3.8–4.3pt across its parts (euxy PR #161).
+ */
+const MAX_MOVE_SPREAD = 0.5;
 
 function sameMove(a: VisualChange, b: VisualChange): boolean {
   if (!a.move || !b.move) return !a.move && !b.move;
   const first = rangeOf(a), second = rangeOf(b);
-  const together = (axis: "x" | "y") => {
+  const same = (axis: "x" | "y") => {
     const low = Math.min(first[axis][0], second[axis][0]), high = Math.max(first[axis][1], second[axis][1]);
     // One direction only: content that moved up and content that moved down did not move together.
-    return high - low <= MAX_MOVE_SPREAD && (low >= -0.25 || high <= 0.25);
+    return Math.abs(a.move!.amount[axis] - b.move!.amount[axis]) <= SAME_MOVE + 1e-6
+      && high - low <= MAX_MOVE_SPREAD + 1e-6 && (low >= -0.25 || high <= 0.25);
   };
-  return together("x") && together("y");
+  return same("x") && same("y");
+}
+
+function overlaps(a: PercentRect, b: PercentRect): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
 /** Two moves as one, weighted by each change's share of the difference. */
@@ -101,8 +113,11 @@ export function groupVisualRegions(regions: readonly VisualDiffRegion[]): Visual
       for (let j = i + 1; j < changes.length; j += 1) {
         // A moved area and a changed one stay apart, as do areas that moved by different amounts.
         if (!near(changes[i]!, changes[j]!) || !sameMove(changes[i]!, changes[j]!)) continue;
+        const combined = union(changes[i]!, changes[j]!);
+        // Nor does one moved outline grow around a changed area: that content did not move, it changed.
+        if (combined.move && changes.some((change, index) => index !== i && index !== j && !change.move && overlaps(combined, change))) continue;
         const next = changes.filter((_, index) => index !== i && index !== j);
-        next.push(union(changes[i]!, changes[j]!));
+        next.push(combined);
         changes = next;
         merged = true;
         break outer;
@@ -114,40 +129,25 @@ export function groupVisualRegions(regions: readonly VisualDiffRegion[]): Visual
   return changes.sort((a, b) => a.y - b.y || a.x - b.x);
 }
 
-/**
- * "1.5" for 1.6, "4" for 4.17: a move to the nearest half. Measuring a move from pixels is good to about half a
- * point, and half a point is all a reviewer needs to tell a nudge from a jump.
- */
+/** "1.3" for 1.33, "4" for 4.04: a move to a tenth, about as fine as measuring it from pixels gets. */
 function amount(value: number): string {
-  return (Math.round(Math.abs(value) * 2) / 2).toString();
+  return (Math.round(Math.abs(value) * 10) / 10).toString();
 }
 
-/**
- * "4" when a merged area's regions moved within half a point of each other (that much is measurement noise), the
- * range "1–2" when they moved by more.
- */
-function span(low: number, high: number): string {
-  const [least, most] = [Math.min(Math.abs(low), Math.abs(high)), Math.max(Math.abs(low), Math.abs(high))];
-  if (most - least <= SAME_MOVE) return amount((least + most) / 2);
-  const [a, b] = [amount(least), amount(most)];
-  return a === b ? a : `${a}–${b}`;
-}
-
-/** A change's move as its outline labels it: "↑4pt", "↓1.5–2pt", "→2 ↓1pt". Under a quarter in either direction is left out. */
-export function formatMove(change: Pick<VisualChange, "move" | "moveRange">): string {
+/** A change's move as its outline labels it: "↑4.1pt", "↓1.3pt", "→2 ↓1pt". A part under a quarter is left out. */
+export function formatMove(change: Pick<VisualChange, "move">): string {
   const move = change.move;
   if (!move) return "";
-  const range = rangeOf(change as VisualChange);
-  const parts = [
-    ...(Math.abs(move.amount.x) >= 0.25 ? [`${move.amount.x < 0 ? "←" : "→"}${span(range.x[0], range.x[1])}`] : []),
-    ...(Math.abs(move.amount.y) >= 0.25 ? [`${move.amount.y < 0 ? "↑" : "↓"}${span(range.y[0], range.y[1])}`] : []),
-  ];
-  return `${parts.join(" ")}${move.unit}`;
+  const { x, y } = move.amount;
+  const horizontal = `${x < 0 ? "←" : "→"}${amount(x)}`, vertical = `${y < 0 ? "↑" : "↓"}${amount(y)}`;
+  const parts = [...(Math.abs(x) >= 0.25 ? [horizontal] : []), ...(Math.abs(y) >= 0.25 ? [vertical] : [])];
+  // Merged diagonal nudges can average under a quarter on both axes; the larger still says which way.
+  return `${parts.length ? parts.join(" ") : Math.abs(y) >= Math.abs(x) ? vertical : horizontal}${move.unit}`;
 }
 
 /**
- * What changed on a screen whose every changed area only moved: a line per direction, "2 areas moved up 4pt",
- * "3 areas moved down 1–2pt". Undefined when any area's content changed.
+ * How far the areas of a screen whose every changed area only moved went, a line per direction: "2 areas moved up
+ * 4pt", "3 areas moved down 1–2pt". Undefined when any area's content changed.
  */
 export function layoutShiftSummary(changes: readonly VisualChange[]): string[] | undefined {
   if (changes.length === 0 || changes.some((change) => !change.move)) return undefined;
@@ -156,19 +156,12 @@ export function layoutShiftSummary(changes: readonly VisualChange[]): string[] |
     const { x, y } = change.move!.amount;
     const vertical = Math.abs(y) >= Math.abs(x);
     const direction = vertical ? (y < 0 ? "up" : "down") : (x < 0 ? "left" : "right");
-    const range = rangeOf(change);
-    groups.set(direction, [...(groups.get(direction) ?? []), ...(vertical ? range.y : range.x).map(Math.abs)]);
+    groups.set(direction, [...(groups.get(direction) ?? []), Math.abs(vertical ? y : x)]);
   }
   const unit = changes[0]!.move!.unit;
-  const counts = new Map<string, number>();
-  for (const change of changes) {
-    const { x, y } = change.move!.amount;
-    const direction = Math.abs(y) >= Math.abs(x) ? (y < 0 ? "up" : "down") : (x < 0 ? "left" : "right");
-    counts.set(direction, (counts.get(direction) ?? 0) + 1);
-  }
   return [...groups].map(([direction, amounts]) => {
-    const count = counts.get(direction) ?? 0;
-    return `${count === 1 ? "1 area" : `${count} areas`} moved ${direction} ${span(Math.min(...amounts), Math.max(...amounts))}${unit}.`;
+    const low = amount(Math.min(...amounts)), high = amount(Math.max(...amounts));
+    return `${amounts.length === 1 ? "1 area" : `${amounts.length} areas`} moved ${direction} ${low === high ? low : `${low}–${high}`}${unit}.`;
   });
 }
 

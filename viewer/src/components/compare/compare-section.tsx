@@ -51,11 +51,14 @@ export function compareModeOptions() {
 // Highlight changes (the outlines) is one remembered choice, on unless turned off, shared by
 // every view that draws them: Compare, the Inspector's review and its header button, and the O key.
 const outlinesListeners = new Set<() => void>();
+/** The choice made this visit, so the button works where storage is denied (a private window). */
+let outlinesChosen: boolean | undefined;
 function storedOutlines(): boolean {
-  return optionalStorage.getItem(OUTLINES_STORAGE_KEY) !== "false";
+  return outlinesChosen ?? optionalStorage.getItem(OUTLINES_STORAGE_KEY) !== "false";
 }
-/** Sets the outlines choice everywhere at once and remembers it. */
+/** Sets the outlines choice everywhere at once and remembers it where it can. */
 export function setOutlinesShown(shown: boolean) {
+  outlinesChosen = shown;
   optionalStorage.setItem(OUTLINES_STORAGE_KEY, String(shown));
   for (const listener of outlinesListeners) listener();
 }
@@ -101,13 +104,22 @@ export function useCompareController(options: CompareControllerOptions) {
   );
   // Only what CI found on this screen. The generic summary ("Shared app source changed.") is
   // not a finding about this screen, so it leaves the list empty and the button disabled.
-  // Every changed area only moved: say how far, in place of CI's generic pixel finding ("Updated visual styling…").
-  const layoutShift = useMemo(() => layoutShiftSummary(areas), [areas]);
+  // Every changed area only moved, CI's own count included (it publishes the largest regions only): say how far,
+  // in place of its generic pixel finding ("Updated visual styling in the main content area").
+  const shiftLines = useMemo(
+    () => (screenDiff?.visual?.allRegionsMoved ? layoutShiftSummary(areas) : undefined),
+    [areas, screenDiff?.visual?.allRegionsMoved],
+  );
   const measurable = areas.some((area) => area.move);
   const facts = useMemo(
     () => presentedChanges(screenDiff).filter((change) => change.id !== "legacy-summary"
-      && !(layoutShift && change.fact?.category === "visual")),
-    [screenDiff, layoutShift],
+      && !(shiftLines && change.fact?.templateId === "visual.main-content-changed")),
+    [screenDiff, shiftLines],
+  );
+  // "Nothing on this screen changed content" only when no other finding says otherwise.
+  const layoutShift = useMemo(
+    () => (shiftLines ? { lines: shiftLines, nothingElse: facts.length === 0 } : undefined),
+    [shiftLines, facts.length],
   );
   // What changed for assistive technology is listed under its own heading.
   const split = useMemo(() => splitForAssistiveTechnology(facts, screenDiff), [facts, screenDiff]);

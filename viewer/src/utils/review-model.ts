@@ -89,6 +89,8 @@ export type VisualDiffRegion = {
 export type ReviewVisualDiff = {
   mismatchPercentage?: number;
   regions: VisualDiffRegion[];
+  /** Every region CI found only moved, including ones the report leaves out: nothing on the screen changed content. */
+  allRegionsMoved?: true;
   /** Diff regions inside the status-bar band that CI left out of the verdict. */
   ignoredStatusBarRegions?: number;
   /** Diff regions inside the home-indicator band (iOS, bottom) that CI left out of the verdict. */
@@ -294,6 +296,7 @@ export function visualDiff(value: unknown): ReviewVisualDiff | undefined {
   const ignoredHomeIndicatorRegions = count(candidate.ignoredHomeIndicatorRegions);
   return {
     regions,
+    ...(candidate.allRegionsMoved === true && regions.length > 0 && regions.every((region) => region.move) ? { allRegionsMoved: true as const } : {}),
     ...(mismatchPercentage !== undefined ? { mismatchPercentage } : {}),
     ...(ignoredStatusBarRegions !== undefined ? { ignoredStatusBarRegions } : {}),
     ...(ignoredHomeIndicatorRegions !== undefined ? { ignoredHomeIndicatorRegions } : {}),

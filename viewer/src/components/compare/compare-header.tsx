@@ -6,6 +6,9 @@ import { Tooltip } from "../shared/tooltip";
 import { DIFF_LABELS, type DiffStatus } from "../../utils/build-diff";
 import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
 import { setMeasurementsShown, useMeasurementsShown } from "../../utils/measurements-setting";
+
+/** A screen whose every changed area only moved: how far, per direction, and whether no other finding remains. */
+export type LayoutShift = { lines: string[]; nothingElse: boolean };
 import type { ComparePicker } from "./compare-section";
 
 /**
@@ -97,8 +100,8 @@ export function WhatChangedContent(props: {
   facts: string[];
   assistive?: string[];
   accessibilityOnly?: boolean | undefined;
-  /** Set when every changed area only moved: a line per direction (layoutShiftSummary). */
-  layoutShift?: string[] | undefined;
+  /** Set when every changed area only moved: a line per direction (layoutShiftSummary), and whether nothing else changed. */
+  layoutShift?: LayoutShift | undefined;
   /** Some outlined area moved, so its outline can be labelled with how far. */
   measurable?: boolean | undefined;
   notes: string[];
@@ -110,9 +113,9 @@ export function WhatChangedContent(props: {
     <div className="what-changed-content" role="region" aria-label="What changed on this screen">
       {props.layoutShift ? (
         <div className="what-changed-shift">
-          <p>Layout shifted. Nothing on this screen changed content.</p>
+          <p>{props.layoutShift.nothingElse ? "Layout shifted. Nothing on this screen changed content." : "Layout shifted."}</p>
           <ul className="what-changed-content-list">
-            {props.layoutShift.map((line) => <li key={line}>{line}</li>)}
+            {props.layoutShift.lines.map((line) => <li key={line}>{line}</li>)}
           </ul>
         </div>
       ) : null}
@@ -165,7 +168,7 @@ export function WhatChangedPopover(props: {
   facts: string[];
   assistive?: string[];
   accessibilityOnly?: boolean | undefined;
-  layoutShift?: string[] | undefined;
+  layoutShift?: LayoutShift | undefined;
   measurable?: boolean | undefined;
   notes: string[];
   open: boolean;

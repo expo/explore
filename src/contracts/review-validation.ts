@@ -90,6 +90,8 @@ function assertVisualVerdict(visual: PublicVisualVerdict, enforceComparisonEvide
       && (typeof visual.mismatchPercentage !== "number" || !Number.isFinite(visual.mismatchPercentage) || visual.mismatchPercentage < 0))
     || (visual.regions !== undefined && (!Array.isArray(visual.regions) || visual.regions.length > 64
       || visual.regions.some(region => region?.shift !== undefined && !validShift(region.shift))))
+    || (visual.allRegionsMoved !== undefined && (visual.allRegionsMoved !== true || !visual.regions?.length
+      || visual.regions.some(region => region.shift === undefined)))
     || !paired) {
     throw new Error("Public visual verdict is inconsistent");
   }

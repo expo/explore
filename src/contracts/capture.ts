@@ -179,6 +179,11 @@ export type PublicVisualVerdict = {
     shift?: { x: number; y: number };
   }>;
   tool: string;
+  /**
+   * Every region the comparison found (not only the published ones) only moved: nothing on the screen changed
+   * content. Absent when any region changed, or moves were not measured.
+   */
+  allRegionsMoved?: true;
   /** Diff regions inside the iOS status-bar band that were excluded from the verdict. */
   ignoredStatusBarRegions?: number;
   /** Diff regions that lay entirely inside the home-indicator band and were left out of the verdict. */
