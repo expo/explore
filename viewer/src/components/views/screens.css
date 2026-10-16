@@ -189,9 +189,9 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
    status as a dot and a word, the way file browsers show documents. Nothing is framed in the status colour,
    so the page reads as a list of screens rather than a canvas of them. */
 .screens-page:not(.phone) .screens-sections { display: block; padding-top: 0; }
-.screens-page:not(.phone) .screens-grid { gap: 14px; }
-/* Wide enough for a 28-character route in the footer's 11px mono on every platform's fonts. */
-.screens-page:not(.phone) .screens-cell { width: 208px; }
+.screens-page:not(.phone) .screens-grid { gap: 12px; }
+/* Wide enough for a 28-character route in the footer's 11px mono with room to spare: Linux's fonts set it at 191px. */
+.screens-page:not(.phone) .screens-cell { width: 216px; }
 .screens-page:not(.phone) .screens-cell .screen-screenshot-card {
   overflow: hidden;
   gap: 0;
@@ -228,14 +228,14 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-page:not(.phone) .screens-cell .screen-screenshot-card.selected:has(.screen-screenshot-target:focus-visible) {
   box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px color-mix(in srgb, var(--accent) 32%, transparent);
 }
-.screens-page:not(.phone) .screens-cell .screen-node-heading { order: 2; min-height: 0; padding: 9px 11px 10px; }
+.screens-page:not(.phone) .screens-cell .screen-node-heading { order: 2; min-height: 0; padding: 9px 8px 10px; }
 .screens-page:not(.phone) .screens-cell .screen-screenshot-card:has(.diff-label) .screen-node-heading { padding-bottom: 30px; }
 .screens-page:not(.phone) .screens-cell .screen-node-title { font-size: 11px; }
 .screens-page:not(.phone) .screens-cell .screen-screenshot-card.selected .screen-node-title { color: var(--accent-strong); font-weight: 600; }
 .screens-page:not(.phone) .screens-cell .screen-screenshot-card .diff-label {
   top: auto;
   bottom: 10px;
-  left: 11px;
+  left: 8px;
   display: flex;
   align-items: center;
   gap: 6px;
