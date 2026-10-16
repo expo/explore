@@ -1,4 +1,4 @@
-import type { DiffStatus, ScreenDiff } from "./build-diff";
+import { isAccessibilityOnly, type DiffStatus, type ScreenDiff } from "./build-diff";
 import { formatReviewerChange, sortReviewerChanges, type CaptureNotes, type ReviewerChangeFact } from "./review-model";
 
 /** One line of "What changed": a reviewer note, a CI finding, or the legacy summary. */
@@ -23,6 +23,19 @@ export function presentedChanges(diff: ScreenDiff | undefined): PresentedChange[
   if (diff.noVisibleChange || diff.status === "unchanged" || diff.status === "not-compared" || diff.status === "unavailable") return [];
   const legacy = diff.changeSummary.trim();
   return legacy ? [{ id: "legacy-summary", copy: legacy }] : [];
+}
+
+/**
+ * What changed, split by who sees it. On a screen whose screenshots match, every finding is for assistive technology:
+ * nothing on it looks different. Elsewhere only the accessibility findings (labels, roles) are, since an added
+ * element or new text may well be visible.
+ */
+export function splitForAssistiveTechnology(changes: PresentedChange[], diff: Pick<ScreenDiff, "status" | "accessibilityOnly"> | undefined): {
+  visible: PresentedChange[];
+  assistive: PresentedChange[];
+} {
+  const assistive = (change: PresentedChange) => Boolean(change.fact) && (isAccessibilityOnly(diff) || change.fact?.category === "accessibility");
+  return { visible: changes.filter((change) => !assistive(change)), assistive: changes.filter(assistive) };
 }
 
 /** What a missing side of a comparison shows instead of a screenshot. */

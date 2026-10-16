@@ -44,11 +44,14 @@ function ReviewModes(props: {
  */
 function WhatChangedAccordion(props: {
   facts: string[];
+  assistive?: string[];
+  accessibilityOnly?: boolean | undefined;
   notes: string[];
   open: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
-  const empty = !props.onOpenChange || (props.facts.length === 0 && props.notes.length === 0);
+  const count = props.facts.length + (props.assistive?.length ?? 0);
+  const empty = !props.onOpenChange || (count === 0 && props.notes.length === 0);
   const open = props.open && !empty;
   return (
     <section className="what-changed-accordion">
@@ -60,7 +63,7 @@ function WhatChangedAccordion(props: {
             onClick={() => props.onOpenChange?.(!props.open)}>
             <span className="what-changed-toggle-title">
               What changed
-              {props.facts.length > 0 ? <span className="what-changed-toggle-count">{props.facts.length}</span> : null}
+              {count > 0 ? <span className="what-changed-toggle-count">{count}</span> : null}
             </span>
             <ChevronDown aria-hidden="true" />
           </button>
@@ -68,7 +71,8 @@ function WhatChangedAccordion(props: {
       </div>
       {open ? (
         <div className="what-changed-accordion-content" id="what-changed-accordion-content">
-          <WhatChangedContent facts={props.facts} notes={props.notes} />
+          <WhatChangedContent facts={props.facts} {...(props.assistive ? { assistive: props.assistive } : {})}
+            accessibilityOnly={props.accessibilityOnly} notes={props.notes} />
         </div>
       ) : null}
     </section>
@@ -109,7 +113,8 @@ export function SidebarReview(props: CompareControllerOptions) {
       </>
     )
     : null;
-  const facts = compare.facts.map((fact) => fact.copy);
+  const facts = compare.split.visible.map((fact) => fact.copy);
+  const assistive = compare.split.assistive.map((fact) => fact.copy);
   const notes = compareNotes(screenDiff, compare.facts.length, compare.statusBarIgnored, compare.homeIndicatorIgnored);
 
   return (
@@ -140,7 +145,8 @@ export function SidebarReview(props: CompareControllerOptions) {
         />
       </div>
 
-      <WhatChangedAccordion facts={facts} notes={notes} open={compare.factsOpen} onOpenChange={compare.setFactsOpen} />
+      <WhatChangedAccordion facts={facts} assistive={assistive} accessibilityOnly={screenDiff.accessibilityOnly} notes={notes}
+        open={compare.factsOpen} onOpenChange={compare.setFactsOpen} />
     </section>
   );
 }

@@ -143,6 +143,15 @@ A failure at any stage is recorded in `state.failure`, a partial report is writt
 | Only app-wide inputs changed (`app-wide`) | Modified | Unchanged (one line in the PR comment) | Needs review |
 | No source change (`none`) | Screen variant (listed apart from Changes) | Unchanged | Unchanged |
 
+"Differs" means the screenshots differ or the accessibility tree does. A Modified screen whose screenshots match is
+**Accessibility only**: what screen readers and voice control read changed (a label, a role, an element added to the tree)
+but nothing shows in the capture. It is still a change: the PR comment counts it apart ("3 visual changes · 12
+accessibility only") under 🟦 Accessibility only, the Viewer marks it blue and Compare steps through it, and the agent API
+reports `status: "accessibility-only"` with `sourceStatus: "modified"`. The report contract is unchanged (its review
+status stays `modified`), so earlier reports read the same way. The accessibility tree can include content outside the
+screenshot, such as rows scrolled below the fold or elements under a sheet, so an accessibility-only change is not always
+invisible on a device.
+
 A pixel mismatch that rounds to 0.00% is noise and counts as "same". Diff regions inside the status-bar band are excluded from the verdict and reported as `ignoredStatusBarRegions`; the Viewer marks that band in Compare.
 
 ## 7. Local CI test

@@ -105,7 +105,7 @@ test("the token page negotiates: browsers get the shell carrying the agent index
   const shell = await browser.text();
   assert.ok(shell.startsWith("<!doctype html>"));
   assert.match(shell, /<div id="root"><section data-explore-agent-index style="[^"]*clip:rect\(0 0 0 0\)[^"]*"><h1>Expo Explore report: .* PR #\d+/);
-  assert.match(shell, new RegExp(`href="${origin}/p/${token}/api/v1/screens\\?status=modified,added,removed"`));
+  assert.match(shell, new RegExp(`href="${origin}/p/${token}/api/v1/screens\\?status=modified,accessibility-only,added,removed"`));
   assert.match(shell, /<\/section><\/div><script type="module"/);
   assert.equal(browser.headers.get("vary"), "Accept");
   assert.equal(browser.headers.get("link"), `<${origin}/p/${token}/api/v1>; rel="alternate"; type="application/json", <${origin}/p/${token}/llms.txt>; rel="alternate"; type="text/markdown"`);
@@ -119,7 +119,7 @@ test("the token page negotiates: browsers get the shell carrying the agent index
     const body = await response.text();
     assert.match(body, /^# Expo Explore report: /, String(accept));
     assert.match(body, /This link stops serving the report after 2030-01-01T00:00:00.000Z/);
-    assert.ok(body.includes(`(${origin}/p/${token}/api/v1/screens?status=modified,added,removed)`), body);
+    assert.ok(body.includes(`(${origin}/p/${token}/api/v1/screens?status=modified,accessibility-only,added,removed)`), body);
     assert.equal(response.headers.get("content-security-policy"), browser.headers.get("content-security-policy"));
   }
   const llms = await site.get("/llms.txt", "text/html");
@@ -305,4 +305,21 @@ test("screens count and filter by what changed visibly: a source change with mat
   const all = JSON.parse((await agentApiReply(context, loaded, "/screens", new URLSearchParams(), "application/json")).body as string);
   const midi = all.items.find((item: { id: string }) => item.id === "enable-midi");
   assert.deepEqual([midi.status, midi.sourceStatus], ["unchanged", "modified"], "its source status is still there");
+});
+
+test("a modified screen whose verified screenshots match is accessibility-only, with its source status kept", async () => {
+  const side = (id: string) => ({ route: `/${id}`, kind: "screen" });
+  const verified = { status: "captured", landing: "verified", attempts: 1 };
+  const surface = (id: string, verdict: string) => ({ id, status: "modified", sourceScope: "screen", head: side(id), base: side(id),
+    headImage: { sha256: "c".repeat(64) }, baseImage: { sha256: "c".repeat(64) }, headOutcome: verified, baseOutcome: verified,
+    review: { status: "modified", description: "Added button “Edit tempo”." }, visual: { verdict, reason: "matched", threshold: 0.1, tool: "agent-device" } });
+  const report = { kind: "explore.report", review: { contract: "explore.review", pullRequest: { origin: "local", repository: "a/b", title: "HEAD vs main", base: { ref: "main", sha: "a".repeat(40) }, head: { ref: "HEAD", sha: "b".repeat(40) } },
+    runtime: { platform: "ios" }, surfaces: [surface("tempo", "modified"), surface("device-picker", "unchanged")] }, assets: [] };
+  const loaded = (await loadReport(zip({ "review.json": new TextEncoder().encode(JSON.stringify(report)) })))!;
+  const context = { pageUrl: "http://127.0.0.1:1/p/t", platforms: ["ios"], expiresAt: null };
+  const summary = JSON.parse((await agentApiReply(context, loaded, "", new URLSearchParams(), "application/json")).body as string);
+  assert.deepEqual(summary.screens, { total: 2, modified: 1, "accessibility-only": 1 });
+  assert.match(summary.links.changed, /status=modified,accessibility-only,added,removed/);
+  const only = JSON.parse((await agentApiReply(context, loaded, "/screens", new URLSearchParams("status=accessibility-only"), "application/json")).body as string);
+  assert.deepEqual(only.items.map((item: { id: string; status: string; sourceStatus: string }) => [item.id, item.status, item.sourceStatus]), [["device-picker", "accessibility-only", "modified"]]);
 });

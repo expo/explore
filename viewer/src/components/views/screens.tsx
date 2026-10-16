@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type Keyboard
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, ListTree } from "lucide-react";
 import { artifactUrl, isLaunchScreen, type ExploreMap, type MapIndex, type Screen } from "../../utils/model";
 import { primaryScreenshotForScreen, screenshotSize } from "../../utils/screen-images";
-import type { BuildDiff, DiffStatus } from "../../utils/build-diff";
-import { isVisibleChange } from "../../utils/changed-screens";
+import { diffClass, isAccessibilityOnly, type BuildDiff, type DiffStatus } from "../../utils/build-diff";
+import { isCapturedChange } from "../../utils/changed-screens";
 import { displayPathForScreen, screenLabel } from "../../utils/screen-path";
 import { screenTree, treeIndex, treeNodeKey, type ScreenTree, type ScreenTreeNode } from "../../utils/screen-tree";
 import type { Appearance } from "../../utils/appearance";
@@ -13,7 +13,7 @@ import { useCanvasVisibleFrame } from "../canvas/visible-frame-provider";
 import { PhoneSheet } from "../phone/phone-chrome";
 import "./screens.css";
 
-/** The statuses a tree dot marks. The Changed filter keeps only the screens that look different (isVisibleChange). */
+/** The statuses a tree dot marks. The Changed filter keeps only the screens whose captures differ (isCapturedChange). */
 const CHANGED_STATUSES = new Set<DiffStatus>(["modified", "added", "removed", "needs-review", "source-affected"]);
 
 type Filter = "changed" | "all";
@@ -45,13 +45,13 @@ function statusOf(diff: BuildDiff | undefined, id: string): DiffStatus | undefin
 }
 
 function isChanged(diff: BuildDiff | undefined, id: string): boolean {
-  return isVisibleChange(diff?.screens.get(id));
+  return isCapturedChange(diff?.screens.get(id));
 }
 
 /** The dot beside a tree row: changed here, changed only in another appearance, or nothing. */
 function dotClass(diff: BuildDiff | undefined, elsewhere: ReadonlyMap<string, Appearance[]> | undefined, id: string): string | undefined {
-  const status = statusOf(diff, id);
-  if (status && CHANGED_STATUSES.has(status)) return `diff-${status}`;
+  const screen = diff?.screens.get(id);
+  if (screen && CHANGED_STATUSES.has(screen.status)) return diffClass(screen);
   if (elsewhere?.get(id)?.length) return "elsewhere";
   return undefined;
 }
@@ -109,7 +109,7 @@ function ScreenCell(props: {
         {...(url ? { screenshot: url } : {})}
         {...(size ? size : {})}
         {...(status ? { diff: status } : {})}
-        {...(props.diff?.screens.get(props.screen.id)?.notVisible ? { notVisible: true } : {})}
+        {...(props.diff?.screens.get(props.screen.id)?.accessibilityOnly ? { accessibilityOnly: true } : {})}
         selected={props.selected}
         ariaPressed={props.selected}
         loading="lazy"
@@ -188,10 +188,13 @@ function TreeRows(props: {
   });
 }
 
-function Legend(props: { others: Appearance[] }) {
+function Legend(props: { others: Appearance[]; accessibilityOnly: boolean }) {
   return (
     <div className="screens-tree-legend">
       <span><span className="screens-tree-dot diff-modified" aria-hidden="true" />Changed</span>
+      {props.accessibilityOnly ? (
+        <span><span className="screens-tree-dot diff-modified diff-accessibility-only" aria-hidden="true" />Accessibility only</span>
+      ) : null}
       {props.others.length ? (
         <span><span className="screens-tree-dot elsewhere" aria-hidden="true" />Changed in {props.others.join(" and ")} only</span>
       ) : null}
@@ -372,7 +375,7 @@ export function ScreensView(props: ScreensViewProps) {
               {filterChips || foldAll ? <div className="screens-tree-head">{filterChips}{foldAll}</div> : null}
               <h2>{tree.mode === "source" ? "app/" : "Explored app"}</h2>
               {treeRows}
-              {props.diff ? <Legend others={others} /> : null}
+              {props.diff ? <Legend others={others} accessibilityOnly={[...props.diff.screens.values()].some(isAccessibilityOnly)} /> : null}
             </nav>
           </aside>
         )}

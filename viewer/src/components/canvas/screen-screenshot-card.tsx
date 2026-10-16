@@ -15,8 +15,8 @@ export type ScreenScreenshotCardProps = {
   /** Shown in place of the image when the run recorded why there is none. */
   missingReason?: string;
   diff?: DiffStatus;
-  /** A modified screen whose screenshots match: the label says the change is not visible. */
-  notVisible?: boolean;
+  /** A modified screen whose screenshots match: the label says only what assistive technology reads changed. */
+  accessibilityOnly?: boolean;
   className?: string;
   style?: CSSProperties;
   selected?: boolean;
@@ -92,7 +92,7 @@ export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
             aria-label={props.ariaLabel ?? `Open ${props.plainTitle ? props.title : props.path}`}
             {...(props.ariaPressed !== undefined ? { "aria-pressed": props.ariaPressed } : {})}
             onClick={props.onClick}>
-            <DiffFrame status={props.diff} notVisible={props.notVisible}>
+            <DiffFrame status={props.diff} accessibilityOnly={props.accessibilityOnly}>
               <span className={`screen-node-image${props.screenshot ? " has-screenshot" : " is-missing"}`}>
                 {props.screenshot ? (
                   <ScreenshotImage

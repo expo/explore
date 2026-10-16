@@ -12,7 +12,7 @@ import { AppLoading } from "./components/shared/app-loading";
 import { ReportLoadingShell } from "./components/shared/report-loading-shell";
 import { screenLabel } from "./utils/screen-path";
 import { AppPill, PLATFORM_NAMES } from "./components/panels/app-pill";
-import { changedScreens, isVisibleChange, type ChangedScreen } from "./utils/changed-screens";
+import { changedScreens, isCapturedChange, type ChangedScreen } from "./utils/changed-screens";
 import { MapView } from "./components/views/semantic-map";
 import { RightPanel } from "./components/panels/right";
 import { SearchCommand } from "./components/search-command";
@@ -1190,7 +1190,7 @@ function ViewerApp() {
   };
   const index = diff?.index ?? screenPresentation?.index;
   const compareOrder = useMemo(
-    () => (diff && index ? changedScreens(diff, index).filter(entry => isVisibleChange(diff.screens.get(entry.id))) : []),
+    () => (diff && index ? changedScreens(diff, index).filter(entry => isCapturedChange(diff.screens.get(entry.id))) : []),
     [diff, index],
   );
   compareOrderRef.current = compareOrder;

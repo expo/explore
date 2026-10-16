@@ -13,8 +13,20 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
  */
 export type CommentPlatform = "ios" | "android";
 export type RecordPhase = "pending" | "capturing" | "ready" | "failed";
-export type ChangeGroup = "added" | "modified" | "removed" | "needs-review" | "source-affected";
-export const CHANGE_GROUPS: ChangeGroup[] = ["added", "removed", "modified", "needs-review", "source-affected"];
+/** `accessibility-only`: modified, but the screenshots match; only what assistive technology reads changed. */
+export type ChangeGroup = "added" | "modified" | "removed" | "accessibility-only" | "needs-review" | "source-affected";
+export const CHANGE_GROUPS: ChangeGroup[] = ["added", "removed", "modified", "accessibility-only", "needs-review", "source-affected"];
+
+/**
+ * "12 changes", or "3 visual changes · 12 accessibility only" when some changed only for assistive technology: those
+ * are changes too (screen readers and voice control see them), but not ones a screenshot shows.
+ */
+export function changeCountText(groups: readonly ChangeGroup[]): string {
+  const accessibility = groups.filter(group => group === "accessibility-only").length;
+  const visual = groups.length - accessibility;
+  if (!accessibility) return `${visual} change${visual === 1 ? "" : "s"}`;
+  return [visual ? `${visual} visual change${visual === 1 ? "" : "s"}` : undefined, `${accessibility} accessibility only`].filter(Boolean).join(" · ");
+}
 
 export type SideHealth = { planned: number; captured: number; verified: number; unverified: number; unavailable: number };
 
@@ -207,13 +219,12 @@ export function readCommentRecords(body: string | undefined): CommentRecords {
 
 /** A short result for a run that is no longer current: "🟩 34 changes", "🟨 12 changes · 4 unavailable", "🟥 failed · capture". */
 export function recordSummary(record: PlatformRecord): string {
-  const changes = record.changes?.length;
   switch (record.phase) {
     case "failed": return `🟥 failed · ${record.failure?.step ?? "capture"}`;
     case "ready": {
       const unavailable = record.health ? record.health.base.unavailable + record.health.head.unavailable : 0;
       const icon = unavailable > 0 || (record.validation?.visual?.failed ?? 0) > 0 ? "🟨" : "🟩";
-      return `${icon} ${changes ?? 0} change${changes === 1 ? "" : "s"}${unavailable > 0 ? ` · ${unavailable} unavailable` : ""}`;
+      return `${icon} ${changeCountText(record.changes?.map(change => change.group) ?? [])}${unavailable > 0 ? ` · ${unavailable} unavailable` : ""}`;
     }
     default: return "⏳ did not finish";
   }

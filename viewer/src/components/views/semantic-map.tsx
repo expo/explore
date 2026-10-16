@@ -58,7 +58,7 @@ type ScreenNodeData = {
   highlighted: boolean;
   direction: MapDirection;
   diff?: DiffStatus;
-  notVisible?: boolean;
+  accessibilityOnly?: boolean;
   projectionDelayMs?: number;
   projectionScreenScale?: number;
   projectionMotion: ProjectionMotionMetadata;
@@ -93,7 +93,7 @@ function ScreenNodeCard({ data, selected }: NodeProps<ScreenGraphNode>) {
       {...(data.screenshot ? { screenshot: data.screenshot } : {})}
       {...(data.missingReason ? { missingReason: data.missingReason } : {})}
       {...(data.diff ? { diff: data.diff } : {})}
-      {...(data.notVisible ? { notVisible: true } : {})}
+      {...(data.accessibilityOnly ? { accessibilityOnly: true } : {})}
       selected={selected}
       highlighted={data.highlighted}
       style={{
@@ -318,7 +318,7 @@ function projectionElements(
         highlighted,
         direction: structure.horizontal ? "LR" : "TB",
         ...(status ? { diff: status } : {}),
-        ...(diff?.screens.get(screen.id)?.notVisible ? { notVisible: true } : {}),
+        ...(diff?.screens.get(screen.id)?.accessibilityOnly ? { accessibilityOnly: true } : {}),
         projectionMotion,
         onSelect: onSelectScreen,
         onHover: onHoverScreen,

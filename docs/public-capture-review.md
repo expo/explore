@@ -172,6 +172,7 @@ imported source changed), `app-wide` (only app-wide inputs such as dependencies,
 | --- | --- |
 | Added / Removed | Route presence differs between source inventories |
 | Modified | The screen's source changed and comparable evidence differs |
+| Accessibility only | Modified, but the screenshots match: only the accessibility tree (what screen readers and voice control read) differs. Counted as a change and listed apart from the visual ones |
 | Needs review | The screen's source changed and the comparison could not tell whether it looks different; a review target |
 | Screen variant | No source change reaches the screen, but its captures differ in runtime UI state (balances, timestamps, loaded content). Listed apart from changes |
 | Source-affected | Source impact without a comparison |
@@ -179,6 +180,9 @@ imported source changed), `app-wide` (only app-wide inputs such as dependencies,
 | Not compared | No comparison was performed |
 
 A difference that rounds to 0.00% of pixels is rendering noise and counts as no difference.
+Accessibility only is how readers present a `modified` verdict whose visual verdict is `unchanged`; the contract has no
+separate status for it, so reports from earlier versions show it too. The accessibility tree can include content outside
+the screenshot (rows below the fold, elements under a sheet), so such a change may still be visible on a device.
 A runtime difference is not proof that the code change caused it. Deterministic mode uses template notes and evidence facts. Agent mode adds AI explanations from the captured evidence and source changes through a separate CLI session; those explanations cannot override fixed verdicts. Structural flows describe possible source navigation; semantic business grouping remains deferred.
 
 ## Artifacts and cache

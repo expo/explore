@@ -450,3 +450,34 @@ test('a report whose hosted preview is still deploying says so instead of linkin
   assert.equal(record.links.report, undefined, 'the record carries no report link while deploying');
   assert.equal(parsePlatformRecord(record).links.deploying, true, 'the deploying flag survives the comment round trip');
 });
+
+test('a screen whose screenshots match but whose accessibility tree changed is listed as accessibility only, apart from the visual changes', () => {
+  const accessibilityOnly = (id) => surface(id, 'modified', { extra: {
+    review: { status: 'modified', description: 'Added button “Edit tempo”.', facts: [
+      { category: 'element', templateId: 'element.added', bullet: 'Added button “Edit tempo”.' },
+      { category: 'accessibility', templateId: 'accessibility.label-changed', bullet: 'Changed accessibility label from “lane-row-title-3” to “Clap”.' },
+    ] },
+    visual: { verdict: 'unchanged', reason: 'matched', mismatchPercentage: 0, threshold: 0.1, tool: 'agent-device@0.20.2' },
+    sourceChange: sourceChange('Labelled the lane rows.'),
+  } });
+  const withAccessibility = review([...evidenceReview().surfaces, accessibilityOnly('device-picker'), accessibilityOnly('enable-midi')]);
+  const body = renderPublicComment(state({ review: withAccessibility, artifactOnly: true }));
+  assert.match(platformRow(body, 'iOS'), /\| 🟩 3 visual changes · 2 accessibility only · 6m 12s \|/);
+  assert.deepEqual(summaries(body), ['🟩 Added (1)', '🟥 Removed (1)', '🟧 Modified (1)', '🟦 Accessibility only (2)', 'Validation · iOS 🟩 10/10 captured']);
+  assert.match(body, /\n\*\*Changes\*\* · 5 screens\n/);
+  assert.match(body, /<summary>🟦 Accessibility only \(2\)<\/summary>\n\nBefore and After look the same\. What screen readers and voice control read changed\.\n\n- `\/device-picker` — Added button “Edit tempo”\\\. · \[iOS\]/);
+  const record = parsePlatformRecord(JSON.parse(JSON.stringify(platformRecordOf(state({ review: withAccessibility, artifactOnly: true })))));
+  assert.deepEqual(record.changes.filter(change => change.group === 'accessibility-only').map(change => change.id), ['device-picker', 'enable-midi'],
+    'the group survives the comment round trip');
+  // A comment with no accessibility-only screen keeps its plain count.
+  assert.match(platformRow(renderPublicComment(state({ artifactOnly: true })), 'iOS'), /\| 🟩 3 changes · 6m 12s \|/);
+});
+
+test('a comment whose only changes are for assistive technology counts just those', () => {
+  const only = review([surface('device-picker', 'modified', { extra: {
+    review: { status: 'modified', description: 'Changed “Play” from a text to a button.', facts: [{ category: 'accessibility', templateId: 'accessibility.role-changed', bullet: 'Changed “Play” from a text to a button.' }] },
+    visual: { verdict: 'unchanged', reason: 'matched', mismatchPercentage: 0, threshold: 0.1, tool: 'agent-device@0.20.2' },
+    sourceChange: sourceChange('Made Play a button.'),
+  } })]);
+  assert.match(platformRow(renderPublicComment(state({ review: only, artifactOnly: true })), 'iOS'), /\| 🟩 1 accessibility only · 6m 12s \|/);
+});

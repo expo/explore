@@ -136,6 +136,7 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
   cursor: pointer;
 }
 .screens-tree-dot[class*="diff-"] { background: var(--diff); }
+.screens-tree-dot.diff-accessibility-only { border-radius: 2px; }
 .screens-tree-dot.elsewhere { background: color-mix(in srgb, var(--modified) 50%, transparent); }
 .screens-tree-legend {
   display: flex;

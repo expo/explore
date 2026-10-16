@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { ImageOff, ScanSearch } from "lucide-react";
 import type { ChangesMenuData } from "../panels/changes-menu";
-import { diffLabel, NOT_VISIBLE_HIGHLIGHT, type BuildDiff, type ScreenDiff } from "../../utils/build-diff";
+import { diffLabel, ACCESSIBILITY_ONLY_HIGHLIGHT, type BuildDiff, type ScreenDiff } from "../../utils/build-diff";
 import type { MapIndex } from "../../utils/model";
 import type { ChangedScreen } from "../../utils/changed-screens";
 import { groupVisualRegions, type VisualChange } from "../../utils/visual-diff";
@@ -13,7 +13,7 @@ import { ToggleGroup } from "../shared/toggle-group";
 import { Tooltip } from "../shared/tooltip";
 import { DEFAULT_SCREENSHOT_RATIO, ScreenshotImage, ScreenshotPlaceholder } from "../shared/screenshot-image";
 import { ChangeOutlines, HomeIndicatorBand, StatusBarBand, SwipeCompare, SWIPE_STEP } from "../panels/visual-diff";
-import { placeholderFor, presentedChanges } from "../../utils/presented-changes";
+import { placeholderFor, presentedChanges, splitForAssistiveTechnology } from "../../utils/presented-changes";
 import { CompareNav, WhatChangedPopover } from "./compare-header";
 import "./compare-section.css";
 
@@ -105,6 +105,8 @@ export function useCompareController(options: CompareControllerOptions) {
     () => presentedChanges(screenDiff).filter((change) => change.id !== "legacy-summary"),
     [screenDiff],
   );
+  // What changed for assistive technology is listed under its own heading.
+  const split = useMemo(() => splitForAssistiveTechnology(facts, screenDiff), [facts, screenDiff]);
 
   const phone = usePhoneLayout();
   const [desktopMode, setDesktopMode] = useState<CompareMode>(() => storedMode(MODE_STORAGE_KEY, "split"));
@@ -239,7 +241,7 @@ export function useCompareController(options: CompareControllerOptions) {
   const chosenMode: CompareMode = phone ? phoneMode : desktopMode;
   const modesDisabled = !comparable;
   return {
-    screen, screenDiff, route, position, previous, next, comparable, areas, facts,
+    screen, screenDiff, route, position, previous, next, comparable, areas, facts, split,
     mode, chosenMode, modesDisabled, chooseMode, modeOptions, outlines, shownOutlines, statusBarIgnored, homeIndicatorIgnored, toggleOutlines,
     activeArea, setActiveArea, stepArea, flipSide, flip, swipePosition, setSwipePosition,
     aspect, setAspect, factsOpen, setFactsOpen,
@@ -318,8 +320,9 @@ export function CompareSection(props: CompareSectionProps) {
     </>
   ) : null;
 
-  const factCopies = facts.map((fact) => fact.copy);
-  const notes = compareNotes(screenDiff, factCopies.length, statusBarIgnored, homeIndicatorIgnored);
+  const factCopies = compare.split.visible.map((fact) => fact.copy);
+  const assistive = compare.split.assistive.map((fact) => fact.copy);
+  const notes = compareNotes(screenDiff, facts.length, statusBarIgnored, homeIndicatorIgnored);
 
   return (
     <section ref={sectionRef} className="compare-section" aria-label={`Compare ${route}`}
@@ -328,7 +331,7 @@ export function CompareSection(props: CompareSectionProps) {
           how to look at it, and what to look for. The bottom toolbar stays the same on every section. */}
       <header className="compare-top">
         <div className="compare-bar">
-          <CompareNav variant="desktop" status={screenDiff.status} statusLabel={diffLabel(screenDiff)} route={route} title={title}
+          <CompareNav variant="desktop" status={screenDiff.status} accessibilityOnly={screenDiff.accessibilityOnly} statusLabel={diffLabel(screenDiff)} route={route} title={title}
             position={compare.position} count={props.order.length} picker={props.picker}
             onPrevious={compare.previous ? () => props.onSelectScreen(compare.previous!.id) : undefined}
             onNext={compare.next ? () => props.onSelectScreen(compare.next!.id) : undefined} />
@@ -345,13 +348,14 @@ export function CompareSection(props: CompareSectionProps) {
             />
           </div>
           <span className="toolbar-divider" aria-hidden="true" />
-          <Tooltip label={screenDiff.notVisible ? NOT_VISIBLE_HIGHLIGHT : "Highlight changes"} shortcut={formatShortcut(SHORTCUTS.compare.outlines)} placement="bottom">
+          <Tooltip label={screenDiff.accessibilityOnly ? ACCESSIBILITY_ONLY_HIGHLIGHT : "Highlight changes"} shortcut={formatShortcut(SHORTCUTS.compare.outlines)} placement="bottom">
             <button type="button" className="toolbar-button compare-outlines" aria-label="Highlight changes"
               aria-pressed={outlines} disabled={areas.length === 0} onClick={toggleOutlines}>
               <ScanSearch aria-hidden="true" />
             </button>
           </Tooltip>
-          <WhatChangedPopover facts={factCopies} notes={notes} open={factsOpen} onOpenChange={setFactsOpen} />
+          <WhatChangedPopover facts={factCopies} assistive={assistive} accessibilityOnly={screenDiff.accessibilityOnly}
+            notes={notes} open={factsOpen} onOpenChange={setFactsOpen} />
         </div>
       </header>
 

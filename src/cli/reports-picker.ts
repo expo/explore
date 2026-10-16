@@ -88,7 +88,8 @@ export function visibleRuns(state: PickerState): SavedRun[] {
 
 function counts(run: SavedRun, paint: Paint): string {
   if (run.explored) return `${paint.text(String(run.explored.screens))} ${paint.dim("screens")}  ${paint.dim(`${run.explored.unexplored} unexplored`)}`;
-  const parts = ([["modified", paint.amber, "modified"], ["added", paint.green, "added"], ["removed", paint.red, "removed"], ["needs-review", paint.yellow, "need review"],
+  const parts = ([["modified", paint.amber, "modified"], ["accessibility-only", paint.blue, "accessibility only"], ["added", paint.green, "added"], ["removed", paint.red, "removed"],
+    ["needs-review", paint.yellow, "need review"],
     ["source-affected", paint.yellow, "source-affected"]] as const)
     .filter(([group]) => run.changes?.[group]).map(([group, colour, label]) => `${colour(String(run.changes![group]))} ${paint.dim(label)}`);
   return parts.length ? parts.join("  ") : paint.dim("no visible changes");

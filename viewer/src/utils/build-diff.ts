@@ -67,16 +67,28 @@ export type ScreenDiff = {
   reviewerChanges: ReviewerChangeFact[];
   runtimeEvidenceRefs: string[];
   noVisibleChange: boolean;
-  /** Modified in what the review read (the accessibility tree, text), with no pixel difference: nothing to outline. */
-  notVisible?: true;
+  /**
+   * Modified only in what assistive technology reads (the accessibility tree): the screenshots match, so there is
+   * nothing to outline. Screen readers and voice control still see the change, so it is reviewed like any other.
+   */
+  accessibilityOnly?: true;
 };
 
-/** Why Highlight changes is off for a change that is not visible. */
-export const NOT_VISIBLE_HIGHLIGHT = "Nothing to highlight: the screenshots match";
+/** Why Highlight changes is off for an accessibility-only change. */
+export const ACCESSIBILITY_ONLY_HIGHLIGHT = "Nothing to highlight: only what assistive technology reads changed";
 
-/** A screen's status as the Viewer names it: a modified screen whose screenshots match says the change is not visible. */
-export function diffLabel(diff: Pick<ScreenDiff, "status" | "notVisible">): string {
-  return diff.notVisible && diff.status === "modified" ? "Changed (not visible)" : DIFF_LABELS[diff.status];
+/** A screen's status as the Viewer names it: a modified screen whose screenshots match changed for assistive technology only. */
+export function diffLabel(diff: Pick<ScreenDiff, "status" | "accessibilityOnly">): string {
+  return isAccessibilityOnly(diff) ? "Accessibility only" : DIFF_LABELS[diff.status];
+}
+
+export function isAccessibilityOnly(diff: Pick<ScreenDiff, "status" | "accessibilityOnly"> | undefined): boolean {
+  return diff?.status === "modified" && Boolean(diff.accessibilityOnly);
+}
+
+/** The class that colours a screen's status: an accessibility-only change keeps Modified's frame in its own colour. */
+export function diffClass(diff: Pick<ScreenDiff, "status" | "accessibilityOnly">): string {
+  return isAccessibilityOnly(diff) ? "diff-modified diff-accessibility-only" : `diff-${diff.status}`;
 }
 
 export type BuildDiff = {
@@ -355,7 +367,7 @@ export function buildDiff(options: {
       reviewerChanges: reviewSurface?.reviewerChanges ?? [],
       runtimeEvidenceRefs: reviewSurface?.runtimeEvidenceRefs ?? [],
       noVisibleChange: screen.status === "unchanged" && (reviewSurface?.noVisibleChange ?? false),
-      ...(screen.status === "modified" && reviewSurface?.pixelsUnchanged ? { notVisible: true as const } : {}),
+      ...(screen.status === "modified" && reviewSurface?.pixelsUnchanged ? { accessibilityOnly: true as const } : {}),
       ...(before ?? borrowed.before ? { beforeScreenshot: (before ?? borrowed.before)! } : {}),
       ...(after ?? borrowed.after ? { afterScreenshot: (after ?? borrowed.after)! } : {}),
       ...(redirectTo && (borrowed.before || borrowed.after) ? { redirectTo } : {}),

@@ -1,8 +1,9 @@
 import type { PublicReview } from "../contracts/capture.js";
 import type { SimulatorRuntimeMetadata } from "../capture/run.js";
 import { CI_COMMENT_MARKER } from "./pr-comment.js";
-import { CHANGE_GROUPS, foldRecord, historyLine, readCommentRecords, recordLine, recordSummary, type ChangeGroup, type CommentPlatform, type CommentRecords, type HistoryEntry, type PlatformRecord } from "./pr-comment-record.js";
+import { CHANGE_GROUPS, changeCountText, foldRecord, historyLine, readCommentRecords, recordLine, recordSummary, type ChangeGroup, type CommentPlatform, type CommentRecords, type HistoryEntry, type PlatformRecord } from "./pr-comment-record.js";
 import { sourceImpactSentences } from "../contracts/source-change.js";
+import { isAccessibilityOnlyChange } from "../contracts/review-validation.js";
 import type { PublicCaptureHealth, PublicEvidenceSummary } from "../review/evidence-assessment.js";
 import type { ReviewPresentation } from "../contracts/review.js";
 import type { ViewerLinks } from "./viewer-links.js";
@@ -60,6 +61,7 @@ const GROUP_LABEL: Record<ReviewGroup, string> = {
   added: "🟩 Added",
   modified: "🟧 Modified",
   removed: "🟥 Removed",
+  "accessibility-only": "🟦 Accessibility only",
   "needs-review": "🟨 Needs review",
   "source-affected": "🟨 Source-affected",
 };
@@ -126,7 +128,9 @@ function groupOf(surface: Surface, evidenceBased: boolean): ReviewGroup | "uncha
   if (surface.status === "added" || surface.status === "removed") return surface.status;
   const verified = (["base", "head"] as const).every(side => surface[`${side}Image`]
     && surface[`${side}Outcome`]?.status === "captured" && surface[`${side}Outcome`]?.landing === "verified");
-  if (evidenceBased && verified && surface.review && surface.visual?.reason !== "diff-failed") return surface.review.status;
+  if (evidenceBased && verified && surface.review && surface.visual?.reason !== "diff-failed") {
+    return isAccessibilityOnlyChange(surface) ? "accessibility-only" : surface.review.status;
+  }
   switch (surface.status) {
     case "modified": return "source-affected";
     case "unchanged": return "unchanged";
@@ -318,12 +322,11 @@ function resultCell(record: PlatformRecord): string {
     }
     case "failed": return `🟥 failed · ${inlineText(record.failure?.step ?? "capture", 48)}`;
     case "ready": {
-      const changes = record.changes?.length ?? 0;
       const unavailable = record.health ? record.health.base.unavailable + record.health.head.unavailable : 0;
       const unverified = record.health ? record.health.base.unverified + record.health.head.unverified : 0;
       const failed = (record.validation?.visual?.failed ?? 0) + (record.validation?.accessibility?.failed ?? 0);
       const icon = unavailable || unverified || failed ? "🟨" : "🟩";
-      return [`${icon} ${plural(changes, "change")}`, unavailable ? `${unavailable} unavailable` : undefined, unverified ? `${unverified} unattributed` : undefined,
+      return [`${icon} ${changeCountText(record.changes?.map(change => change.group) ?? [])}`, unavailable ? `${unavailable} unavailable` : undefined, unverified ? `${unverified} unattributed` : undefined,
         failed ? `${failed} comparison${failed === 1 ? "" : "s"} failed` : undefined, duration(record.startedAt, record.updatedAt)].filter(Boolean).join(" · ");
     }
   }
@@ -395,7 +398,8 @@ function changesSection(records: PlatformRecord[], platforms: CommentPlatform[],
     const rows = groups.get(group) ?? [];
     if (!rows.length) continue;
     const shown = rows.slice(0, rowCap);
-    const content = ["", ...shown.map(row => renderChangeRow(row, platforms))];
+    const content = ["", ...(group === "accessibility-only" ? ["Before and After look the same. What screen readers and voice control read changed.", ""] : []),
+      ...shown.map(row => renderChangeRow(row, platforms))];
     if (rows.length > shown.length) {
       const report = ready.find(record => record.links.report)?.links.report;
       content.push(`- ${rows.length - shown.length} more${report ? ` — ${link("Explore report", report)}` : ""}`);

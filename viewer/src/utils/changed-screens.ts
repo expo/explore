@@ -24,12 +24,13 @@ export function isChangedStatus(status: DiffStatus): status is FocusStatus {
 }
 
 /**
- * A change the captures show: an added or removed screen, or a modified one whose pixels differ. A screen whose
- * source changed but whose captures look the same ("No visible change", source-affected, or modified with
- * unchanged pixels) stays in the Changes list, but Compare does not step through it and Screens' Changed hides it.
+ * A change the captures show: an added, removed or modified screen, including one modified only in what assistive
+ * technology reads (its screenshots match, its accessibility tree does not). A screen whose source changed but whose
+ * captures show nothing different ("No visible change", source-affected) stays in the Changes list, but Compare does
+ * not step through it and Screens' Changed hides it.
  */
-export function isVisibleChange(diff: Pick<ScreenDiff, "status" | "notVisible"> | undefined): boolean {
-  return diff !== undefined && (diff.status === "added" || diff.status === "removed" || (diff.status === "modified" && !diff.notVisible));
+export function isCapturedChange(diff: Pick<ScreenDiff, "status"> | undefined): boolean {
+  return diff !== undefined && (diff.status === "added" || diff.status === "removed" || diff.status === "modified");
 }
 
 export function compareText(left: string, right: string): number {

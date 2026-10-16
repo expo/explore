@@ -23,7 +23,8 @@ import { copyImageToClipboard } from "../../utils/copy-image";
 import type { NavigationEdge } from "../../../../src/contracts/navigation-graph";
 import { navigationEdgeKey } from "../../utils/source-navigation";
 import {
-  DIFF_LABELS,
+  diffClass,
+  diffLabel,
   type BuildDiff,
   type ScreenDiff,
 } from "../../utils/build-diff";
@@ -111,7 +112,8 @@ function TransitionRow(props: {
   const { screen, sources, observed } = props.item;
   const targetId = screen.id;
   const screenshot = artifactUrl(screenshotForScreen(screen, props.index));
-  const status = props.diff?.screens.get(targetId)?.status ?? "unchanged";
+  const targetDiff = props.diff?.screens.get(targetId);
+  const status = targetDiff?.status ?? "unchanged";
   const kinds = [...new Set(sources.length
     ? sources.map(({ edge }) => edge.kind)
     : observed.map(transition => transition.actionKind))].sort();
@@ -141,7 +143,7 @@ function TransitionRow(props: {
         <span className="transition-copy">
           <strong className="transition-path">{screenLabel(screen, props.index)}</strong>
         </span>
-        <span className={`diff-dot diff-${status}`} title={DIFF_LABELS[status]} />
+        <span className={`diff-dot ${diffClass(targetDiff ?? { status })}`} title={diffLabel(targetDiff ?? { status })} />
         <ChevronRight size={13} aria-hidden="true" />
       </button>
     </Tooltip>

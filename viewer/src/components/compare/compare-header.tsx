@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import { ChevronLeft, ChevronRight, List } from "lucide-react";
 import { ChangesMenu } from "../panels/changes-menu";
 import { StatusGlyph } from "../shared/status-icon";
@@ -15,6 +15,8 @@ import type { ComparePicker } from "./compare-section";
  */
 export function CompareNav(props: {
   status: DiffStatus;
+  /** Modified only in what assistive technology reads: the mark takes that status's colour and shape. */
+  accessibilityOnly?: boolean | undefined;
   route: string;
   title: string;
   /** Zero-based; below zero when the screen is not in the order. */
@@ -39,7 +41,7 @@ export function CompareNav(props: {
           disabled={!desktop || picker.open}>
           <button type="button" className="compare-nav-picker" aria-haspopup="true"
             aria-expanded={picker.open} onClick={() => picker.onOpenChange(!picker.open)}>
-            <StatusGlyph status={props.status} label={props.statusLabel ?? DIFF_LABELS[props.status]} />
+            <StatusGlyph status={props.status} accessibilityOnly={props.accessibilityOnly} label={props.statusLabel ?? DIFF_LABELS[props.status]} />
             {/* A route that does not fit loses its start, not the end that names the screen. */}
             <code className="compare-nav-route" title={props.title}><bdi>{props.route}</bdi></code>
           </button>
@@ -87,15 +89,34 @@ export function CompareSteps(props: {
 
 /**
  * What changed on a screen, as the phone's sheet and the desktop popover both list it: CI's
- * findings as bullets, then the notes about the comparison under a hairline.
+ * findings as bullets, then what changed for assistive technology under its own heading, then the
+ * notes about the comparison under a hairline.
  */
-export function WhatChangedContent(props: { facts: string[]; notes: string[] }) {
+export function WhatChangedContent(props: { facts: string[]; assistive?: string[]; accessibilityOnly?: boolean | undefined; notes: string[] }) {
+  const assistive = props.assistive ?? [];
+  const assistiveTitle = useId();
   return (
     <div className="what-changed-content" role="region" aria-label="What changed on this screen">
       {props.facts.length > 0 ? (
         <ul className="what-changed-content-list">
           {props.facts.map((fact) => <li key={fact}>{fact}</li>)}
         </ul>
+      ) : null}
+      {assistive.length > 0 ? (
+        <section className="what-changed-assistive" aria-labelledby={assistiveTitle}>
+          <h4 id={assistiveTitle} className="what-changed-assistive-title">
+            <span className="status-glyph-dot diff-accessibility-only" aria-hidden="true" />
+            For assistive technology
+          </h4>
+          <p className="what-changed-assistive-context">
+            {props.accessibilityOnly
+              ? "Before and After look the same. Only what screen readers and voice control read changed."
+              : "Read by screen readers and voice control, not shown in the screenshot."}
+          </p>
+          <ul className="what-changed-content-list">
+            {assistive.map((fact) => <li key={fact}>{fact}</li>)}
+          </ul>
+        </section>
       ) : null}
       {props.notes.length > 0 ? (
         <div className="what-changed-content-notes">
@@ -113,13 +134,15 @@ export function WhatChangedContent(props: { facts: string[]; notes: string[] }) 
  */
 export function WhatChangedPopover(props: {
   facts: string[];
+  assistive?: string[];
+  accessibilityOnly?: boolean | undefined;
   notes: string[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const { open, onOpenChange } = props;
-  const empty = props.facts.length === 0 && props.notes.length === 0;
+  const empty = props.facts.length === 0 && !props.assistive?.length && props.notes.length === 0;
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
@@ -149,8 +172,11 @@ export function WhatChangedPopover(props: {
       </Tooltip>
       {open ? (
         <div className="compare-what-changed-popover" role="dialog" aria-modal="false" aria-label="What changed">
-          <strong className="compare-what-changed-popover-title">What changed</strong>
-          <WhatChangedContent facts={props.facts} notes={props.notes} />
+          {/* A screen that changed only for assistive technology has nothing else to title. */}
+          {props.facts.length > 0 || props.notes.length > 0
+            ? <strong className="compare-what-changed-popover-title">What changed</strong> : null}
+          <WhatChangedContent facts={props.facts} {...(props.assistive ? { assistive: props.assistive } : {})}
+            accessibilityOnly={props.accessibilityOnly} notes={props.notes} />
         </div>
       ) : null}
     </div>

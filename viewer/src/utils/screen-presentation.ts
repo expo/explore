@@ -241,7 +241,7 @@ function familyEvidence(diffs: readonly ScreenDiff[]): {
   reviewerChanges: ScreenDiff["reviewerChanges"];
   runtimeEvidenceRefs: string[];
   noVisibleChange: boolean;
-  notVisible?: true;
+  accessibilityOnly?: true;
 } {
   const first = diffs[0];
   if (!first) throw new Error("Cannot present an empty diff family");
@@ -264,7 +264,7 @@ function familyEvidence(diffs: readonly ScreenDiff[]): {
     runtimeEvidenceRefs,
     noVisibleChange: diffs.some((diff) => diff.noVisibleChange),
     // Not visible only when no modified member of the family shows a difference.
-    ...(modified.length > 0 && modified.every((diff) => diff.notVisible) ? { notVisible: true as const } : {}),
+    ...(modified.length > 0 && modified.every((diff) => diff.accessibilityOnly) ? { accessibilityOnly: true as const } : {}),
     ...(primary.captureNotes ? { captureNotes: primary.captureNotes } : {}),
     // A redirect's screenshots belong to the route it declares; the panel must keep saying so.
     ...(primary.redirectTo ? { redirectTo: primary.redirectTo } : {}),
