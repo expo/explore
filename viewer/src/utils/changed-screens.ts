@@ -1,15 +1,17 @@
-import type { BuildDiff, DiffStatus, ScreenDiff } from "./build-diff";
+import { isAccessibilityOnly, type BuildDiff, type DiffStatus, type ScreenDiff } from "./build-diff";
 import type { MapIndex } from "./model";
 import { isLaunchScreen } from "./model";
 import type { FocusStatus } from "./navigation";
 import { displayPathForScreen } from "./screen-path";
 
+/** Review order: the visible changes first, then what changed only for assistive technology. */
 const STATUS_ORDER: Record<FocusStatus, number> = {
   added: 0,
   modified: 1,
   removed: 2,
-  "needs-review": 3,
-  "source-affected": 4,
+  "accessibility-only": 3,
+  "needs-review": 4,
+  "source-affected": 5,
 };
 
 export type ChangedScreen = {
@@ -19,7 +21,22 @@ export type ChangedScreen = {
   route: string;
 };
 
-export function isChangedStatus(status: DiffStatus): status is FocusStatus {
+/** The status the Changes filter and focus match a screen on: Accessibility only apart from Modified. */
+export function focusStatusOf(diff: Pick<ScreenDiff, "status" | "accessibilityOnly"> | undefined): DiffStatus | "accessibility-only" | undefined {
+  return isAccessibilityOnly(diff) ? "accessibility-only" : diff?.status;
+}
+
+/** Each focus status's count: Modified counts only the visible changes, Accessibility only the rest. */
+export function focusCounts(diff: BuildDiff | undefined): Record<FocusStatus, number> {
+  const counts: Record<FocusStatus, number> = { added: 0, modified: 0, "accessibility-only": 0, removed: 0, "needs-review": 0, "source-affected": 0 };
+  for (const screen of diff?.screens.values() ?? []) {
+    const status = focusStatusOf(screen);
+    if (status && status in counts) counts[status as FocusStatus] += 1;
+  }
+  return counts;
+}
+
+export function isChangedStatus(status: DiffStatus): status is Exclude<FocusStatus, "accessibility-only"> {
   return status !== "unchanged" && status !== "not-compared" && status !== "unavailable" && status !== "variant";
 }
 
@@ -59,7 +76,7 @@ export function changedScreens(diff: BuildDiff, index: MapIndex): ChangedScreen[
     if (!isChangedStatus(screenDiff.status)) continue;
     const screen = index.screens.get(id);
     if (!screen) continue;
-    result.push({ id, status: screenDiff.status, title: screen.title, route: displayPathForScreen(screen) });
+    result.push({ id, status: isAccessibilityOnly(screenDiff) ? "accessibility-only" : screenDiff.status, title: screen.title, route: displayPathForScreen(screen) });
   }
   return result.sort(compareChangedScreens);
 }

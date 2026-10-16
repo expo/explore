@@ -51,7 +51,7 @@ test('round trip: iOS and Android jobs of one run share a single comment: one ro
   assert.equal(comment.match(/^### Explore review/gm).length, 1, 'one header');
   const routeLines = comment.split('\n').filter(line => /^- `\/(added|removed|home)`/.test(line));
   assert.ok(routeLines.length >= 1, `the comment lists changed routes once:\n${comment}`);
-  assert.equal(routeLines.length, 6, 'each changed screen is listed once');
+  assert.equal(routeLines.length, 6, `each changed screen is listed once:\n${comment}`);
   for (const line of routeLines) assert.ok(/\[iOS\]\(/.test(line) && /\[Android\]\(/.test(line), `each changed route carries both platforms once: ${line}`);
   const projection = publicReviewProjection(android.report.review);
   for (const surface of android.report.review.surfaces) assert.ok(projection.surfaces[surface.id], `the Viewer projects the Android surface ${surface.id}`);

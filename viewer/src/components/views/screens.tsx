@@ -3,7 +3,7 @@ import { ChevronRight, ChevronsDownUp, ChevronsUpDown, ListTree } from "lucide-r
 import { artifactUrl, isLaunchScreen, type ExploreMap, type MapIndex, type Screen } from "../../utils/model";
 import { primaryScreenshotForScreen, screenshotSize } from "../../utils/screen-images";
 import { diffClass, type BuildDiff, type DiffStatus } from "../../utils/build-diff";
-import { isCapturedChange } from "../../utils/changed-screens";
+import { focusStatusOf, isCapturedChange } from "../../utils/changed-screens";
 import { displayPathForScreen, screenLabel } from "../../utils/screen-path";
 import { screenTree, treeIndex, treeNodeKey, type ScreenTree, type ScreenTreeNode } from "../../utils/screen-tree";
 import type { Appearance } from "../../utils/appearance";
@@ -393,7 +393,7 @@ export function ScreensView(props: ScreensViewProps) {
                       elsewhere={isChanged(props.diff, id) ? undefined : props.changedElsewhere?.get(id)}
                       via={tree.via.get(id)}
                       selected={props.selectedScreenId === id}
-                      dimmed={Boolean(props.focus?.length) && !props.focus!.some((state) => state === statusOf(props.diff, id))}
+                      dimmed={Boolean(props.focus?.length) && !props.focus!.some((state) => state === focusStatusOf(props.diff?.screens.get(id)))}
                       onSelect={() => props.onSelectScreen(id)} />
                   ) : null;
                 })}

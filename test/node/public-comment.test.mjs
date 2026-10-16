@@ -204,7 +204,7 @@ test('without evidence the comment lists only added and removed screens and says
   assert.doesNotMatch(body, /Source-affected|screen=settings/);
   assert.equal(checkRow(body, 'Visual comparison'), '| Visual comparison | 🟨 not run |');
   assert.equal(checkRow(body, 'Accessibility comparison'), '| Accessibility comparison | 🟨 not run |');
-  assert.match(platformRow(body, 'iOS'), /^\| iOS \| Example 1\\\.4\\\.0 \\\(27\\\) \| 🟩 2 changes · 0s \|/);
+  assert.match(platformRow(body, 'iOS'), /^\| iOS \| Example 1\\\.4\\\.0 \\\(27\\\) \| 🟨 2 changes · 1 not compared · 0s \|/, 'the uncompared /settings is counted, not hidden');
   assert.doesNotMatch(body, /Needs review|Unchanged|screen=cats/);
 });
 
@@ -483,4 +483,34 @@ test('a comment whose only changes are for assistive technology counts just thos
     sourceChange: sourceChange('Made Play a button.'),
   } })]);
   assert.match(platformRow(renderPublicComment(state({ review: only, artifactOnly: true })), 'iOS'), /\| 🟩 1 accessibility only · 6m 12s \|/);
+});
+
+test('a screen accessibility-only on iOS and visibly modified on Android is listed as Modified, whichever platform comes first', async () => {
+  const { platformSectionMerge } = await import('../../dist/report/pr-comment-body.js');
+  const settings = (verdict) => {
+    const changed = evidenceReview();
+    changed.surfaces[2].visual = { ...changed.surfaces[2].visual, verdict, mismatchPercentage: verdict === 'modified' ? 3.2 : 0 };
+    return changed;
+  };
+  const androidState = overrides => state({ artifactOnly: true, build: { ...state().build, platform: 'android' },
+    runtime: { ...state().runtime, platform: 'android', deviceModel: 'EasAndroidDevice01', osVersion: '15.0' }, ...overrides });
+  const ios = renderPublicComment(state({ review: settings('unchanged'), artifactOnly: true }));
+  assert.ok(summaries(ios).includes('🟦 Accessibility only (1)'), 'iOS alone: the screenshots match');
+  const both = platformSectionMerge(androidState({ review: settings('modified') }), 'android').merge(ios);
+  assert.deepEqual(summaries(both).slice(0, 3), ['🟩 Added (1)', '🟥 Removed (1)', '🟧 Modified (1)']);
+  assert.doesNotMatch(both, /Accessibility only \(|Before and After look the same/);
+  assert.match(both, /\n- `\/settings` — [^\n]+ · \[iOS \(accessibility only\)\]\(<[^>]+>\) · \[Android\]\(<[^>]+>\)\n/);
+});
+
+test('screens whose comparison did not run are counted as not compared, never as a green "no change"', () => {
+  const uncompared = review([surface('settings', 'modified'), surface('tempo', 'modified')]);
+  const body = renderPublicComment(state({ review: uncompared, artifactOnly: true }));
+  assert.match(platformRow(body, 'iOS'), /\| 🟨 0 changes · 2 not compared · 6m 12s \|/);
+  assert.match(body, /\nNo compared screen changed on the reviewed platforms\.\n/);
+  // A screen that was never captured (outside the capture scope) stays out of the count.
+  const outOfScope = surface('channel', 'modified');
+  for (const key of ['baseImage', 'headImage', 'baseOutcome', 'headOutcome']) delete outOfScope[key];
+  const quiet = renderPublicComment(state({ review: review([outOfScope]), artifactOnly: true, evidence: undefined, capture: { planned: { base: 0, head: 0 }, done: { base: 0, head: 0 }, baseFromCache: false } }));
+  assert.match(platformRow(quiet, 'iOS'), /\| 🟩 0 changes · 6m 12s \|/);
+  assert.match(quiet, /\nNo screen changed on the reviewed platforms\.\n/);
 });

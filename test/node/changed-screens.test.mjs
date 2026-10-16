@@ -30,3 +30,16 @@ test("What changed lists what assistive technology reads under its own heading",
   // A reviewer note is not a finding about the accessibility tree.
   assert.deepEqual(ids(splitForAssistiveTechnology([{ id: "review-note", copy: "Note" }], { status: "modified", accessibilityOnly: true })), [["review-note"], []]);
 });
+
+const { focusCounts, focusStatusOf } = await tsImport("../../viewer/src/utils/changed-screens.ts", import.meta.url);
+
+test("the Changes filter counts Accessibility only apart from Modified", () => {
+  const screens = new Map([
+    ["a", { status: "modified" }], ["b", { status: "modified", accessibilityOnly: true }], ["c", { status: "modified", accessibilityOnly: true }],
+    ["d", { status: "added" }], ["e", { status: "not-compared" }], ["f", { status: "unchanged" }],
+  ]);
+  assert.deepEqual(focusCounts({ screens }), { added: 1, modified: 1, "accessibility-only": 2, removed: 0, "needs-review": 0, "source-affected": 0 });
+  assert.equal(focusStatusOf({ status: "modified", accessibilityOnly: true }), "accessibility-only");
+  assert.equal(focusStatusOf({ status: "modified" }), "modified");
+  assert.equal(focusStatusOf(undefined), undefined);
+});

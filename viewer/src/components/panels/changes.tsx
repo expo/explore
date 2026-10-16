@@ -5,7 +5,7 @@ import {
   useState,
 } from "react";
 import { GitCompareArrows, Search, X } from "lucide-react";
-import { DIFF_LABELS, diffLabel, type BuildDiff } from "../../utils/build-diff";
+import { DIFF_LABELS, type BuildDiff } from "../../utils/build-diff";
 import type { MapIndex } from "../../utils/model";
 import { FOCUS_LABELS, type FocusStatus } from "../../utils/navigation";
 import { displayPathForScreen } from "../../utils/screen-path";
@@ -17,7 +17,7 @@ import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
 import { changedScreens, compareText } from "../../utils/changed-screens";
 import "./changes.css";
 
-const STATUSES: FocusStatus[] = ["added", "modified", "removed", "needs-review", "source-affected"];
+const STATUSES: FocusStatus[] = ["added", "modified", "accessibility-only", "removed", "needs-review", "source-affected"];
 
 export type ChangesPanelProps = {
   diff: BuildDiff;
@@ -176,10 +176,10 @@ export function ChangesPanel(props: ChangesPanelProps) {
                     <button
                       type="button"
                       className={`changes-screen-row diff-${screen.status}`}
-                      aria-label={`Open ${screen.title}, ${diffLabel(props.diff.screens.get(screen.id) ?? screen)}, ${screen.route}`}
+                      aria-label={`Open ${screen.title}, ${FOCUS_LABELS[screen.status]}, ${screen.route}`}
                       aria-current={screen.id === props.selectedScreenId ? "true" : undefined}
                       onClick={() => props.onOpenScreen(screen.id)}>
-                      <StatusGlyph status={screen.status} accessibilityOnly={props.diff.screens.get(screen.id)?.accessibilityOnly} />
+                      <StatusGlyph status={screen.status === "accessibility-only" ? "modified" : screen.status} accessibilityOnly={screen.status === "accessibility-only"} />
                       <code className="changes-screen-path" title={screen.title}>{screen.route}</code>
                     </button>
                   </li>

@@ -1,6 +1,6 @@
 import type { CSSProperties, MouseEventHandler, ReactNode } from "react";
 import { ImageOff, PanelRight } from "lucide-react";
-import type { DiffStatus } from "../../utils/build-diff";
+import { diffClass, type DiffStatus } from "../../utils/build-diff";
 import { ScreenPathText } from "../shared/screen-path-text";
 import { DEFAULT_SCREENSHOT_SIZE, ScreenshotImage } from "../shared/screenshot-image";
 import { CanvasActiveFrame } from "./active-frame";
@@ -56,7 +56,7 @@ export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
     "screen-screenshot-card",
     props.className,
     // The status class carries the frame colour to the card, so its handles can share it.
-    props.diff ? `diff-${props.diff}` : undefined,
+    props.diff ? diffClass({ status: props.diff, ...(props.accessibilityOnly ? { accessibilityOnly: true as const } : {}) }) : undefined,
     props.selected ? "selected" : undefined,
     props.highlighted ? "highlighted" : undefined,
   ].filter(Boolean).join(" ");

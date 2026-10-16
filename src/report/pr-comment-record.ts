@@ -25,6 +25,14 @@ export const CHANGE_GROUPS: ChangeGroup[] = ["added", "removed", "modified", "ac
  * "12 changes", or "3 visual changes · 12 accessibility only" when some changed only for assistive technology: those
  * are changes too (screen readers and voice control see them), but not ones a screenshot shows.
  */
+/**
+ * The group of a screen that changed on several platforms. Accessibility only says the screenshots match, so it
+ * yields to any other group; otherwise the first platform's group stands, as it always has.
+ */
+export function strongerGroup(first: ChangeGroup, other: ChangeGroup): ChangeGroup {
+  return first === "accessibility-only" ? other : first;
+}
+
 export function changeCountText(groups: readonly ChangeGroup[]): string {
   const accessibility = groups.filter(group => group === "accessibility-only").length;
   const visual = groups.length - accessibility;
@@ -57,6 +65,8 @@ export type PlatformRecord = {
   };
   /** The review's changed surfaces, one per surface; `scheme` for a secondary appearance (`<route>@<scheme>`). */
   changes?: { id: string; route: string; group: ChangeGroup; description: string; scheme?: string }[];
+  /** Screens whose source changed and whose captures were verified, but that got no verdict: the comparison did not run or failed. */
+  notCompared?: number;
   /** Differences stated once rather than per screen (variants, app-wide source changes). */
   context?: string[];
   diagnostics?: { side?: "base" | "head"; route: string; code: string; message: string; nextAction: string }[];
@@ -182,6 +192,7 @@ export function parsePlatformRecord(value: unknown): PlatformRecord | undefined 
       && isString(entry.message) && isString(entry.nextAction)
       ? [{ ...(isSide(entry.side) ? { side: entry.side } : {}), route: entry.route, code: entry.code, message: entry.message, nextAction: entry.nextAction }] : []).slice(0, 20);
   }
+  if (isCount(value.notCompared) && value.notCompared > 0) record.notCompared = value.notCompared;
   if (isCount(value.diagnosticCount)) record.diagnosticCount = value.diagnosticCount;
   if (isRecord(value.failure) && isString(value.failure.step, 200) && isString(value.failure.message)) record.failure = { step: value.failure.step, message: value.failure.message };
   if (value.superseded === true) record.superseded = true;
@@ -227,8 +238,8 @@ export function recordSummary(record: PlatformRecord): string {
     case "failed": return `🟥 failed · ${record.failure?.step ?? "capture"}`;
     case "ready": {
       const unavailable = record.health ? record.health.base.unavailable + record.health.head.unavailable : 0;
-      const icon = unavailable > 0 || (record.validation?.visual?.failed ?? 0) > 0 ? "🟨" : "🟩";
-      return `${icon} ${changeCountText(record.changes?.map(change => change.group) ?? [])}${unavailable > 0 ? ` · ${unavailable} unavailable` : ""}`;
+      const icon = unavailable > 0 || (record.validation?.visual?.failed ?? 0) > 0 || record.notCompared ? "🟨" : "🟩";
+      return `${icon} ${changeCountText(record.changes?.map(change => change.group) ?? [])}${unavailable > 0 ? ` · ${unavailable} unavailable` : ""}${record.notCompared ? ` · ${record.notCompared} not compared` : ""}`;
     }
     default: return "⏳ did not finish";
   }
