@@ -22,7 +22,7 @@ export type VisualChange = PercentRect & {
 const SAME_MOVE = 0.34;
 /**
  * The most the regions in one outline may differ, together. Measuring a move from re-rasterized text is good to
- * about this: a sheet that moved 4.17pt as a whole measures 3.8–4.3pt across its parts (euxy PR #161).
+ * about this: a sheet that moved 4.17pt as a whole measures 3.8–4.3pt across its parts (brentvatne/euxy#161).
  */
 const MAX_MOVE_SPREAD = 0.5;
 

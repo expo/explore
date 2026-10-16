@@ -18,7 +18,7 @@ const EDGE = 1.5;
  * The share of a region's difference one shift must explain for the region to have moved rather than changed.
  * A move of half a pixel or less re-rasterizes text rather than shifting it, so a pure shift explains only a
  * quarter to a half of it; content that changed (new text, a caret) explains under a quarter at that size, and
- * anything larger has to be explained mostly by the shift. Measured on euxy's SDK 58 upgrade (PR #161).
+ * anything larger has to be explained mostly by the shift. Measured on euxy's SDK 58 upgrade (brentvatne/euxy#161).
  */
 const MIN_EXPLAINED = 0.6;
 const MIN_EXPLAINED_SUBPIXEL = 0.25;
@@ -33,7 +33,7 @@ const TIE = 1.005;
 const AMBIGUOUS = 1.05;
 /**
  * After aligning by the move, content is the same only where every channel is within this: re-rasterized text
- * differs by at most about 125 (PR #161), new content by about 200. A few pixels over it are noise; more are a change.
+ * differs by at most about 125 (brentvatne/euxy#161), new content by about 200. A few pixels over it are noise; more are a change.
  */
 const CHANGED_CHANNEL = 140;
 const CHANGED_PIXELS = 3;
