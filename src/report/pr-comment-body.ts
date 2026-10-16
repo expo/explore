@@ -2,7 +2,6 @@ import type { PublicReview } from "../contracts/capture.js";
 import type { SimulatorRuntimeMetadata } from "../capture/run.js";
 import { CI_COMMENT_MARKER } from "./pr-comment.js";
 import { CHANGE_GROUPS, changeCountText, foldRecord, historyLine, readCommentRecords, recordLine, recordSummary, type ChangeGroup, type CommentPlatform, type CommentRecords, type HistoryEntry, type PlatformRecord } from "./pr-comment-record.js";
-import { sourceImpactSentences } from "../contracts/source-change.js";
 import { isAccessibilityOnlyChange } from "../contracts/review-validation.js";
 import type { PublicCaptureHealth, PublicEvidenceSummary } from "../review/evidence-assessment.js";
 import type { ReviewPresentation } from "../contracts/review.js";
@@ -63,7 +62,6 @@ const GROUP_LABEL: Record<ReviewGroup, string> = {
   removed: "🟥 Removed",
   "accessibility-only": "🟦 Accessibility only",
   "needs-review": "🟨 Needs review",
-  "source-affected": "🟨 Source-affected",
 };
 
 /** The body is HTML, so no blank lines are needed and the block keeps its natural spacing. */
@@ -123,18 +121,21 @@ function plural(count: number, noun: string): string {
 
 type Surface = PublicReview["surfaces"][number];
 
-/** Evidence-based group when the run produced verdicts; otherwise the source-based status. */
-function groupOf(surface: Surface, evidenceBased: boolean): ReviewGroup | "unchanged" | "variant" {
+/**
+ * The group a surface is listed under, from the run's verdicts. A screen without one (its source changed but no
+ * screenshots were compared) is not listed: Explore reports what the captures show. A capture that failed is counted as
+ * unavailable in the result and named under Validation instead.
+ */
+function groupOf(surface: Surface, evidenceBased: boolean): ReviewGroup | "unlisted" {
   if (surface.status === "added" || surface.status === "removed") return surface.status;
   const verified = (["base", "head"] as const).every(side => surface[`${side}Image`]
     && surface[`${side}Outcome`]?.status === "captured" && surface[`${side}Outcome`]?.landing === "verified");
   if (evidenceBased && verified && surface.review && surface.visual?.reason !== "diff-failed") {
-    return isAccessibilityOnlyChange(surface) ? "accessibility-only" : surface.review.status;
+    const status = surface.review.status;
+    if (status === "unchanged" || status === "variant") return "unlisted";
+    return isAccessibilityOnlyChange(surface) ? "accessibility-only" : status;
   }
-  switch (surface.status) {
-    case "modified": return "source-affected";
-    case "unchanged": return "unchanged";
-  }
+  return "unlisted";
 }
 
 function routeOf(surface: Surface): string {
@@ -147,9 +148,6 @@ function descriptionOf(surface: Surface, group: ReviewGroup): string {
   if (group === "added") return `Added ${route} screen`;
   if (group === "removed") return `Removed ${route} screen`;
   // A group's own label already says added or removed; the route makes the line readable alone.
-  if (group === "source-affected") {
-    return sourceImpactSentences(surface.sourceImpact) ?? "Source-affected; not compared";
-  }
   if (surface.review) return plainText(surface.review.description, MAX_DESCRIPTION_LENGTH);
   return "No visible change";
 }
@@ -274,7 +272,7 @@ export function platformRecordOf(state: PublicCommentState, platform?: CommentPl
     for (const surface of state.review.surfaces) {
       if ((surface.head ?? surface.base)?.kind === "redirect") continue;
       const group = groupOf(surface, evidenceBased);
-      if (group === "unchanged" || group === "variant") continue;
+      if (group === "unlisted") continue;
       const scheme = schemeOf(surface.id);
       record.changes.push({ id: surface.id, route: routeOf(surface), group, description: descriptionOf(surface, group), ...(scheme ? { scheme } : {}) });
     }
@@ -610,15 +608,14 @@ export function reviewChanges(review: PublicReview): Map<string, ChangeGroup> {
   for (const surface of review.surfaces) {
     if ((surface.head ?? surface.base)?.kind === "redirect") continue;
     const group = groupOf(surface, evidenceBased);
-    if (group !== "unchanged" && group !== "variant") changes.set(surface.id, group);
+    if (group !== "unlisted") changes.set(surface.id, group);
   }
   return changes;
 }
 
-/** Surfaces the review calls changed (reviewer verdicts first, raw status otherwise); undefined before the review exists. */
+/** Surfaces the review calls changed: a verdict other than unchanged or variant. Undefined before the review exists. */
 export function reviewChangeCount(state: Pick<PublicCommentState, "review">): number | undefined {
-  return state.review?.surfaces.filter(surface => surface.review ? surface.review.status !== "unchanged" && surface.review.status !== "variant"
-    : surface.status !== "unchanged").length;
+  return state.review?.surfaces.filter(surface => surface.review && surface.review.status !== "unchanged" && surface.review.status !== "variant").length;
 }
 
 export { recordSummary, readCommentRecords };

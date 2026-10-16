@@ -13,9 +13,13 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
  */
 export type CommentPlatform = "ios" | "android";
 export type RecordPhase = "pending" | "capturing" | "ready" | "failed";
-/** `accessibility-only`: modified, but the screenshots match; only what assistive technology reads changed. */
-export type ChangeGroup = "added" | "modified" | "removed" | "accessibility-only" | "needs-review" | "source-affected";
-export const CHANGE_GROUPS: ChangeGroup[] = ["added", "removed", "modified", "accessibility-only", "needs-review", "source-affected"];
+/**
+ * `accessibility-only`: modified, but the screenshots match; only what assistive technology reads changed. A screen
+ * whose source changed but that was not compared is no group: Explore reports what the captures show, not what the code
+ * might do.
+ */
+export type ChangeGroup = "added" | "modified" | "removed" | "accessibility-only" | "needs-review";
+export const CHANGE_GROUPS: ChangeGroup[] = ["added", "removed", "modified", "accessibility-only", "needs-review"];
 
 /**
  * "12 changes", or "3 visual changes · 12 accessibility only" when some changed only for assistive technology: those

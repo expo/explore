@@ -188,7 +188,7 @@ function TreeRows(props: {
   });
 }
 
-/** Changed, Accessibility only and Source-affected always: a reader learns the kinds even on a report without one. */
+/** Changed and Accessibility only always: a reader learns the kinds even on a report without one. */
 function Legend(props: { others: Appearance[] }) {
   return (
     <div className="screens-tree-legend">
@@ -197,7 +197,6 @@ function Legend(props: { others: Appearance[] }) {
       {props.others.length ? (
         <span><span className="screens-tree-dot elsewhere" aria-hidden="true" />Changed in {props.others.join(" and ")} only</span>
       ) : null}
-      <span><span className="screens-tree-dot diff-source-affected" aria-hidden="true" />Source-affected</span>
     </div>
   );
 }

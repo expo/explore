@@ -125,7 +125,8 @@ const edgeItem = (edge: Json): Json => defined({ from: str(edge.from), to: str(e
  * A screen's status as the Viewer and the PR comment show it: the review's verdict where there is one, so `modified`
  * means a visible change. A screen whose source changed but whose captures match is unchanged, including in reports
  * from before 0.19.1, which called it "needs review". A modified screen whose screenshots match changed only in what
- * assistive technology reads: `accessibility-only`.
+ * assistive technology reads: `accessibility-only`. A screen whose source changed but that has no verdict was not
+ * compared: `not-compared`.
  */
 /** Both sides captured at their verified destination route, as a verdict requires (isAccessibilityOnlyChange in the contract). */
 function verifiedPair(surface: Json): boolean {
@@ -138,6 +139,8 @@ function verdictOf(surface: Json): string | undefined {
   const status = str(review.status);
   if (status === "needs-review" && str(review.description) === "Source changed; no visible difference was captured.") return "unchanged";
   if (status === "modified" && str(rec(surface.visual).verdict) === "unchanged" && verifiedPair(surface)) return "accessibility-only";
+  // A source change nobody compared is not a change Explore saw.
+  if (status === undefined && str(surface.status) === "modified") return "not-compared";
   return status ?? str(surface.status);
 }
 

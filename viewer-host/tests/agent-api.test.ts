@@ -307,18 +307,20 @@ test("screens count and filter by what changed visibly: a source change with mat
   assert.deepEqual([midi.status, midi.sourceStatus], ["unchanged", "modified"], "its source status is still there");
 });
 
-test("a modified screen whose verified screenshots match is accessibility-only, with its source status kept", async () => {
+test("a modified screen whose verified screenshots match is accessibility-only, and one never compared is not-compared", async () => {
   const side = (id: string) => ({ route: `/${id}`, kind: "screen" });
   const verified = { status: "captured", landing: "verified", attempts: 1 };
   const surface = (id: string, verdict: string) => ({ id, status: "modified", sourceScope: "screen", head: side(id), base: side(id),
     headImage: { sha256: "c".repeat(64) }, baseImage: { sha256: "c".repeat(64) }, headOutcome: verified, baseOutcome: verified,
     review: { status: "modified", description: "Added button “Edit tempo”." }, visual: { verdict, reason: "matched", threshold: 0.1, tool: "agent-device" } });
   const report = { kind: "explore.report", review: { contract: "explore.review", pullRequest: { origin: "local", repository: "a/b", title: "HEAD vs main", base: { ref: "main", sha: "a".repeat(40) }, head: { ref: "HEAD", sha: "b".repeat(40) } },
-    runtime: { platform: "ios" }, surfaces: [surface("tempo", "modified"), surface("device-picker", "unchanged")] }, assets: [] };
+    runtime: { platform: "ios" }, surfaces: [surface("tempo", "modified"), surface("device-picker", "unchanged"),
+      // Its source changed but nothing was compared: not a change Explore saw.
+      { id: "c-explore", status: "modified", sourceScope: "screen", head: side("c/_explore"), base: side("c/_explore") }] }, assets: [] };
   const loaded = (await loadReport(zip({ "review.json": new TextEncoder().encode(JSON.stringify(report)) })))!;
   const context = { pageUrl: "http://127.0.0.1:1/p/t", platforms: ["ios"], expiresAt: null };
   const summary = JSON.parse((await agentApiReply(context, loaded, "", new URLSearchParams(), "application/json")).body as string);
-  assert.deepEqual(summary.screens, { total: 2, modified: 1, "accessibility-only": 1 });
+  assert.deepEqual(summary.screens, { total: 3, modified: 1, "accessibility-only": 1, "not-compared": 1 });
   assert.match(summary.links.changed, /status=modified,accessibility-only,added,removed/);
   const only = JSON.parse((await agentApiReply(context, loaded, "/screens", new URLSearchParams("status=accessibility-only"), "application/json")).body as string);
   assert.deepEqual(only.items.map((item: { id: string; status: string; sourceStatus: string }) => [item.id, item.status, item.sourceStatus]), [["device-picker", "accessibility-only", "modified"]]);

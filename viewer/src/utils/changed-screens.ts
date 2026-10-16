@@ -26,7 +26,7 @@ export function isChangedStatus(status: DiffStatus): status is FocusStatus {
 /**
  * A change the captures show: an added, removed or modified screen, including one modified only in what assistive
  * technology reads (its screenshots match, its accessibility tree does not). A screen whose source changed but whose
- * captures show nothing different ("No visible change", source-affected) stays in the Changes list, but Compare does
+ * captures show nothing different ("No visible change") stays in the Changes list, but Compare does
  * not step through it and Screens' Changed hides it.
  */
 export function isCapturedChange(diff: Pick<ScreenDiff, "status"> | undefined): boolean {

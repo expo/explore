@@ -175,9 +175,8 @@ imported source changed), `app-wide` (only app-wide inputs such as dependencies,
 | Accessibility only | Modified, but the screenshots match: only the accessibility tree (what screen readers and voice control read) differs. Counted as a change and listed apart from the visual ones |
 | Needs review | The screen's source changed and the comparison could not tell whether it looks different; a review target |
 | Screen variant | No source change reaches the screen, but its captures differ in runtime UI state (balances, timestamps, loaded content). Listed apart from changes |
-| Source-affected | Source impact without a comparison |
 | Unchanged | No visible difference, whether or not the screen's source changed. Explore reports visual changes; reports before 0.19.1 called a source change with no visible difference Needs review |
-| Not compared | No comparison was performed |
+| Not compared | No comparison was performed, including for a screen whose source changed. Not counted as a change: Explore reports what the captures show, not what the code might do. Earlier versions listed these as Source-affected |
 
 A difference that rounds to 0.00% of pixels is rendering noise and counts as no difference.
 Accessibility only is how readers present a `modified` verdict whose visual verdict is `unchanged`; the contract has no

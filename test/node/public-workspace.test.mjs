@@ -211,7 +211,7 @@ test("public inventory preserves source classification while unverified images s
   const workspace = publicReviewToWorkspace(review);
   const { baseline, current } = workspaceSides(workspace);
   assert.deepEqual(workspace.comparison.entries.map(({ id, status }) => ({ id, status })), [
-    { id: "games-free", status: "source-affected" }, { id: "games-pro", status: "not-compared" },
+    { id: "games-free", status: "not-compared" }, { id: "games-pro", status: "not-compared" },
     { id: "care-guide", status: "added" }, { id: "sweet-bee", status: "removed" },
     { id: "scan-mood", status: "not-compared" }, { id: "scan-breed", status: "not-compared" },
     { id: "home", status: "not-compared" }, { id: "camera-alias", status: "not-compared" },
@@ -231,9 +231,9 @@ test("public inventory preserves source classification while unverified images s
     assert.ok(payload.map.screens.every((screen) => !screen.start && !screen.terminal));
   }
   const diff = diffFor(review);
-  assert.equal(diff.screens.get("games-free").status, "source-affected", "Equal PNG hashes cannot prove verified destinations");
+  assert.equal(diff.screens.get("games-free").status, "not-compared", "Equal PNG hashes cannot prove verified destinations");
   assert.equal(diff.screens.get("games-pro").status, "not-compared", "Different PNG hashes cannot prove a route modification");
-  assert.deepEqual(diff.counts, { added: 1, modified: 0, removed: 1, unchanged: 0, "needs-review": 0, "source-affected": 1, "not-compared": 5, unavailable: 0, variant: 0 });
+  assert.deepEqual(diff.counts, { added: 1, modified: 0, removed: 1, unchanged: 0, "needs-review": 0, "source-affected": 0, "not-compared": 6, unavailable: 0, variant: 0 });
   assert.equal(workspace.review, undefined, "The adapter must not fabricate semantic review evidence");
   assert.deepEqual(review, before, "The source publication remains immutable");
 });
@@ -281,7 +281,7 @@ test("existing route-family presentation groups query variants without losing th
   assert.equal(scan.observationIds.length, 2);
   assert.deepEqual(scan.variantIds.map((id) => presentation.index.variants.get(id).name), ["mood", "breed"]);
   const displayed = presentBuildDiff(diff, presentation);
-  assert.deepEqual(displayed.counts, { added: 1, modified: 0, removed: 1, unchanged: 0, "needs-review": 0, "source-affected": 1, "not-compared": 3, unavailable: 0, variant: 0 });
+  assert.deepEqual(displayed.counts, { added: 1, modified: 0, removed: 1, unchanged: 0, "needs-review": 0, "source-affected": 0, "not-compared": 4, unavailable: 0, variant: 0 });
   assert.equal(presentation.map.screens.length, 6);
   assert.equal(scan.title, "Scan — Instruction");
   const graph = buildObservedGraph(presentation.map, presentation.index);
@@ -455,7 +455,7 @@ test("What changed uses commit-bound Git summaries without changing screenshot i
   review.surfaces[0].sourceChange = summary;
   const diff = diffFor(review).screens.get("games-free");
   assert.equal(diff.changeSummary, summary.summary);
-  assert.equal(diff.status, "source-affected");
+  assert.equal(diff.status, "not-compared");
   assert.equal(diff.beforeScreenshot, review.surfaces[0].baseImage.url);
   assert.equal(diff.afterScreenshot, review.surfaces[0].headImage.url);
   assert.doesNotMatch(diff.changeSummary, /Visual changes have not been classified/);
@@ -583,16 +583,16 @@ test("public notes survive viewer projection without changing deterministic verd
 });
 
 
-test("source-only impact and untouched uncaptured inventory stay distinct from runtime verdicts", () => {
+test("a source change without a comparison is not compared, as untouched uncaptured inventory is: it is no change the captures show", () => {
   const review = fixture("changes");
   delete review.surfaces[0].baseImage;
   delete review.surfaces[0].headImage;
   const diff = diffFor(review);
-  assert.equal(diff.screens.get("games-free").status, "source-affected");
+  assert.equal(diff.screens.get("games-free").status, "not-compared");
   assert.equal(diff.screens.get("games-pro").status, "not-compared");
   assert.equal(diff.counts.modified, 0);
   assert.equal(diff.counts.unchanged, 0);
-  assert.equal(diff.counts["source-affected"], 1);
+  assert.equal(diff.counts["source-affected"], 0);
   assert.equal(review.surfaces[0].status, "modified", "source classification is retained without inventing a visual verdict");
 });
 
@@ -657,7 +657,7 @@ test("unverified captures on either side remain diagnostics and cannot become ap
     assert.equal(affected.coverage.observations, 6, "an unverified image is retained as diagnostic evidence");
     assert.match(affected.map.gaps.find(gap => gap.screenId === surface.id).message, /destination unverified/);
     const diff = diffFor(review);
-    assert.equal(diff.screens.get(surface.id).status, "source-affected");
+    assert.equal(diff.screens.get(surface.id).status, "not-compared");
     assert.equal(diff.screens.get(surface.id).noVisibleChange, false);
     assert.deepEqual(diff.screens.get(surface.id).reviewerChanges, []);
     assert.equal(diff.counts["needs-review"], 0);
@@ -710,7 +710,7 @@ test("direct reads of existing operational verdicts preserve diagnostics without
   deepFreeze(input);
   publicReviewToWorkspace(input);
   const diff = diffFor(input);
-  assert.equal(diff.screens.get(surface.id).status, "source-affected");
+  assert.equal(diff.screens.get(surface.id).status, "not-compared");
   assert.equal(diff.counts["needs-review"], 0);
   assert.deepEqual(diff.screens.get(surface.id).reviewerChanges, []);
   assert.equal(surface.review.status, "needs-review", "the original report is not mutated by reading");

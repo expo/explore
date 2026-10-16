@@ -196,14 +196,15 @@ test('an OS version the simulator did not report is omitted, not shown as unknow
   assert.doesNotMatch(body, /unknown/i);
 });
 
-test('without evidence the comment falls back to source statuses and says comparisons did not run', () => {
+test('without evidence the comment lists only added and removed screens and says comparisons did not run', () => {
   const plain = review([surface('care-guide', 'added'), surface('sweet-bee', 'removed'), surface('settings', 'modified'), surface('cats', 'unchanged')]);
   const body = renderPublicComment(reviewOnlyState(plain));
-  assert.match(body, /<summary>🟨 Source-affected \(1\)<\/summary>/);
-  assert.match(body, /\n- `\/settings` — Source\\-affected; not compared · \[iOS\]/);
+  // A source change nobody compared is not a change the captures show.
+  assert.deepEqual(summaries(body).slice(0, 2), ['🟩 Added (1)', '🟥 Removed (1)']);
+  assert.doesNotMatch(body, /Source-affected|screen=settings/);
   assert.equal(checkRow(body, 'Visual comparison'), '| Visual comparison | 🟨 not run |');
   assert.equal(checkRow(body, 'Accessibility comparison'), '| Accessibility comparison | 🟨 not run |');
-  assert.match(platformRow(body, 'iOS'), /^\| iOS \| Example 1\\\.4\\\.0 \\\(27\\\) \| 🟩 3 changes · 0s \|/);
+  assert.match(platformRow(body, 'iOS'), /^\| iOS \| Example 1\\\.4\\\.0 \\\(27\\\) \| 🟩 2 changes · 0s \|/);
   assert.doesNotMatch(body, /Needs review|Unchanged|screen=cats/);
 });
 
@@ -261,8 +262,10 @@ test('capture problems are listed as diagnostics inside the validation block wit
   flagged.surfaces[2].headOutcome.landing = 'unverified';
   flagged.surfaces[2].review = { status: 'needs-review', description: 'old destination failure' };
   const body = renderPublicComment(state({ review: flagged, capture: { planned: { base: 3, head: 3 }, done: { base: 1, head: 2 }, baseFromCache: false } }));
-  assert.deepEqual(summaries(body), ['🟩 Added (1)', '🟥 Removed (1)', '🟨 Source-affected (1)', 'Validation · iOS 🟨 3/6 captured']);
-  assert.match(platformRow(body, 'iOS'), /\| 🟨 3 changes · 3 unavailable · 1 unattributed · 6m 12s \|/);
+  // /settings could not be compared, so it is no change: its failures are named under Validation.
+  assert.deepEqual(summaries(body), ['🟩 Added (1)', '🟥 Removed (1)', 'Validation · iOS 🟨 3/6 captured']);
+  assert.match(platformRow(body, 'iOS'), /\| 🟨 2 changes · 3 unavailable · 1 unattributed · 6m 12s \|/);
+  assert.match(body, /\n- Base · \/settings · /);
   assert.match(body, /\*\*iOS\*\* · base 1\/3 verified · 2 unavailable · head 1\/3 verified · 1 unattributed · 1 unavailable/);
   assert.match(body, /\n- Base · \/cats\/sweet\\-bee · BASE\\_SESSION\\_FAILED: base simulator disconnected; token=\\\[redacted\\\] Next action: Restart the base simulator session and rerun capture\\\./);
   assert.match(body, /\n- Head · \/cats\/care\\-guide · HEAD\\_SESSION\\_FAILED/);
@@ -284,7 +287,7 @@ test('zero eligible pairs are visibly skipped instead of successful comparisons'
   assert.equal(checkRow(body, 'Route verification'), '| Route verification | 🟨 0/6 verified · 6 unattributed |');
   assert.equal(checkRow(body, 'Visual comparison'), '| Visual comparison | 🟨 0 compared · threshold 0.1 · 2 skipped |');
   assert.equal(checkRow(body, 'Accessibility comparison'), '| Accessibility comparison | 🟨 0 compared · 0 descriptions |');
-  assert.match(platformRow(body, 'iOS'), /\| 🟨 4 changes · 6 unattributed · 6m 12s \|/);
+  assert.match(platformRow(body, 'iOS'), /\| 🟨 2 changes · 6 unattributed · 6m 12s \|/, 'the uncompared modified screens are not changes');
 });
 
 test('the review-only comment counts failed outcomes in planned coverage and lists the reason', () => {

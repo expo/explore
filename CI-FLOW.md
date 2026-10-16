@@ -143,6 +143,11 @@ A failure at any stage is recorded in `state.failure`, a partial report is writt
 | Only app-wide inputs changed (`app-wide`) | Modified | Unchanged (one line in the PR comment) | Needs review |
 | No source change (`none`) | Screen variant (listed apart from Changes) | Unchanged | Unchanged |
 
+A screen whose source changed but whose screenshots were not compared (it is outside the capture scope) has no
+verdict: the PR comment does not list it, the agent API reports `not-compared`, and the Viewer marks it Not compared.
+Earlier versions listed it as Source-affected. A planned capture that failed is counted as unavailable and named under
+Validation.
+
 "Differs" means the screenshots differ or the accessibility tree does. A Modified screen whose screenshots match is
 **Accessibility only**: what screen readers and voice control read changed (a label, a role, an element added to the tree)
 but nothing shows in the capture. It is still a change: the PR comment counts it apart ("3 visual changes · 12
