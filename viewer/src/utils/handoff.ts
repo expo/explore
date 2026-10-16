@@ -54,7 +54,7 @@ export function handoffPrompt(input: HandoffInput, view?: HandoffView): string {
     input.pageUrl,
     "",
     `Fetch the link first${local ? " (from this machine, with curl if your fetch tool refuses local addresses)" : ""}. It explains the report's JSON API. Go through the changed screens, compare the before and after screenshots${appearances}, and tell me which changes look intended and which look like regressions. For each regression, name the source file to fix.`,
-    ...(local ? ["", "The link is served by `expo-explore capture:review` on this machine and stops working when it exits."] : []),
+    ...(local ? ["", "The link is served by `expo-explore capture` on this machine and stops working when it exits."] : []),
   ];
   if (view) {
     const where = [view.screen, view.view, view.platform, view.appearance].filter(Boolean).join(" · ");

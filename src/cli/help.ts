@@ -17,11 +17,14 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
        (--offline skips EAS and GitHub; --check-model sends one small request with the local provider key)
   doctor --capture [--project DIRECTORY] [--output DIRECTORY] [--platform ios|android] [--yes]
        (captures the committed HEAD like the baseline workflow, with your eas login, and reports each route)
-  capture:review [--base REF] [--head REF | --uncommitted [--include-untracked]] [--platform ios|android] [--scope all|changes]
+  capture [--base REF] [--head REF | --committed] [--platform ios|android] [--scope all|changes]
        [--upload [--expires-in 7d|30d|never]] [--no-open] [--no-cache] [--output DIRECTORY] [--project DIRECTORY]
        (on this machine: checks out both commits in temporary worktrees, captures them with your eas login and your
-        local claude or codex login, and opens the report; the base defaults to where HEAD left the default branch;
-        it runs both commits' code as you, so review only commits you would run)
+        local claude or codex login, and opens the report; the head is HEAD with your uncommitted changes, as eas build
+        uploads them (--committed, or cli.requireCommit in eas.json, leaves them out); the base defaults to where HEAD
+        left the default branch;
+        without .expo-explore/config.yaml it uses the defaults setup would write;
+        it runs both commits' code as you, so review only commits you would run; capture:review is the same command)
   view [--catalog FILE] [--port N] [--no-open]
        (opens a report in the Viewer)
   reports [list | open ID | add REPORT... | upload ID | rm ID | prune] [--all] [--json]

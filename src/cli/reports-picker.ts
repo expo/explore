@@ -129,7 +129,7 @@ export function renderPicker(state: PickerState, options: { width: number; heigh
   if (!runs.length) {
     const empty = state.runs.length
       ? [`  ${paint.dim(state.filter ? `Nothing matches "${state.filter}".` : `No saved runs of ${state.repository}. Press tab for every repository.`)}`]
-      : [`  ${paint.text("No saved runs yet.")}`, `  ${paint.dim("expo-explore capture:review reviews your branch on this machine, and its report is kept here.")}`];
+      : [`  ${paint.text("No saved runs yet.")}`, `  ${paint.dim("expo-explore capture reviews your branch on this machine, and its report is kept here.")}`];
     return [...header, ...empty, "", ...footer].map(line => fit(line, width));
   }
   const selected = runs[Math.min(state.selected, runs.length - 1)]!;

@@ -152,18 +152,18 @@ Repeat `expo-explore doctor --json` and fix each `fail` until none remain, colle
 
 ## Review a change on this machine
 
-Once `.expo-explore/config.yaml` is committed, the same review CI runs works locally, between any two commits:
+The same review CI runs works locally, between any two commits. It reads `.expo-explore/config.yaml` from the head commit, else from the checkout when setup wrote it but it is not committed, else uses the defaults `setup --non-interactive` would write (with several simulator profiles, the one named `explore`), so it works before setup:
 
 ```sh
-npx @expo/explore capture:review                   # HEAD against where it left the default branch
-npx @expo/explore capture:review --uncommitted     # your uncommitted changes to tracked files against HEAD's base
-npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all
+npx @expo/explore capture               # HEAD and the uncommitted changes, against where HEAD left the default branch
+npx @expo/explore capture --committed   # HEAD alone
+npx @expo/explore capture --base v1.3.0 --head v1.4.0 --scope all
 ```
 
 - It prints which commits it compares. Each is checked out as a detached worktree in a temporary directory, its dependencies installed (frozen lockfile, no scripts, no Explore credentials in the environment), and removed afterwards; the user's checkout, index and branches are never touched.
 - It runs both commits' code as the user (dependency installs, the app config, bundling). Before reviewing a branch the user did not write, say so and ask; credential-free installs are not a sandbox.
 - Logins: `EXPO_TOKEN` and the provider's API key when they are set; otherwise the user's `eas login` and their local `claude` or `codex` login for the configured provider. If `eas whoami` fails, tell them to run `eas login`.
-- `--uncommitted` includes tracked files only. `--include-untracked` adds untracked, non-ignored files, which are uploaded with the EAS build, so check the listed files first and never include secrets.
+- Without `--head`, the head is HEAD plus the working tree's changes, untracked non-ignored files included, which is what `eas build` uploads. It lists them; check that list for secrets the user would not want built. `--committed` reviews HEAD alone, and an `eas.json` with `cli.requireCommit: true` leaves the changes out unless `--uncommitted` is passed.
 - Every configured platform is reviewed unless `--platform` picks one. It opens the report in a local Viewer; `--upload` hosts it instead and prints the link, `--no-open` or `--json` only prints the report paths.
 - Every run is kept on this machine for 30 days: `npx @expo/explore reports list` (or `--json`) shows them, `reports open <id|latest>` reopens one in the local Viewer, and `reports upload <id>` hosts it without capturing again. Run bare in a terminal, `reports` is an arrow-key picker for the user.
 - To host a report after the fact, run `npx @expo/explore report:upload <report.zip>...` with the paths it printed (or the `--output` directory's `<platform>/report.zip`), one per platform. It uses the same project as `--upload` and does not capture again.
@@ -176,7 +176,7 @@ npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all
 
 - **Releases.** Unless the user asks otherwise, compare each release with the last stable release, with `scope: all` (every screen, so the report shows the whole release with what changed marked) and, when hosted previews are on, `expires-in: never` (the link outlives the 30-day artifact). For every tag as it is pushed, add the `release-review.yml` from the README's "Compare any two commits" section: it finds the newest earlier tag without a `-` (so a release candidate is compared with the last stable release) and calls `explore-compare.yml` with `secrets: inherit` and `permissions: { contents: read, actions: read }`. A nightly compares with yesterday's tag; a release branch with `main`.
 - **Once, on demand.** The workflow must be on the default branch to be dispatched: `gh workflow run explore-compare.yml -f base=<ref> -f head=<ref> -f scope=all -f expires-in=never`, or **Run workflow** under Actions → Expo Explore compare.
-- **Without CI.** `npx @expo/explore capture:review --base <ref> --head <ref> --scope all --upload` runs the same comparison on this machine (see the previous section).
+- **Without CI.** `npx @expo/explore capture --base <ref> --head <ref> --scope all --upload` runs the same comparison on this machine (see the previous section).
 - Call the workflow once per workflow run (a second call in the same run reuses the first one's artifact names). A `base` the baseline workflow captured in the last 30 days is reused, so only `head` is captured.
 - To verify, run it once on the latest tag and open the run's summary: it lists each platform's result and links the report.
 

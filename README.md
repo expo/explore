@@ -20,9 +20,49 @@ Explore maps your app: a screenshot of every screen, connected by the taps betwe
 
 </details>
 
-## Try it on your app
+## Quick start
 
-Paste this into Claude Code or Codex from your app's directory. It explores a build you point to, or an Expo project straight from its source:
+Review a change to your own app, on your machine. You need an Expo SDK 57+ app with Expo Router or React Navigation, Node.js 24.12+, and EAS Simulator access ([join the waitlist](https://expo.dev/services/simulators)). No API keys, no CI.
+
+From your app's directory:
+
+1. **Make the app buildable on EAS, if it is not yet.**
+
+   ```sh
+   npx eas-cli@latest login
+   npx eas-cli@latest init
+   ```
+
+   Then set `ios.bundleIdentifier` in your app config, add a simulator profile to `eas.json`, and commit. The review builds your last commit as the "before".
+
+   ```json
+   { "build": { "explore": { "ios": { "simulator": true } } } }
+   ```
+
+2. **Change a screen, then review the change.** Edit some text near the top of a screen (Explore captures the first screenful) and run:
+
+   ```sh
+   npx @expo/explore capture
+   ```
+
+   Explore builds your last commit and your uncommitted changes on EAS, captures the screens the changes can affect, before and after, on EAS Simulator, and opens the report in your browser. The first run waits for an EAS build; later runs reuse it while your native code is unchanged.
+
+Or paste this into Claude Code or Codex from your app's directory:
+
+```text
+Show me an Expo Explore review of a change to this app. Follow the "Review a change on
+this machine" section of https://unpkg.com/@expo/explore/skills/explore-setup/SKILL.md.
+If the app cannot build for the iOS Simulator on EAS yet, set that up (an EAS project,
+ios.bundleIdentifier, an "explore" profile with ios.simulator: true) and ask me before
+you commit it. If I have no uncommitted changes, change some text near the top of a
+screen. Then run npx @expo/explore capture and open the report.
+```
+
+Explore uses its defaults until you run `npx @expo/explore setup`, which writes `.expo-explore/config.yaml` for you to change. Next: [review every pull request](#set-up-ci).
+
+## Map every screen of any app
+
+To map every screen of an app instead, with no config, paste this into Claude Code or Codex from your app's directory. It explores a build you point to, or an Expo project straight from its source:
 
 ```text
 Show me Expo Explore working on this app. Follow
@@ -89,7 +129,7 @@ One card per screen the run reached, laid out by how many taps it took, with the
 
 ### Review a change before you push it
 
-Once Explore is [set up](#set-up-ci) (`.expo-explore/config.yaml` committed), the review a PR gets also runs on your machine, between any two commits. No tokens or keys to set: it uses your `eas login` and your Claude Code or Codex login.
+The review a PR gets also runs on your machine, between any two commits, with your committed `.expo-explore/config.yaml` or, before you have one, [the defaults](#quick-start). No tokens or keys to set: it uses your `eas login` and your Claude Code or Codex login.
 
 ```text
 Review my current changes with Expo Explore. Follow the "Review a change on this machine"
@@ -108,13 +148,13 @@ Every run is kept on your machine for 30 days. `npx @expo/explore reports` lists
 <summary><strong>Run it yourself</strong></summary>
 
 ```sh
-npx @expo/explore capture:review                     # HEAD against where it left the default branch
-npx @expo/explore capture:review --uncommitted       # your uncommitted changes too
-npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all --upload
+npx @expo/explore capture               # HEAD and your uncommitted changes, against where HEAD left the default branch
+npx @expo/explore capture --committed   # HEAD alone
+npx @expo/explore capture --base v1.3.0 --head v1.4.0 --scope all --upload
 ```
 
 - It checks out both commits as temporary worktrees, installs their dependencies, captures every configured platform on EAS Simulator (`--platform` picks one), and opens the report in a local Viewer. `--upload` hosts it and prints the link; `report:upload <report.zip>` hosts one you already have.
-- Your checkout, index and branches are never touched. `--uncommitted` takes tracked changes only; `--include-untracked` adds untracked files, which are uploaded with the EAS build.
+- Your checkout, index and branches are never touched. Your uncommitted changes, untracked files included, are reviewed as `eas build` would upload them; `--committed`, or `cli.requireCommit: true` in `eas.json`, leaves them out.
 - It runs both commits' code on your machine, as you: installing their dependencies, evaluating the app config, and bundling the JavaScript. That is what checking them out and running them would do, so review only commits you would run, and someone else's branch only if you trust it.
 - Installs run without credential environment variables, which keeps tokens out of reach of a registry a commit's `.npmrc` names; that is not a sandbox. A registry that needs `${NPM_TOKEN}` in the project's `.npmrc` must be authenticated in your own `~/.npmrc`.
 - Captures are cached in `~/.cache/expo-explore`, so the same base is not captured twice (`--no-cache` skips it); a capture unused for 30 days goes, and the cache stays under 2 GB. Ctrl+C stops the run's simulator sessions.
@@ -154,8 +194,8 @@ report:
 ```
 
 - Run `expo-explore setup --workflows` after enabling it to add the `deploy` job.
-- A [comparison of two commits](#compare-any-two-commits) links its hosted report from the run's summary instead of a PR comment. `capture:review --upload` on your machine deploys to the same project with your `eas login`.
-- `expo-explore report:upload <report.zip>...` hosts reports already on your machine the same way: a review's reports (one per platform, from `capture:review --output` or a downloaded `explore-review` artifact) or an `explore:binary` report.
+- A [comparison of two commits](#compare-any-two-commits) links its hosted report from the run's summary instead of a PR comment. `capture --upload` on your machine deploys to the same project with your `eas login`.
+- `expo-explore report:upload <report.zip>...` hosts reports already on your machine the same way: a review's reports (one per platform, from `capture --output` or a downloaded `explore-review` artifact) or an `explore:binary` report.
 - `EXPO_TOKEN` must be able to create the EAS project, so use a [robot user's](https://docs.expo.dev/accounts/programmatic-access/) token.
 - The report is encrypted, and only a request carrying the link's token can open it. Treat the link like a shared file link; see [report access](docs/private-review.md#hosted-previews).
 
@@ -172,7 +212,7 @@ The prompt above walks through these steps with you. To do them yourself:
    - `EXPO_TOKEN`: create it in [Expo access tokens](https://expo.dev/settings/access-tokens). For [hosted previews](#hosted-previews), use a [robot user](https://docs.expo.dev/accounts/programmatic-access/) that can create projects.
    - A secret for each `{{secret:NAME}}` in your setup steps. Run `npx @expo/explore setup --workflows` after you add one.
 4. Commit, merge to the default branch, and run **Expo Explore baseline** from GitHub Actions.
-5. Open a PR. **Expo Explore review** runs and posts a comment with the report. To see a whole review of your branch first, run `npx @expo/explore capture:review` on your machine.
+5. Open a PR. **Expo Explore review** runs and posts a comment with the report. To see a whole review of your branch first, run `npx @expo/explore capture` on your machine.
 
 A failed run shows an error code and a next action in the PR comment; see [CI troubleshooting](docs/quickstart-ci.md#diagnose-a-failed-run).
 
@@ -252,7 +292,7 @@ There are a few ways to snapshot a release:
 
 - **On demand:** in your repository's Actions tab, open **Expo Explore compare**, choose **Run workflow**, and set `base` to the last release's tag (`v1.3.0`), `head` to the new tag or release candidate (`v1.4.0-rc.1`), `scope` to `all` and `expires-in` to `never`. The run's summary links the report.
 - **Automatically, on every tag:** add the `release-review.yml` in [The comparison workflow](#compare) below. It compares each tag, release candidates included, with the last stable tag, so a release candidate is reviewed against what people have now.
-- **On your machine, without CI:** `npx @expo/explore capture:review --base v1.3.0 --head v1.4.0 --scope all --upload`, with your `eas login`. `npx @expo/explore reports` lists the runs you have kept.
+- **On your machine, without CI:** `npx @expo/explore capture --base v1.3.0 --head v1.4.0 --scope all --upload`, with your `eas login`. `npx @expo/explore reports` lists the runs you have kept.
 
 `scope: all` captures every screen, not only those whose source changed, so the report shows the whole release with what changed since the last one marked; `expires-in: never` keeps its link.
 
@@ -408,7 +448,7 @@ curl -s "$LINK/api/v1/screens?status=modified" | jq '.items[] | {route, status, 
 4. It compares the captures. A screen with a source change is **Modified** if its captures differ.
 5. It uploads the report to GitHub Actions and posts a PR comment.
 
-The same review runs for any two commits without a PR ([`explore-compare.yml`](#compare-any-two-commits), linking the report from the run summary) and on your machine (`capture:review`, [above](#review-a-change-before-you-push-it)). The workflows' logic lives in `expo-explore ci:*` commands, so a fix reaches CI with the `@expo/explore` version the workflows pin.
+The same review runs for any two commits without a PR ([`explore-compare.yml`](#compare-any-two-commits), linking the report from the run summary) and on your machine (`capture`, [above](#review-a-change-before-you-push-it)). The workflows' logic lives in `expo-explore ci:*` commands, so a fix reaches CI with the `@expo/explore` version the workflows pin.
 
 Reports and baselines are kept for 30 days and diagnostics for 7. Hosted deployments are never deleted automatically; see [report access](docs/private-review.md).
 

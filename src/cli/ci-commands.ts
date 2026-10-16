@@ -221,11 +221,12 @@ export async function captureBaseline(): Promise<void> {
   output({ ok: true, ...await runBaselineCi({ ...(platform ? { platform } : {}), project, sha: required("sha"), output: required("output"), config, progress: stderrProgress() }) });
 }
 
-/** `capture:review [--base REF] [--head REF | --uncommitted]`: a local review, opened in the Viewer or hosted with --upload. */
+/** `capture` (or `capture:review`) `[--base REF] [--head REF | --committed]`: a local review, opened in the Viewer or hosted with --upload. */
 async function localReview(): Promise<void> {
   const platform = platformFlag();
   const result = await runLocalReview({ project: flag("project") ?? process.cwd(), base: flag("base"), head: flag("head"),
-    uncommitted: has("uncommitted"), untracked: has("include-untracked"), ...(platform ? { platform } : {}),
+    // --include-untracked is accepted from before untracked files were included by default.
+    committed: has("committed"), uncommitted: has("uncommitted"), ...(platform ? { platform } : {}),
     scope: flag("scope"), expiresIn: flag("expires-in"), cache: !has("no-cache"), configPath: flag("config"), progress: stderrProgress() });
   if (has("output")) {
     for (const report of result.reports) {

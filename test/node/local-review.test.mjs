@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { lstat, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appEnvironment, captureCacheDirectory, defaultBase, installDependencies, keepCapture, localInstallCommand, reportRef, runLocalReview, snapshotWorkingTree } from '../../dist/ci/local-review.js';
+import { appEnvironment, captureCacheDirectory, defaultBase, installDependencies, keepCapture, localInstallCommand, localReviewConfig, reportRef, reviewHeadSource, runLocalReview, snapshotWorkingTree } from '../../dist/ci/local-review.js';
 import { mkdir, readdir } from 'node:fs/promises';
 import { startLocalReportServer } from '../../dist/report/local-report-server.js';
 import { fixture, git } from '../helpers/public-ci-fixture.mjs';
@@ -54,6 +54,56 @@ test('the working tree becomes a commit on HEAD without touching the index, file
   assert.deepEqual(withUntracked.untracked, ['untracked.txt'], 'named, since they would be uploaded with the build');
   assert.equal(spawnSync('git', ['-C', root, 'cat-file', '-e', `${withUntracked.sha}:ignored.txt`]).status !== 0, true, 'ignored files never go in');
   assert.deepEqual({ status: git(root, 'status', '--porcelain'), index: git(root, 'diff', '--cached', '--name-only'), refs: git(root, 'for-each-ref'), head: git(root, 'rev-parse', 'HEAD') }, before);
+});
+
+test('the head is the working tree, as eas build uploads it, unless --committed, --head, or eas.json requireCommit says otherwise', async t => {
+  const project = await scratch(t, 'explore-local-head-');
+  assert.equal(await reviewHeadSource({}, project), 'working-tree', 'no eas.json');
+  await writeFile(join(project, 'eas.json'), JSON.stringify({ cli: { version: '>= 16' }, build: {} }));
+  assert.equal(await reviewHeadSource({}, project), 'working-tree');
+  assert.equal(await reviewHeadSource({ committed: true }, project), 'commit');
+  assert.equal(await reviewHeadSource({ head: 'HEAD' }, project), 'working-tree', '--head HEAD is the default head');
+  assert.equal(await reviewHeadSource({ head: 'v1.0.0' }, project), 'commit');
+  await writeFile(join(project, 'eas.json'), JSON.stringify({ cli: { requireCommit: true } }));
+  assert.equal(await reviewHeadSource({}, project), 'require-commit', 'eas build refuses uncommitted changes here, so the review leaves them out');
+  assert.equal(await reviewHeadSource({ uncommitted: true }, project), 'working-tree', '--uncommitted includes them anyway');
+  await writeFile(join(project, 'eas.json'), '{ not json');
+  assert.equal(await reviewHeadSource({}, project), 'working-tree');
+  for (const conflict of [{ uncommitted: true, head: 'v1.0.0' }, { uncommitted: true, committed: true }]) {
+    await assert.rejects(reviewHeadSource(conflict, project), { code: 'LOCAL_REVIEW_UNCOMMITTED_HEAD' });
+  }
+});
+
+test('a review uses the head commit\'s config, else an uncommitted one, else the defaults setup would write', async t => {
+  const project = await scratch(t, 'explore-local-app-');
+  const head = await scratch(t, 'explore-local-head-');
+  const json = (path, value) => writeFile(join(project, path), JSON.stringify(value));
+  await json('package.json', { dependencies: { expo: '*', 'expo-router': '*' } });
+  await json('app.json', { expo: { name: 'Test app', scheme: 'test-app', ios: { bundleIdentifier: 'com.example.test' } } });
+  await json('eas.json', { build: { explore: { ios: { simulator: true } } } });
+  const configPath = '.expo-explore/config.yaml';
+  const resolve = (options = {}) => localReviewConfig({ project, head, configPath, explicit: false, ...options });
+
+  const messages = [];
+  const defaults = await resolve({ progress: message => messages.push(message) });
+  assert.equal(defaults.mode, 'deterministic');
+  assert.deepEqual([defaults.app.platform, defaults.app.bundleId, defaults.app.easProfile, defaults.app.scheme], ['ios', 'com.example.test', 'explore', 'test-app']);
+  assert.equal(defaults.navigation.provider, 'expo-router');
+  assert.equal(defaults.exploration.scope, 'changes');
+  assert.match(messages.join('\n'), /setup's defaults \(com\.example\.test, EAS profile explore, iPhone 17\)/);
+  await assert.rejects(lstat(join(project, '.expo-explore')), { code: 'ENOENT' }, 'the defaults are not written');
+
+  const config = name => `mode: deterministic\napp:\n  name: ${name}\n  platform: ios\n  bundleId: com.example.test\n  easProfile: explore\n`
+    + 'navigation:\n  provider: expo-router\ndevice:\n  name: iPhone 17\nexploration:\n  scope: changes\n';
+  await mkdir(join(project, '.expo-explore')); await writeFile(join(project, configPath), config('Checkout'));
+  assert.equal((await resolve()).app.name, 'Checkout', 'setup ran but its config is not committed yet');
+  await mkdir(join(head, '.expo-explore')); await writeFile(join(head, configPath), config('Head'));
+  assert.equal((await resolve()).app.name, 'Head', 'the commit under review wins');
+
+  await assert.rejects(resolve({ configPath: 'other.yaml', explicit: true }), { code: 'CONFIG_READ_FAILED' }, 'a --config path must be in the commit');
+  await rm(join(project, '.expo-explore'), { recursive: true }); await rm(join(head, '.expo-explore'), { recursive: true });
+  await rm(join(project, 'eas.json'));
+  await assert.rejects(resolve(), error => error.code === 'LOCAL_REVIEW_CONFIG_DEFAULTS' && /no \.expo-explore\/config\.yaml.*No eas\.json found/s.test(error.message));
 });
 
 test('with no base, a branch is compared with where it left the default branch', async t => {

@@ -26,9 +26,12 @@ const aliases: Record<string, string> = {
   "config platforms": "config:platforms",
 };
 
+/** One-word names for commands people type: `capture` is the local review, `capture:review` without its CI flags. */
+const shortNames: Record<string, string> = { capture: "capture:review" };
+
 const first = argv[0] ?? "help";
 const pair = `${first} ${argv[1] ?? ""}`.trim();
-export const command = aliases[pair] ?? first;
+export const command = aliases[pair] ?? shortNames[first] ?? first;
 export const resultContract = ["source:verify", "capture:review", "capture:baseline", "ci:report", "ci:publish", "ci:failure", "ci:deploy", "ci:pr", "ci:find-baseline", "ci:compare-refs", "ci:after-capture", "config:platforms", "explore:binary", "explore:session", "report:upload", "reports"].includes(command)
   ? "explore.result" : QUERY_CONTRACT;
 const commandArgCount = aliases[pair] ? 2 : 1;
@@ -81,7 +84,7 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
   export: { output: "value" },
   "export:web": {catalog:"value",output:"value"},
   "capture:review": { "base-project":"value", "head-project":"value", "pull-request":"value", compare:"value", output:"value", config:"value", platform:"value", scope:"value", "expires-in":"value",
-    base:"value", head:"value", project:"value", uncommitted:"boolean", "include-untracked":"boolean", upload:"boolean", "no-open":"boolean", "no-cache":"boolean", port:"value" },
+    base:"value", head:"value", project:"value", committed:"boolean", uncommitted:"boolean", "include-untracked":"boolean", upload:"boolean", "no-open":"boolean", "no-cache":"boolean", port:"value" },
 
 
 

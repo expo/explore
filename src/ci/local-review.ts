@@ -8,7 +8,7 @@ import { runCiReview } from "./pipeline.js";
 import { resolveCommit } from "./workflow-steps.js";
 import { ciLayout, installCommand, type PackageManager } from "./workflow-install.js";
 import { configPlatforms, readExploreConfig, resolvePlatformConfig, withRunOverrides, DEFAULT_EXPLORE_CONFIG_PATH, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
-import { AGENT_PROVIDERS } from "../config/setup.js";
+import { AGENT_PROVIDERS, defaultExploreConfig } from "../config/setup.js";
 import type { PrepareCiExplorationOptions } from "../capture/agent/exploration.js";
 import { createCiAgentSession } from "../capture/agent/session.js";
 import { createLocalCiAgentSession } from "../capture/agent/session-local.js";
@@ -32,10 +32,10 @@ export type LocalReviewOptions = {
   project: string;
   base?: string | undefined;
   head?: string | undefined;
-  /** Review uncommitted changes to tracked files as the head (the working tree, not a commit). */
+  /** Review HEAD alone, leaving out the working tree's changes. */
+  committed?: boolean | undefined;
+  /** Review the working tree even when eas.json sets cli.requireCommit. Without --head this is the default. */
   uncommitted?: boolean | undefined;
-  /** With `uncommitted`: also include untracked files that are not ignored. */
-  untracked?: boolean | undefined;
   platform?: ExplorePlatform | undefined;
   scope?: string | undefined;
   expiresIn?: string | undefined;
@@ -89,7 +89,7 @@ export async function snapshotWorkingTree(root: string, options: { untracked?: b
   for (const file of untracked) bytes += (await stat(join(root, file)).catch(() => ({ size: 0 }))).size;
   if (bytes > UNTRACKED_LIMIT_BYTES) throw new CiError({ code: "LOCAL_REVIEW_UNTRACKED_TOO_LARGE", stage: "preflight",
     message: `The untracked files add up to ${Math.round(bytes / 1024 / 1024)} MB; they would be uploaded with the EAS build.`,
-    nextAction: "Ignore or commit the large files, or leave out --include-untracked." });
+    nextAction: "Ignore or commit the large files, or pass --committed to review HEAD alone." });
   must(git(root, ["add", options.untracked ? "-A" : "-u", "--", "."], environment), "Cannot stage the working tree", "Check the repository's state.");
   const tree = must(git(root, ["write-tree"], environment), "Cannot write the working tree", "Check the repository's state.");
   await rm(index, { force: true });
@@ -271,6 +271,49 @@ export async function stopRecordedSessions(outputs: string[], environment: NodeJ
   return stopped;
 }
 
+/**
+ * What the head of a review without --head is: the working tree, as `eas build` uploads it (tracked and untracked
+ * files, not ignored ones), unless the app's eas.json sets cli.requireCommit, which makes eas build refuse uncommitted
+ * changes, or --committed asks for HEAD alone. --head names a commit, so the working tree is never part of it.
+ */
+export async function reviewHeadSource(options: Pick<LocalReviewOptions, "head" | "committed" | "uncommitted">, project: string):
+  Promise<"working-tree" | "commit" | "require-commit"> {
+  const namedHead = options.head !== undefined && options.head !== "HEAD";
+  if (options.uncommitted && (namedHead || options.committed)) throw new CiError({ code: "LOCAL_REVIEW_UNCOMMITTED_HEAD", stage: "preflight",
+    message: "--uncommitted reviews the working tree, which is on top of HEAD.", nextAction: `Leave out ${namedHead ? "--head" : "--committed"}, or leave out --uncommitted.` });
+  if (namedHead || options.committed) return "commit";
+  if (options.uncommitted) return "working-tree";
+  let eas: unknown;
+  try { eas = JSON.parse(await readFile(join(project, "eas.json"), "utf8")); } catch { return "working-tree"; }
+  const cli = eas !== null && typeof eas === "object" ? (eas as { cli?: unknown }).cli : undefined;
+  return cli !== null && typeof cli === "object" && (cli as { requireCommit?: unknown }).requireCommit === true ? "require-commit" : "working-tree";
+}
+
+/**
+ * The config a local review runs with: the head commit's; else the one in your checkout, when setup has written it but
+ * it is not committed yet; else the defaults setup would write, so an app can be reviewed before it is set up. A
+ * config path passed with --config must be in the head commit.
+ */
+export async function localReviewConfig(options: { project: string; head: string; configPath: string; explicit: boolean;
+  platform?: ExplorePlatform | undefined; progress?: Progress }): Promise<ExploreConfig> {
+  const progress = options.progress ?? silentProgress;
+  if (options.explicit || await exists(join(options.head, options.configPath))) return readExploreConfig(options.head, options.configPath);
+  if (await exists(join(options.project, options.configPath))) {
+    progress(`config: ${options.configPath} from your checkout (it is not in the head commit)`);
+    return readExploreConfig(options.project, options.configPath);
+  }
+  let config: ExploreConfig;
+  try { config = await defaultExploreConfig(options.project, options.platform); }
+  catch (error) {
+    throw new CiError({ code: "LOCAL_REVIEW_CONFIG_DEFAULTS", stage: "preflight",
+      message: `There is no ${options.configPath}, so this review uses setup's defaults, which need this: ${(error as Error).message}`,
+      nextAction: "Fix that and rerun (with several simulator profiles, the one named explore is used), or run expo-explore setup to write a config." });
+  }
+  progress(`config: none yet, so setup's defaults (${config.app.bundleId}, EAS profile ${config.app.easProfile}, ${config.device.name}); `
+    + "expo-explore setup writes one you can change");
+  return config;
+}
+
 export async function runLocalReview(options: LocalReviewOptions): Promise<LocalReviewResult> {
   const environment = { ...(options.environment ?? process.env) };
   const progress = options.progress ?? silentProgress;
@@ -306,14 +349,14 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     // The commits.
     const headRef = options.head ?? "HEAD";
     let head: LocalReviewResult["head"];
-    if (options.uncommitted) {
-      if (options.head && options.head !== "HEAD") throw new CiError({ code: "LOCAL_REVIEW_UNCOMMITTED_HEAD", stage: "preflight",
-        message: "--uncommitted reviews the working tree, which is on top of HEAD.", nextAction: "Leave out --head, or leave out --uncommitted." });
-      const snapshot = await snapshotWorkingTree(root, { untracked: options.untracked, work });
+    const source = await reviewHeadSource(options, project);
+    if (source === "require-commit") progress("head: HEAD; eas.json sets cli.requireCommit, so uncommitted changes are left out as eas build leaves them out (--uncommitted includes them)");
+    if (source === "working-tree") {
+      const snapshot = await snapshotWorkingTree(root, { untracked: true, work });
       head = snapshot ? { ref: "uncommitted changes", sha: snapshot.sha, uncommitted: snapshot.changed } : { ref: "HEAD", sha: resolveCommit(root, "HEAD", "head") };
-      if (snapshot) progress(`head: your uncommitted changes to ${snapshot.changed.length} file${snapshot.changed.length === 1 ? "" : "s"}`
-        + (snapshot.untracked.length ? ` (untracked, uploaded with the build and kept in .git/objects until git gc: ${snapshot.untracked.join(", ")})` : ""));
-      else progress("head: no uncommitted changes, reviewing HEAD");
+      if (snapshot) progress(`head: HEAD with your uncommitted changes to ${snapshot.changed.length} file${snapshot.changed.length === 1 ? "" : "s"}, as eas build would upload them`
+        + (snapshot.untracked.length ? ` (untracked, kept in .git/objects until git gc: ${snapshot.untracked.join(", ")})` : "") + "; --committed leaves them out");
+      else progress("head: HEAD (no uncommitted changes)");
     } else {
       const sha = resolveCommit(root, headRef, "head");
       head = { ref: reportRef(root, headRef, sha), sha };
@@ -321,7 +364,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     const baseSha = options.base ? resolveCommit(root, options.base, "base") : undefined;
     const base = options.base && baseSha ? { ref: reportRef(root, options.base, baseSha), sha: baseSha } : defaultBase(root, head.sha);
     if (base.sha === head.sha) throw new CiError({ code: "COMPARE_SAME_COMMIT", stage: "preflight", message: `${base.ref} and ${head.ref} are the same commit (${head.sha.slice(0, 8)}).`,
-      nextAction: "Pass --base with an earlier commit, or --uncommitted to review your uncommitted changes." });
+      nextAction: "Change something to review it, or pass --base with an earlier commit." });
     progress(`comparing ${head.ref} (${head.sha.slice(0, 8)}) with ${base.ref} (${base.sha.slice(0, 8)})`);
 
     // The checkouts, and the config at head.
@@ -333,7 +376,8 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     }
     const projects = { base: join(checkouts.base, appDirectory), head: join(checkouts.head, appDirectory) };
     const configPath = options.configPath ?? DEFAULT_EXPLORE_CONFIG_PATH;
-    const rawConfig = await readExploreConfig(projects.head, configPath);
+    const rawConfig = await localReviewConfig({ project, head: projects.head, configPath, explicit: options.configPath !== undefined,
+      platform: options.platform, progress });
     const platforms = options.platform ? [options.platform] : configPlatforms(rawConfig);
     const repository = repositoryName(root, rawConfig);
 

@@ -78,11 +78,16 @@ test("EAS profile inheritance is respected and device builds cannot be selected"
     explore: { extends: "base", ios: { buildConfiguration: "Release" } },
     production: { extends: "base", ios: { simulator: false } },
   } });
-  await assert.rejects(runExploreSetup({ project, ...options }), /--profile/);
   await assert.rejects(runExploreSetup({ project, ...options, profile: "production" }), /--profile/);
   await assert.rejects(stat(path), { code: "ENOENT" });
-  await runExploreSetup({ project, ...options, profile: "explore" });
+  // Of several simulator profiles, the one named explore is the default; without one, setup asks for --profile.
+  await runExploreSetup({ project, ...options });
   assert.equal((await readExploreConfig(project)).app.easProfile, "explore");
+  await rm(path);
+  await json("eas.json", { build: { base: { ios: { simulator: true } }, sim: { extends: "base" } } });
+  await assert.rejects(runExploreSetup({ project, ...options }), /--profile: base, sim/);
+  await runExploreSetup({ project, ...options, profile: "sim" });
+  assert.equal((await readExploreConfig(project)).app.easProfile, "sim");
 });
 
 test("dynamic config uses the app's Expo resolver instead of stale app.json", async (t) => {

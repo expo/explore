@@ -176,7 +176,7 @@ async function uploadSavedRun(run: SavedRun): Promise<void> {
 }
 
 function listLines(runs: SavedRun[], now = Date.now()): string[] {
-  if (!runs.length) return ["No saved runs yet. expo-explore capture:review reviews your branch on this machine, and its report is kept here."];
+  if (!runs.length) return ["No saved runs yet. expo-explore capture reviews your branch on this machine, and its report is kept here."];
   const idWidth = Math.max(...runs.map(run => run.id.length));
   return [...runs.map(run => `${run.id.padEnd(idWidth)}  ${kindLabel(run).padEnd(9)}${runTitle(run)}  (${run.platforms.join(", ")}, ${friendlyTime(run.createdAt, now)})`),
     "", "Open one with: expo-explore reports open <id>"];

@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { stringify } from "yaml";
-import { DEFAULT_EXPLORE_CONFIG_PATH, readExploreConfig, validateExploreConfig, type ExploreConfig } from "./explore-config.js";
+import { DEFAULT_EXPLORE_CONFIG_PATH, readExploreConfig, validateExploreConfig, type ExploreConfig, type ExplorePlatform } from "./explore-config.js";
 import { explorationSecretNames } from "./exploration-inputs.js";
 import type { RouteEntryReport } from "../ci/route-entry.js";
 import type { CiInstallResult } from "../ci/workflow-install.js";
@@ -60,6 +60,8 @@ type SetupOptions = {
   appState?: string | undefined;
   workflows?: boolean | undefined;
   nonInteractive?: boolean;
+  /** Return the config without writing anything. */
+  dryRun?: boolean;
   check?: boolean;
 };
 type Interaction = {
@@ -235,6 +237,14 @@ export type SetupResult = {
 };
 
 /**
+ * The config `setup --non-interactive` would write, without writing it: what a local review runs with in an app that
+ * has no config yet. Throws setup's errors when the app cannot be built for capture.
+ */
+export async function defaultExploreConfig(project: string, platform?: ExplorePlatform): Promise<ExploreConfig> {
+  return (await runExploreSetup({ project, platform, nonInteractive: true, dryRun: true })).config;
+}
+
+/**
  * The guided setup. It writes what it can derive (app identity, mode, route parameters it was given,
  * an agent-instructions draft, CI files) and hands the app-specific flows to the user's coding agent.
  */
@@ -290,7 +300,9 @@ export async function runExploreSetup(options: SetupOptions = {}, interaction?: 
     }
     const schemes = Array.isArray(app.scheme) ? app.scheme.filter((value): value is string => typeof value === "string") : undefined;
     const scheme = await choose("URL scheme (optional)", options.scheme, schemes?.[0] ?? string(app.scheme), schemes);
-    const profile = await choose(platform === "android" ? "EAS emulator (APK) build profile" : "EAS simulator build profile", options.profile, profiles.length === 1 ? profiles[0]! : "", profiles);
+    const profile = await choose(platform === "android" ? "EAS emulator (APK) build profile" : "EAS simulator build profile", options.profile,
+      // With several, the one named explore, the name the README and the explore-setup skill give it.
+      profiles.length === 1 ? profiles[0]! : profiles.includes("explore") ? "explore" : "", profiles);
     if (!profiles.includes(profile)) throw new Error(`Choose ${platform === "android" ? "an Android APK" : "a simulator"} profile from eas.json with --profile: ${profiles.join(", ")}.`);
     const inferredProvider = dependencies["expo-router"] ? "expo-router" : dependencies["@react-navigation/native"] ? "react-navigation" : "auto";
     const provider = await choose("Navigation provider", options.navigation, inferredProvider, ["auto", "expo-router", "react-navigation"]);
@@ -390,6 +402,7 @@ export async function runExploreSetup(options: SetupOptions = {}, interaction?: 
       const answer = await ui!.ask("Write this config? (yes/no)", "yes");
       if (!/^(y|yes)$/i.test(answer.trim())) throw new Error("Setup canceled; no config was written.");
     }
+    if (options.dryRun) return { path, config, created: false };
     await mkdir(parent, { recursive: true });
     await writeFile(path, yaml, { flag: "wx" });
     if (instructions) await writeFile(instructionsPath, instructions, { flag: "wx" });

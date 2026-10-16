@@ -122,6 +122,19 @@ test("version prints the package version", () => {
   }
 });
 
+test("capture is the local review, capture:review by a shorter name", async (t) => {
+  const outside = await mkdtemp(join(tmpdir(), "explore-capture-"));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  const failures = ["capture", "capture:review"].map(command => [
+    runFailure(outside, [command, "--bogus", "--json"]),
+    runFailure(outside, [command, "--committed", "--json"]),
+  ]);
+  assert.deepEqual(failures[0], failures[1], "the same flags, errors and result contract");
+  assert.equal(failures[0][0].command, "capture:review");
+  assert.equal(failures[0][0].diagnostic.code, "CLI_ARGUMENT_INVALID");
+  assert.equal(failures[0][1].diagnostic.code, "LOCAL_REVIEW_GIT_FAILED", "--committed is a known flag; outside a repository the review stops");
+});
+
 test("removed map-writing commands fail as unknown commands", () => {
   for (const command of ["init", "screen:add", "attempt:commit", "frontier:claim", "gap:add", "finish"]) {
     const result = spawnSync(process.execPath, [cli, command], { cwd: root, encoding: "utf8" });
