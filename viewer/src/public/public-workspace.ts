@@ -10,6 +10,7 @@ import type {
 import {
   captureNotes,
   visualDiff,
+  type RegionMove,
   type ReviewerChangeCategory,
   type ReviewRuntimeEvidence,
   type ViewerReviewProjection,
@@ -52,6 +53,19 @@ function comparisonStatus(surface: Surface): BuildComparisonEntry["status"] {
   if (surface.status === "added" || surface.status === "removed") return surface.status;
   // A source change with no comparison is not a change the captures show: not compared, whatever the source did.
   return comparisonReview(surface)?.status ?? "not-compared";
+}
+
+/**
+ * A region's move in percent of the image, from its pixel shift and the image size its rect implies. iOS
+ * screenshots are one pixel per point; Android's are in the screenshot's own pixels, since the report does not
+ * know the screen's density.
+ */
+function regionMove(region: NonNullable<NonNullable<Surface["visual"]>["regions"]>[number], platform: "ios" | "android" | undefined): RegionMove | undefined {
+  const { shift, rect, normalizedRect } = region;
+  if (!shift || !(normalizedRect.width > 0) || !(normalizedRect.height > 0)) return undefined;
+  const imageWidth = (rect.width * 100) / normalizedRect.width;
+  const imageHeight = (rect.height * 100) / normalizedRect.height;
+  return { x: (shift.x * 100) / imageWidth, y: (shift.y * 100) / imageHeight, amount: { x: shift.x, y: shift.y }, unit: platform === "android" ? "px" : "pt" };
 }
 
 /** The side's route exists and was planned, but its capture ended without a screenshot. */
@@ -572,10 +586,11 @@ export function publicReviewProjection(review: PublicReview): ViewerReviewProjec
         ...(surface.visual?.mismatchPercentage !== undefined ? { mismatchPercentage: surface.visual.mismatchPercentage } : {}),
         ...(surface.visual?.ignoredStatusBarRegions ? { ignoredStatusBarRegions: surface.visual.ignoredStatusBarRegions } : {}),
         ...(surface.visual?.ignoredHomeIndicatorRegions ? { ignoredHomeIndicatorRegions: surface.visual.ignoredHomeIndicatorRegions } : {}),
-        regions: (surface.visual?.regions ?? []).map((region) => ({
-          ...region.normalizedRect,
-          share: region.shareOfDiffPercentage,
-        })),
+        ...(surface.visual?.allRegionsMoved ? { allRegionsMoved: true } : {}),
+        regions: (surface.visual?.regions ?? []).map((region) => {
+          const move = regionMove(region, review.runtime.platform);
+          return { ...region.normalizedRect, share: region.shareOfDiffPercentage, ...(move ? { move } : {}) };
+        }),
       })
       : undefined;
     // A side that exists in its revision but has no screenshot says why, in the report's words.

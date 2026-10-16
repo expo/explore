@@ -75,7 +75,7 @@ export function PhoneCompare(props: CompareControllerOptions & {
           <ScanSearch aria-hidden="true" />
         </button>
         <button type="button" className="phone-icon-button" aria-label="What changed" aria-haspopup="dialog"
-          disabled={compare.facts.length === 0 && notes.length === 0} onClick={() => compare.setFactsOpen(true)}>
+          disabled={compare.facts.length === 0 && !compare.layoutShift && notes.length === 0} onClick={() => compare.setFactsOpen(true)}>
           <List aria-hidden="true" />
         </button>
         {props.headerAction}
@@ -122,7 +122,8 @@ export function PhoneCompare(props: CompareControllerOptions & {
       </div>
 
       <PhoneSheet title="What changed" open={compare.factsOpen} onClose={() => compare.setFactsOpen(false)}>
-        <WhatChangedContent facts={facts} assistive={assistive} accessibilityOnly={screenDiff.accessibilityOnly} notes={notes} />
+        <WhatChangedContent facts={facts} assistive={assistive} accessibilityOnly={screenDiff.accessibilityOnly}
+          layoutShift={compare.layoutShift} measurable={compare.measurable} notes={notes} />
       </PhoneSheet>
     </section>
   );

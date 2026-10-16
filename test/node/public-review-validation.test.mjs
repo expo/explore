@@ -253,3 +253,36 @@ test("quarantine: a report-level contract failure still throws", () => {
   assert.throws(() => quarantineReviewContract(provenance), /disagree with their build provenance/);
 });
 
+
+test('a visual region may carry the shift its content moved by, and a malformed one is rejected', async () => {
+  const { assertPublicReview } = await import('../../dist/contracts/review-validation.js');
+  const valid = JSON.parse(JSON.stringify(reviewWithRegion({ x: 0, y: -4.17 })));
+  assert.doesNotThrow(() => assertPublicReview(valid));
+  for (const shift of [{ x: 0 }, { x: 0, y: Number.NaN }, { x: 0, y: 500 }, 'up']) {
+    assert.throws(() => assertPublicReview(reviewWithRegion(shift)), /visual verdict is inconsistent/, JSON.stringify(shift));
+  }
+});
+
+function reviewWithRegion(shift) {
+  const input = review();
+  input.surfaces[0].review = { status: "modified", description: "Updated visual styling in the main content area." };
+  input.surfaces[0].visual = { verdict: "modified", reason: "repeated-cross-build-delta", mismatchPercentage: 1, threshold: 0.1, tool: "agent-device",
+    regions: [{ rect: { x: 0, y: 0, width: 1, height: 1 }, normalizedRect: { x: 0, y: 0, width: 100, height: 100 },
+      differentPixels: 1, shareOfDiffPercentage: 100, dominantChange: "mixed", location: "center", shift }] };
+  return input;
+}
+
+test('allRegionsMoved is only true, and only where every published region carries its shift', async () => {
+  const { assertPublicReview } = await import('../../dist/contracts/review-validation.js');
+  const moved = reviewWithRegion({ x: 0, y: 1 });
+  moved.surfaces[0].visual.allRegionsMoved = true;
+  assert.doesNotThrow(() => assertPublicReview(moved));
+  for (const [label, mutate] of [['false', visual => { visual.allRegionsMoved = false; }],
+    ['a region without a shift', visual => { delete visual.regions[0].shift; }],
+    ['no regions', visual => { delete visual.regions; }]]) {
+    const input = reviewWithRegion({ x: 0, y: 1 });
+    input.surfaces[0].visual.allRegionsMoved = true;
+    mutate(input.surfaces[0].visual);
+    assert.throws(() => assertPublicReview(input), /visual verdict is inconsistent/, label);
+  }
+});

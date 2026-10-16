@@ -19,6 +19,35 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--modified) 35%, transparent);
 }
 .visual-change-outlines.has-active .visual-change-outline:not(.active) { opacity: 0.35; }
+/* An area that only moved: dashed and quiet, in the slate of a measurement rather than the orange of a change. */
+.visual-change-outline.moved {
+  border: 1.5px dashed var(--moved);
+  background: transparent;
+}
+.visual-change-outline.moved.active {
+  background: color-mix(in srgb, var(--moved) 14%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--moved) 30%, transparent);
+}
+/* How far it moved, riding the outline's top right corner. */
+.visual-change-measure {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 0 5px;
+  border-radius: 5px;
+  color: #fff;
+  background: var(--moved);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  white-space: nowrap;
+  transform: translate(4px, -60%);
+}
+:root[data-theme="dark"] .visual-change-measure { color: #0b0c0e; }
+/* The Before side draws moved areas where their content was (see ChangeOutlines): Compare's sides and the
+   Inspector's side-by-side pair. */
+.compare-side[data-side="before"], .compare-flip-frame[data-side="before"], [data-diff-side="before"] { --outline-before: 1; }
 
 /* The status-bar band CI does not compare: blurred out, explained by its tooltip on hover. */
 .visual-status-bar-band {

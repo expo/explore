@@ -67,6 +67,8 @@
   /* Accessibility only is blue, as in the PR comment (🟦), deeper than the accent a screen variant uses. */
   --accessibility: #2f6feb;
   --accessibility-soft: #e8f0fe;
+  /* A measurement: slate, quieter than any change colour. */
+  --moved: #5b6b85;
   --graph-dot: #d9d9e0;
   --graph-line: #8b8d98;
   --graph-line-soft: #c5c7ce;
@@ -186,6 +188,7 @@
   --modified-soft: #331e0b;
   --accessibility: #8fa8ff;
   --accessibility-soft: #17224a;
+  --moved: #9fb0cc;
   --graph-dot: #212225;
   --graph-line: #696e77;
   --graph-line-soft: #3f4349;

@@ -27,6 +27,7 @@ import {
 } from "./visual-evidence.js";
 import { AGENT_DEVICE_VERSION } from "../shared/agent-device-version.js";
 import { STATUS_BAR_BAND_PERCENT } from "../shared/png-evidence.js";
+import { measureRegionShifts } from "./region-shift.js";
 
 export const DEFAULT_VISUAL_THRESHOLD = 0.1;
 export const DEFAULT_EVIDENCE_TIME_BUDGET_MS = 10 * 60_000;
@@ -139,6 +140,29 @@ function visualVerdict(assessment: VisualEvidenceAssessment, threshold: number):
     ...(regions && regions.length > 0 ? { regions } : {}),
     tool: VISUAL_TOOL,
   };
+}
+
+/**
+ * The published regions with how far their content moved, where a move explains it: a layout that shifted by a
+ * device pixel reads as moved, not as changed. Every region the comparison found is measured, not only the ones
+ * published, so `allRegionsMoved` can say nothing else on the screen changed. A measurement that fails leaves the
+ * regions as they were.
+ */
+async function withRegionShifts(basePath: string, headPath: string, all: readonly VisualDiffRegion[], published: NonNullable<PublicVisualVerdict["regions"]>):
+  Promise<Pick<PublicVisualVerdict, "regions" | "allRegionsMoved">> {
+  try {
+    const shifts = await measureRegionShifts(basePath, headPath, all.map(region => region.rect));
+    const shiftOf = new Map(all.map((region, index) => [region.rect, shifts[index]] as const));
+    return {
+      regions: published.map(region => {
+        const shift = shiftOf.get(region.rect);
+        return shift ? { ...region, shift } : region;
+      }),
+      ...(all.length > 0 && shifts.every(Boolean) ? { allRegionsMoved: true as const } : {}),
+    };
+  } catch {
+    return { regions: published };
+  }
 }
 
 /** Remove status-bar-only diff regions from a measurement and recompute its verdict inputs. */
@@ -463,6 +487,10 @@ export async function assessPublicEvidence(options: {
             representative: measurement,
           });
           visual = visualVerdict(assessment, threshold);
+          // Measuring moves is extra: once the comparison budget is spent, regions go out unmeasured.
+          if (visual.verdict === "modified" && visual.regions?.length && now() <= deadline) {
+            Object.assign(visual, await withRegionShifts(basePath, headPath, measurement.regions, visual.regions));
+          }
           if (ignoredTop > 0) visual.ignoredStatusBarRegions = ignoredTop;
           if (ignoredBottom > 0) visual.ignoredHomeIndicatorRegions = ignoredBottom;
           visualCounts.compared += 1;

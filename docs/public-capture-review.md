@@ -179,6 +179,10 @@ imported source changed), `app-wide` (only app-wide inputs such as dependencies,
 | Not compared | No comparison was performed, including for a screen whose source changed. Not counted as a change: Explore reports what the captures show, not what the code might do. Earlier versions listed these as Source-affected |
 
 A difference that rounds to 0.00% of pixels is rendering noise and counts as no difference.
+A changed region whose content only moved (a layout that grew by a device pixel, a sheet that is taller) carries
+`shift`, how far it moved in screenshot pixels, and `allRegionsMoved: true` says every region CI found moved (it
+publishes the largest eight); the Viewer labels each outline with its move. A shift does not change the verdict: a
+moved screen is still Modified.
 Accessibility only is how readers present a `modified` verdict whose visual verdict is `unchanged`; the contract has no
 separate status for it, so reports from earlier versions show it too. The accessibility tree can include content outside
 the screenshot (rows below the fold, elements under a sheet), so such a change may still be visible on a device.

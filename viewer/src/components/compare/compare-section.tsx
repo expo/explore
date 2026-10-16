@@ -4,7 +4,7 @@ import type { ChangesMenuData } from "../panels/changes-menu";
 import { diffLabel, ACCESSIBILITY_ONLY_HIGHLIGHT, type BuildDiff, type ScreenDiff } from "../../utils/build-diff";
 import type { MapIndex } from "../../utils/model";
 import type { ChangedScreen } from "../../utils/changed-screens";
-import { groupVisualRegions, type VisualChange } from "../../utils/visual-diff";
+import { groupVisualRegions, layoutShiftSummary, type VisualChange } from "../../utils/visual-diff";
 import { formatShortcut, matchesShortcut, SHORTCUTS, shortcutsLive } from "../../utils/shortcuts";
 import { HOLD_INITIAL_DELAY_MS, holdIntervalMs } from "../../utils/key-hold";
 import { optionalStorage } from "../../utils/embedded-report";
@@ -51,11 +51,14 @@ export function compareModeOptions() {
 // Highlight changes (the outlines) is one remembered choice, on unless turned off, shared by
 // every view that draws them: Compare, the Inspector's review and its header button, and the O key.
 const outlinesListeners = new Set<() => void>();
+/** The choice made this visit, so the button works where storage is denied (a private window). */
+let outlinesChosen: boolean | undefined;
 function storedOutlines(): boolean {
-  return optionalStorage.getItem(OUTLINES_STORAGE_KEY) !== "false";
+  return outlinesChosen ?? optionalStorage.getItem(OUTLINES_STORAGE_KEY) !== "false";
 }
-/** Sets the outlines choice everywhere at once and remembers it. */
+/** Sets the outlines choice everywhere at once and remembers it where it can. */
 export function setOutlinesShown(shown: boolean) {
+  outlinesChosen = shown;
   optionalStorage.setItem(OUTLINES_STORAGE_KEY, String(shown));
   for (const listener of outlinesListeners) listener();
 }
@@ -101,9 +104,22 @@ export function useCompareController(options: CompareControllerOptions) {
   );
   // Only what CI found on this screen. The generic summary ("Shared app source changed.") is
   // not a finding about this screen, so it leaves the list empty and the button disabled.
+  // Every changed area only moved, CI's own count included (it publishes the largest regions only): say how far,
+  // in place of its generic pixel finding ("Updated visual styling in the main content area").
+  const shiftLines = useMemo(
+    () => (screenDiff?.visual?.allRegionsMoved ? layoutShiftSummary(areas) : undefined),
+    [areas, screenDiff?.visual?.allRegionsMoved],
+  );
+  const measurable = areas.some((area) => area.move);
   const facts = useMemo(
-    () => presentedChanges(screenDiff).filter((change) => change.id !== "legacy-summary"),
-    [screenDiff],
+    () => presentedChanges(screenDiff).filter((change) => change.id !== "legacy-summary"
+      && !(shiftLines && change.fact?.templateId === "visual.main-content-changed")),
+    [screenDiff, shiftLines],
+  );
+  // "Nothing on this screen changed content" only when no other finding says otherwise.
+  const layoutShift = useMemo(
+    () => (shiftLines ? { lines: shiftLines, nothingElse: facts.length === 0 } : undefined),
+    [shiftLines, facts.length],
   );
   // What changed for assistive technology is listed under its own heading.
   const split = useMemo(() => splitForAssistiveTechnology(facts, screenDiff), [facts, screenDiff]);
@@ -241,7 +257,7 @@ export function useCompareController(options: CompareControllerOptions) {
   const chosenMode: CompareMode = phone ? phoneMode : desktopMode;
   const modesDisabled = !comparable;
   return {
-    screen, screenDiff, route, position, previous, next, comparable, areas, facts, split,
+    screen, screenDiff, route, position, previous, next, comparable, areas, facts, split, layoutShift, measurable,
     mode, chosenMode, modesDisabled, chooseMode, modeOptions, outlines, shownOutlines, statusBarIgnored, homeIndicatorIgnored, toggleOutlines,
     activeArea, setActiveArea, stepArea, flipSide, flip, swipePosition, setSwipePosition,
     aspect, setAspect, factsOpen, setFactsOpen,
@@ -355,7 +371,7 @@ export function CompareSection(props: CompareSectionProps) {
             </button>
           </Tooltip>
           <WhatChangedPopover facts={factCopies} assistive={assistive} accessibilityOnly={screenDiff.accessibilityOnly}
-            notes={notes} open={factsOpen} onOpenChange={setFactsOpen} />
+            layoutShift={compare.layoutShift} measurable={compare.measurable} notes={notes} open={factsOpen} onOpenChange={setFactsOpen} />
         </div>
       </header>
 
@@ -490,7 +506,7 @@ export function CompareStage(props: StageProps) {
           ))}
         </figcaption>
         <div className="compare-frame-wrap">
-          <button type="button" className="compare-frame compare-flip-frame"
+          <button type="button" className="compare-frame compare-flip-frame" data-side={showing}
             aria-label={`Show ${showing === "after" ? "Before" : "After"}`} onClick={props.onFlip}>
             <CompareImage src={showing === "after" ? after : before} alt={`${props.title}, ${showing}`}
               placeholder="No screenshot" onAspect={props.onAspect} />

@@ -1,4 +1,4 @@
-import type { VisualDiffRegion } from "./review-model";
+import type { RegionMove, VisualDiffRegion } from "./review-model";
 
 /** A rectangle in percent of the image width and height (0–100). */
 export type PercentRect = { x: number; y: number; width: number; height: number };
@@ -8,18 +8,69 @@ export type VisualChange = PercentRect & {
   /** This change's share of all differing pixels, in percent. */
   share: number;
   regionCount: number;
+  /** Set when every region in it only moved, by the same amount: their average, which places and labels the outline. */
+  move?: RegionMove;
+  /** The least and most its regions moved, in the screenshot's units, which keeps a merged outline to one amount. */
+  moveRange?: { x: [number, number]; y: [number, number] };
 };
+
+/**
+ * Areas moved by the same amount when their moves are within this of each other, in the screenshot's units. Parts of
+ * one rigid sheet measure up to a third apart (re-rasterized text), so a third is the same move; rows that drifted by
+ * half a point or more (1, 1.5, 2pt down a list) keep their own outlines.
+ */
+const SAME_MOVE = 0.34;
+/**
+ * The most the regions in one outline may differ, together. Measuring a move from re-rasterized text is good to
+ * about this: a sheet that moved 4.17pt as a whole measures 3.8–4.3pt across its parts (brentvatne/euxy#161).
+ */
+const MAX_MOVE_SPREAD = 0.5;
+
+function sameMove(a: VisualChange, b: VisualChange): boolean {
+  if (!a.move || !b.move) return !a.move && !b.move;
+  const first = rangeOf(a), second = rangeOf(b);
+  const same = (axis: "x" | "y") => {
+    const low = Math.min(first[axis][0], second[axis][0]), high = Math.max(first[axis][1], second[axis][1]);
+    // One direction only: content that moved up and content that moved down did not move together.
+    return Math.abs(a.move!.amount[axis] - b.move!.amount[axis]) <= SAME_MOVE + 1e-6
+      && high - low <= MAX_MOVE_SPREAD + 1e-6 && (low >= -0.25 || high <= 0.25);
+  };
+  return same("x") && same("y");
+}
+
+function overlaps(a: PercentRect, b: PercentRect): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+/** Two moves as one, weighted by each change's share of the difference. */
+function mergedMove(a: VisualChange, b: VisualChange): RegionMove | undefined {
+  if (!a.move || !b.move) return undefined;
+  const total = a.share + b.share || 1;
+  const mix = (first: number, second: number) => (first * a.share + second * b.share) / total;
+  return { x: mix(a.move.x, b.move.x), y: mix(a.move.y, b.move.y), unit: a.move.unit,
+    amount: { x: mix(a.move.amount.x, b.move.amount.x), y: mix(a.move.amount.y, b.move.amount.y) } };
+}
 
 /** Regions closer than this, in percent of the image height, read as one change. */
 const VERTICAL_GAP = 1.5;
 /** Regions closer than this, in percent of the image width, read as one change. */
 const HORIZONTAL_GAP = 3;
 
-function near(a: PercentRect, b: PercentRect): boolean {
-  return a.x <= b.x + b.width + HORIZONTAL_GAP
-    && b.x <= a.x + a.width + HORIZONTAL_GAP
-    && a.y <= b.y + b.height + VERTICAL_GAP
-    && b.y <= a.y + a.height + VERTICAL_GAP;
+/**
+ * Areas that moved by the same amount moved together (a sheet, a card and the rows under it), so they read as one
+ * across a wider gap: the content between them moved too, it just has no edges for CI to see.
+ */
+const MOVED_VERTICAL_GAP = 8;
+const MOVED_HORIZONTAL_GAP = 10;
+
+function near(a: VisualChange, b: VisualChange): boolean {
+  const moved = Boolean(a.move && b.move);
+  const horizontal = moved ? MOVED_HORIZONTAL_GAP : HORIZONTAL_GAP;
+  const vertical = moved ? MOVED_VERTICAL_GAP : VERTICAL_GAP;
+  return a.x <= b.x + b.width + horizontal
+    && b.x <= a.x + a.width + horizontal
+    && a.y <= b.y + b.height + vertical
+    && b.y <= a.y + a.height + vertical;
 }
 
 function union(a: VisualChange, b: VisualChange): VisualChange {
@@ -32,7 +83,17 @@ function union(a: VisualChange, b: VisualChange): VisualChange {
     height: Math.max(a.y + a.height, b.y + b.height) - y,
     share: a.share + b.share,
     regionCount: a.regionCount + b.regionCount,
+    ...(mergedMove(a, b) ? { move: mergedMove(a, b)!, moveRange: {
+      x: [Math.min(rangeOf(a).x[0], rangeOf(b).x[0]), Math.max(rangeOf(a).x[1], rangeOf(b).x[1])],
+      y: [Math.min(rangeOf(a).y[0], rangeOf(b).y[0]), Math.max(rangeOf(a).y[1], rangeOf(b).y[1])],
+    } } : {}),
   };
+}
+
+/** A change's move range: its own, or its single move's amount. */
+function rangeOf(change: VisualChange): { x: [number, number]; y: [number, number] } {
+  const amount = change.move?.amount ?? { x: 0, y: 0 };
+  return change.moveRange ?? { x: [amount.x, amount.x], y: [amount.y, amount.y] };
 }
 
 /**
@@ -50,9 +111,13 @@ export function groupVisualRegions(regions: readonly VisualDiffRegion[]): Visual
     merged = false;
     outer: for (let i = 0; i < changes.length; i += 1) {
       for (let j = i + 1; j < changes.length; j += 1) {
-        if (!near(changes[i]!, changes[j]!)) continue;
+        // A moved area and a changed one stay apart, as do areas that moved by different amounts.
+        if (!near(changes[i]!, changes[j]!) || !sameMove(changes[i]!, changes[j]!)) continue;
+        const combined = union(changes[i]!, changes[j]!);
+        // Nor does one moved outline grow around a changed area: that content did not move, it changed.
+        if (combined.move && changes.some((change, index) => index !== i && index !== j && !change.move && overlaps(combined, change))) continue;
         const next = changes.filter((_, index) => index !== i && index !== j);
-        next.push(union(changes[i]!, changes[j]!));
+        next.push(combined);
         changes = next;
         merged = true;
         break outer;
@@ -62,6 +127,42 @@ export function groupVisualRegions(regions: readonly VisualDiffRegion[]): Visual
   const total = changes.reduce((sum, change) => sum + change.share, 0);
   if (total > 0) changes = changes.map((change) => ({ ...change, share: (change.share * 100) / total }));
   return changes.sort((a, b) => a.y - b.y || a.x - b.x);
+}
+
+/** "1.3" for 1.33, "4" for 4.04: a move to a tenth, about as fine as measuring it from pixels gets. */
+function amount(value: number): string {
+  return (Math.round(Math.abs(value) * 10) / 10).toString();
+}
+
+/** A change's move as its outline labels it: "↑4.1pt", "↓1.3pt", "→2 ↓1pt". A part under a quarter is left out. */
+export function formatMove(change: Pick<VisualChange, "move">): string {
+  const move = change.move;
+  if (!move) return "";
+  const { x, y } = move.amount;
+  const horizontal = `${x < 0 ? "←" : "→"}${amount(x)}`, vertical = `${y < 0 ? "↑" : "↓"}${amount(y)}`;
+  const parts = [...(Math.abs(x) >= 0.25 ? [horizontal] : []), ...(Math.abs(y) >= 0.25 ? [vertical] : [])];
+  // Merged diagonal nudges can average under a quarter on both axes; the larger still says which way.
+  return `${parts.length ? parts.join(" ") : Math.abs(y) >= Math.abs(x) ? vertical : horizontal}${move.unit}`;
+}
+
+/**
+ * How far the areas of a screen whose every changed area only moved went, a line per direction: "2 areas moved up
+ * 4pt", "3 areas moved down 1–2pt". Undefined when any area's content changed.
+ */
+export function layoutShiftSummary(changes: readonly VisualChange[]): string[] | undefined {
+  if (changes.length === 0 || changes.some((change) => !change.move)) return undefined;
+  const groups = new Map<string, number[]>();
+  for (const change of changes) {
+    const { x, y } = change.move!.amount;
+    const vertical = Math.abs(y) >= Math.abs(x);
+    const direction = vertical ? (y < 0 ? "up" : "down") : (x < 0 ? "left" : "right");
+    groups.set(direction, [...(groups.get(direction) ?? []), Math.abs(vertical ? y : x)]);
+  }
+  const unit = changes[0]!.move!.unit;
+  return [...groups].map(([direction, amounts]) => {
+    const low = amount(Math.min(...amounts)), high = amount(Math.max(...amounts));
+    return `${amounts.length === 1 ? "1 area" : `${amounts.length} areas`} moved ${direction} ${low === high ? low : `${low}–${high}`}${unit}.`;
+  });
 }
 
 /** Room around a change's outline, in percent of the image width and height, so it frames text. */

@@ -349,7 +349,7 @@ function ScreenDiffSection(props: {
         : { ...current, [screenshot]: aspectRatio }
     ));
   };
-  // CI compares the two images pixel for pixel, so the same areas are outlined on both sides.
+  // The same areas are outlined on both sides; an area that only moved sits where its content is on each.
   const outlines = visualChanges.length > 0 ? <ChangeOutlines changes={visualChanges} /> : null;
 
   return (

@@ -2,7 +2,7 @@ import { type CSSProperties, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import { ToggleGroup } from "../shared/toggle-group";
 import { ChangeOutlines, HomeIndicatorBand, StatusBarBand } from "../panels/visual-diff";
-import { WhatChangedContent } from "./compare-header";
+import { WhatChangedContent, type LayoutShift } from "./compare-header";
 import {
   CompareStage,
   compareModeOptions,
@@ -46,11 +46,13 @@ function WhatChangedAccordion(props: {
   facts: string[];
   assistive?: string[];
   accessibilityOnly?: boolean | undefined;
+  layoutShift?: LayoutShift | undefined;
+  measurable?: boolean | undefined;
   notes: string[];
   open: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
-  const count = props.facts.length + (props.assistive?.length ?? 0);
+  const count = props.facts.length + (props.assistive?.length ?? 0) + (props.layoutShift?.lines.length ?? 0);
   const empty = !props.onOpenChange || (count === 0 && props.notes.length === 0);
   const open = props.open && !empty;
   return (
@@ -72,7 +74,7 @@ function WhatChangedAccordion(props: {
       {open ? (
         <div className="what-changed-accordion-content" id="what-changed-accordion-content">
           <WhatChangedContent facts={props.facts} {...(props.assistive ? { assistive: props.assistive } : {})}
-            accessibilityOnly={props.accessibilityOnly} notes={props.notes} />
+            accessibilityOnly={props.accessibilityOnly} layoutShift={props.layoutShift} measurable={props.measurable} notes={props.notes} />
         </div>
       ) : null}
     </section>
@@ -145,7 +147,8 @@ export function SidebarReview(props: CompareControllerOptions) {
         />
       </div>
 
-      <WhatChangedAccordion facts={facts} assistive={assistive} accessibilityOnly={screenDiff.accessibilityOnly} notes={notes}
+      <WhatChangedAccordion facts={facts} assistive={assistive} accessibilityOnly={screenDiff.accessibilityOnly}
+        layoutShift={compare.layoutShift} measurable={compare.measurable} notes={notes}
         open={compare.factsOpen} onOpenChange={compare.setFactsOpen} />
     </section>
   );
