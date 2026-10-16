@@ -46,6 +46,7 @@ import {
   type ThemePreference,
 } from "./utils/navigation";
 import {
+  CANVAS_NUMBER_KEYS,
   matchesShortcut,
   modalOpen,
   SHORTCUTS,
@@ -142,7 +143,10 @@ const LEGACY_COLLAPSED_STORAGE_KEY = "expo-explore:panel-collapsed";
 const RIGHT_COLLAPSED_STORAGE_KEY = "expo-explore:right-panel-collapsed";
 // The shell's keyboard map, paired with what each key selects. Read as lists so a key and the
 // thing it reaches stay one entry.
-const CANVAS_KEYS = Object.entries(SHORTCUTS.canvas) as [CanvasView, Shortcut][];
+const CANVAS_KEYS = [
+  ...Object.entries(SHORTCUTS.canvas),
+  ...(CANVAS_NUMBER_KEYS ? Object.entries(SHORTCUTS.canvasByNumber) : []),
+] as [CanvasView, Shortcut][];
 
 /** Before data loads there is no comparison to assume. A workspace reparses the URL on arrival. */
 const EMPTY_ROUTE_CONTEXT: RouteContext = {

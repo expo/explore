@@ -406,10 +406,13 @@ test("the Screens tree folds by row, by keyboard, and all at once, and remembers
   await tree.getByRole("button", { name: "Expand all" }).click();
   await expect.poll(() => rows.count()).toBe(expandedRows);
 
-  // Section headings name the folder, with the path beneath.
-  const onboarding = page.getByRole("region", { name: "Onboarding" });
-  await expect(onboarding.getByRole("heading", { level: 2 })).toHaveText("Onboarding");
-  await expect(onboarding.locator(".screens-section-head .path")).toHaveText("app/onboarding");
+  // The tree names the folders, so the page beside it is one grid without section headings, in the tree's order.
+  await expect(page.locator(".screens-page .screens-section-head")).toHaveCount(0);
+  await expect(page.locator(".screens-page .screens-grid")).toHaveCount(1);
+  const treeOrder = await tree.locator(".screens-tree-row[data-screen-id]").evaluateAll(rows => rows.map(row => row.dataset.screenId));
+  const gridOrder = await page.locator(".screens-page .screens-cell").evaluateAll(cells => cells.map(cell => cell.dataset.screenId));
+  assert.ok(gridOrder.length > 1);
+  assert.deepEqual(gridOrder, treeOrder);
   assert.deepEqual(errors, []);
 });
 

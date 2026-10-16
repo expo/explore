@@ -7,6 +7,8 @@ export type Shortcut = {
   code: string;
   /** ⌘ on Apple keyboards, Ctrl everywhere else. */
   mod?: boolean;
+  /** The Control key itself on every keyboard, for chords whose ⌘ form the browser keeps (⌘1–⌘9 switch tabs). */
+  ctrl?: boolean;
   /** ⌥ on Apple keyboards, Alt everywhere else. */
   alt?: boolean;
   shift?: boolean;
@@ -17,12 +19,22 @@ export type Shortcut = {
 const APPLE = typeof navigator !== "undefined"
   && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 
+/**
+ * Whether Ctrl+1–3 reach the page. On Apple keyboards ⌃ is free (the browser's tab keys are ⌘1–9); elsewhere the
+ * browser keeps Ctrl+1–8 for its tabs, so those keys are neither handled nor printed there.
+ */
+export const CANVAS_NUMBER_KEYS = APPLE;
+
 function mod(code: string, key: string): Shortcut {
   return { code, key, mod: true };
 }
 
 function modShift(code: string, key: string): Shortcut {
   return { code, key, mod: true, shift: true };
+}
+
+function ctrl(code: string, key: string): Shortcut {
+  return { code, key, ctrl: true };
 }
 
 function shift(code: string, key: string): Shortcut {
@@ -68,6 +80,12 @@ export const SHORTCUTS = {
     screens: plain("KeyS", "S"),
     compare: plain("KeyC", "C"),
   },
+  /** The canvases by their place in the toolbar, as tabs are numbered elsewhere. Apple keyboards only (CANVAS_NUMBER_KEYS). */
+  canvasByNumber: {
+    map: ctrl("Digit1", "1"),
+    screens: ctrl("Digit2", "2"),
+    compare: ctrl("Digit3", "3"),
+  },
   /** Compare only. The arrows walk changed screens; J and K walk the changed areas of one. */
   compare: {
     previousScreen: plain("ArrowLeft", "←"),
@@ -92,10 +110,10 @@ export const SHORTCUTS = {
 /** The hint, in the idiom of the keyboard reading it: Apple's ⌥⇧⌘ order, or Ctrl+Alt+Shift. */
 export function formatShortcut(shortcut: Shortcut, apple = APPLE): string {
   if (apple) {
-    return `${shortcut.alt ? "⌥" : ""}${shortcut.shift ? "⇧" : ""}${shortcut.mod ? "⌘" : ""}${shortcut.key}`;
+    return `${shortcut.ctrl ? "⌃" : ""}${shortcut.alt ? "⌥" : ""}${shortcut.shift ? "⇧" : ""}${shortcut.mod ? "⌘" : ""}${shortcut.key}`;
   }
   const parts: string[] = [];
-  if (shortcut.mod) parts.push("Ctrl");
+  if (shortcut.mod || shortcut.ctrl) parts.push("Ctrl");
   if (shortcut.alt) parts.push("Alt");
   if (shortcut.shift) parts.push("Shift");
   parts.push(shortcut.key);
@@ -104,7 +122,9 @@ export function formatShortcut(shortcut: Shortcut, apple = APPLE): string {
 
 export function matchesShortcut(event: KeyboardEvent, shortcut: Shortcut): boolean {
   if (event.code !== shortcut.code) return false;
-  if ((event.metaKey || event.ctrlKey) !== Boolean(shortcut.mod)) return false;
+  if (shortcut.ctrl) {
+    if (!event.ctrlKey || event.metaKey) return false;
+  } else if ((event.metaKey || event.ctrlKey) !== Boolean(shortcut.mod)) return false;
   if (event.shiftKey !== Boolean(shortcut.shift)) return false;
   return event.altKey === Boolean(shortcut.alt);
 }

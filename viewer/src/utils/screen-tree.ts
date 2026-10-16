@@ -228,6 +228,22 @@ export type ScreenTreeIndex = {
   parents: Map<string, string>;
 };
 
+/**
+ * Every screen in the order the tree lists it: depth first, so a subfolder's screens follow its parent folder's own,
+ * where sections list folders in the order they were found. A screen the tree leaves out comes last.
+ */
+export function treeScreenOrder(tree: ScreenTree): string[] {
+  const ids: string[] = [];
+  const walk = (nodes: readonly ScreenTreeNode[]) => {
+    for (const node of nodes) {
+      if (node.kind === "screen") ids.push(node.screenId);
+      walk(node.children);
+    }
+  };
+  walk(tree.tree);
+  return [...new Set([...ids, ...tree.sections.flatMap(section => section.screenIds)])];
+}
+
 export function treeIndex(tree: readonly ScreenTreeNode[]): ScreenTreeIndex {
   const index: ScreenTreeIndex = { keys: [], screensUnder: new Map(), ancestors: new Map(), parents: new Map() };
   const walk = (nodes: readonly ScreenTreeNode[], above: string[]): string[] => nodes.flatMap((node) => {

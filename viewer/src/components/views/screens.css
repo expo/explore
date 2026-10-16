@@ -184,6 +184,91 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-cell-via { overflow: hidden; color: var(--tertiary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .screens-cell-elsewhere { color: var(--modified); font-size: 11px; font-weight: 600; }
 
+/* ── Desktop grid ── */
+/* One evenly spaced grid. Each screen is a card: the screenshot in a grey well and the route under it, with the
+   status as the tree's dot before it, the way file browsers show documents. Nothing is framed in the status colour,
+   so the page reads as a list of screens rather than a canvas of them. */
+.screens-page:not(.phone) .screens-sections { display: block; padding-top: 0; }
+.screens-page:not(.phone) .screens-grid { gap: 12px; }
+/* Wide enough for a 28-character route after the dot, in the footer's 10.5px mono with room to spare: Linux's
+   fonts set it at about 183px. Five cards fit beside the tree at 1440px. */
+.screens-page:not(.phone) .screens-cell { width: 216px; }
+.screens-page:not(.phone) .screens-cell .screen-screenshot-card {
+  overflow: hidden;
+  gap: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.screens-page:not(.phone) .screens-cell .screen-screenshot-card:has(.screen-screenshot-target:hover) { border-color: color-mix(in srgb, var(--accent) 55%, var(--border-subtle)); }
+.screens-page:not(.phone) .screens-cell .screen-screenshot-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+/* The status is laid out against the card, not the screenshot, so it can sit in the footer. */
+.screens-page:not(.phone) .screens-cell :is(.screen-screenshot-slot, .diff-frame) { position: static; }
+.screens-page:not(.phone) .screens-cell .screen-screenshot-slot { order: 1; height: 236px; flex: none; padding: 12px 0; background: var(--element); }
+.screens-page:not(.phone) .screens-cell .screen-screenshot-card.selected .screen-screenshot-slot { background: var(--accent-soft); }
+.screens-page:not(.phone) .screens-cell .screen-node-image img,
+.screens-page:not(.phone) .screens-cell .screen-node-image > .image-placeholder,
+.screens-page:not(.phone) .screens-cell .screen-screenshot-card .diff-frame .screen-node-image img,
+.screens-page:not(.phone) .screens-cell .screen-screenshot-card .diff-frame .screen-node-image > .image-placeholder {
+  border-color: transparent;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.14);
+}
+/* The image box hugs the screenshot, so its corners and shadow are the screenshot's and no box shows around it. */
+/* The screenshot fits the well both ways at its own proportions (styles.css's max-width and max-height), so a
+   landscape capture is framed as itself, not letterboxed inside a portrait-sized box. */
+.screens-page:not(.phone) .screens-cell .screen-node-image img { width: auto; height: auto; background: transparent; }
+/* No screenshot: the well has a size here, so the placeholder fits it the way styles.css fits it to a Map slot,
+   at the screenshot's proportions, rather than by the cell's width as a phone's cell does (phone.css). */
+.screens-page:not(.phone) .screens-cell .screen-node-image:has(> .image-placeholder) { container-type: size; }
+.screens-page:not(.phone) .screens-cell .screen-node-image > .image-placeholder {
+  width: min(
+    100cqw - 2 * var(--frame-border),
+    (100cqh - 2 * var(--frame-border)) * var(--screenshot-width) / var(--screenshot-height),
+    var(--screenshot-width) * 1px
+  );
+  height: min(
+    100cqh - 2 * var(--frame-border),
+    (100cqw - 2 * var(--frame-border)) * var(--screenshot-height) / var(--screenshot-width),
+    var(--screenshot-height) * 1px
+  );
+  aspect-ratio: auto;
+}
+/* A selected card's button is pressed, and a focused pressed button brightens (styles.css). Here that would wash out
+   the screenshot and, as a filter, become the box the status is placed in, lifting it into the well. Keyboard focus
+   rings the card instead. */
+.screens-page:not(.phone) .screens-cell .screen-screenshot-target:focus-visible { filter: none; outline: 0; }
+.screens-page:not(.phone) .screens-cell .screen-screenshot-card:has(.screen-screenshot-target:focus-visible) {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 42%, transparent);
+}
+.screens-page:not(.phone) .screens-cell .screen-screenshot-card.selected:has(.screen-screenshot-target:focus-visible) {
+  box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.screens-page:not(.phone) .screens-cell .screen-node-heading { order: 2; min-height: 0; padding: 10px 6px 10px 8px; }
+.screens-page:not(.phone) .screens-cell .screen-screenshot-card:has(.diff-label) .screen-node-heading { padding-left: 20px; }
+.screens-page:not(.phone) .screens-cell .screen-node-title { font-size: 10.5px; line-height: 14px; }
+.screens-page:not(.phone) .screens-cell .screen-screenshot-card.selected .screen-node-title { color: var(--accent-strong); font-weight: 600; }
+/* The status is the tree's dot before the route, in the status colour (a square for accessibility only); the word
+   stays in the label's accessible name. */
+.screens-page:not(.phone) .screens-cell .screen-screenshot-card .diff-label {
+  top: auto;
+  bottom: 13.5px;
+  left: 8px;
+  width: 7px;
+  height: 7px;
+  overflow: hidden;
+  padding: 0;
+  border-radius: 50%;
+  color: transparent;
+  background: var(--diff);
+  box-shadow: none;
+  font-size: 0;
+  transform: none;
+}
+.screens-page:not(.phone) .screens-cell .diff-accessibility-only .diff-label { border-radius: 2px; }
+.screens-page:not(.phone) .screens-cell :is(.screens-cell-via, .screens-cell-elsewhere) { padding-inline: 2px; }
+
 /* ── Phone ── */
 /* The space under the top bar is a block, not padding: both engines inset a sticky child's rest
    position by the scroll container's padding, which pushed the section bar a bar's height too low. */
