@@ -1309,6 +1309,38 @@ for (const canvas of ["map", "screens"] as const) {
   });
 }
 
+test("← and → step through the Screens cards in page order, with focus, and leave the tree's arrows alone", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/screens");
+  const grid = page.getByRole("main", { name: "Screens" });
+  await grid.getByRole("button", { name: /^All/ }).click();
+  const cells = grid.locator(".screens-grid .screens-cell");
+  const ids = await cells.evaluateAll(elements => elements.map(element => element.getAttribute("data-screen-id")!));
+  expect(ids.length).toBeGreaterThan(2);
+  const card = (id: string) => grid.locator(`.screens-cell[data-screen-id="${id}"] .screen-screenshot-card`);
+  const target = (id: string) => grid.locator(`.screens-cell[data-screen-id="${id}"] .screen-screenshot-target`);
+
+  // With nothing selected, → starts at the first card.
+  await expect(grid.locator(".screen-screenshot-card.selected")).toHaveCount(0);
+  await page.keyboard.press("ArrowRight");
+  await expect(card(ids[0]!)).toHaveClass(/selected/);
+  await expect(target(ids[0]!)).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(card(ids[1]!)).toHaveClass(/selected/);
+  await expect(target(ids[1]!)).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(card(ids[2]!)).toHaveClass(/selected/);
+  await page.keyboard.press("ArrowLeft");
+  await expect(card(ids[1]!)).toHaveClass(/selected/);
+  await expect(card(ids[2]!)).not.toHaveClass(/selected/);
+
+  // In the tree, ← and → fold and unfold rows; they do not step the cards.
+  const row = grid.locator(".screens-tree-row").first();
+  await row.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(card(ids[1]!)).toHaveClass(/selected/);
+});
+
 test("reuses the Map screenshot card in Screens, with the route under the screenshot at the card's left edge", async ({ page }) => {
   await serveWorkspace(page);
   await page.goto("/screens");

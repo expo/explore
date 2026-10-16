@@ -84,9 +84,17 @@ export function shortcutGroups(context: ShortcutContext): Group[][] {
       { label: "Close the inspector, then deselect", keys: ["Esc"] },
     ],
   };
+  const screensGroup: Group = {
+    title: "Screens",
+    rows: [
+      { label: "Previous or next screen", keys: ["←", "→"] },
+      { label: "Close the inspector, then deselect", keys: ["Esc"] },
+    ],
+  };
   const here: Group[] = context.canvas === "compare"
     ? [reviewGroup(context)]
-    : [...(context.review ? [reviewGroup(context)] : []), ...(context.canvas === "map" ? [mapGroup] : []), CAMERA];
+    : [...(context.review ? [reviewGroup(context)] : []), ...(context.canvas === "map" ? [mapGroup] : []),
+      ...(context.canvas === "screens" ? [screensGroup] : []), CAMERA];
   return [here, [goTo, view]];
 }
 

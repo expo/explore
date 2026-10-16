@@ -8,6 +8,7 @@ import { displayPathForScreen, screenLabel } from "../../utils/screen-path";
 import { screenTree, treeIndex, treeNodeKey, type ScreenTree, type ScreenTreeNode } from "../../utils/screen-tree";
 import type { Appearance } from "../../utils/appearance";
 import type { FocusRequest, FocusStatus } from "../../utils/navigation";
+import { shortcutsLive } from "../../utils/shortcuts";
 import { ScreenScreenshotCard } from "../canvas/screen-screenshot-card";
 import { useCanvasVisibleFrame } from "../canvas/visible-frame-provider";
 import { PhoneSheet } from "../phone/phone-chrome";
@@ -321,6 +322,38 @@ export function ScreensView(props: ScreensViewProps) {
     (props.onPickScreen ?? props.onSelectScreen)(id);
     requestAnimationFrame(() => document.getElementById(cardId(id))?.scrollIntoView({ block: "center", behavior: "smooth" }));
   };
+
+  // ← and → step through the cards in their order on the page, as the arrows step through screens in Compare. A step
+  // picks the screen as the tree does, leaving the Inspector as it is, and focus follows it; with nothing picked, → starts
+  // at the first card. The tree's rows fold with ← and →, and controls outside the page (the Inspector, the toolbar)
+  // keep their keys.
+  const order = sections.flatMap(section => section.screenIds);
+  const orderRef = useRef(order);
+  orderRef.current = order;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const pickRef = useRef(props.onPickScreen ?? props.onSelectScreen);
+  pickRef.current = props.onPickScreen ?? props.onSelectScreen;
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.code !== "ArrowLeft" && event.code !== "ArrowRight") return;
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.defaultPrevented || !shortcutsLive(event)) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const onPage = !target || target === document.body || target.closest(".screens-page") !== null;
+      if (!onPage || target?.closest(".screens-tree-list")) return;
+      const ids = orderRef.current;
+      const at = selectedRef.current ? ids.indexOf(selectedRef.current) : -1;
+      const forward = event.code === "ArrowRight";
+      const next = at === -1 ? (forward ? 0 : ids.length - 1) : at + (forward ? 1 : -1);
+      const id = ids[next];
+      if (!id) return;
+      event.preventDefault();
+      pickRef.current(id);
+      requestAnimationFrame(() => document.getElementById(cardId(id))?.querySelector<HTMLElement>(".screen-screenshot-target")?.focus({ preventScroll: true }));
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // The Inspector floats over the right edge; the page keeps its content clear of it.
   const { visibleFrame } = useCanvasVisibleFrame();
