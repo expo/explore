@@ -185,12 +185,13 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-cell-elsewhere { color: var(--modified); font-size: 11px; font-weight: 600; }
 
 /* ── Desktop grid ── */
-/* One evenly spaced grid. Each screen is a card: the screenshot in a grey well, the route under it and the
-   status as a dot and a word, the way file browsers show documents. Nothing is framed in the status colour,
+/* One evenly spaced grid. Each screen is a card: the screenshot in a grey well and the route under it, with the
+   status as the tree's dot before it, the way file browsers show documents. Nothing is framed in the status colour,
    so the page reads as a list of screens rather than a canvas of them. */
 .screens-page:not(.phone) .screens-sections { display: block; padding-top: 0; }
 .screens-page:not(.phone) .screens-grid { gap: 12px; }
-/* Wide enough for a 28-character route in the footer's 11px mono with room to spare: Linux's fonts set it at 191px. */
+/* Wide enough for a 28-character route after the dot, in the footer's 10.5px mono with room to spare: Linux's
+   fonts set it at about 183px. Five cards fit beside the tree at 1440px. */
 .screens-page:not(.phone) .screens-cell { width: 216px; }
 .screens-page:not(.phone) .screens-cell .screen-screenshot-card {
   overflow: hidden;
@@ -244,35 +245,28 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-page:not(.phone) .screens-cell .screen-screenshot-card.selected:has(.screen-screenshot-target:focus-visible) {
   box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px color-mix(in srgb, var(--accent) 32%, transparent);
 }
-.screens-page:not(.phone) .screens-cell .screen-node-heading { order: 2; min-height: 0; padding: 9px 8px 10px; }
-.screens-page:not(.phone) .screens-cell .screen-screenshot-card:has(.diff-label) .screen-node-heading { padding-bottom: 30px; }
-.screens-page:not(.phone) .screens-cell .screen-node-title { font-size: 11px; }
+.screens-page:not(.phone) .screens-cell .screen-node-heading { order: 2; min-height: 0; padding: 10px 6px 10px 8px; }
+.screens-page:not(.phone) .screens-cell .screen-screenshot-card:has(.diff-label) .screen-node-heading { padding-left: 20px; }
+.screens-page:not(.phone) .screens-cell .screen-node-title { font-size: 10.5px; line-height: 14px; }
 .screens-page:not(.phone) .screens-cell .screen-screenshot-card.selected .screen-node-title { color: var(--accent-strong); font-weight: 600; }
+/* The status is the tree's dot before the route, in the status colour (a square for accessibility only); the word
+   stays in the label's accessible name. */
 .screens-page:not(.phone) .screens-cell .screen-screenshot-card .diff-label {
   top: auto;
-  bottom: 10px;
+  bottom: 13.5px;
   left: 8px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  width: 7px;
+  height: 7px;
+  overflow: hidden;
   padding: 0;
-  color: var(--secondary);
-  background: transparent;
+  border-radius: 50%;
+  color: transparent;
+  background: var(--diff);
   box-shadow: none;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 0;
   transform: none;
 }
-.screens-page:not(.phone) .screens-cell .screen-screenshot-card .diff-label::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--diff);
-}
-.screens-page:not(.phone) .screens-cell .diff-accessibility-only .diff-label::before { border-radius: 1px; }
-:root[data-theme="dark"] .screens-page:not(.phone) .screens-cell .diff-label { color: var(--secondary); }
+.screens-page:not(.phone) .screens-cell .diff-accessibility-only .diff-label { border-radius: 2px; }
 .screens-page:not(.phone) .screens-cell :is(.screens-cell-via, .screens-cell-elsewhere) { padding-inline: 2px; }
 
 /* ── Phone ── */

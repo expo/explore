@@ -4,8 +4,8 @@
  * or a spinner accelerates. The browser's own key repeat is ignored (its rate is a fixed OS setting),
  * so the hold is timed here and ends on key up, blur, or the end of the list.
  */
-export const HOLD_INITIAL_DELAY_MS = 400;
-export const HOLD_FIRST_INTERVAL_MS = 300;
+export const HOLD_INITIAL_DELAY_MS = 250;
+export const HOLD_FIRST_INTERVAL_MS = 200;
 export const HOLD_FLOOR_INTERVAL_MS = 70;
 const HOLD_DECAY = 0.8;
 

@@ -1334,11 +1334,46 @@ test("← and → step through the Screens cards in page order, with focus, and 
   await expect(card(ids[1]!)).toHaveClass(/selected/);
   await expect(card(ids[2]!)).not.toHaveClass(/selected/);
 
+  // ↓ and ↑ move a row, to the card in the same column.
+  const tops = await cells.evaluateAll(elements => elements.map(element => Math.round(element.getBoundingClientRect().top)));
+  const columns = tops.filter(top => top === tops[0]).length;
+  if (ids.length > 1 + columns) {
+    await page.keyboard.press("ArrowDown");
+    await expect(card(ids[1 + columns]!)).toHaveClass(/selected/);
+    await expect(target(ids[1 + columns]!)).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(card(ids[1]!)).toHaveClass(/selected/);
+  }
+
+  // Held, → keeps stepping, as in Compare, and stops on release.
+  const selectedAt = async () => ids.indexOf((await grid.locator(".screens-cell:has(.screen-screenshot-card.selected)").getAttribute("data-screen-id"))!);
+  const from = await selectedAt();
+  await page.keyboard.down("ArrowRight");
+  await expect.poll(selectedAt, { timeout: 4000 }).toBeGreaterThanOrEqual(Math.min(ids.length - 1, from + 3));
+  await page.keyboard.up("ArrowRight");
+  const released = await selectedAt();
+  await page.waitForTimeout(500);
+  expect(await selectedAt()).toBe(released);
+
+  // Return opens the pick in the Inspector, from the card or from anywhere on the page.
+  const inspector = page.getByRole("complementary", { name: "Inspector panel" });
+  await expect(inspector).toBeHidden();
+  await page.keyboard.press("Enter");
+  await expect(inspector).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(inspector).toBeHidden();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("Enter");
+  await expect(inspector).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(inspector).toBeHidden();
+
   // In the tree, ← and → fold and unfold rows; they do not step the cards.
+  const picked = await selectedAt();
   const row = grid.locator(".screens-tree-row").first();
   await row.focus();
   await page.keyboard.press("ArrowLeft");
-  await expect(card(ids[1]!)).toHaveClass(/selected/);
+  await expect(card(ids[picked]!)).toHaveClass(/selected/);
 });
 
 test("→ steps the Screens cards right after Screens is opened from the toolbar, and from a pick that Changed hides", async ({ page }) => {

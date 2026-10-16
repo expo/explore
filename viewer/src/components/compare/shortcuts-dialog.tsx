@@ -89,7 +89,7 @@ export function shortcutGroups(context: ShortcutContext): Group[][] {
   const screensGroup: Group = {
     title: "Screens",
     rows: [
-      { label: "Previous or next screen", keys: ["←", "→"] },
+      { label: "Move through the screens", keys: ["←", "→", "↑", "↓"] },
       { label: "Close the inspector, then deselect", keys: ["Esc"] },
     ],
   };

@@ -9,6 +9,7 @@ import { screenTree, treeIndex, treeNodeKey, treeScreenOrder, type ScreenTree, t
 import type { Appearance } from "../../utils/appearance";
 import type { FocusRequest, FocusStatus } from "../../utils/navigation";
 import { shortcutsLive } from "../../utils/shortcuts";
+import { HOLD_INITIAL_DELAY_MS, holdIntervalMs } from "../../utils/key-hold";
 import { ScreenScreenshotCard } from "../canvas/screen-screenshot-card";
 import { useCanvasVisibleFrame } from "../canvas/visible-frame-provider";
 import { PhoneSheet } from "../phone/phone-chrome";
@@ -74,6 +75,26 @@ function writeFolded(key: string, folded: ReadonlySet<string>): void {
 
 function cardId(id: string): string {
   return `screens-card-${id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+}
+
+/**
+ * The card in the row above or below a screen's, nearest it across: read from where the cards sit, so it follows the
+ * grid however many columns the page has room for. A short last row still takes ↓ from the row above it.
+ */
+function cardInNextRow(from: string, ids: readonly string[], down: boolean): string | undefined {
+  const box = (id: string) => document.getElementById(cardId(id))?.getBoundingClientRect();
+  const here = box(from);
+  if (!here) return undefined;
+  const centre = (rect: DOMRect) => rect.left + rect.width / 2;
+  const rows = ids.flatMap(id => {
+    const rect = box(id);
+    return rect && (down ? rect.top >= here.bottom - 1 : rect.bottom <= here.top + 1) ? [{ id, rect }] : [];
+  });
+  if (!rows.length) return undefined;
+  const nearestTop = down ? Math.min(...rows.map(row => row.rect.top)) : Math.max(...rows.map(row => row.rect.top));
+  const row = rows.filter(candidate => Math.abs(candidate.rect.top - nearestTop) < 1);
+  return row.reduce((best, candidate) =>
+    Math.abs(centre(candidate.rect) - centre(here)) < Math.abs(centre(best.rect) - centre(here)) ? candidate : best).id;
 }
 
 function sectionAnchor(id: string): string {
@@ -326,10 +347,13 @@ export function ScreensView(props: ScreensViewProps) {
     requestAnimationFrame(() => document.getElementById(cardId(id))?.scrollIntoView({ block: "center", behavior: "smooth" }));
   };
 
-  // On desktop, ← and → step through the cards in their order on the page (`order`), as the arrows step through screens
-  // in Compare. A step picks the screen as the tree does, leaving the Inspector as it is, and focus follows it; with
-  // nothing picked, → starts at the first card, and a pick that Changed hides steps from where it sits in the tree. The
-  // tree's rows fold with ← and →; the Inspector's controls keep their keys. Phones are left as they were.
+  // On desktop the arrow keys move through the cards: ← and → in their order on the page (`order`), as the arrows step
+  // through screens in Compare, and ↑ and ↓ to the card above or below, by where the cards sit, so they follow the grid
+  // at any width. A step picks the screen as the tree does, leaving the Inspector as it is, and focus follows it; with
+  // nothing picked, → and ↓ start at the first card, and a pick that Changed hides steps from where it sits in the tree.
+  // The tree's rows keep their arrow keys, and so do the Inspector's controls. Phones are left as they were.
+  // Held, an arrow keeps stepping as Compare's do (key-hold.ts). Return opens the picked screen in the Inspector, as a
+  // click on its card does; on the card itself the button already does.
   const orderRef = useRef(order);
   orderRef.current = order;
   const treeOrderRef = useRef(treeOrder);
@@ -338,38 +362,83 @@ export function ScreensView(props: ScreensViewProps) {
   selectedRef.current = selected;
   const pickRef = useRef(props.onPickScreen ?? props.onSelectScreen);
   pickRef.current = props.onPickScreen ?? props.onSelectScreen;
+  const openRef = useRef(props.onSelectScreen);
+  openRef.current = props.onSelectScreen;
   useEffect(() => {
     if (props.phone) return;
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.code !== "ArrowLeft" && event.code !== "ArrowRight") return;
-      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.defaultPrevented || !shortcutsLive(event)) return;
-      const target = event.target instanceof Element ? event.target : null;
-      // The page, or the bottom toolbar that Screens was just opened from; its buttons have no arrow keys of their own.
-      const onPage = !target || target === document.body || target.closest(".screens-page, .canvas-toolbar") !== null;
-      if (!onPage || target?.closest(".screens-tree-list")) return;
+    /** The card an arrow moves to from `from` (the pick, or the last card a hold stepped to). */
+    const next = (code: string, from: string | undefined): string | undefined => {
       const ids = orderRef.current;
-      const forward = event.code === "ArrowRight";
-      const selected = selectedRef.current;
-      let id: string | undefined;
-      if (selected && ids.includes(selected)) {
-        id = ids[ids.indexOf(selected) + (forward ? 1 : -1)];
-      } else if (selected && treeOrderRef.current.includes(selected)) {
+      const vertical = code === "ArrowUp" || code === "ArrowDown";
+      const forward = code === "ArrowRight" || code === "ArrowDown";
+      if (from && ids.includes(from)) return vertical ? cardInNextRow(from, ids, forward) : ids[ids.indexOf(from) + (forward ? 1 : -1)];
+      if (from && treeOrderRef.current.includes(from)) {
         // Picked, but hidden by Changed: the nearest shown card past it in the tree's order.
         const shownIds = new Set(ids);
         const all = treeOrderRef.current;
-        const from = all.indexOf(selected);
-        const rest = forward ? all.slice(from + 1) : all.slice(0, from).reverse();
-        id = rest.find(candidate => shownIds.has(candidate));
-      } else {
-        id = forward ? ids[0] : ids[ids.length - 1];
+        const at = all.indexOf(from);
+        return (forward ? all.slice(at + 1) : all.slice(0, at).reverse()).find(candidate => shownIds.has(candidate));
       }
-      if (!id) return;
-      event.preventDefault();
+      return forward ? ids[0] : ids[ids.length - 1];
+    };
+    const go = (id: string) => {
       pickRef.current(id);
       requestAnimationFrame(() => document.getElementById(cardId(id))?.querySelector<HTMLElement>(".screen-screenshot-target")?.focus({ preventScroll: true }));
     };
+    let hold: { code: string; at: string; timer: ReturnType<typeof setTimeout> } | undefined;
+    const endHold = () => {
+      if (hold) clearTimeout(hold.timer);
+      hold = undefined;
+    };
+    const beginHold = (code: string, at: string) => {
+      endHold();
+      let step = 1;
+      const tick = () => {
+        const id = hold && next(code, hold.at);
+        if (!hold || !id) { endHold(); return; }
+        go(id);
+        hold = { code, at: id, timer: setTimeout(tick, holdIntervalMs(step)) };
+        step += 1;
+      };
+      hold = { code, at, timer: setTimeout(tick, HOLD_INITIAL_DELAY_MS) };
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      const arrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.code);
+      if (!arrow && event.key !== "Enter") return;
+      // The browser's own repeat of a held arrow would scroll the page under the hold.
+      if (event.repeat && hold?.code === event.code) { event.preventDefault(); return; }
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.defaultPrevented || !shortcutsLive(event)) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (!arrow) {
+        // Return on a button or a link presses it; elsewhere on the page it opens the pick.
+        const selectedId = selectedRef.current;
+        if (target?.closest("button, a, [role=\"button\"]") || !target?.closest("body") || !selectedId || !orderRef.current.includes(selectedId)) return;
+        if (target !== document.body && !target.closest(".screens-page")) return;
+        event.preventDefault();
+        openRef.current(selectedId);
+        return;
+      }
+      // The page, or the bottom toolbar that Screens was just opened from; its buttons have no arrow keys of their own.
+      const onPage = !target || target === document.body || target.closest(".screens-page, .canvas-toolbar") !== null;
+      if (!onPage || target?.closest(".screens-tree-list")) return;
+      const id = next(event.code, selectedRef.current);
+      if (!id) return;
+      event.preventDefault();
+      go(id);
+      beginHold(event.code, id);
+    };
+    const onKeyUp = (event: globalThis.KeyboardEvent) => {
+      if (hold && event.code === hold.code) endHold();
+    };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", endHold);
+    return () => {
+      endHold();
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", endHold);
+    };
   }, [props.phone]);
 
   // The Inspector floats over the right edge; the page keeps its content clear of it.
