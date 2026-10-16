@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type Keyboard
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, ListTree } from "lucide-react";
 import { artifactUrl, isLaunchScreen, type ExploreMap, type MapIndex, type Screen } from "../../utils/model";
 import { primaryScreenshotForScreen, screenshotSize } from "../../utils/screen-images";
-import { diffClass, isAccessibilityOnly, type BuildDiff, type DiffStatus } from "../../utils/build-diff";
+import { diffClass, type BuildDiff, type DiffStatus } from "../../utils/build-diff";
 import { isCapturedChange } from "../../utils/changed-screens";
 import { displayPathForScreen, screenLabel } from "../../utils/screen-path";
 import { screenTree, treeIndex, treeNodeKey, type ScreenTree, type ScreenTreeNode } from "../../utils/screen-tree";
@@ -188,13 +188,12 @@ function TreeRows(props: {
   });
 }
 
-function Legend(props: { others: Appearance[]; accessibilityOnly: boolean }) {
+/** Changed, Accessibility only and Source-affected always: a reader learns the kinds even on a report without one. */
+function Legend(props: { others: Appearance[] }) {
   return (
     <div className="screens-tree-legend">
       <span><span className="screens-tree-dot diff-modified" aria-hidden="true" />Changed</span>
-      {props.accessibilityOnly ? (
-        <span><span className="screens-tree-dot diff-modified diff-accessibility-only" aria-hidden="true" />Accessibility only</span>
-      ) : null}
+      <span><span className="screens-tree-dot diff-modified diff-accessibility-only" aria-hidden="true" />Accessibility only</span>
       {props.others.length ? (
         <span><span className="screens-tree-dot elsewhere" aria-hidden="true" />Changed in {props.others.join(" and ")} only</span>
       ) : null}
@@ -375,7 +374,7 @@ export function ScreensView(props: ScreensViewProps) {
               {filterChips || foldAll ? <div className="screens-tree-head">{filterChips}{foldAll}</div> : null}
               <h2>{tree.mode === "source" ? "app/" : "Explored app"}</h2>
               {treeRows}
-              {props.diff ? <Legend others={others} accessibilityOnly={[...props.diff.screens.values()].some(isAccessibilityOnly)} /> : null}
+              {props.diff ? <Legend others={others} /> : null}
             </nav>
           </aside>
         )}
