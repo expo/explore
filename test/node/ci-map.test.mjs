@@ -150,7 +150,8 @@ async function fixture(t, settings = {}) {
         app: { id: settings.wrongProject ? 'foreign-project' : PROJECT_ID, slug: 'example', ownerAccount: { name: 'acme' } },
         remoteConfig: { agentDeviceRemoteSessionUrl: 'https://controller.example/session', agentDeviceRemoteSessionToken: DAEMON_TOKEN,
           // eas-cli --json folds the preview token into an expo.dev page that frames the preview server.
-          webPreviewUrl: settings.webPreviewUrl ?? `https://expo.dev/simulator-preview/${PREVIEW_ID}?token=${PREVIEW_TOKEN}` } });
+          webPreviewUrl: settings.webPreviewUrl ?? `https://expo.dev/simulator-preview/${PREVIEW_ID}?token=${PREVIEW_TOKEN}`,
+          ...(settings.previewApiUrl ? { previewApiUrl: settings.previewApiUrl } : {}) } });
       if (command === 'simulator:stop') {
         if (settings.stopFailure) throw new Error('stop unavailable');
         return json({ id: 'session-1', status: 'STOPPED' });
@@ -354,6 +355,31 @@ test('a preview URL that names the preview server directly reads its catalog', a
   const result = await runCiMap(f.options);
   assert.equal(result.simulatorRuntime.osVersion, '26.5');
   assert.deepEqual(f.catalogRequests.map(request => request.url), [`https://web-preview-${PREVIEW_ID}.eas-simulator.ngrok.dev/grid/api?limit=1000`]);
+});
+
+test('sessions start with a public preview link, and eas-cli 25 publishes its token on previewApiUrl', async t => {
+  // eas-cli 25 omits the preview token from a private session's --json output; a --public-link session carries it on
+  // previewApiUrl (the preview server itself) and in the fragment of the expo.dev page.
+  const f = await fixture(t, { webPreviewUrl: `https://expo.dev/simulator-preview/${PREVIEW_ID}#token=${PREVIEW_TOKEN}`,
+    previewApiUrl: `https://web-preview-${PREVIEW_ID}.eas-simulator.ngrok.dev/?token=${PREVIEW_TOKEN}` });
+  const result = await runCiMap(f.options);
+  assert.ok(f.requests.find(request => request.args[0] === 'simulator:start').args.includes('--public-link'));
+  assert.equal(result.simulatorRuntime.osVersion, '26.5');
+  assert.deepEqual(f.catalogRequests.map(request => request.url), [`https://web-preview-${PREVIEW_ID}.eas-simulator.ngrok.dev/grid/api?limit=1000`]);
+});
+
+test('a preview token in the expo.dev page fragment reaches the framed preview server', async t => {
+  const f = await fixture(t, { webPreviewUrl: `https://expo.dev/simulator-preview/${PREVIEW_ID}#token=${PREVIEW_TOKEN}` });
+  const result = await runCiMap(f.options);
+  assert.equal(result.simulatorRuntime.osVersion, '26.5');
+  assert.equal(f.catalogRequests.length, 1);
+});
+
+test('a private session publishes no preview token, so the OS version is unknown and capture goes on', async t => {
+  const f = await fixture(t, { webPreviewUrl: `https://expo.dev/simulator-preview/${PREVIEW_ID}` });
+  const result = await runCiMap(f.options);
+  assert.equal(result.outcomes[f.ids.home].status, 'captured');
+  assert.ok(f.catalogRequests.every(request => request.authorization === null), 'no credential is invented');
 });
 
 test('an unrecognized preview URL is not sent the preview token', async t => {

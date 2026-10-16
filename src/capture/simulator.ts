@@ -100,7 +100,7 @@ export function simulatorStartFailure(error: unknown, secrets: readonly string[]
     message: source.message.replace(/\\+(["'/])/g, "$1"),
     nextAction: "Inspect the EAS simulator start failure." }), { secrets });
   const message = failure.message
-    .replace(/\b(?:AGENT_DEVICE_[A-Z_]+|EAS_SIMULATOR_[A-Z_]+|EXPO_TOKEN|agentDeviceRemoteSession(?:Token|Url)|webPreviewUrl)["']?\s*[:=][^\r\n]*/g, "[REDACTED_HANDOFF]")
+    .replace(/\b(?:AGENT_DEVICE_[A-Z_]+|EAS_SIMULATOR_[A-Z_]+|EXPO_TOKEN|agentDeviceRemoteSession(?:Token|Url)|webPreviewUrl|previewApiUrl)["']?\s*[:=][^\r\n]*/g, "[REDACTED_HANDOFF]")
     .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>"']+/g, "[REDACTED_URL]")
     .slice(0, 1600);
   return { code: failure.code, stage: "session", message,
@@ -361,11 +361,15 @@ export function collectRuntime(options: CiMapOptions & { platform: NonNullable<C
 export async function simulatorOsVersion(session: string, deviceId: string, transport: typeof fetch, platform: "ios" | "android" = "ios"): Promise<string> {
   const value = parseJson(session, "eas simulator:get");
   const remote = isRecord(value) && isRecord(value.remoteConfig) ? value.remoteConfig : {};
-  if (typeof remote.webPreviewUrl !== "string") throw new Error("EAS did not publish the simulator preview URL");
-  const preview = new URL(remote.webPreviewUrl);
+  // eas-cli 25 publishes the preview server itself as previewApiUrl, with the token in its query, but only for a
+  // session started with --public-link; its webPreviewUrl is then an expo.dev page with the token in the fragment.
+  // Earlier versions folded the token into webPreviewUrl's query. A private session's output has no token at all.
+  const published = typeof remote.previewApiUrl === "string" ? remote.previewApiUrl : remote.webPreviewUrl;
+  if (typeof published !== "string") throw new Error("EAS did not publish the simulator preview URL");
+  const preview = new URL(published);
   if (preview.protocol !== "https:" || preview.username || preview.password) throw new Error("The simulator preview URL is not HTTPS");
-  // eas-cli --json folds the preview token into the URL; the catalog takes it as a bearer credential.
-  const token = preview.searchParams.get("token");
+  // The catalog takes the preview token as a bearer credential.
+  const token = preview.searchParams.get("token") ?? new URLSearchParams(preview.hash.slice(1)).get("token");
   const catalog = new URL(framedSimulatorPreviewServer(preview) ?? preview.origin);
   if (!SIMULATOR_PREVIEW_HOST.test(catalog.hostname)) throw new Error(`The simulator preview URL names no preview server: ${preview.origin}${preview.pathname}`);
   // The iOS preview server lists simulators at /grid/api; the Android one has no grid and lists
