@@ -327,3 +327,27 @@ test("keeps source provenance while reducing the viewer to route-level screens",
     false,
   );
 });
+
+test("a route family is accessibility-only only when every changed member is", () => {
+  const family = (statuses) => {
+    // Screens recorded on one router path are one family.
+    const members = statuses.map((_, index) => screen(`screen-${index}`, `Policy ${index}`, "/policies", [`variant-${index}`]));
+    const sourceMap = mapWith(members);
+    const presentation = presentationModel.presentScreensByPath(sourceMap);
+    const screens = new Map(members.map((member, index) => {
+      const [status, accessibilityOnly] = statuses[index];
+      return [member.id, { status, changeSummary: "", reviewerChanges: [], runtimeEvidenceRefs: [], noVisibleChange: false,
+        ...(status !== "added" ? { beforeScreenshot: `before-${index}.png` } : {}), afterScreenshot: `after-${index}.png`,
+        ...(accessibilityOnly ? { accessibilityOnly: true } : {}) }];
+    }));
+    const presented = presentationModel.presentBuildDiff({ baselineId: "build-1", map: sourceMap, index: indexMap(sourceMap), screens,
+      counts: { added: 0, modified: 0, removed: 0, unchanged: 0 } }, presentation);
+    assert.equal(presented.screens.size, 1, "the members are one family");
+    return [...presented.screens.values()][0];
+  };
+  assert.equal(family([["modified", true], ["modified", true]]).accessibilityOnly, true);
+  assert.equal(family([["modified", true], ["unchanged", false]]).accessibilityOnly, true);
+  // An added or visibly modified member is a visible change, so the family is not accessibility-only.
+  assert.equal(family([["modified", true], ["added", false]]).accessibilityOnly, undefined);
+  assert.equal(family([["modified", true], ["modified", false]]).accessibilityOnly, undefined);
+});

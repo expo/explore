@@ -1,8 +1,8 @@
 import type { PublicReview } from "../contracts/capture.js";
 import type { SimulatorRuntimeMetadata } from "../capture/run.js";
 import { CI_COMMENT_MARKER } from "./pr-comment.js";
-import { CHANGE_GROUPS, foldRecord, historyLine, readCommentRecords, recordLine, recordSummary, type ChangeGroup, type CommentPlatform, type CommentRecords, type HistoryEntry, type PlatformRecord } from "./pr-comment-record.js";
-import { sourceImpactSentences } from "../contracts/source-change.js";
+import { CHANGE_GROUPS, changeCountText, foldRecord, strongerGroup, historyLine, readCommentRecords, recordLine, recordSummary, type ChangeGroup, type CommentPlatform, type CommentRecords, type HistoryEntry, type PlatformRecord } from "./pr-comment-record.js";
+import { isAccessibilityOnlyChange } from "../contracts/review-validation.js";
 import type { PublicCaptureHealth, PublicEvidenceSummary } from "../review/evidence-assessment.js";
 import type { ReviewPresentation } from "../contracts/review.js";
 import type { ViewerLinks } from "./viewer-links.js";
@@ -60,8 +60,8 @@ const GROUP_LABEL: Record<ReviewGroup, string> = {
   added: "🟩 Added",
   modified: "🟧 Modified",
   removed: "🟥 Removed",
+  "accessibility-only": "🟦 Accessibility only",
   "needs-review": "🟨 Needs review",
-  "source-affected": "🟨 Source-affected",
 };
 
 /** The body is HTML, so no blank lines are needed and the block keeps its natural spacing. */
@@ -121,16 +121,32 @@ function plural(count: number, noun: string): string {
 
 type Surface = PublicReview["surfaces"][number];
 
-/** Evidence-based group when the run produced verdicts; otherwise the source-based status. */
-function groupOf(surface: Surface, evidenceBased: boolean): ReviewGroup | "unchanged" | "variant" {
+/**
+ * The group a surface is listed under, from the run's verdicts. A screen without one (its source changed but no
+ * screenshots were compared) is not listed: Explore reports what the captures show. A capture that failed is counted as
+ * unavailable in the result and named under Validation instead.
+ */
+function groupOf(surface: Surface, evidenceBased: boolean): ReviewGroup | "unlisted" {
   if (surface.status === "added" || surface.status === "removed") return surface.status;
   const verified = (["base", "head"] as const).every(side => surface[`${side}Image`]
     && surface[`${side}Outcome`]?.status === "captured" && surface[`${side}Outcome`]?.landing === "verified");
-  if (evidenceBased && verified && surface.review && surface.visual?.reason !== "diff-failed") return surface.review.status;
-  switch (surface.status) {
-    case "modified": return "source-affected";
-    case "unchanged": return "unchanged";
+  if (evidenceBased && verified && surface.review && surface.visual?.reason !== "diff-failed") {
+    const status = surface.review.status;
+    if (status === "unchanged" || status === "variant") return "unlisted";
+    return isAccessibilityOnlyChange(surface) ? "accessibility-only" : status;
   }
+  return "unlisted";
+}
+
+/**
+ * A screen whose source changed and whose captures were both verified, but that has no verdict: the comparison did
+ * not run or failed. Not a change, but not a screen that looks the same either, so the result says how many.
+ */
+function notComparedChange(surface: Surface): boolean {
+  if (surface.status !== "modified" || (surface.head ?? surface.base)?.kind === "redirect") return false;
+  const verified = (["base", "head"] as const).every(side => surface[`${side}Image`]
+    && surface[`${side}Outcome`]?.status === "captured" && surface[`${side}Outcome`]?.landing === "verified");
+  return verified && (!surface.review || surface.visual?.reason === "diff-failed");
 }
 
 function routeOf(surface: Surface): string {
@@ -143,9 +159,6 @@ function descriptionOf(surface: Surface, group: ReviewGroup): string {
   if (group === "added") return `Added ${route} screen`;
   if (group === "removed") return `Removed ${route} screen`;
   // A group's own label already says added or removed; the route makes the line readable alone.
-  if (group === "source-affected") {
-    return sourceImpactSentences(surface.sourceImpact) ?? "Source-affected; not compared";
-  }
   if (surface.review) return plainText(surface.review.description, MAX_DESCRIPTION_LENGTH);
   return "No visible change";
 }
@@ -270,10 +283,12 @@ export function platformRecordOf(state: PublicCommentState, platform?: CommentPl
     for (const surface of state.review.surfaces) {
       if ((surface.head ?? surface.base)?.kind === "redirect") continue;
       const group = groupOf(surface, evidenceBased);
-      if (group === "unchanged" || group === "variant") continue;
+      if (group === "unlisted") continue;
       const scheme = schemeOf(surface.id);
       record.changes.push({ id: surface.id, route: routeOf(surface), group, description: descriptionOf(surface, group), ...(scheme ? { scheme } : {}) });
     }
+    const notCompared = state.review.surfaces.filter(notComparedChange).length;
+    if (notCompared) record.notCompared = notCompared;
     record.context = contextLines(state.review).filter(line => line.length);
     const diagnostics = [...(state.evidence?.diagnostics ?? [])];
     for (const surface of state.review.surfaces) {
@@ -318,12 +333,12 @@ function resultCell(record: PlatformRecord): string {
     }
     case "failed": return `🟥 failed · ${inlineText(record.failure?.step ?? "capture", 48)}`;
     case "ready": {
-      const changes = record.changes?.length ?? 0;
       const unavailable = record.health ? record.health.base.unavailable + record.health.head.unavailable : 0;
       const unverified = record.health ? record.health.base.unverified + record.health.head.unverified : 0;
       const failed = (record.validation?.visual?.failed ?? 0) + (record.validation?.accessibility?.failed ?? 0);
-      const icon = unavailable || unverified || failed ? "🟨" : "🟩";
-      return [`${icon} ${plural(changes, "change")}`, unavailable ? `${unavailable} unavailable` : undefined, unverified ? `${unverified} unattributed` : undefined,
+      const notCompared = record.notCompared ?? 0;
+      const icon = unavailable || unverified || failed || notCompared ? "🟨" : "🟩";
+      return [`${icon} ${changeCountText(record.changes?.map(change => change.group) ?? [])}`, notCompared ? `${notCompared} not compared` : undefined, unavailable ? `${unavailable} unavailable` : undefined, unverified ? `${unverified} unattributed` : undefined,
         failed ? `${failed} comparison${failed === 1 ? "" : "s"} failed` : undefined, duration(record.startedAt, record.updatedAt)].filter(Boolean).join(" · ");
     }
   }
@@ -363,6 +378,8 @@ function changeRows(records: PlatformRecord[]): Map<ReviewGroup, ChangeRow[]> {
     for (const change of record.changes ?? []) {
       const href = record.links.report ? surfaceLink(record.links.report, change.id) : undefined;
       const row = rows.get(change.id) ?? { id: change.id, route: change.route, group: change.group, description: change.description, perPlatform: {}, ...(change.scheme ? { scheme: change.scheme } : {}) };
+      // A screen accessibility-only on one platform and visibly changed on another is listed as the visible change.
+      if (strongerGroup(row.group, change.group) !== row.group) Object.assign(row, { group: change.group, description: change.description });
       row.perPlatform[record.platform] = { group: change.group, ...(href ? { href } : {}) };
       rows.set(change.id, row);
     }
@@ -390,12 +407,14 @@ function changesSection(records: PlatformRecord[], platforms: CommentPlatform[],
   const lines: string[] = [];
   const total = [...groups.values()].reduce((sum, rows) => sum + rows.length, 0);
   lines.push(`**Changes** · ${plural(total, "screen")}${platforms.length > 1 && ready.length > 1 ? " · a screen is listed once, with a link per platform" : ""}`, "");
-  if (total === 0) lines.push("No screen changed on the reviewed platforms.", "");
+  // With screens left uncompared, nothing changed only among the ones compared.
+  if (total === 0) lines.push(ready.some(record => record.notCompared) ? "No compared screen changed on the reviewed platforms." : "No screen changed on the reviewed platforms.", "");
   for (const group of GROUP_ORDER) {
     const rows = groups.get(group) ?? [];
     if (!rows.length) continue;
     const shown = rows.slice(0, rowCap);
-    const content = ["", ...shown.map(row => renderChangeRow(row, platforms))];
+    const content = ["", ...(group === "accessibility-only" ? ["Before and After look the same. What screen readers and voice control read changed.", ""] : []),
+      ...shown.map(row => renderChangeRow(row, platforms))];
     if (rows.length > shown.length) {
       const report = ready.find(record => record.links.report)?.links.report;
       content.push(`- ${rows.length - shown.length} more${report ? ` — ${link("Explore report", report)}` : ""}`);
@@ -606,18 +625,27 @@ export function reviewChanges(review: PublicReview): Map<string, ChangeGroup> {
   for (const surface of review.surfaces) {
     if ((surface.head ?? surface.base)?.kind === "redirect") continue;
     const group = groupOf(surface, evidenceBased);
-    if (group !== "unchanged" && group !== "variant") changes.set(surface.id, group);
+    if (group !== "unlisted") changes.set(surface.id, group);
   }
   return changes;
 }
 
-/** Surfaces the review calls changed (reviewer verdicts first, raw status otherwise); undefined before the review exists. */
+/** How many screens the comment lists as changed; undefined before the review exists. */
 export function reviewChangeCount(state: Pick<PublicCommentState, "review">): number | undefined {
-  return state.review?.surfaces.filter(surface => surface.review ? surface.review.status !== "unchanged" && surface.review.status !== "variant"
-    : surface.status !== "unchanged").length;
+  return state.review ? reviewChanges(state.review).size : undefined;
 }
 
 export { recordSummary, readCommentRecords };
+
+/** A surface's status in the local text summary, named as the comment groups it. */
+function localStatus(surface: Surface): string {
+  if (isAccessibilityOnlyChange(surface)) return "accessibility only";
+  if (surface.review) return surface.review.status;
+  if (surface.status === "added" || surface.status === "removed") return surface.status;
+  const failed = (["base", "head"] as const).some(side => surface[side]?.kind === "screen" && !surface[`${side}Image`]
+    && surface[`${side}Outcome`] && surface[`${side}Outcome`]?.status !== "captured");
+  return failed ? "unavailable" : "not compared";
+}
 
 function renderLocalText(state: PublicCommentState): string {
   const pr = state.pullRequest as Extract<ReviewPresentation, { origin: "local" }>;
@@ -630,6 +658,6 @@ function renderLocalText(state: PublicCommentState): string {
     ...(counts && counts.planned.base + counts.planned.head === 0 ? ["No captures selected; visual comparison was not required.", ""] : []),
     ...(state.review?.surfaces.filter(s => (s.status === "added" || s.status === "removed"
       || s.baseOutcome || s.headOutcome || s.review) && s.review?.status !== "unchanged" && s.review?.status !== "variant").map(s =>
-      `- ${inlineText((s.head ?? s.base)?.route ?? s.id, 160)}: ${s.review?.status ?? (s.status === "added" || s.status === "removed" ? s.status : "not compared")}${s.note ? ` — ${inlineText(s.note.text, 500)}` : ""}`) ?? []),
+      `- ${inlineText((s.head ?? s.base)?.route ?? s.id, 160)}: ${localStatus(s)}${s.note ? ` — ${inlineText(s.note.text, 500)}` : ""}`) ?? []),
     "", ...(state.review ? contextLines(state.review) : []), "Report: artifacts/report.zip", "Details: README.md, agent-mode-cost.md, issues.md", ""].join("\n");
 }

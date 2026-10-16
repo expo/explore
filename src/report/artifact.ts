@@ -5,7 +5,7 @@ import { assertPublicReview, projectPublicReviewForReport } from "../contracts/r
 import { createHash } from "node:crypto";
 import type { ArtifactReport } from "../contracts/artifact-report.js";
 import { compareTitleMarkdown, projectReviewPresentation, type CompareReviewPresentation } from "../contracts/review.js";
-import { renderPublicComment, platformSectionMerge, type PublicCommentState } from "./pr-comment-body.js";
+import { renderPublicComment, platformSectionMerge, reviewChangeCount, type PublicCommentState } from "./pr-comment-body.js";
 import type { ExplorePlatform } from "../config/explore-config.js";
 import { upsertStickyComment } from "./pr-comment.js";
 import { previewLinks, viewerLinks } from "./viewer-links.js";
@@ -214,7 +214,7 @@ async function publishCompareSummary(input: CiReportInput, options: { artifactUr
     runAttempt: review.runAttempt, configPath: input.commentState.configPath, artifactUrl: options.artifactUrl,
     ...(options.platform ? { platform: options.platform } : {}) });
   const changes = input.commentState.review ?? review;
-  const count = changes.surfaces.filter(surface => surface.review ? surface.review.status !== "unchanged" && surface.review.status !== "variant" : surface.status !== "unchanged").length;
+  const count = reviewChangeCount({ review: changes }) ?? 0;
   const platform = (options.platform ?? review.runtime.platform) === "android" ? "Android" : "iOS";
   if (environment.GITHUB_STEP_SUMMARY) {
     await appendFile(environment.GITHUB_STEP_SUMMARY, `- ${platform} report of ${compareTitleMarkdown(comparison)}: [Open](${links.viewer!.open}) · [zip](${links.download!}) · ${count} ${count === 1 ? "change" : "changes"}\n`);

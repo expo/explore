@@ -12,7 +12,7 @@ import { AppLoading } from "./components/shared/app-loading";
 import { ReportLoadingShell } from "./components/shared/report-loading-shell";
 import { screenLabel } from "./utils/screen-path";
 import { AppPill, PLATFORM_NAMES } from "./components/panels/app-pill";
-import { changedScreens, isVisibleChange, type ChangedScreen } from "./utils/changed-screens";
+import { changedScreens, focusCounts as countFocusStatuses, isCapturedChange, type ChangedScreen } from "./utils/changed-screens";
 import { MapView } from "./components/views/semantic-map";
 import { RightPanel } from "./components/panels/right";
 import { SearchCommand } from "./components/search-command";
@@ -1181,16 +1181,10 @@ function ViewerApp() {
   ), [presentedMap, workspace]);
   // Focus singles out diff states, so it means nothing without a baseline to diff against.
   const focusFilter = diff ? route.focus : [];
-  const focusCounts = {
-    added: diff?.counts.added ?? 0,
-    modified: diff?.counts.modified ?? 0,
-    removed: diff?.counts.removed ?? 0,
-    "needs-review": diff?.counts["needs-review"] ?? 0,
-    "source-affected": diff?.counts["source-affected"] ?? 0,
-  };
+  const focusCounts = useMemo(() => countFocusStatuses(diff), [diff]);
   const index = diff?.index ?? screenPresentation?.index;
   const compareOrder = useMemo(
-    () => (diff && index ? changedScreens(diff, index).filter(entry => isVisibleChange(diff.screens.get(entry.id))) : []),
+    () => (diff && index ? changedScreens(diff, index).filter(entry => isCapturedChange(diff.screens.get(entry.id))) : []),
     [diff, index],
   );
   compareOrderRef.current = compareOrder;

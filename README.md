@@ -387,7 +387,7 @@ The same link answers differently depending on who asks. It already carries the 
 
 - A browser gets the Viewer.
 - Anything that does not ask for HTML (`curl`, `fetch`, agents' URL tools) gets a Markdown index of the report, also at `/llms.txt`.
-- The index links to a read-only JSON API under `/api/v1`: `/screens?status=modified,added,removed`, `/screens/<id>`, `/transitions`, and `/raw` for the report file.
+- The index links to a read-only JSON API under `/api/v1`: `/screens?status=modified,accessibility-only,added,removed`, `/screens/<id>`, `/transitions`, and `/raw` for the report file.
 - Reports without source also expose `/journeys`, `/gaps`, and `/frontier`.
 - Multi-platform reports take `?platform=ios|android`. Expired links answer `410`.
 

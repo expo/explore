@@ -1,15 +1,17 @@
-import type { BuildDiff, DiffStatus, ScreenDiff } from "./build-diff";
+import { isAccessibilityOnly, type BuildDiff, type DiffStatus, type ScreenDiff } from "./build-diff";
 import type { MapIndex } from "./model";
 import { isLaunchScreen } from "./model";
 import type { FocusStatus } from "./navigation";
 import { displayPathForScreen } from "./screen-path";
 
+/** Review order: the visible changes first, then what changed only for assistive technology. */
 const STATUS_ORDER: Record<FocusStatus, number> = {
   added: 0,
   modified: 1,
   removed: 2,
-  "needs-review": 3,
-  "source-affected": 4,
+  "accessibility-only": 3,
+  "needs-review": 4,
+  "source-affected": 5,
 };
 
 export type ChangedScreen = {
@@ -19,17 +21,33 @@ export type ChangedScreen = {
   route: string;
 };
 
-export function isChangedStatus(status: DiffStatus): status is FocusStatus {
+/** The status the Changes filter and focus match a screen on: Accessibility only apart from Modified. */
+export function focusStatusOf(diff: Pick<ScreenDiff, "status" | "accessibilityOnly"> | undefined): DiffStatus | "accessibility-only" | undefined {
+  return isAccessibilityOnly(diff) ? "accessibility-only" : diff?.status;
+}
+
+/** Each focus status's count: Modified counts only the visible changes, Accessibility only the rest. */
+export function focusCounts(diff: BuildDiff | undefined): Record<FocusStatus, number> {
+  const counts: Record<FocusStatus, number> = { added: 0, modified: 0, "accessibility-only": 0, removed: 0, "needs-review": 0, "source-affected": 0 };
+  for (const screen of diff?.screens.values() ?? []) {
+    const status = focusStatusOf(screen);
+    if (status && status in counts) counts[status as FocusStatus] += 1;
+  }
+  return counts;
+}
+
+export function isChangedStatus(status: DiffStatus): status is Exclude<FocusStatus, "accessibility-only"> {
   return status !== "unchanged" && status !== "not-compared" && status !== "unavailable" && status !== "variant";
 }
 
 /**
- * A change the captures show: an added or removed screen, or a modified one whose pixels differ. A screen whose
- * source changed but whose captures look the same ("No visible change", source-affected, or modified with
- * unchanged pixels) stays in the Changes list, but Compare does not step through it and Screens' Changed hides it.
+ * A change the captures show: an added, removed or modified screen, including one modified only in what assistive
+ * technology reads (its screenshots match, its accessibility tree does not). A screen whose source changed but whose
+ * captures show nothing different ("No visible change") stays in the Changes list, but Compare does
+ * not step through it and Screens' Changed hides it.
  */
-export function isVisibleChange(diff: Pick<ScreenDiff, "status" | "notVisible"> | undefined): boolean {
-  return diff !== undefined && (diff.status === "added" || diff.status === "removed" || (diff.status === "modified" && !diff.notVisible));
+export function isCapturedChange(diff: Pick<ScreenDiff, "status"> | undefined): boolean {
+  return diff !== undefined && (diff.status === "added" || diff.status === "removed" || diff.status === "modified");
 }
 
 export function compareText(left: string, right: string): number {
@@ -58,7 +76,7 @@ export function changedScreens(diff: BuildDiff, index: MapIndex): ChangedScreen[
     if (!isChangedStatus(screenDiff.status)) continue;
     const screen = index.screens.get(id);
     if (!screen) continue;
-    result.push({ id, status: screenDiff.status, title: screen.title, route: displayPathForScreen(screen) });
+    result.push({ id, status: isAccessibilityOnly(screenDiff) ? "accessibility-only" : screenDiff.status, title: screen.title, route: displayPathForScreen(screen) });
   }
   return result.sort(compareChangedScreens);
 }

@@ -8,7 +8,8 @@ export type ThemePreference = "light" | "dark" | "system";
 export type MapDirection = "TB" | "LR";
 /** The explicitly selected amount of Map hierarchy, independent from camera zoom. */
 /** The diff states the canvas can single out. An empty selection is "All": nothing drops back. */
-export type FocusStatus = "added" | "modified" | "removed" | "needs-review" | "source-affected";
+/** `accessibility-only`: a modified screen whose screenshots match, filtered apart from the visible changes. */
+export type FocusStatus = "added" | "modified" | "accessibility-only" | "removed" | "needs-review" | "source-affected";
 /** The right panel shows Session and Diff. */
 export type InspectView = "session" | "diff";
 /** Which way the inspector's transition list reads: into the screen, or out of it. */
@@ -83,7 +84,7 @@ export type FocusRequest = {
 const CANVASES: CanvasView[] = ["map", "screens", "compare"];
 const INSPECTS: InspectView[] = ["session", "diff"];
 const DIRECTIONS: TransitionDirection[] = ["in", "out"];
-const FOCUSES: FocusStatus[] = ["added", "modified", "removed", "needs-review", "source-affected"];
+const FOCUSES: FocusStatus[] = ["added", "modified", "accessibility-only", "removed", "needs-review", "source-affected"];
 
 function isCanvas(value: string | null | undefined): value is CanvasView {
   return CANVASES.includes(value as CanvasView);
@@ -326,6 +327,7 @@ export const CANVAS_DESCRIPTIONS: Record<CanvasView, string> = {
 export const FOCUS_LABELS: Record<FocusStatus, string> = {
   added: "Added",
   modified: "Modified",
+  "accessibility-only": "Accessibility only",
   removed: "Removed",
   "needs-review": "No visible change",
   "source-affected": "Source-affected",

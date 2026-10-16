@@ -218,6 +218,11 @@ function aggregateStatus(statuses: readonly DiffStatus[]): DiffStatus {
   return "modified";
 }
 
+function accessibilityOnlyFamily(diffs: readonly ScreenDiff[]): boolean {
+  const changed = diffs.filter((diff) => diff.status === "added" || diff.status === "removed" || diff.status === "modified");
+  return changed.length > 0 && changed.every((diff) => diff.status === "modified" && diff.accessibilityOnly);
+}
+
 function firstDiffWithScreenshot(
   diffs: readonly ScreenDiff[],
   side: "beforeScreenshot" | "afterScreenshot",
@@ -241,7 +246,7 @@ function familyEvidence(diffs: readonly ScreenDiff[]): {
   reviewerChanges: ScreenDiff["reviewerChanges"];
   runtimeEvidenceRefs: string[];
   noVisibleChange: boolean;
-  notVisible?: true;
+  accessibilityOnly?: true;
 } {
   const first = diffs[0];
   if (!first) throw new Error("Cannot present an empty diff family");
@@ -251,7 +256,6 @@ function familyEvidence(diffs: readonly ScreenDiff[]): {
   const beforeDiff = firstDiffWithScreenshot(diffs, "beforeScreenshot");
   const afterDiff = firstDiffWithScreenshot(diffs, "afterScreenshot");
   const primary = paired ?? afterDiff ?? beforeDiff ?? first;
-  const modified = diffs.filter((diff) => diff.status === "modified");
   const reviewerChanges = [...new Map(diffs
     .flatMap((diff) => diff.reviewerChanges ?? [])
     .map((change) => [change.id, change])).values()];
@@ -263,8 +267,8 @@ function familyEvidence(diffs: readonly ScreenDiff[]): {
     reviewerChanges,
     runtimeEvidenceRefs,
     noVisibleChange: diffs.some((diff) => diff.noVisibleChange),
-    // Not visible only when no modified member of the family shows a difference.
-    ...(modified.length > 0 && modified.every((diff) => diff.notVisible) ? { notVisible: true as const } : {}),
+    // Accessibility only when every changed member is: an added, removed or visibly modified member is a visible change.
+    ...(accessibilityOnlyFamily(diffs) ? { accessibilityOnly: true as const } : {}),
     ...(primary.captureNotes ? { captureNotes: primary.captureNotes } : {}),
     // A redirect's screenshots belong to the route it declares; the panel must keep saying so.
     ...(primary.redirectTo ? { redirectTo: primary.redirectTo } : {}),

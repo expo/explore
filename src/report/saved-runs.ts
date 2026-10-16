@@ -8,7 +8,7 @@ import { exploreCacheRoot } from "../shared/cache-root.js";
 import { MAX_METADATA_BYTES } from "./agent-api.js";
 import { normalizePublicReviewForReading } from "../contracts/review-validation.js";
 import { reviewChanges, reviewDevice } from "./pr-comment-body.js";
-import type { ChangeGroup } from "./pr-comment-record.js";
+import { strongerGroup, type ChangeGroup } from "./pr-comment-record.js";
 import { readZipDirectory, readZipEntry } from "./zip-reader.js";
 
 /**
@@ -100,9 +100,12 @@ export async function describeReports(reports: SavedReport[], extra: { subjects?
   const review = reviews[0];
   const pr = review?.pullRequest;
   if (!review || !pr) throw new Error("Not an Explore review report");
-  // One surface changed on two platforms is one change, under the first platform's group, as the PR comment lists it.
+  // One surface changed on two platforms is one change, under the group the PR comment lists it in (strongerGroup).
   const merged = new Map<string, ChangeGroup>();
-  for (const each of reviews) if (each) for (const [id, group] of reviewChanges(normalizePublicReviewForReading(each))) if (!merged.has(id)) merged.set(id, group);
+  for (const each of reviews) if (each) for (const [id, group] of reviewChanges(normalizePublicReviewForReading(each))) {
+    const first = merged.get(id);
+    merged.set(id, first ? strongerGroup(first, group) : group);
+  }
   const changes: Partial<Record<ChangeGroup, number>> = {};
   for (const group of merged.values()) changes[group] = (changes[group] ?? 0) + 1;
   const devices = [...new Set(reviews.map(each => each ? reviewDevice({ runtime: { deviceModel: each.runtime?.device?.model ?? "", osVersion: each.runtime?.device?.osVersion ?? "",

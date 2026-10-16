@@ -23,6 +23,7 @@ import type { BuildDiff, DiffStatus } from "../../utils/build-diff";
 import { CANVAS_MAX_ZOOM } from "../../utils/canvas-zoom";
 import { usePhoneLayout } from "../../utils/phone-layout";
 import type { FocusBehavior, FocusRequest, FocusStatus, MapDirection } from "../../utils/navigation";
+import { focusStatusOf } from "../../utils/changed-screens";
 import { displayPathForScreen } from "../../utils/screen-path";
 import { shortcutsLive } from "../../utils/shortcuts";
 import { mapKeyDirection, mapKeyTarget } from "../../utils/map-keyboard";
@@ -58,7 +59,7 @@ type ScreenNodeData = {
   highlighted: boolean;
   direction: MapDirection;
   diff?: DiffStatus;
-  notVisible?: boolean;
+  accessibilityOnly?: boolean;
   projectionDelayMs?: number;
   projectionScreenScale?: number;
   projectionMotion: ProjectionMotionMetadata;
@@ -93,7 +94,7 @@ function ScreenNodeCard({ data, selected }: NodeProps<ScreenGraphNode>) {
       {...(data.screenshot ? { screenshot: data.screenshot } : {})}
       {...(data.missingReason ? { missingReason: data.missingReason } : {})}
       {...(data.diff ? { diff: data.diff } : {})}
-      {...(data.notVisible ? { notVisible: true } : {})}
+      {...(data.accessibilityOnly ? { accessibilityOnly: true } : {})}
       selected={selected}
       highlighted={data.highlighted}
       style={{
@@ -287,7 +288,8 @@ function projectionElements(
     const screenshot = structure.screenshots.get(screen.id);
     const highlighted = false;
     const status = diff?.screens.get(screen.id)?.status;
-    const muted = focus.length > 0 && !focus.some((state) => state === status);
+    const focusStatus = focusStatusOf(diff?.screens.get(screen.id));
+    const muted = focus.length > 0 && !focus.some((state) => state === focusStatus);
     const projectionMotion: ProjectionMotionMetadata = {
       motionKey: `screen:${screen.id}`,
       role: "screen",
@@ -318,7 +320,7 @@ function projectionElements(
         highlighted,
         direction: structure.horizontal ? "LR" : "TB",
         ...(status ? { diff: status } : {}),
-        ...(diff?.screens.get(screen.id)?.notVisible ? { notVisible: true } : {}),
+        ...(diff?.screens.get(screen.id)?.accessibilityOnly ? { accessibilityOnly: true } : {}),
         projectionMotion,
         onSelect: onSelectScreen,
         onHover: onHoverScreen,

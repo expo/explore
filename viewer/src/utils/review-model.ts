@@ -98,7 +98,7 @@ export type ReviewSurface = {
   reviewerChanges: ReviewerChangeFact[];
   runtimeEvidenceRefs: string[];
   noVisibleChange: boolean;
-  /** CI compared both verified screenshots and found no pixel difference: whatever changed is not visible. */
+  /** CI compared both verified screenshots and found no pixel difference: anything that changed is in the accessibility tree. */
   pixelsUnchanged?: true;
   /** Route this surface declares instead of rendering a screen of its own. */
   redirectTo?: string;

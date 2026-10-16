@@ -124,13 +124,48 @@ const edgeItem = (edge: Json): Json => defined({ from: str(edge.from), to: str(e
 /**
  * A screen's status as the Viewer and the PR comment show it: the review's verdict where there is one, so `modified`
  * means a visible change. A screen whose source changed but whose captures match is unchanged, including in reports
- * from before 0.19.1, which called it "needs review".
+ * from before 0.19.1, which called it "needs review". A modified screen whose screenshots match changed only in what
+ * assistive technology reads: `accessibility-only`. A screen whose capture failed is `unavailable`, and one whose
+ * source changed but that has no verdict was not compared: `not-compared`.
  */
+/** Both sides captured at their verified destination route, as a verdict requires (isAccessibilityOnlyChange in the contract). */
+function verifiedPair(surface: Json): boolean {
+  return (["base", "head"] as const).every(side => str(rec(surface[side]).kind) === "screen" && Boolean(surface[`${side}Image`])
+    && str(rec(surface[`${side}Outcome`]).status) === "captured" && str(rec(surface[`${side}Outcome`]).landing) === "verified");
+}
+
+/** The side's planned capture ended without a screenshot, or captured another screen than the route (the Viewer's Unavailable). */
+function captureUnavailable(surface: Json, side: "base" | "head"): boolean {
+  const outcome = surface[`${side}Outcome`];
+  if (str(rec(surface[side]).kind) !== "screen" || outcome === undefined) return false;
+  const image = Boolean(surface[`${side}Image`]);
+  if (!image) return str(rec(outcome).status) !== "captured";
+  return str(rec(outcome).status) === "captured" && str(rec(outcome).landing) !== "verified" && rec(outcome).observed !== undefined;
+}
+
 function verdictOf(surface: Json): string | undefined {
+  // A capture that failed is unavailable, as the Viewer says, whatever the source or an older verdict claims.
+  if (str(surface.status) !== "removed" && captureUnavailable(surface, "head")) return "unavailable";
+  if (["modified", "unchanged"].includes(str(surface.status) ?? "") && captureUnavailable(surface, "base")) return "unavailable";
   const review = rec(surface.review);
   const status = str(review.status);
   if (status === "needs-review" && str(review.description) === "Source changed; no visible difference was captured.") return "unchanged";
+  if (status === "modified" && str(rec(surface.visual).verdict) === "unchanged" && verifiedPair(surface)) return "accessibility-only";
+  // A source change nobody compared is not a change Explore saw.
+  if (status === undefined && str(surface.status) === "modified") return "not-compared";
   return status ?? str(surface.status);
+}
+
+const STATUS_ORDER = ["modified", "accessibility-only", "added", "removed", "needs-review", "unavailable", "not-compared", "unchanged", "variant"];
+const STATUS_WORDS: Record<string, string> = { "accessibility-only": "accessibility only (screenshots match, the accessibility tree does not)",
+  "needs-review": "need review", "not-compared": "not compared", variant: "screen variants" };
+
+/** "3 modified, 1 added, 1 removed, 30 unchanged": every status counted, so the parts add up to the total. */
+function screenCounts(screens: Json): string {
+  const statuses = Object.keys(screens).filter(status => status !== "total")
+    .sort((left, right) => (STATUS_ORDER.indexOf(left) + 1 || 99) - (STATUS_ORDER.indexOf(right) + 1 || 99));
+  const parts = statuses.flatMap(status => (num(screens[status]) ? [`${num(screens[status])} ${STATUS_WORDS[status] ?? status}`] : []));
+  return parts.length ? parts.join(", ") : "none";
 }
 
 function reviewSummary(context: AgentContext, review: Json): Json {
@@ -145,7 +180,7 @@ function reviewSummary(context: AgentContext, review: Json): Json {
     createdAt: str(review.createdAt), mode: str(review.mode), platforms: context.platforms, expiresAt: context.expiresAt,
     screens: { total: surfaces.length, ...counts },
     links: {
-      screens: withPlatform(context, apiUrl(context, "/screens")), changed: withPlatform(context, apiUrl(context, "/screens?status=modified,added,removed")),
+      screens: withPlatform(context, apiUrl(context, "/screens")), changed: withPlatform(context, apiUrl(context, "/screens?status=modified,accessibility-only,added,removed")),
       transitions: withPlatform(context, apiUrl(context, "/transitions")), raw: withPlatform(context, apiUrl(context, "/raw")),
       viewer: viewerUrl(context), viewerChanges: viewerUrl(context, { focus: "modified", inspect: "diff" }), markdown: `${context.pageUrl}/llms.txt`,
     },
@@ -229,10 +264,10 @@ export function agentIndexMarkdown(context: AgentContext, loaded: LoadedReport):
     // A comparison of two commits, or a local review on someone's machine, has no pull request: its title names both refs.
     const compared = pr.origin === "compare" || pr.origin === "local";
     lines.push(`# Expo Explore report: ${escapeMd(app.name ?? pr.repository)} ${compared ? escapeMd(pr.title) : `PR #${escapeMd(pr.number)}`}${app.platform ? ` (${escapeMd(app.platform)})` : ""}`, "",
-      `> Visual review of ${compared ? `${escapeMd(pr.repository)} ${escapeMd(pr.title)}` : `pull request ${escapeMd(pr.repository)}#${escapeMd(pr.number)}`} by Expo Explore. ${screens.total} screens captured: ${screens.modified ?? 0} modified, ${screens.added ?? 0} added, ${screens.removed ?? 0} removed, ${screens.unchanged ?? 0} unchanged.${context.expiresAt ? ` This link stops serving the report after ${context.expiresAt}.` : ""}`, "",
+      `> Visual review of ${compared ? `${escapeMd(pr.repository)} ${escapeMd(pr.title)}` : `pull request ${escapeMd(pr.repository)}#${escapeMd(pr.number)}`} by Expo Explore. ${screens.total} screens: ${screenCounts(screens)}.${context.expiresAt ? ` This link stops serving the report after ${context.expiresAt}.` : ""}`, "",
       "This URL is the human Viewer. The same report is available as read-only JSON (no credentials beyond this URL):", "",
       `- [Summary](${links.summary ?? withPlatform(context, apiUrl(context))}): kind, counts by status, app and PR identity, links`,
-      `- [Changed screens](${links.changed}): the modified, added and removed screens with the review description, visual verdict and mismatch percentage; \`status=\` filters, \`limit=\`/\`cursor=\` page`,
+      `- [Changed screens](${links.changed}): the modified, accessibility-only (screenshots match, the accessibility tree does not), added and removed screens with the review description, visual verdict and mismatch percentage; \`status=\` filters, \`limit=\`/\`cursor=\` page`,
       `- [All screens](${links.screens}): every captured screen; \`${links.screens}/{id}\` (the \`id\` field of a screen) adds source files and navigation in and out`,
       `- [Transitions](${links.transitions}): navigation edges between screens (\`?from=\`/\`?to=\` take a screen id or route)`,
       `- Screenshots: each screen's \`headImage\`/\`baseImage\` URL returns the PNG`,

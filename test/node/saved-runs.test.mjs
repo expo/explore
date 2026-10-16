@@ -180,3 +180,29 @@ test('cached captures go after 30 days unused, then the least recently used past
   assert.deepEqual((await readdir(join(environment.EXPLORE_CACHE_DIR, 'captures', 'ios'))), ['c'.repeat(40)]);
   assert.ok(newest);
 });
+
+test('a screen accessibility-only on one platform and visibly modified on the other counts as modified, whatever the order', async t => {
+  const { readZipDirectory, readZipEntry } = await import('../../dist/report/zip-reader.js');
+  const directory = readZipDirectory(review);
+  const original = JSON.parse(new TextDecoder().decode(await readZipEntry(review, directory.get('review.json'), 50_000_000)));
+  const variant = async (platform, verdict) => {
+    const report = structuredClone(original);
+    report.review.runtime.platform = platform;
+    const surface = report.review.surfaces.find(entry => entry.id === 'expo-cats-add-9b770c554b11');
+    surface.review = { status: 'modified', description: 'Changed accessibility label from “Add” to “Add a cat”.',
+      facts: [{ category: 'accessibility', templateId: 'accessibility.label-changed', bullet: 'Changed accessibility label from “Add” to “Add a cat”.' }] };
+    surface.visual = { ...surface.visual, verdict, mismatchPercentage: verdict === 'modified' ? 2.4 : 0 };
+    const folder = await mkdtemp(join(tmpdir(), 'explore-saved-a11y-'));
+    t.after(() => rm(folder, { recursive: true, force: true }));
+    await writeFile(join(folder, 'review.json'), JSON.stringify(report));
+    return zipReportDirectory(folder);
+  };
+  const ios = { platform: 'ios', zip: await variant('ios', 'unchanged') };
+  const android = { platform: 'android', zip: await variant('android', 'modified') };
+  const alone = (await describeReports([ios])).changes;
+  assert.equal(alone['accessibility-only'], 1, 'on iOS alone the screenshots match');
+  const both = (await describeReports([ios, android])).changes;
+  assert.equal(both['accessibility-only'], undefined);
+  assert.equal(both.modified, alone.modified + 1, 'the Android visual change is what the run counts');
+  assert.deepEqual((await describeReports([android, ios])).changes, both);
+});

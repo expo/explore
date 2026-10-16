@@ -13,8 +13,32 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
  */
 export type CommentPlatform = "ios" | "android";
 export type RecordPhase = "pending" | "capturing" | "ready" | "failed";
-export type ChangeGroup = "added" | "modified" | "removed" | "needs-review" | "source-affected";
-export const CHANGE_GROUPS: ChangeGroup[] = ["added", "removed", "modified", "needs-review", "source-affected"];
+/**
+ * `accessibility-only`: modified, but the screenshots match; only what assistive technology reads changed. A screen
+ * whose source changed but that was not compared is no group: Explore reports what the captures show, not what the code
+ * might do.
+ */
+export type ChangeGroup = "added" | "modified" | "removed" | "accessibility-only" | "needs-review";
+export const CHANGE_GROUPS: ChangeGroup[] = ["added", "removed", "modified", "accessibility-only", "needs-review"];
+
+/**
+ * "12 changes", or "3 visual changes · 12 accessibility only" when some changed only for assistive technology: those
+ * are changes too (screen readers and voice control see them), but not ones a screenshot shows.
+ */
+/**
+ * The group of a screen that changed on several platforms. Accessibility only says the screenshots match, so it
+ * yields to any other group; otherwise the first platform's group stands, as it always has.
+ */
+export function strongerGroup(first: ChangeGroup, other: ChangeGroup): ChangeGroup {
+  return first === "accessibility-only" ? other : first;
+}
+
+export function changeCountText(groups: readonly ChangeGroup[]): string {
+  const accessibility = groups.filter(group => group === "accessibility-only").length;
+  const visual = groups.length - accessibility;
+  if (!accessibility) return `${visual} change${visual === 1 ? "" : "s"}`;
+  return [visual ? `${visual} visual change${visual === 1 ? "" : "s"}` : undefined, `${accessibility} accessibility only`].filter(Boolean).join(" · ");
+}
 
 export type SideHealth = { planned: number; captured: number; verified: number; unverified: number; unavailable: number };
 
@@ -41,6 +65,8 @@ export type PlatformRecord = {
   };
   /** The review's changed surfaces, one per surface; `scheme` for a secondary appearance (`<route>@<scheme>`). */
   changes?: { id: string; route: string; group: ChangeGroup; description: string; scheme?: string }[];
+  /** Screens whose source changed and whose captures were verified, but that got no verdict: the comparison did not run or failed. */
+  notCompared?: number;
   /** Differences stated once rather than per screen (variants, app-wide source changes). */
   context?: string[];
   diagnostics?: { side?: "base" | "head"; route: string; code: string; message: string; nextAction: string }[];
@@ -166,6 +192,7 @@ export function parsePlatformRecord(value: unknown): PlatformRecord | undefined 
       && isString(entry.message) && isString(entry.nextAction)
       ? [{ ...(isSide(entry.side) ? { side: entry.side } : {}), route: entry.route, code: entry.code, message: entry.message, nextAction: entry.nextAction }] : []).slice(0, 20);
   }
+  if (isCount(value.notCompared) && value.notCompared > 0) record.notCompared = value.notCompared;
   if (isCount(value.diagnosticCount)) record.diagnosticCount = value.diagnosticCount;
   if (isRecord(value.failure) && isString(value.failure.step, 200) && isString(value.failure.message)) record.failure = { step: value.failure.step, message: value.failure.message };
   if (value.superseded === true) record.superseded = true;
@@ -207,13 +234,12 @@ export function readCommentRecords(body: string | undefined): CommentRecords {
 
 /** A short result for a run that is no longer current: "🟩 34 changes", "🟨 12 changes · 4 unavailable", "🟥 failed · capture". */
 export function recordSummary(record: PlatformRecord): string {
-  const changes = record.changes?.length;
   switch (record.phase) {
     case "failed": return `🟥 failed · ${record.failure?.step ?? "capture"}`;
     case "ready": {
       const unavailable = record.health ? record.health.base.unavailable + record.health.head.unavailable : 0;
-      const icon = unavailable > 0 || (record.validation?.visual?.failed ?? 0) > 0 ? "🟨" : "🟩";
-      return `${icon} ${changes ?? 0} change${changes === 1 ? "" : "s"}${unavailable > 0 ? ` · ${unavailable} unavailable` : ""}`;
+      const icon = unavailable > 0 || (record.validation?.visual?.failed ?? 0) > 0 || record.notCompared ? "🟨" : "🟩";
+      return `${icon} ${changeCountText(record.changes?.map(change => change.group) ?? [])}${unavailable > 0 ? ` · ${unavailable} unavailable` : ""}${record.notCompared ? ` · ${record.notCompared} not compared` : ""}`;
     }
     default: return "⏳ did not finish";
   }

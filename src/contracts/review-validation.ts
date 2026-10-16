@@ -32,6 +32,14 @@ function hasVerifiedPair(surface: Surface): boolean {
     && surface[`${side}Outcome`]?.landing === "verified");
 }
 
+/**
+ * A modified screen whose verified screenshots match: only what assistive technology reads (its accessibility tree)
+ * changed. Screen readers and voice control see it, so it is a change to review, listed apart from the visual ones.
+ */
+export function isAccessibilityOnlyChange(surface: Surface): boolean {
+  return surface.review?.status === "modified" && surface.visual?.verdict === "unchanged" && hasVerifiedPair(surface);
+}
+
 function assertReviewFields(surface: Surface, enforceComparisonEvidence: boolean): void {
   const assertVerifiedPair = () => {
     if (enforceComparisonEvidence && !hasVerifiedPair(surface)) {

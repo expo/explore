@@ -45,8 +45,9 @@ export function PhoneCompare(props: CompareControllerOptions & {
         {compare.homeIndicatorIgnored ? <HomeIndicatorBand /> : null}
     </>
   ) : null;
-  const facts = compare.facts.map((fact) => fact.copy);
-  const notes = compareNotes(screenDiff, facts.length, compare.statusBarIgnored, compare.homeIndicatorIgnored);
+  const facts = compare.split.visible.map((fact) => fact.copy);
+  const assistive = compare.split.assistive.map((fact) => fact.copy);
+  const notes = compareNotes(screenDiff, compare.facts.length, compare.statusBarIgnored, compare.homeIndicatorIgnored);
   const previous = compare.previous ? () => props.onSelectScreen(compare.previous!.id) : undefined;
   const next = compare.next ? () => props.onSelectScreen(compare.next!.id) : undefined;
   // A tap near either side of the stage steps through the screens, like the stepper in the header. It runs
@@ -67,14 +68,14 @@ export function PhoneCompare(props: CompareControllerOptions & {
   return (
     <section className="phone-compare" aria-label={`Compare ${route}`}>
       <header className="phone-compare-head">
-        <CompareNav variant="phone" status={screenDiff.status} statusLabel={diffLabel(screenDiff)} route={route} title={screen.title}
+        <CompareNav variant="phone" status={screenDiff.status} accessibilityOnly={screenDiff.accessibilityOnly} statusLabel={diffLabel(screenDiff)} route={route} title={screen.title}
           position={compare.position} count={props.order.length} picker={props.picker} stepsApart />
         <button type="button" className="phone-icon-button" aria-label="Outlines" aria-pressed={compare.outlines}
           disabled={areas.length === 0} onClick={compare.toggleOutlines}>
           <ScanSearch aria-hidden="true" />
         </button>
         <button type="button" className="phone-icon-button" aria-label="What changed" aria-haspopup="dialog"
-          disabled={facts.length === 0 && notes.length === 0} onClick={() => compare.setFactsOpen(true)}>
+          disabled={compare.facts.length === 0 && notes.length === 0} onClick={() => compare.setFactsOpen(true)}>
           <List aria-hidden="true" />
         </button>
         {props.headerAction}
@@ -121,7 +122,7 @@ export function PhoneCompare(props: CompareControllerOptions & {
       </div>
 
       <PhoneSheet title="What changed" open={compare.factsOpen} onClose={() => compare.setFactsOpen(false)}>
-        <WhatChangedContent facts={facts} notes={notes} />
+        <WhatChangedContent facts={facts} assistive={assistive} accessibilityOnly={screenDiff.accessibilityOnly} notes={notes} />
       </PhoneSheet>
     </section>
   );

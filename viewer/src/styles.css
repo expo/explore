@@ -64,6 +64,9 @@
   /* Modified is orange in both themes, as in the PR comment (🟧). Yellow means "needs review". */
   --modified: #ea580c;
   --modified-soft: #ffefd6;
+  /* Accessibility only is blue, as in the PR comment (🟦), deeper than the accent a screen variant uses. */
+  --accessibility: #2f6feb;
+  --accessibility-soft: #e8f0fe;
   --graph-dot: #d9d9e0;
   --graph-line: #8b8d98;
   --graph-line-soft: #c5c7ce;
@@ -181,6 +184,8 @@
   --purple-soft: #301c3b;
   --modified: #ff9a3c;
   --modified-soft: #331e0b;
+  --accessibility: #8fa8ff;
+  --accessibility-soft: #17224a;
   --graph-dot: #212225;
   --graph-line: #696e77;
   --graph-line-soft: #3f4349;
@@ -1665,6 +1670,11 @@ code {
 /* Modified reads orange everywhere: the Changes list, the canvas chip and border, the Inspector badge. */
 .diff-modified { --diff: var(--modified); --diff-soft: var(--modified-soft); }
 .diff-removed { --diff: var(--danger); --diff-soft: var(--danger-soft); }
+/* Accessibility only: modified for assistive technology, with matching screenshots. It keeps Modified's frame
+   (it carries diff-modified too) in blue, and its marks are squares, so it does not rest on colour alone. */
+.diff-accessibility-only { --diff: var(--accessibility); --diff-soft: var(--accessibility-soft); }
+.diff-accessibility-only.diff-dot,
+.diff-accessibility-only .status-glyph-dot { border-radius: 2px; }
 .diff-unchanged { --diff: var(--tertiary); --diff-soft: var(--element); }
 .diff-needs-review { --diff: var(--tertiary); --diff-soft: var(--element); }
 .diff-source-affected { --diff: var(--purple); --diff-soft: var(--purple-soft); }

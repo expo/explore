@@ -103,7 +103,7 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
   const pullRequestPath = join(root, 'pull-request.json'); await writeFile(pullRequestPath, JSON.stringify(pr));
   const environment = { PATH: process.env.PATH, HOME: root, RUNNER_TEMP: root, EXPO_TOKEN: 'test-expo-secret', GITHUB_TOKEN: 'test-github-secret',
     GITHUB_RUN_ID: '1234', GITHUB_RUN_ATTEMPT: '1', GITHUB_REPOSITORY: pr.repository, TOOLS_COMMIT: 'c'.repeat(40), EXPLORE_VIEWER_ORIGIN: 'https://viewer.example' };
-  const requests = []; const comments = []; const sessions = new Map(); let currentSession; let currentPath = '/'; let sessionCounter = 0; let repackedSha; let openFailed = false; let currentScheme = 'light';
+  const requests = []; const comments = []; const sessions = new Map(); let currentSession; const idleDevice = { path: '/', scheme: 'light' }; let sessionCounter = 0; let repackedSha; let openFailed = false;
   const identity = () => ({ session: 'expo-explore-runtime', appBundleId: config.app.bundleId,
     device: { id: 'device-1', name: config.device.name, platform, target: 'mobile', osVersion: '26.0', locale: 'en-US', orientation: 'portrait', colorScheme: 'light' },
     identifiers: { session: 'expo-explore-runtime', appBundleId: config.app.bundleId, deviceId: 'device-1', deviceName: config.device.name } });
@@ -140,8 +140,8 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
         return json({ jobs: [{ key: 'repack', status: 'SUCCESS', outputs: { build_id: `repacked-${repackedSha}`, platform } }] });
       }
       if (command === 'simulator:start') {
-        const id = `session-${++sessionCounter}`; currentSession = id; currentPath = '/'; openFailed = false;
-        const session = { id, name: value(request, '--name'), build: value(request, '--build-id') }; sessions.set(id, session);
+        const id = `session-${++sessionCounter}`; currentSession = id; openFailed = false;
+        const session = { id, name: value(request, '--name'), build: value(request, '--build-id'), path: '/', scheme: 'light' }; sessions.set(id, session);
         writeFileSync(join(request.cwd, '.env.eas-simulator'), `${HEADER}EAS_SIMULATOR_SESSION_ID='${id}'\nAGENT_DEVICE_DAEMON_BASE_URL='https://controller.example/${id}'\nAGENT_DEVICE_DAEMON_AUTH_TOKEN='controller-private-token'\n`);
         return { stdout: 'ready', stderr: '' };
       }
@@ -155,6 +155,9 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
       return { stdout: '', stderr: '' };
     }
     if (basename(request.command) === 'agent-device') {
+      // Base and head capture in parallel, each on its own simulator: a request names its session in the daemon URL,
+      // so the route, appearance and build it sees are that session's, not whichever session started last.
+      const device = sessions.get(/\/([^/]+)$/.exec(request.environment?.AGENT_DEVICE_DAEMON_BASE_URL ?? '')?.[1]) ?? sessions.get(currentSession) ?? idleDevice;
       if (command === '--version') return { stdout: AGENT_DEVICE_VERSION, stderr: '' };
       if (command === 'open') {
         if (request.args[2]?.startsWith('sample://')) {
@@ -162,7 +165,7 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
             openFailed = true;
             return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'The app is not ready for this link yet.' } });
           }
-          currentPath = '/' + request.args[2].slice('sample://'.length);
+          device.path = '/' + request.args[2].slice('sample://'.length);
         }
         return ok(identity());
       }
@@ -170,17 +173,17 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
       if (command === 'wait') return ok({});
       if (command === 'alert' && request.args[1] === 'get') return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'alert not found' } });
       if (command === 'snapshot') {
-        const dynamic = currentPath.startsWith('/item/');
+        const dynamic = device.path.startsWith('/item/');
         const destination = provider === 'expo-router'
-          ? { provider, pathname: currentPath, segments: dynamic ? ['item', '[id]'] : currentPath.split('/').filter(Boolean), parameters: dynamic ? { id: currentPath.slice('/item/'.length) } : {} }
-          : { provider, segments: [currentPath.slice(1).replace(/^./, first => first.toUpperCase())], parameters: {} };
+          ? { provider, pathname: device.path, segments: dynamic ? ['item', '[id]'] : device.path.split('/').filter(Boolean), parameters: dynamic ? { id: device.path.slice('/item/'.length) } : {} }
+          : { provider, segments: [device.path.slice(1).replace(/^./, first => first.toUpperCase())], parameters: {} };
         return ok({ truncated: false, nodes: [
-          { index: 0, type: 'StaticText', label: currentPath, identifier: 'screen-title', enabled: true, visible: true, rect: { x: 0, y: 0, width: 16, height: 24 } },
-          ...(currentPath === observerFailurePath ? [] : [{ index: 1, type: 'StaticText', label: JSON.stringify(destination), identifier: CAPTURE_OBSERVER_IDENTIFIER, enabled: true, visible: true }]),
+          { index: 0, type: 'StaticText', label: device.path, identifier: 'screen-title', enabled: true, visible: true, rect: { x: 0, y: 0, width: 16, height: 24 } },
+          ...(device.path === observerFailurePath ? [] : [{ index: 1, type: 'StaticText', label: JSON.stringify(destination), identifier: CAPTURE_OBSERVER_IDENTIFIER, enabled: true, visible: true }]),
         ] });
       }
-      if (command === 'settings') { if (request.args[1] === 'appearance') currentScheme = request.args[2]; return ok({ setting: request.args[1], value: request.args[2] }); }
-      if (command === 'screenshot') { const color = createHash('sha256').update(`${currentPath}:${currentScheme}:${currentPath === '/home' ? sessions.get(currentSession).build : 'unchanged-source'}`).digest(); const data = Buffer.alloc(16 * 24 * 4); for (let i = 0; i < data.length; i += 4) { data[i] = color[0]; data[i + 1] = color[1]; data[i + 2] = color[2]; data[i + 3] = 255; } writeFileSync(request.args[1], PNG.sync.write({ width: 16, height: 24, data })); return ok({ path: request.args[1] }); }
+      if (command === 'settings') { if (request.args[1] === 'appearance') device.scheme = request.args[2]; return ok({ setting: request.args[1], value: request.args[2] }); }
+      if (command === 'screenshot') { const color = createHash('sha256').update(`${device.path}:${device.scheme}:${device.path === '/home' ? device.build : 'unchanged-source'}`).digest(); const data = Buffer.alloc(16 * 24 * 4); for (let i = 0; i < data.length; i += 4) { data[i] = color[0]; data[i + 1] = color[1]; data[i + 2] = color[2]; data[i + 3] = 255; } writeFileSync(request.args[1], PNG.sync.write({ width: 16, height: 24, data })); return ok({ path: request.args[1] }); }
     }
     throw new Error(`Unexpected mocked command: ${request.command} ${request.args.join(' ')}`);
   };

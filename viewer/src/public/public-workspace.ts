@@ -50,7 +50,8 @@ function comparisonStatus(surface: Surface): BuildComparisonEntry["status"] {
     if (captureUnavailable(surface, "base") || unattributed("base")) return "unavailable";
   }
   if (surface.status === "added" || surface.status === "removed") return surface.status;
-  return comparisonReview(surface)?.status ?? (surface.status === "modified" ? "source-affected" : "not-compared");
+  // A source change with no comparison is not a change the captures show: not compared, whatever the source did.
+  return comparisonReview(surface)?.status ?? "not-compared";
 }
 
 /** The side's route exists and was planned, but its capture ended without a screenshot. */

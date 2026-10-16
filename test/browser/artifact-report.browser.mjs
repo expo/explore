@@ -1005,7 +1005,7 @@ test("a docs-only report with zero images and no EAS build opens Screens without
   assert.deepEqual(errors, []);
 });
 
-test("unverified capture diagnostics stay separate from verified Needs review and source impact filters", async t => {
+test("unverified capture diagnostics stay separate from verified Needs review, and source changes nobody compared are not changes", async t => {
   const report = reportFixture();
   const home = report.review.surfaces[0];
   const uncertain = structuredClone(home);
@@ -1029,12 +1029,13 @@ test("unverified capture diagnostics stay separate from verified Needs review an
   await expect(page.locator(".app-shell")).toBeVisible();
   await page.getByRole("button", { name: "Screens", exact: true }).click();
   await expect(page.locator(".screens-page .diff-frame.diff-needs-review")).toHaveCount(1);
-  await expect(page.locator(".screens-page .diff-frame.diff-source-affected")).toHaveCount(2);
-  await expect(page.locator(".screens-page .diff-frame.diff-not-compared")).toHaveCount(1);
+  // The unverified /home and the never-captured /candidate changed in source only: not compared, like /untouched.
+  await expect(page.locator(".screens-page .diff-frame.diff-source-affected")).toHaveCount(0);
+  await expect(page.locator(".screens-page .diff-frame.diff-not-compared")).toHaveCount(3);
   await expect(page.locator(".screens-page .diff-frame.diff-modified")).toHaveCount(0);
   const menu = await openChangesMenu(page);
   const chips = menu.getByRole("group", { name: "Filter changes" }).getByRole("button");
-  await expect(chips).toHaveText(["Modified 0", "No visible change 1", "Source-affected 2"]);
+  await expect(chips).toHaveText(["Modified 0", "No visible change 1"]);
   assert.deepEqual(errors, []);
 });
 
@@ -1068,8 +1069,8 @@ test("an existing report with operational verdicts opens as diagnostics without 
   const { page, errors } = await harness(t, await archive(report), { app: true });
   await expect(page.locator(".app-shell")).toBeVisible();
   await page.getByRole("button", { name: "Screens", exact: true }).click();
-  await expect(page.locator(".screens-page .diff-frame.diff-source-affected")).toHaveCount(1);
-  await expect(page.locator(".screens-page .diff-frame.diff-not-compared")).toHaveCount(1);
+  await expect(page.locator(".screens-page .diff-frame.diff-source-affected")).toHaveCount(0);
+  await expect(page.locator(".screens-page .diff-frame.diff-not-compared")).toHaveCount(2);
   await expect(page.locator(".screens-page .diff-frame.diff-unavailable")).toHaveCount(1, "an added route whose capture failed has nothing to show");
   await expect(page.locator(".screens-page .diff-frame.diff-removed")).toHaveCount(1);
   await expect(page.locator(".diff-frame.diff-needs-review, .diff-frame.diff-modified, .diff-frame.diff-unchanged, .diff-frame.diff-added")).toHaveCount(0);

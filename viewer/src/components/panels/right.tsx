@@ -4,7 +4,7 @@ import { Tooltip } from "../shared/tooltip";
 import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
 import { InspectorPanel } from "./inspector";
 import type { ChangedScreen } from "../../utils/changed-screens";
-import { diffLabel, NOT_VISIBLE_HIGHLIGHT, type BuildDiff } from "../../utils/build-diff";
+import { diffLabel, ACCESSIBILITY_ONLY_HIGHLIGHT, type BuildDiff } from "../../utils/build-diff";
 import type { MapIndex, Screen } from "../../utils/model";
 import type { TransitionDirection } from "../../utils/navigation";
 import { displayPathForScreen } from "../../utils/screen-path";
@@ -93,7 +93,7 @@ export function RightPanel(props: RightPanelProps) {
             {/* The screen's status as Compare's header and the Changes list mark it: a dot (+ or −
                 for added or removed) in the status colour, named for screen readers. */}
             {screenDiff ? (
-              <StatusGlyph status={screenDiff.status} label={diffLabel(screenDiff)}
+              <StatusGlyph status={screenDiff.status} accessibilityOnly={screenDiff.accessibilityOnly} label={diffLabel(screenDiff)}
                 className="inspector-diff-status" />
             ) : null}
             {props.index.plainTitles ? (
@@ -114,7 +114,7 @@ export function RightPanel(props: RightPanelProps) {
               both in place, off. */}
           {props.screen && props.diff && props.onOpenCompare ? (
             <>
-              <Tooltip label={screenDiff?.notVisible ? NOT_VISIBLE_HIGHLIGHT : "Highlight changes"} shortcut={formatShortcut(SHORTCUTS.compare.outlines)} placement="bottom-end">
+              <Tooltip label={screenDiff?.accessibilityOnly ? ACCESSIBILITY_ONLY_HIGHLIGHT : "Highlight changes"} shortcut={formatShortcut(SHORTCUTS.compare.outlines)} placement="bottom-end">
                 <button type="button" className="icon-button inspector-highlight" aria-label="Highlight changes"
                   aria-pressed={outlinable ? outlines : false} disabled={!outlinable}
                   onClick={() => setOutlinesShown(!outlines)}>

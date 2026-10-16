@@ -196,6 +196,13 @@
 }
 .what-changed-content-list > li::marker { color: var(--tertiary); }
 .what-changed-content-notes { display: flex; flex-direction: column; gap: 6px; }
+/* What changed for assistive technology: its own heading, led by Accessibility only's blue square. */
+.what-changed-assistive { display: flex; flex-direction: column; gap: 6px; }
+.what-changed-content-list + .what-changed-assistive { padding-top: 12px; border-top: 1px solid var(--panel-line); }
+.what-changed-assistive-title { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text); font-size: 13px; font-weight: 600; line-height: 18px; }
+.what-changed-assistive-title > .status-glyph-dot { width: 8px; height: 8px; border-radius: 2px; background: var(--diff); }
+.what-changed-assistive-context { margin: 0; color: var(--secondary); font-size: 12px; line-height: 17px; }
+.what-changed-assistive + .what-changed-content-notes { padding-top: 12px; border-top: 1px solid var(--panel-line); }
 .what-changed-content-list + .what-changed-content-notes { padding-top: 12px; border-top: 1px solid var(--panel-line); }
 .what-changed-content-notes > p { margin: 0; color: var(--secondary); font-size: 12px; line-height: 17px; }
 
