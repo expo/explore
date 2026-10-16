@@ -15,6 +15,21 @@ test("hints print modifiers in Apple's ⌥⇧⌘ order and as Ctrl+Alt+Shift els
   assert.equal(formatShortcut(SHORTCUTS.camera.fit, true), "⇧1");
   assert.equal(formatShortcut({ code: "KeyT", key: "T", mod: true, alt: true }, false), "Ctrl+Alt+T");
   assert.equal(formatShortcut(SHORTCUTS.edit.redo, false), "Ctrl+Shift+Z");
+  // The Control key itself prints as ⌃ on a Mac, where ⌘ would be a different key.
+  assert.equal(formatShortcut(SHORTCUTS.canvasByNumber.screens, true), "⌃2");
+  assert.equal(formatShortcut(SHORTCUTS.canvasByNumber.screens, false), "Ctrl+2");
+});
+
+test("Ctrl+1, Ctrl+2 and Ctrl+3 reach Map, Screens and Compare with Control alone, never ⌘ (the browser's tab keys)", () => {
+  assert.equal(matchesShortcut(key("Digit1", { ctrlKey: true }), SHORTCUTS.canvasByNumber.map), true);
+  assert.equal(matchesShortcut(key("Digit2", { ctrlKey: true }), SHORTCUTS.canvasByNumber.screens), true);
+  assert.equal(matchesShortcut(key("Digit3", { ctrlKey: true }), SHORTCUTS.canvasByNumber.compare), true);
+  assert.equal(matchesShortcut(key("Digit1", { metaKey: true }), SHORTCUTS.canvasByNumber.map), false);
+  assert.equal(matchesShortcut(key("Digit1", { ctrlKey: true, metaKey: true }), SHORTCUTS.canvasByNumber.map), false);
+  assert.equal(matchesShortcut(key("Digit1", { ctrlKey: true, shiftKey: true }), SHORTCUTS.canvasByNumber.map), false);
+  // Compare's 1, 2, 3 (Split, Swipe, Flip) stay plain digits.
+  assert.equal(matchesShortcut(key("Digit1", { ctrlKey: true }), SHORTCUTS.compare.split), false);
+  assert.equal(matchesShortcut(key("Digit1"), SHORTCUTS.canvasByNumber.map), false);
 });
 
 test("a chord matches only its own modifiers, on either ⌘ or Ctrl", () => {
@@ -35,7 +50,8 @@ test("no two shortcuts share a chord", () => {
   const seen = new Map();
   for (const [group, entries] of Object.entries(SHORTCUTS)) {
     for (const [name, shortcut] of Object.entries(entries)) {
-      const chord = `${shortcut.code}:${Boolean(shortcut.mod)}:${Boolean(shortcut.alt)}:${Boolean(shortcut.shift)}`;
+      // Off Apple keyboards ⌘ is Ctrl, so a Control chord clashes with the same ⌘ chord.
+      const chord = `${shortcut.code}:${Boolean(shortcut.mod || shortcut.ctrl)}:${Boolean(shortcut.alt)}:${Boolean(shortcut.shift)}`;
       const clash = seen.get(chord);
       assert.ok(!clash, `${group}.${name} repeats ${clash}`);
       seen.set(chord, `${group}.${name}`);

@@ -168,6 +168,7 @@ function TreeRows(props: {
         <button type="button" style={style}
           className={`screens-tree-row${node.tab ? " tab" : ""}${props.visible.has(screen.id) ? "" : " filtered"}`}
           aria-current={props.selectedScreenId === screen.id ? "true" : undefined}
+          data-screen-id={screen.id}
           aria-expanded={key ? open : undefined}
           data-tree-key={key}
           onClick={() => props.onSelect(screen.id)}>
@@ -202,8 +203,8 @@ function Legend(props: { others: Appearance[] }) {
 }
 
 /**
- * Screens as a page that scrolls: a section per route folder (or per tab, when there are no route
- * files), with the tree of them beside it on desktop and behind a Tree button on a phone.
+ * Screens as a page that scrolls. On desktop, one grid of every screen in the order of the tree beside it; on a
+ * phone, a section per route folder (or per tab, when there are no route files), with the tree behind a Tree button.
  */
 export function ScreensView(props: ScreensViewProps) {
   const tree: ScreenTree = useMemo(
@@ -327,6 +328,18 @@ export function ScreensView(props: ScreensViewProps) {
     ? ({ "--screens-right-inset": `calc(100% - ${visibleFrame.x + visibleFrame.width}px)` } as CSSProperties)
     : undefined;
 
+  const cell = (id: string) => {
+    const screen = props.index.screens.get(id);
+    return screen ? (
+      <ScreenCell key={id} screen={screen} index={props.index} diff={props.diff}
+        elsewhere={isChanged(props.diff, id) ? undefined : props.changedElsewhere?.get(id)}
+        via={tree.via.get(id)}
+        selected={props.selectedScreenId === id}
+        dimmed={Boolean(props.focus?.length) && !props.focus!.some((state) => state === focusStatusOf(props.diff?.screens.get(id)))}
+        onSelect={() => props.onSelectScreen(id)} />
+    ) : null;
+  };
+
   const treeRows = (
     <ul className="screens-tree-list" onKeyDown={onTreeKey}>
       <TreeRows nodes={tree.tree} depth={0} index={props.index} diff={props.diff} elsewhere={props.changedElsewhere}
@@ -378,28 +391,20 @@ export function ScreensView(props: ScreensViewProps) {
           </aside>
         )}
         <div className="screens-sections">
-          {sections.map(section => (
+          {props.phone ? sections.map(section => (
             <section key={section.id} id={sectionAnchor(section.id)} className="screens-section" aria-label={section.name ?? section.title}>
               <header className="screens-section-head">
                 <h2>{section.name ?? section.title}</h2>
                 {section.path ? <span className="path">{breakAfterSlashes(section.title)}</span>
                   : section.subtitle ? <span>{section.subtitle}</span> : null}
               </header>
-              <div className="screens-grid">
-                {section.screenIds.map(id => {
-                  const screen = props.index.screens.get(id);
-                  return screen ? (
-                    <ScreenCell key={id} screen={screen} index={props.index} diff={props.diff}
-                      elsewhere={isChanged(props.diff, id) ? undefined : props.changedElsewhere?.get(id)}
-                      via={tree.via.get(id)}
-                      selected={props.selectedScreenId === id}
-                      dimmed={Boolean(props.focus?.length) && !props.focus!.some((state) => state === focusStatusOf(props.diff?.screens.get(id)))}
-                      onSelect={() => props.onSelectScreen(id)} />
-                  ) : null;
-                })}
-              </div>
+              <div className="screens-grid">{section.screenIds.map(cell)}</div>
             </section>
-          ))}
+          )) : (
+            // On desktop the tree beside the page already shows the folders, so every screen sits in one evenly
+            // spaced grid in the tree's order, without headings between them.
+            <div className="screens-grid">{sections.flatMap(section => section.screenIds).map(cell)}</div>
+          )}
         </div>
       </div>
 

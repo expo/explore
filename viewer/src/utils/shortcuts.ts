@@ -7,6 +7,8 @@ export type Shortcut = {
   code: string;
   /** ⌘ on Apple keyboards, Ctrl everywhere else. */
   mod?: boolean;
+  /** The Control key itself on every keyboard, for chords whose ⌘ form the browser keeps (⌘1–⌘9 switch tabs). */
+  ctrl?: boolean;
   /** ⌥ on Apple keyboards, Alt everywhere else. */
   alt?: boolean;
   shift?: boolean;
@@ -23,6 +25,10 @@ function mod(code: string, key: string): Shortcut {
 
 function modShift(code: string, key: string): Shortcut {
   return { code, key, mod: true, shift: true };
+}
+
+function ctrl(code: string, key: string): Shortcut {
+  return { code, key, ctrl: true };
 }
 
 function shift(code: string, key: string): Shortcut {
@@ -68,6 +74,12 @@ export const SHORTCUTS = {
     screens: plain("KeyS", "S"),
     compare: plain("KeyC", "C"),
   },
+  /** The canvases by their place in the toolbar, as tabs are numbered elsewhere. */
+  canvasByNumber: {
+    map: ctrl("Digit1", "1"),
+    screens: ctrl("Digit2", "2"),
+    compare: ctrl("Digit3", "3"),
+  },
   /** Compare only. The arrows walk changed screens; J and K walk the changed areas of one. */
   compare: {
     previousScreen: plain("ArrowLeft", "←"),
@@ -92,10 +104,10 @@ export const SHORTCUTS = {
 /** The hint, in the idiom of the keyboard reading it: Apple's ⌥⇧⌘ order, or Ctrl+Alt+Shift. */
 export function formatShortcut(shortcut: Shortcut, apple = APPLE): string {
   if (apple) {
-    return `${shortcut.alt ? "⌥" : ""}${shortcut.shift ? "⇧" : ""}${shortcut.mod ? "⌘" : ""}${shortcut.key}`;
+    return `${shortcut.ctrl ? "⌃" : ""}${shortcut.alt ? "⌥" : ""}${shortcut.shift ? "⇧" : ""}${shortcut.mod ? "⌘" : ""}${shortcut.key}`;
   }
   const parts: string[] = [];
-  if (shortcut.mod) parts.push("Ctrl");
+  if (shortcut.mod || shortcut.ctrl) parts.push("Ctrl");
   if (shortcut.alt) parts.push("Alt");
   if (shortcut.shift) parts.push("Shift");
   parts.push(shortcut.key);
@@ -104,7 +116,9 @@ export function formatShortcut(shortcut: Shortcut, apple = APPLE): string {
 
 export function matchesShortcut(event: KeyboardEvent, shortcut: Shortcut): boolean {
   if (event.code !== shortcut.code) return false;
-  if ((event.metaKey || event.ctrlKey) !== Boolean(shortcut.mod)) return false;
+  if (shortcut.ctrl) {
+    if (!event.ctrlKey || event.metaKey) return false;
+  } else if ((event.metaKey || event.ctrlKey) !== Boolean(shortcut.mod)) return false;
   if (event.shiftKey !== Boolean(shortcut.shift)) return false;
   return event.altKey === Boolean(shortcut.alt);
 }

@@ -63,6 +63,7 @@ export function shortcutGroups(context: ShortcutContext): Group[][] {
         label: context.hasChanges ? "Map, Screens, Compare" : "Map, Screens",
         keys: sections.map((section) => SHORTCUTS.canvas[section]),
       },
+      { label: "The same, by their place in the toolbar", keys: sections.map((section) => SHORTCUTS.canvasByNumber[section]) },
       { label: "Search screens", keys: [SHORTCUTS.app.search] },
       ...(context.handoff ? [{ label: "Hand off to AI", keys: [SHORTCUTS.app.handoff] }] : []),
       ...(context.hasChanges ? [{ label: "Changed screens menu", keys: [SHORTCUTS.app.changes] }] : []),

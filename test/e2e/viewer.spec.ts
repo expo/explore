@@ -1309,7 +1309,7 @@ for (const canvas of ["map", "screens"] as const) {
   });
 }
 
-test("reuses the Map screenshot card visual in Screens, with the route at the card's left edge", async ({ page }) => {
+test("reuses the Map screenshot card in Screens, with the route under the screenshot at the card's left edge", async ({ page }) => {
   await serveWorkspace(page);
   await page.goto("/screens");
 
@@ -1337,8 +1337,9 @@ test("reuses the Map screenshot card visual in Screens, with the route at the ca
       };
     });
     expect(layout.flexDirection).toBe("column");
+    // The card is the Map's, so the heading still comes first in the markup; Screens shows it as the card's footer.
     expect(layout.headingBeforeImage).toBe(true);
-    expect(layout.headingTop).toBeLessThan(layout.imageTop);
+    expect(layout.headingTop).toBeGreaterThan(layout.imageTop);
     expect(layout.titleLeftDelta).toBeLessThan(1);
 
   }
