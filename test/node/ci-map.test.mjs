@@ -110,7 +110,7 @@ async function fixture(t, settings = {}) {
   const planPath = join(root, 'plan.json'); await writeFile(planPath, JSON.stringify(plan));
   const requests = [];
   let current = '/'; let snapshots = 0; let sessionName; let screenshotAttempts = 0; let splashLeft = 0; let recordingPath = ''; let alert = null; let appearance = 'light'; let alertReads = 0;
-  let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let relaunchedAfterForeign = false; let serverStarts = 0; let unreadableLeft = settings.unreadableAfterFold ?? 0;
+  let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let deviceLost = false; let relaunchedAfterForeign = false; let serverStarts = 0; let unreadableLeft = settings.unreadableAfterFold ?? 0;
   const deviceName = settings.android ? 'Pixel 7' : 'iPhone 17 Pro';
   const platform = settings.android ? 'android' : 'ios';
   // A local simulator is the one the capture created, named for Explore.
@@ -254,6 +254,10 @@ async function fixture(t, settings = {}) {
           alert = (!settings.alertOnlyAt || settings.alertOnlyAt === current) ? settings.deepLinkAlert ?? null : null;
         }
         if (settings.openFailure === current) throw new Error('route could not open');
+        // The emulator's adb connection drops for a few seconds as this route opens, once.
+        if (settings.deviceLostOnOpen === current && !deviceLost) { deviceLost = true;
+          return json({ success: false, error: { code: 'COMMAND_FAILED', message: "open: device 'emulator-5556' not found",
+            details: { reason: 'device_not_found', hint: 'The device disconnected or is restarting — verify it is listed in adb devices, then retry.' } } }); }
         return ok(identity());
       }
       if (command === 'appstate') {
@@ -814,6 +818,16 @@ test('one failed route preserves its placeholder and captures later routes', asy
   assert.equal(result.outcomes[f.ids.home].status, 'failed');
   assert.equal(result.outcomes[f.ids.home].attempts, 2);
   assert.equal(result.outcomes[f.ids.settings].status, 'captured');
+});
+
+test('a route whose open loses the Android emulator for a moment is opened again once the device answers', async t => {
+  const f = await fixture(t, { android: true, deviceLostOnOpen: '/home' });
+  const result = await runCiMap(f.options);
+  assert.equal(result.outcomes[f.ids.home].status, 'captured', JSON.stringify(result.outcomes[f.ids.home]));
+  assert.equal(result.outcomes[f.ids.home].attempts, 2);
+  assert.equal(result.outcomes[f.ids.settings].status, 'captured');
+  const retries = (await readFile(join(f.options.mapDirectory, 'capture-diagnostics', 'controller-retries.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(retries.some(entry => entry.reason === 'route-reopened-after-device-lost' && /not found/.test(entry.fault)), JSON.stringify(retries));
 });
 
 test('iOS app-link confirmation is accepted once before fresh route evidence', async t => {

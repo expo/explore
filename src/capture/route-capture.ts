@@ -1171,6 +1171,19 @@ export async function capturePlannedRoutes(options: {
         await captureCurrent(route, attempt);
         break;
       } catch (error) {
+        // The emulator's adb connection dropped (a local one does once, early, under load) or the daemon was unreachable:
+        // that says nothing about this route. Once the device answers again, the route opens again from the app's root.
+        if (attempt === 1 && transientControllerFault(error) && deadline - clock() > 30_000) {
+          let answered = true;
+          try { controllerApp(); } catch { answered = false; }
+          if (answered) {
+            const diagnostics = join(store.root, "capture-diagnostics");
+            mkdirSync(diagnostics, { recursive: true, mode: 0o700 });
+            appendFileSync(join(diagnostics, "controller-retries.jsonl"), `${JSON.stringify({ command: "open", route: route.route, reason: "route-reopened-after-device-lost",
+              fault: serializeCiError(toCiError(error), { secrets }).message, at: new Date(clock()).toISOString() })}\n`, { mode: 0o600 });
+            continue;
+          }
+        }
         const failure = failedOutcome(error, attempt);
         // A wedged controller costs this route only: once its retries are spent, the next route starts on a restarted app.
         if (controllerWedged(error) && (attempt === 2 || !failure.error?.retryable)) {
