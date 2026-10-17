@@ -16,6 +16,8 @@ const IOS_DEVICES = fixture("list-devices.out");
 const DUO_PROMPT = fixture("fixture-ios27-duo-open-prompt-ui-tree.json");
 const DUO_PROMPT_DESCRIBE = fixture("fixture-ios27-duo-open-prompt-describe.json");
 const DUO_HOME = fixture("fixture-ios27-duo-home-ui-tree.json");
+// iPhone Duo opened (the inner display), Edit Lane sheet up: Argent reports the app root as the screen's top-left third.
+const DUO_OPEN_EDIT_LANE = fixture("fixture-ios27-duo-open-edit-lane-ui-tree.json");
 const DUO_DEVICES = { devices: [{ platform: "ios", udid: "74195B53-4DBC-4EAA-9991-F98E5BB86BA8", name: "iPhone Duo", state: "Booted", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-27-1", runtimeKind: "mobile" }] };
 const ANDROID_DEVICES = { devices: [{ platform: "android", serial: "emulator-5554", state: "device", isEmulator: true, model: "sdk_gphone64_x86_64", avdName: "pixel_7", sdkLevel: 36, runtimeKind: "mobile" }], avds: [] };
 const BUNDLE = "dev.brent.euxy";
@@ -493,4 +495,33 @@ test("open without --relaunch keeps a running app as it is", async () => {
   const { run, calls } = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": IOS_HOME, "restart-app": {} });
   assert.equal((await run(["open", BUNDLE, ...flags("ios")])).exitCode, 0);
   assert.equal(calls.some(call => call.tool === "restart-app"), false);
+});
+
+test("a link prompt that lingers a moment after Open is pressed is not a failure", async () => {
+  const prompt = { ...IOS_HOME, alertVisible: true, foregroundApp: "com.apple.springboard",
+    roots: [...IOS_HOME.roots, { type: "Alert", label: "Open in “euxy”?", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.2 }, children: [] }] };
+  // Read once before the press, twice more while the app comes forward, then the app.
+  const { run, context } = harness("ios", { "list-devices": IOS_DEVICES, "open-url": {}, "gesture-tap": {}, describe: { description: "" }, "ui-tree": [prompt, prompt, prompt, IOS_HOME] });
+  assert.equal((await run(["open", BUNDLE, "euxy://", ...flags("ios")])).exitCode, 0);
+  assert.equal(context.state.deepLinkPromptAccepted, true);
+});
+
+test("on iPhone Duo's inner display, a sheet's title outside Argent's shrunken root frame is visible", () => {
+  assert.deepEqual(DUO_OPEN_EDIT_LANE.roots[0].frame, { x: 0, y: 0, width: 0.3333333333333333, height: 0.3333333333333333 }, "the recorded Argent quirk");
+  const { nodes } = snapshotFromTree(DUO_OPEN_EDIT_LANE, "ios", 1, BUNDLE);
+  for (const label of ["Edit Lane", "Cancel", "Done"]) {
+    const node = nodes.find(item => item.label === label);
+    assert.ok(node, label);
+    assert.notEqual(node.visible, false, `${label} is visible`);
+  }
+});
+
+test("a node its ancestor clips away is still reported hidden on iOS", () => {
+  const clipped = { screen: { width: 400, height: 800 }, foregroundApp: BUNDLE, roots: [{ type: "Application", frame: { x: 0, y: 0, width: 1, height: 1 }, children: [
+    { type: "ScrollView", frame: { x: 0, y: 0, width: 1, height: 0.5 }, children: [
+      { type: "Button", label: "In view", frame: { x: 0.1, y: 0.1, width: 0.3, height: 0.05 } },
+      { type: "Button", label: "Scrolled away", frame: { x: 0.1, y: 0.7, width: 0.3, height: 0.05 } }] }] }] };
+  const { nodes } = snapshotFromTree(clipped, "ios", 1, BUNDLE);
+  assert.notEqual(nodes.find(node => node.label === "In view").visible, false);
+  assert.equal(nodes.find(node => node.label === "Scrolled away").visible, false);
 });

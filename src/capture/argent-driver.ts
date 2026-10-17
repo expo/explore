@@ -117,8 +117,19 @@ export function snapshotFromTree(tree: ArgentTree, platform: ArgentPlatform, gen
   const refs: NonNullable<ArgentBridgeState["refs"]> = {};
   const seen = new Set<string>();
   const toPoints = (frame: Rect): Rect => ({ x: frame.x * screen.width, y: frame.y * screen.height, width: frame.width * screen.width, height: frame.height * screen.height });
-  const visit = (node: ArgentNode, depth: number, parentIndex: number | undefined, appRoot: boolean) => {
+  /**
+   * iOS visibility, as Argent computes it (a node is hidden when its frame misses every ancestor's frame), except that a
+   * root clips to the whole screen. On iPhone Duo's inner display Argent 0.29 reports the app root as the top-left third
+   * of the screen ([0, 0, 0.333, 0.333], its 3x scale applied twice), which hid everything outside that third: a sheet's
+   * title and its Cancel button among them. Android's `hidden` is the system's own visible-to-user flag and is kept.
+   */
+  const clipOf = (node: ArgentNode, clip: Rect | undefined, root: boolean): Rect | undefined => {
+    if (root || !node.frame || ![node.frame.x, node.frame.y, node.frame.width, node.frame.height].every(finite)) return clip;
+    return clip && intersect(node.frame, clip);
+  };
+  const visit = (node: ArgentNode, depth: number, parentIndex: number | undefined, appRoot: boolean, clip: Rect | undefined, root: boolean) => {
     const frame = node.frame;
+    const inner = clipOf(node, clip, root);
     const rect = frame && [frame.x, frame.y, frame.width, frame.height].every(finite) ? toPoints(frame) : undefined;
     const onScreen = !!rect && rect.x < screen.width && rect.y < screen.height && rect.x + rect.width > 0 && rect.y + rect.height > 0;
     const type = appRoot ? "Application" : agentDeviceType(node, platform);
@@ -133,7 +144,7 @@ export function snapshotFromTree(tree: ArgentTree, platform: ArgentPlatform, gen
       const traits = node.traits ?? [];
       // iOS marks a disabled element with the notEnabled trait, Android with disabled.
       const enabled = !traits.includes("notEnabled") && node.disabled !== true;
-      const visible = node.hidden !== true;
+      const visible = platform === "ios" ? !!inner : node.hidden !== true;
       nodes.push({ depth, index, ...(parentIndex === undefined ? {} : { parentIndex }), type, ref,
         rect: appRoot ? { x: 0, y: 0, width: screen.width, height: screen.height } : rect,
         ...(label ? { label } : {}), ...(node.identifier ? { identifier: node.identifier } : {}),
@@ -142,13 +153,19 @@ export function snapshotFromTree(tree: ArgentTree, platform: ArgentPlatform, gen
       refs[ref] = { rect: appRoot ? { x: 0, y: 0, width: screen.width, height: screen.height } : rect, type,
         ...(node.value !== undefined ? { value: node.value } : {}), ...(type === "SecureTextField" ? { secure: true } : {}) };
     }
-    for (const child of node.children ?? []) visit(child, depth + 1, index, false);
+    for (const child of node.children ?? []) visit(child, depth + 1, index, false, inner, false);
   };
   for (const root of roots) {
     const isAppRoot = platform === "ios" ? root.type === "Application" || nodes.length === 0 : root.bundleId === app;
-    visit(root, 0, undefined, isAppRoot);
+    visit(root, 0, undefined, isAppRoot, { x: 0, y: 0, width: 1, height: 1 }, true);
   }
   return { nodes, refs, screen: { width: screen.width, height: screen.height } };
+}
+
+function intersect(a: Rect, b: Rect): Rect | undefined {
+  const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width), bottom = Math.min(a.y + a.height, b.y + b.height);
+  return right > x && bottom > y ? { x, y, width: right - x, height: bottom - y } : undefined;
 }
 
 const centre = (rect: Rect, screen: { width: number; height: number }) =>
@@ -633,10 +650,21 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
       // Without a described button, the prompt's Open button sits at a fixed offset from the centre on iPhone 17.
       await tap(...(open ? Object.values(centre(open, { width: 1, height: 1 })) as [number, number]
         : [0.5 + DEEP_LINK_PROMPT_CONFIRM.dxPoints / size.width, 0.5 + DEEP_LINK_PROMPT_CONFIRM.dyPoints / size.height] as [number, number]));
-      await context.sleep(1_000);
-      if (!openInAppPromptShowing(await tree())) { state.deepLinkPromptAccepted = true; return; }
+      if (await promptCleared()) { state.deepLinkPromptAccepted = true; return; }
       throw new BridgeFailure("CONTROLLER_DEEP_LINK_PROMPT", "iOS kept asking to open the link in the app after Open was pressed.");
     }
+  }
+
+  /**
+   * After Open is pressed, the prompt can stay in the tree for a second or two while the app comes forward (observed on
+   * iPhone Duo's inner display), so the bridge reads again for a few seconds before it calls the press a failure.
+   */
+  async function promptCleared(): Promise<boolean> {
+    for (let poll = 0; poll < 6; poll++) {
+      await context.sleep(1_000);
+      if (!openInAppPromptShowing(await tree())) return true;
+    }
+    return false;
   }
 
   /** Taps the Open button found in a screenshot, then confirms it is gone. */
