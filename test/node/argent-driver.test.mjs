@@ -529,12 +529,19 @@ test("a node its ancestor clips away is still reported hidden on iOS", () => {
 
 test("when Argent keeps reading the dark panel after a fold, the bridge folds back and forth once, then gives up clearly", async () => {
   const blindClosed = { ...DUO_HOME, foregroundApp: undefined, roots: [{ role: "AXGroup", children: [] }] };
-  const recovers = harness("ios", { "list-devices": DUO_DEVICES, fold: {},
+  // A drained reader picks up the lit panel without another fold.
+  const drained = harness("ios", { "list-devices": DUO_DEVICES, fold: {}, "stop-all-simulator-servers": { stopped: true },
     "ui-tree": [DUO_HOME, ...Array(10).fill(blindClosed), DUO_OPEN_EDIT_LANE] });
-  assert.equal((await recovers.run(["fold", "open", ...flags("ios")])).exitCode, 0);
-  assert.deepEqual(recovers.calls.filter(call => call.tool === "fold").map(call => call.args.posture), ["open", "closed", "open"]);
+  assert.equal((await drained.run(["fold", "open", ...flags("ios")])).exitCode, 0);
+  assert.deepEqual(drained.calls.find(call => call.tool === "stop-all-simulator-servers").args, { devices: ["74195B53-4DBC-4EAA-9991-F98E5BB86BA8"] });
+  assert.deepEqual(drained.calls.filter(call => call.tool === "fold").map(call => call.args.posture), ["open"]);
 
-  const stuck = harness("ios", { "list-devices": DUO_DEVICES, fold: {}, "ui-tree": [DUO_HOME, blindClosed] });
+  const refolded = harness("ios", { "list-devices": DUO_DEVICES, fold: {}, "stop-all-simulator-servers": { stopped: true },
+    "ui-tree": [DUO_HOME, ...Array(20).fill(blindClosed), DUO_OPEN_EDIT_LANE] });
+  assert.equal((await refolded.run(["fold", "open", ...flags("ios")])).exitCode, 0);
+  assert.deepEqual(refolded.calls.filter(call => call.tool === "fold").map(call => call.args.posture), ["open", "closed", "open"]);
+
+  const stuck = harness("ios", { "list-devices": DUO_DEVICES, fold: {}, "stop-all-simulator-servers": { stopped: true }, "ui-tree": [DUO_HOME, blindClosed] });
   const failed = await stuck.run(["fold", "open", ...flags("ios")]);
   assert.equal(failed.json.error.code, "CONTROLLER_FOLD_UNVERIFIED");
 });

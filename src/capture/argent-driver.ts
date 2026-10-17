@@ -291,7 +291,7 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
 
   /** Reads are resent after a transport failure (they change nothing); a UI action is sent once, after a health check. */
   const call = async (tool: string, args: Record<string, unknown> = {}, options?: { out?: string }): Promise<Record<string, unknown>> => {
-    const withDevice = tool === "list-devices" ? args : { udid: state.udid, ...args };
+    const withDevice = tool === "list-devices" || tool === "stop-all-simulator-servers" ? args : { udid: state.udid, ...args };
     for (let attempt = 0; ; attempt++) {
       try { return record(await context.call(tool, withDevice, options)); }
       catch (error) {
@@ -623,9 +623,14 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         };
         if (posture !== "closed" || before) {
           if (!await followed()) {
-            await call("fold", { posture: posture === "closed" ? "open" : "closed" });
-            folded = await call("fold", { posture });
-            if (!await followed()) throw new BridgeFailure("CONTROLLER_FOLD_UNVERIFIED", `Argent kept reading the other panel after folding the device ${posture}.`);
+            // Folding again does not free a reader stuck on the dark panel; draining this device's Argent services
+            // (accessibility included) makes the next read start one on the lit panel.
+            await call("stop-all-simulator-servers", { devices: [state.udid] });
+            if (!await followed()) {
+              await call("fold", { posture: posture === "closed" ? "open" : "closed" });
+              folded = await call("fold", { posture });
+              if (!await followed()) throw new BridgeFailure("CONTROLLER_FOLD_UNVERIFIED", `Argent kept reading the other panel after folding the device ${posture}.`);
+            }
           }
         }
         return success({ action: "fold", pose: posture, ...(folded.panel !== undefined ? { panel: folded.panel } : {}) });
