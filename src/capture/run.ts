@@ -25,7 +25,7 @@ import { assertCaptureEasProfile, assertSimulatorAvailable, fingerprintFrom, has
 import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, controllerVersion, simulatorOsVersion, type ActiveSimulatorRuntime, type SimulatorConnection } from "./simulator.js";
 import { argentControllerInvocation } from "./controller-invocation.js";
 import { sharedBuild } from "./shared-build.js";
-import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
+import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, agentDeviceClaims, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
   deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, approveLinkScheme, localPoseShown,
   setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
 import { ensureArgentToolServer } from "../shared/controller-cache.js";
@@ -97,10 +97,6 @@ export type CiMapResult = {
   outcomes: CaptureBundle["outcomes"];
 };
 
-
-function parseJsonOrUndefined(text: string): unknown {
-  try { return JSON.parse(text); } catch { return undefined; }
-}
 
 /**
  * Minutes an EAS session is asked for beyond the capture's own budget. The session starts beside the repack, and the
@@ -475,13 +471,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       say(`starting a local ${options.device} emulator`);
       localEmulatorStart = await startLocalEmulator({ runner, device: options.device, name: `explore-${side}-${options.gitCommit.slice(0, 8)}`, directory: simulatorProject,
         cwd: simulatorProject, environment: restrictedEnvironment,
-        // agent-device refuses a serial an interrupted run still claims, even one it reports as stale, so that port is skipped.
-        ...(controller === "agent-device" ? { claimed: (serial: string) => {
-          const status = runner({ command: options.agentDeviceCommand, args: ["device", "status", "--platform", "android", "--serial", serial, "--json"],
-            cwd: simulatorProject, environment: restrictedEnvironment, timeoutMs: 30_000, allowFailure: true });
-          const data = (parseJsonOrUndefined(status.stdout) as { data?: { claims?: unknown[]; hiddenStaleClaims?: number } } | undefined)?.data;
-          return (data?.claims?.length ?? 0) + (data?.hiddenStaleClaims ?? 0) > 0;
-        } } : {}),
+        ...(controller === "agent-device" ? { claimed: (serial: string) => agentDeviceClaims({ runner, agentDevice: options.agentDeviceCommand, serial, cwd: simulatorProject, environment: restrictedEnvironment }) } : {}),
         // Recorded as soon as it starts, so an interrupted review stops it too.
         started: async serial => {
           localEmulator = serial;

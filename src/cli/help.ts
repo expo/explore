@@ -19,8 +19,8 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
        (captures the committed HEAD like the baseline workflow, with your eas login, and reports each route)
   capture [--base REF] [--head REF | --committed] [--target ID | --platform ios|android] [--parallel N] [--scope all|changes]
        [--controller agent-device|argent] [--simulator eas|local] [--repack eas|local] [--upload [--expires-in 7d|30d|never]] [--no-open] [--no-cache] [--output DIRECTORY] [--project DIRECTORY]
-       (on this machine: checks out both commits in temporary worktrees, captures them with your eas login and your
-        local claude or codex login, and opens the report; the head is HEAD with your uncommitted changes, as eas build
+       (on this machine: checks out both commits in temporary worktrees, captures them with your eas login (in agent
+        mode, also your local claude or codex login), and opens the report; the head is HEAD with your uncommitted changes, as eas build
         uploads them (--committed, or cli.requireCommit in eas.json, leaves them out); the base defaults to where HEAD
         left the default branch;
         without .expo-explore/config.yaml it uses the defaults setup would write;
@@ -43,19 +43,22 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
        (hosts reports already on this machine on EAS Hosting behind one link, with your eas login: one per platform
         of the same review, from capture:review --output or a downloaded explore-review artifact, or one explore:binary report)`;
 
-const BINARY = `Prebuilt apps (no source needed; runs on EAS Simulator with your local claude or codex login):
-  explore:binary <app.apk | app.app | app.tar.gz | simulator .ipa> [--output DIRECTORY] [--no-upload] [--json]
+const BINARY = `Prebuilt apps (no source needed; runs with your local claude or codex login):
+  explore:binary <app.apk | app.app | app.tar.gz | simulator .ipa> [--output DIRECTORY] [--simulator eas|local] [--no-upload] [--json]
        (installs the archive in a fresh EAS Simulator session, lets the model explore it, writes a map
         and report under --output, hosts the report on EAS Hosting, and prints the link)
+       --simulator local runs it on a simulator or emulator it starts on this machine instead, with no EAS login,
+        and opens the report in the local Viewer (--upload hosts it instead, --no-open skips the Viewer, --port N);
+        iOS needs Xcode, Android the SDK (ANDROID_HOME) with platform-tools, cmdline-tools, the emulator and a system image for this Mac
        Flags, all optional: --device NAME --bundle-id ID --launch-url URL --hints "what to focus on"
-        --controller agent-device|argent (the session's device controller; agent-device by default)
+        --controller agent-device|argent (the device controller; agent-device by default)
         (a sign-in in --hints is written as {{secret:NAME}}: Explore types the value of the environment variable NAME,
         and the model and the report only see the reference)
         --max-duration-minutes N --max-screens N --max-actions N --provider anthropic|openai --model ID
         --owner ACCOUNT --project SLUG --expires-in 7d|30d|never --allow-destructive "Label,Other label"
         --alias NAME (one EAS Hosting host per app that always serves the newest run; with EXPLORE_PREVIEW_TOKEN
         set to a fixed 32-character token, the hosted link is the same every run)
-       (iOS needs a simulator build; a device .ipa and Android .aab are rejected before any session starts)
+       (iOS needs a simulator build; a device .ipa and Android .aab are rejected before any device starts)
   explore:session [SESSION_ID] [--bundle-id ID] [--output DIRECTORY] [--upload] [--json]
        (explores an app that is already installed on an EAS Simulator session you started — run it where
         "eas simulator:start --type agent-device --out-config-type dotenv" (or --type argent) wrote .env.eas-simulator,

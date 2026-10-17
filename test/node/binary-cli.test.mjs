@@ -22,7 +22,7 @@ function fail(args) {
 test("explore:binary is in the short help with its archive kinds and --no-upload", () => {
   const help = spawnSync(process.execPath, [cli, "help"], { cwd: root, encoding: "utf8" });
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /explore:binary <app\.apk \| app\.app \| app\.tar\.gz \| simulator \.ipa>.*--no-upload/);
+  assert.match(help.stdout, /explore:binary <app\.apk \| app\.app \| app\.tar\.gz \| simulator \.ipa>.*--simulator eas\|local.*--no-upload/);
 });
 
 test("explore:binary validates its arguments before touching EAS or a model", () => {
@@ -30,6 +30,9 @@ test("explore:binary validates its arguments before touching EAS or a model", ()
   assert.match(fail(["./app.apk", "--upload", "--no-upload"]), /either --upload or --no-upload/);
   assert.match(fail(["./app.apk", "--expires-in", "400d"]), /--expires-in must be 1d to 90d, or never/);
   assert.match(fail(["./app.apk", "--platform", "web"]), /platform/);
+  assert.match(fail(["./app.apk", "--simulator", "cloud"]), /simulator/);
+  // A local run needs no EAS login, so the archive is the first thing it checks.
+  assert.match(fail(["./does-not-exist.apk", "--simulator", "local"]), /Archive not found: .*does-not-exist\.apk/);
   assert.match(fail(["./does-not-exist.apk", "--no-upload"]), /Archive not found: .*does-not-exist\.apk/);
   assert.match(fail(["./package.json", "--no-upload"]), /Unsupported archive: package\.json/);
   const human = spawnSync(process.execPath, [cli, "explore:binary", "./does-not-exist.apk", "--no-upload"], { cwd: root, encoding: "utf8", env: { ...process.env, EXPO_TOKEN: "", EXPO_SESSION_SECRET: "" } });

@@ -1,6 +1,6 @@
 ---
 name: explore-binary
-description: Explore a prebuilt mobile app archive (Android .apk, iOS simulator .app, .tar.gz, or simulator .ipa) with Expo Explore. Runs `expo-explore explore:binary`, which installs the archive in a fresh EAS Simulator session, drives it with the local claude or codex login, writes an exploration map and report, hosts the report on EAS Hosting, and prints the link. Use when asked to "run @expo/explore for some.app/.apk", to map or smoke-test an app you only have as a build, or to get screenshots of every screen of a binary. `expo-explore explore:session` does the exploration half alone against an EAS Simulator session you already started (app already installed; result opens in the local Viewer). Also explores an Expo project from its source with no new build: its development build (or Expo Go) on an EAS Simulator, loading JavaScript from a tunneled local dev server. Not for device .ipa files.
+description: Explore a prebuilt mobile app archive (Android .apk, iOS simulator .app, .tar.gz, or simulator .ipa) with Expo Explore. Runs `expo-explore explore:binary`, which installs the archive in a fresh EAS Simulator session (or, with `--simulator local`, on a simulator or emulator it starts on this Mac, with no EAS login), drives it with the local claude or codex login, writes an exploration map and report, and hosts the report on EAS Hosting or opens it in the local Viewer. Use when asked to "run @expo/explore for some.app/.apk", to map or smoke-test an app you only have as a build, or to get screenshots of every screen of a binary. `expo-explore explore:session` does the exploration half alone against an EAS Simulator session you already started (app already installed; result opens in the local Viewer). Also explores an Expo project from its source with no new build: its development build (or Expo Go) on an EAS Simulator, loading JavaScript from a tunneled local dev server. Not for device .ipa files.
 ---
 
 # Explore a prebuilt app
@@ -11,25 +11,25 @@ One command, run from any directory:
 npx @expo/explore explore:binary ./path/to/app.apk --json
 ```
 
-Accepted inputs: Android `.apk`; iOS simulator builds as a `.app` directory, a `.tar.gz`/`.tgz` of one, or an `.ipa` that contains a simulator build. An iOS device `.ipa` and an Android `.aab` are rejected before any session starts (`ARCHIVE_NOT_SIMULATOR`, `ARCHIVE_AAB_UNSUPPORTED`); ask for a simulator build or a universal/x86_64 APK instead.
+Accepted inputs: Android `.apk`; iOS simulator builds as a `.app` directory, a `.tar.gz`/`.tgz` of one, or an `.ipa` that contains a simulator build. An iOS device `.ipa` and an Android `.aab` are rejected before any device starts (`ARCHIVE_NOT_SIMULATOR`, `ARCHIVE_AAB_UNSUPPORTED`); ask for a simulator build or a universal APK instead.
 
 Platform, bundle id, app name and version are read from the archive; do not pass them unless Explore asks.
 
 ## Before running
 
-- EAS login: `eas whoami` succeeds, or `EXPO_TOKEN` is set. The session and the hosted report live under that account (`--owner` picks one when the login has several, `--project` renames the default `expo-explore` project).
+- Where it runs. By default on EAS Simulator, which needs an EAS login: `eas whoami` succeeds, or `EXPO_TOKEN` is set. The session and the hosted report live under that account (`--owner` picks one when the login has several, `--project` renames the default `expo-explore` project). Without EAS Simulator access, or without an Expo account, pass `--simulator local`: Explore creates a simulator (iOS, needs Xcode) or an emulator (Android, needs the Android SDK with platform-tools, cmdline-tools, the emulator and a system image for this Mac, and `ANDROID_HOME`) and removes it afterwards. An APK must then ship native libraries for this Mac's ABI (`arm64-v8a` on Apple silicon); a universal one does.
 - A model: Explore tries `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` when set, then the local `claude` login (Claude Code), then the local `codex` login, and uses the first that passes a preflight request. `--provider` or `--model` limits it to that one choice. If none passes, the run stops before a simulator is started.
 - Node 24.12 or newer.
 
 ## What happens
 
 1. Archive inspection and compatibility checks (size, simulator build, emulator ABI, sha256).
-2. `eas simulator:start` of an empty agent-device session (an `argent` one with `--controller argent`), verified by exact session id before use.
-3. `agent-device install` of the archive straight into the session (Argent: `reinstall-app`), then `open <bundle id>`.
+2. `eas simulator:start` of an empty agent-device session (an `argent` one with `--controller argent`), verified by exact session id before use. With `--simulator local`: a new simulator or emulator on this Mac instead, with the app's URL schemes approved so its links open without a prompt.
+3. `agent-device install` of the archive straight into the session (Argent: `reinstall-app`; locally `simctl install` or `adb install`), then `open <bundle id>`.
 4. The model explores through a small tool set (observe, act, capture, finish); app text is treated as untrusted and destructive controls (delete, reset, sign out, purchase, send, share) are blocked outside the model.
 5. The map and screenshots are written under `--output` (default `./explore-<archive>-<timestamp>`), plus `report/` for the Viewer.
-6. The report is sealed and deployed to EAS Hosting (`--no-upload` skips this; `--expires-in 7d|30d|never`).
-7. The exact session is stopped; a failure to stop reports `SESSION_CLEANUP_FAILED` with the id to stop by hand.
+6. The report is sealed and deployed to EAS Hosting (`--no-upload` skips this; `--expires-in 7d|30d|never`). With `--simulator local` it opens in the local Viewer instead, which keeps running until stopped; `--json` and `--no-open` skip it, so with `--json` open it afterwards with `view --dir <output>` (in the background, since it serves until stopped). `--upload` hosts it, and that needs an EAS login.
+7. The exact session is stopped, or the local device deleted; a failure to stop reports `SESSION_CLEANUP_FAILED` with the command to stop it by hand. A local device a hard-stopped run left behind is removed by the next local run.
 
 Budgets default to 15 minutes, 40 screens, 150 actions (`--max-duration-minutes`, `--max-screens`, `--max-actions`). Steer the model with `--hints "focus on the onboarding and settings"`, skip onboarding with `--launch-url myapp://home`, and allow a specific risky control with `--allow-destructive "Clear cache"`.
 
