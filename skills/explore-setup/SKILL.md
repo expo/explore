@@ -5,7 +5,7 @@ description: Set up Expo Explore CI reviews in deterministic or agent mode. Star
 
 # Set up Expo Explore
 
-Make the app ready for CI capture in the user's chosen mode, using its real configuration and source. This is the shared **local authoring skill** for both modes. Android capture is not available yet.
+Make the app ready for CI capture in the user's chosen mode, using its real configuration and source. This is the shared **local authoring skill** for both modes.
 
 Explore's tools are app-agnostic: `expo-explore setup` and `expo-explore doctor` know routes, parameters, links and source redirects, but not what the app means by them. **Your job is the app-specific part**: read this app's source to learn which flows (sign-in, onboarding, a subscription, a feature flag, a permission, a record that must exist, …) each screen needs, and write that into this app's `config.yaml` or instructions. Look for what the app actually has; do not assume the flows of another app, and do not impose an account or persona schema.
 
@@ -164,11 +164,12 @@ npx @expo/explore capture --base v1.3.0 --head v1.4.0 --scope all
 - It runs both commits' code as the user (dependency installs, the app config, bundling). Before reviewing a branch the user did not write, say so and ask; credential-free installs are not a sandbox.
 - Logins: `EXPO_TOKEN` and the provider's API key when they are set; otherwise the user's `eas login` and their local `claude` or `codex` login for the configured provider. If `eas whoami` fails, tell them to run `eas login`.
 - Without `--head`, the head is HEAD plus the working tree's changes, untracked non-ignored files included, which is what `eas build` uploads. It lists them; check that list for secrets the user would not want built. `--committed` reviews HEAD alone, and an `eas.json` with `cli.requireCommit: true` leaves the changes out unless `--uncommitted` is passed.
-- Every configured platform is reviewed unless `--platform` picks one. It opens the report in a local Viewer; `--upload` hosts it instead and prints the link, `--no-open` or `--json` only prints the report paths.
+- Every configured platform or target is reviewed, at once, unless `--target` or `--platform` picks some (`--parallel N` caps how many run together). It opens the report in a local Viewer; `--upload` hosts it instead and prints the link, `--no-open` or `--json` only prints the report paths.
+- Without EAS Simulator access, add `--simulator local` (or `capture.simulator: local`): each commit is captured on a simulator Explore creates on this Mac (Xcode) or an emulator (Android SDK), and the app is repacked there too. The native build still comes from EAS. `npx @expo/explore doctor --simulator local` checks that this machine can start each device.
 - Every run is kept on this machine for 30 days: `npx @expo/explore reports list` (or `--json`) shows them, `reports open <id|latest>` reopens one in the local Viewer, and `reports upload <id>` hosts it without capturing again. Run bare in a terminal, `reports` is an arrow-key picker for the user.
-- To host a report after the fact, run `npx @expo/explore report:upload <report.zip>...` with the paths it printed (or the `--output` directory's `<platform>/report.zip`), one per platform. It uses the same project as `--upload` and does not capture again.
-- Captures are cached in `~/.cache/expo-explore`, so a second review of the same base does not capture it again (`--no-cache` skips the cache). Ctrl+C stops the EAS Simulator sessions the review started.
-- It builds on EAS and runs simulator sessions, like a CI review: expect several minutes and EAS usage per run.
+- To host a report after the fact, run `npx @expo/explore report:upload <report.zip>...` with the paths it printed (or the `--output` directory's `<target>/report.zip`), one per platform or target. It uses the same project as `--upload` and does not capture again.
+- Captures are cached in `~/.cache/expo-explore`, so a second review of the same base does not capture it again (`--no-cache` skips the cache). Ctrl+C stops the simulator sessions and local devices the review started; after a harder stop, the next local review stops what was left running.
+- It builds on EAS and, unless it captures locally, runs EAS Simulator sessions, like a CI review: expect several minutes and EAS usage per run.
 
 ## Compare any two commits
 

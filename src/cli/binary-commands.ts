@@ -39,12 +39,17 @@ export async function exploreBinary(): Promise<void> {
   const platform = flag("platform") === undefined ? undefined : oneOf("platform", ["ios", "android"] as const);
   const provider = flag("provider") === undefined ? undefined : oneOf("provider", ["anthropic", "openai"] as const);
   const controller = flag("controller") === undefined ? undefined : oneOf("controller", ["agent-device", "argent"] as const);
+  const simulator = flag("simulator") === undefined ? "eas" : oneOf("simulator", ["eas", "local"] as const);
+  // On EAS Simulator the report is hosted unless --no-upload; locally it opens in the Viewer unless --upload, so a
+  // local run needs no Expo account at all.
+  const upload = simulator === "local" ? has("upload") : !has("no-upload");
+  const port = flag("port") === undefined ? undefined : nonNegativeInteger("port");
   const started = Date.now();
   const say = (message: string) => { process.stderr.write(`[explore ${Math.round((Date.now() - started) / 1000)}s] ${message}\n`); };
   const allowDestructive = flags("allow-destructive").flatMap(value => value.split(",")).map(value => value.trim()).filter(Boolean);
-  if (!has("no-upload")) await assertHostingExport();
+  if (upload) await assertHostingExport();
   const result = await runBinaryExploration({
-    archive: resolve(process.cwd(), archive), output: outputDirectory, progress: say,
+    archive: resolve(process.cwd(), archive), output: outputDirectory, progress: say, simulator,
     ...(platform ? { platform } : {}), ...(provider ? { provider } : {}), ...(controller ? { controller } : {}),
     ...(flag("device") ? { device: flag("device")! } : {}), ...(flag("bundle-id") ? { bundleId: flag("bundle-id")! } : {}),
     ...(flag("launch-url") ? { launchUrl: flag("launch-url")! } : {}), ...(flag("hints") ? { hints: flag("hints")! } : {}),
@@ -58,15 +63,16 @@ export async function exploreBinary(): Promise<void> {
   const report = await writeExplorationReport(result, join(outputDirectory, "report"));
   await keepReports(async () => [{ platform: result.archive.platform, zip: await zipReportDirectory(report.reportPath) }]);
   let hosted: Awaited<ReturnType<typeof deployExplorationReport>> | undefined;
-  if (!has("no-upload")) {
+  if (upload) {
     say("hosting the report on EAS Hosting");
-    hosted = await deployExplorationReport({ reportPath: report.reportPath, platform: result.archive.platform, project: flag("project") ?? DEFAULT_BINARY_PROJECT, owner: result.session.owner, expiresAfterDays, ...stableLinkOptions() });
+    const owner = result.session.owner || flag("owner");
+    hosted = await deployExplorationReport({ reportPath: report.reportPath, platform: result.archive.platform, project: flag("project") ?? DEFAULT_BINARY_PROJECT, ...(owner ? { owner } : {}), expiresAfterDays, ...stableLinkOptions() });
     say(`report: ${hosted.previewUrl}${hosted.expiresAt ? ` (expires ${hosted.expiresAt})` : ""}`);
   }
   const summary = { ok: true,
     app: { name: result.archive.appName, bundleId: result.archive.bundleId, platform: result.archive.platform, ...(result.archive.version ? { version: result.archive.version } : {}) },
     archive: { path: result.archive.path, kind: result.archive.kind, sha256: result.archive.sha256, bytes: result.archive.bytes },
-    device: { model: result.runtime.deviceModel, osVersion: result.runtime.osVersion }, session: { id: result.session.id, owner: result.session.owner, project: result.session.project },
+    device: { model: result.runtime.deviceModel, osVersion: result.runtime.osVersion }, session: { id: result.session.id, simulator, ...(simulator === "eas" ? { owner: result.session.owner, project: result.session.project } : {}) },
     model: result.model, exploration: { stopReason: result.exploration.stopReason, ...(result.exploration.summary ? { summary: result.exploration.summary } : {}),
       screens: result.exploration.screens, observations: result.exploration.observations, actions: result.exploration.actions, durationMs: result.durationMs },
     map: result.mapPath, report: report.reportPath, ...(hosted ? { url: hosted.previewUrl, expiresAt: hosted.expiresAt, deploymentUrl: hosted.deploymentUrl, ...(hosted.aliasUrl ? { aliasUrl: hosted.aliasUrl } : {}) } : {}),
@@ -75,7 +81,11 @@ export async function exploreBinary(): Promise<void> {
   console.log(`${summary.app.name} (${summary.app.bundleId}, ${summary.app.platform}) explored on ${summary.device.model} ${summary.device.osVersion}: ${summary.exploration.screens} screens, ${summary.exploration.actions} actions, stopped because ${summary.exploration.stopReason}.`);
   if (hosted) console.log(`Hosted report: ${hosted.previewUrl}${hosted.expiresAt ? ` (expires ${hosted.expiresAt})` : ""}`);
   console.log(`Local report: ${report.reportPath}`);
-  console.log(`Next: ${summary.next.join("  |  ")}`);
+  if (simulator === "eas" || hosted || has("no-open")) { console.log(`Next: ${summary.next.join("  |  ")}`); return; }
+  const viewer = await startViewerServer({ root: outputDirectory, ...(port === undefined ? {} : { port }) });
+  console.log(`Viewer: ${viewer.url} (Ctrl+C to stop)`);
+  openViewerInBrowser(viewer.url);
+  await waitForViewerShutdown(viewer);
 }
 
 /** `--env-file` wins; otherwise the `.env.eas-simulator` that `eas simulator:start --out-config-type dotenv` wrote in the current directory, unless the environment already carries a session. */

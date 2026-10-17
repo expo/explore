@@ -187,6 +187,18 @@ export async function assertLocalEmulatorCompatible(apk: string, abi: string): P
 }
 
 /**
+ * Whether agent-device still holds a claim on an emulator serial, one an interrupted run left behind: it refuses
+ * such a serial even when it reports the claim as stale, so startLocalEmulator skips that port.
+ */
+export function agentDeviceClaims(options: { runner: CommandRunner; agentDevice: string; serial: string; cwd: string; environment: NodeJS.ProcessEnv }): boolean {
+  const status = options.runner({ command: options.agentDevice, args: ["device", "status", "--platform", "android", "--serial", options.serial, "--json"],
+    cwd: options.cwd, environment: options.environment, timeoutMs: 30_000, allowFailure: true });
+  let data: { claims?: unknown[]; hiddenStaleClaims?: number } | undefined;
+  try { data = (JSON.parse(status.stdout) as { data?: typeof data }).data; } catch { return false; }
+  return (data?.claims?.length ?? 0) + (data?.hiddenStaleClaims ?? 0) > 0;
+}
+
+/**
  * Creates an AVD of the configured device profile (such as pixel_7) and starts it without a window. It boots in the
  * background while a capture repacks the app; waitForLocalEmulator waits for it afterwards.
  */

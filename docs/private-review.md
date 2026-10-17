@@ -12,11 +12,11 @@ The Viewer reads the ZIP supplied by the reviewer; it has no hosted artifact dow
 
 ## Hosted previews
 
-Hosted previews are off by default. When `report.preview.hosting: eas` is set, the review workflow's `deploy` job uploads each run's reports (one per captured platform) to an [EAS Hosting](https://docs.expo.dev/eas/hosting/introduction/) deployment in your Expo account, and the comment shows an **Explore report** link that opens it directly, in place of the **Open** drop page. The GitHub artifact and **zip** stay as they are.
+Hosted previews are off by default. When `report.preview.hosting: eas` is set, the review workflow's `deploy` job uploads each run's reports (one per captured platform or target) to an [EAS Hosting](https://docs.expo.dev/eas/hosting/introduction/) deployment in your Expo account, and the comment shows an **Explore report** link that opens it directly, in place of the **Open** drop page. The GitHub artifact and **zip** stay as they are.
 
 **What a reviewer needs.** Only the link. It looks like `https://acme-explore--k7f3z0d1q8.expo.app/p/f6r2…` and carries a 160-bit token generated for that run. It opens the Viewer and the report for one PR revision; it does not show the repository, other runs, or anything else in the Expo account.
 
-**Several platforms.** One deployment holds every platform's report. The link opens the primary platform's report (`?platform=ios` or `?platform=android` selects one); the Viewer's platform menu lists the others from `/p/<token>/reports.json`, which names each platform, its device, and its change count and nothing else. Every report and the listing sit behind the same token and expiry.
+**Several platforms or targets.** One deployment holds every target's report (a config without `targets` has one per platform). The link opens the first one (`?target=<id>` selects another, and `?platform=ios` or `?platform=android` from older links still works); the Viewer's menu lists the others from `/p/<token>/reports.json`, which names each target, its platform, label, device, and change count and nothing else. Every report and the listing sit behind the same token and expiry.
 
 **What is protected, and how.**
 

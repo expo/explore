@@ -144,7 +144,7 @@ targets:
   android: { platform: android, device: pixel_7, bundleId: com.example.myapp, easProfile: explore-android }
 ```
 
-A target's id (lowercase letters, digits and dashes; not `base`, `head` or `report`) takes the place of the platform everywhere a capture is named: `--target duo-open`, `explore-capture-<run>-<attempt>-duo-open`, `explore-baseline-<sha>-duo-open`. `expo-explore config:targets` prints the list the workflows use as their matrix. Fields a target leaves out come from `app` and `device`; a target of another platform than `app.platform` sets its own `bundleId` and `easProfile`. A config with `platforms` has one target per platform, named `ios` and `android`, so its names do not change. `--platform` still selects a target when only one has that platform.
+A target's id (up to 32 lowercase letters, digits and dashes, starting with a letter; not `base`, `head`, `report` or `install-…`; at most 8 per config) takes the place of the platform everywhere a capture is named: `--target duo-open`, `explore-capture-<run>-<attempt>-duo-open`, `explore-baseline-<sha>-duo-open`. `expo-explore config:targets` prints the list the workflows use as their matrix. Fields a target leaves out come from `app` and `device`; a target of another platform than `app.platform` sets its own `bundleId` and `easProfile`. A config with `platforms` has one target per platform, named `ios` and `android`, so its names do not change. `--platform` still selects a target when only one has that platform.
 
 Use the actual bundle identifier, scheme, profile, and available simulator device name. `scheme` is optional when static app configuration supplies it. `navigation.entry` resolves ambiguous entry modules; it does not list screens.
 

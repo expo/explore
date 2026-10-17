@@ -577,7 +577,7 @@ export async function deployExplorationReport(options: ExplorationDeployOptions)
     message: "An EAS login is required to host the report", nextAction: "Run `eas login` or set EXPO_TOKEN, then rerun with --upload." });
   if (!/^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$/.test(options.project)) throw previewError("PREVIEW_PROJECT_INVALID", `Invalid EAS project slug: ${options.project}`, "Pass --project as a lowercase slug such as expo-explore.");
   if (options.alias !== undefined && !HOSTING_ALIAS.test(options.alias)) throw previewError("PREVIEW_ALIAS_INVALID", `Invalid EAS Hosting alias: ${options.alias}`, "Pass --alias as a lowercase slug such as bluesky.");
-  if (options.token !== undefined && !HOSTED_TOKEN.test(options.token)) throw previewError("PREVIEW_TOKEN_INVALID", "EXPLORE_PREVIEW_TOKEN must be 32 characters of a-z and 2-7.", "Generate one with `openssl rand 20 | base32 | tr A-Z a-z` and set EXPLORE_PREVIEW_TOKEN, or unset it for a random token.");
+  if (options.token !== undefined && !HOSTED_TOKEN.test(options.token)) throw previewError("PREVIEW_TOKEN_INVALID", "EXPLORE_PREVIEW_TOKEN must be 32 characters of a-z and 2-7.", "Generate one with `LC_ALL=C tr -dc a-z2-7 </dev/urandom | head -c 32` and set EXPLORE_PREVIEW_TOKEN, or unset it for a random token.");
   const exportPath = resolve(options.exportPath ?? PREVIEW_EXPORT_PATH);
   await assertExport(exportPath);
   let zip: Uint8Array;

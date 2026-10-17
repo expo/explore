@@ -164,10 +164,13 @@ export async function readArchiveIcon(archive: InspectedArchive): Promise<Buffer
   }
 }
 
-/** Explore's EAS Android emulator is x86_64 with no 32-bit support; an APK that ships only ARM or x86 libraries fails to install there. */
+/**
+ * Explore's EAS Android emulator is x86_64 with no 32-bit support, and a local one runs this Mac's ABI; an APK that
+ * ships native libraries only for other ABIs fails to install there.
+ */
 export function assertEmulatorCompatible(archive: InspectedArchive, emulatorAbis: readonly string[] = ["x86_64"]): void {
   if (archive.platform === "ios") {
-    if (!archive.simulator) throw archiveError("ARCHIVE_NOT_SIMULATOR", `${basename(archive.path)} is an iOS device build; it cannot run on the EAS Simulator.`,
+    if (!archive.simulator) throw archiveError("ARCHIVE_NOT_SIMULATOR", `${basename(archive.path)} is an iOS device build; it cannot run on a simulator.`,
       "Build for the simulator (an EAS profile with ios.simulator: true) and pass that .app, .tar.gz, or simulator .ipa.");
     return;
   }
@@ -177,7 +180,7 @@ export function assertEmulatorCompatible(archive: InspectedArchive, emulatorAbis
   }
   if (archive.abis.length && !archive.abis.some(abi => emulatorAbis.includes(abi))) {
     throw archiveError("ARCHIVE_ABI_UNSUPPORTED", `The APK ships native libraries only for ${archive.abis.join(", ")}; the emulator needs ${emulatorAbis.join(" or ")}.`,
-      "Build a universal APK or one that includes x86_64 native libraries.", { abis: archive.abis, emulatorAbis: [...emulatorAbis] });
+      `Build a universal APK or one that includes ${emulatorAbis[0]} native libraries.`, { abis: archive.abis, emulatorAbis: [...emulatorAbis] });
   }
 }
 
