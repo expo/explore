@@ -52,3 +52,23 @@ export function mapKeyTarget(
   }
   return best?.id;
 }
+
+/**
+ * The screen an arrow selects when nothing is: the one at the edge the key moves away from, as
+ * the Screens page's arrows enter at the first or last card. ↓ takes the topmost screen, ↑ the
+ * bottom one, → the leftmost, ← the rightmost; ties go to the screen nearest the other axis's start.
+ */
+export function mapKeyEntry(
+  structure: { positions: Map<string, Point> },
+  direction: MapKeyDirection,
+): string | undefined {
+  const vertical = direction === "up" || direction === "down";
+  const sign = direction === "down" || direction === "right" ? 1 : -1;
+  let best: { id: string; along: number; across: number } | undefined;
+  for (const [id, point] of structure.positions) {
+    const along = sign * (vertical ? point.y : point.x);
+    const across = vertical ? point.x : point.y;
+    if (!best || along < best.along || (along === best.along && across < best.across)) best = { id, along, across };
+  }
+  return best?.id;
+}

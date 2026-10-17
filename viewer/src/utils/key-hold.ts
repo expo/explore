@@ -24,3 +24,37 @@ export function holdSchedule(count: number): number[] {
   }
   return times;
 }
+
+export type KeyHold = {
+  /**
+   * Starts holding `code` after its first step already landed. `step` takes the next step and
+   * says whether there was one; the hold ends by itself when there is not.
+   */
+  begin: (code: string, step: () => boolean) => void;
+  end: () => void;
+  /** Whether `code` is the key being held. */
+  holding: (code: string) => boolean;
+};
+
+/** One held key at a time, timed on the schedule above. */
+export function createKeyHold(): KeyHold {
+  let current: { code: string; timer: ReturnType<typeof setTimeout> } | undefined;
+  const end = () => {
+    if (current) clearTimeout(current.timer);
+    current = undefined;
+  };
+  return {
+    begin(code, step) {
+      end();
+      let count = 1;
+      const tick = () => {
+        if (!current || !step()) { end(); return; }
+        current = { code, timer: setTimeout(tick, holdIntervalMs(count)) };
+        count += 1;
+      };
+      current = { code, timer: setTimeout(tick, HOLD_INITIAL_DELAY_MS) };
+    },
+    end,
+    holding: (code) => current?.code === code,
+  };
+}

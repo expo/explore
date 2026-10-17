@@ -17,6 +17,8 @@ export type ShortcutContext = {
   hasChanges: boolean;
   /** The report can be handed off to an agent (a hosted preview). */
   handoff?: boolean;
+  /** The report was captured in both light and dark, so the app's appearance can be switched. */
+  appearances?: boolean;
 };
 
 const COMPARE = SHORTCUTS.compare;
@@ -75,13 +77,15 @@ export function shortcutGroups(context: ShortcutContext): Group[][] {
     title: "View",
     rows: [
       ...(context.canvas === "compare" ? [] : [{ label: "Show or hide the inspector", keys: [SHORTCUTS.panel.right] }]),
+      { label: "Viewer theme: auto, dark, light", keys: [SHORTCUTS.appearance.theme] },
+      ...(context.appearances ? [{ label: "The app's appearance: light or dark", keys: [SHORTCUTS.appearance.app] }] : []),
       { label: "Show this list", keys: ["?"] },
     ],
   };
   const mapGroup: Group = {
     title: "Map",
     rows: [
-      { label: "Walk the map from the selected screen", keys: ["↑", "↓", "←", "→", "H J K L"] },
+      { label: "Walk the map; with nothing selected, enter it at the edge", keys: ["↑", "↓", "←", "→", "H J K L"] },
       { label: "Undo or redo moving a card", keys: [SHORTCUTS.edit.undo, SHORTCUTS.edit.redo] },
       { label: "Close the inspector, then deselect", keys: ["Esc"] },
     ],

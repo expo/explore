@@ -1065,7 +1065,39 @@ code {
     filter 170ms ease-in-out calc(var(--toolbar-motion) * 0.35);
 }
 /* Compare's count of changed screens rides on its button's corner. */
-.toolbar-button:has(> .toolbar-badge) { position: relative; }
+.toolbar-button:has(> .toolbar-badge), .toolbar-button:has(> .key-hint) { position: relative; }
+.camera-action-button:has(> .key-hint), .collapsed-platform:has(> .key-hint), .compare-nav-picker:has(> .key-hint) { position: relative; }
+
+/* The key that completes a chord, on a button's corner while its modifier is held: hold ⌃ and
+   the toolbar's sections show 1, 2 and 3. Quiet: the badge's shape in the element colour. */
+.key-hint {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: flex;
+  min-width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--element);
+  box-shadow: 0 0 0 2px var(--surface), 0 1px 2px rgb(0 0 0 / 0.12);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  animation: key-hint-in 100ms ease-out;
+}
+.toolbar-button:has(> .toolbar-badge) > .key-hint { right: auto; left: -6px; }
+@keyframes key-hint-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .key-hint { animation: none; } }
 .toolbar-badge {
   position: absolute;
   top: -6px;

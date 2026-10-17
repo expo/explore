@@ -27,7 +27,8 @@ import type { FocusBehavior, FocusRequest, FocusStatus, MapDirection } from "../
 import { focusStatusOf } from "../../utils/changed-screens";
 import { displayPathForScreen } from "../../utils/screen-path";
 import { shortcutsLive } from "../../utils/shortcuts";
-import { mapKeyDirection, mapKeyTarget } from "../../utils/map-keyboard";
+import { mapKeyDirection, mapKeyEntry, mapKeyTarget, type MapKeyDirection } from "../../utils/map-keyboard";
+import { createKeyHold } from "../../utils/key-hold";
 
 const HOVER_CLEAR_DELAY = 180;
 const MAP_LAYOUT_REVISION = "flat-v1";
@@ -552,24 +553,50 @@ function ConnectionCanvas(props: MapViewProps) {
     if (hoverClearTimer.current !== undefined) window.clearTimeout(hoverClearTimer.current);
     applyHover(undefined);
   }, [applyHover]);
-  // With a screen selected, the arrow keys (or h j k l) walk the map: along an edge in the
-  // layout's flow, across to the neighbour on the same rank otherwise.
+  // The arrow keys (or h j k l) walk the map from the selected screen: along an edge in the
+  // layout's flow, across to the neighbour on the same rank otherwise. With nothing selected they
+  // enter the map at its edge, as on the Screens page. A held key keeps walking.
   const { selectedScreenId } = props;
+  const selectedRef = useRef(selectedScreenId);
+  selectedRef.current = selectedScreenId;
   useEffect(() => {
-    if (!selectedScreenId) return;
+    const hold = createKeyHold();
+    const move = (direction: MapKeyDirection, from: string | undefined): string | undefined => {
+      const structure = structureRef.current;
+      if (!structure) return undefined;
+      return from ? mapKeyTarget(structure, from, direction) : mapKeyEntry(structure, direction);
+    };
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat && hold.holding(event.code)) { event.preventDefault(); return; }
       if (event.defaultPrevented || !shortcutsLive(event)) return;
       const direction = mapKeyDirection(event);
       if (!direction) return;
-      const structure = structureRef.current;
-      if (!structure) return;
+      if (!structureRef.current) return;
       event.preventDefault();
-      const target = mapKeyTarget(structure, selectedScreenId, direction);
-      if (target) selectScreen(target);
+      let at = move(direction, selectedRef.current);
+      if (!at) return;
+      selectScreen(at);
+      hold.begin(event.code, () => {
+        const target = move(direction, at);
+        if (!target) return false;
+        at = target;
+        selectScreen(target);
+        return true;
+      });
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (hold.holding(event.code)) hold.end();
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectScreen, selectedScreenId]);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", hold.end);
+    return () => {
+      hold.end();
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", hold.end);
+    };
+  }, [selectScreen]);
 
   const onViewportChange = useCallback((event: CanvasViewportChangeEvent) => {
     viewportChangeHandler.current?.(event);

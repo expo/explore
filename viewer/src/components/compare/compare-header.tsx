@@ -5,6 +5,7 @@ import { StatusGlyph } from "../shared/status-icon";
 import { Tooltip } from "../shared/tooltip";
 import { DIFF_LABELS, type DiffStatus } from "../../utils/build-diff";
 import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
+import { KeyHint } from "../shared/key-hint";
 import { setMeasurementsShown, useMeasurementsShown } from "../../utils/measurements-setting";
 
 /** A screen whose every changed area only moved: how far, per direction, and whether no other finding remains. */
@@ -48,6 +49,7 @@ export function CompareNav(props: {
             <StatusGlyph status={props.status} accessibilityOnly={props.accessibilityOnly} label={props.statusLabel ?? DIFF_LABELS[props.status]} />
             {/* A route that does not fit loses its start, not the end that names the screen. */}
             <code className="compare-nav-route" title={props.title}><bdi>{props.route}</bdi></code>
+            <KeyHint shortcut={SHORTCUTS.app.changes} />
           </button>
         </Tooltip>
         {props.stepsApart ? null : <CompareSteps {...props} />}

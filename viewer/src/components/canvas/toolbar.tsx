@@ -2,7 +2,8 @@ import { GitCompareArrows, Keyboard, LayoutGrid, Map, Search } from "lucide-reac
 import { type CSSProperties } from "react";
 import { Tooltip } from "../shared/tooltip";
 import { useCanvasVisibleFrame } from "./visible-frame-provider";
-import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
+import { CANVAS_NUMBER_KEYS, formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
+import { KeyHint } from "../shared/key-hint";
 import {
   CANVAS_DESCRIPTIONS,
   CANVAS_LABELS,
@@ -60,6 +61,7 @@ export function CanvasToolbar(props: CanvasToolbarProps) {
             aria-expanded={props.searchOpen}
             onClick={props.onOpenSearch}>
             <Search />
+            <KeyHint shortcut={SHORTCUTS.app.search} />
           </button>
         </Tooltip>
         {props.actions}
@@ -91,6 +93,7 @@ export function CanvasToolbar(props: CanvasToolbarProps) {
                 {id === "compare" && props.compareCount ? (
                   <span className="toolbar-badge" aria-hidden="true">{props.compareCount}</span>
                 ) : null}
+                {CANVAS_NUMBER_KEYS ? <KeyHint shortcut={SHORTCUTS.canvasByNumber[id]} /> : null}
               </button>
             </Tooltip>
           );

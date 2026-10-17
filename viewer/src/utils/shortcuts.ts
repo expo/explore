@@ -16,7 +16,7 @@ export type Shortcut = {
   key: string;
 };
 
-const APPLE = typeof navigator !== "undefined"
+export const APPLE = typeof navigator !== "undefined"
   && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 
 /**
@@ -60,6 +60,11 @@ export const SHORTCUTS = {
   /** I shows or hides the inspector, as an info panel does elsewhere. */
   panel: {
     right: plain("KeyI", "I"),
+  },
+  /** T is the Viewer's own light or dark theme; ⇧T is the captured app's appearance, in a report that has both. */
+  appearance: {
+    theme: plain("KeyT", "T"),
+    app: shift("KeyT", "T"),
   },
   /** Canvas edits follow the platform-standard history keys. */
   edit: {

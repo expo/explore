@@ -7,6 +7,8 @@ import { isPreviewPath, isReportTargetId, previewReportsUrl, targetQuery } from 
 import { ScreenshotImage } from "../shared/screenshot-image";
 import { artifactUrl } from "../../utils/model";
 import { Tooltip } from "../shared/tooltip";
+import { KeyHint } from "../shared/key-hint";
+import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
 import { ChangesMenu } from "./changes-menu";
 import type { FocusStatus } from "../../utils/navigation";
 import type { ExploreMap, MapIndex } from "../../utils/model";
@@ -192,12 +194,13 @@ export function AppPill(props: AppPillProps) {
           ) : null}
           {props.appearance ? (
             <>
-              <Tooltip label="Appearance · the same screens captured in the other scheme" placement="bottom">
+              <Tooltip label="Appearance · the same screens captured in the other scheme" shortcut={formatShortcut(SHORTCUTS.appearance.app)} placement="bottom">
                 <button ref={appearanceRef} type="button" className="collapsed-platform" aria-haspopup="menu" aria-expanded={appearanceOpen}
                   aria-label={`Appearance: ${appearanceLabel(props.appearance.current)}. Show the other appearance`}
                   onClick={() => setAppearanceOpen(open => !open)}>
                   {appearanceLabel(props.appearance.current)}
                   <svg aria-hidden="true" width="8" height="8" viewBox="0 0 8 8"><path d="M1 2.5 4 5.5 7 2.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  <KeyHint shortcut={SHORTCUTS.appearance.app} />
                 </button>
               </Tooltip>
               <Menu items={appearanceItems} open={appearanceOpen} anchorRef={appearanceRef} ariaLabel="Appearance" onDismiss={() => setAppearanceOpen(false)} />
