@@ -4,7 +4,7 @@ import test from "node:test";
 import { tsImport } from "tsx/esm/api";
 
 const { PNG } = await import("pngjs");
-const { ArgentCallError, describedButton, findOpenButton, iosRuntimeVersion, openInAppPromptShowing, parseCommand, runBridgeCommand, snapshotFromTree } = await tsImport("../../src/capture/argent-driver.ts", import.meta.url);
+const { ArgentCallError, describedButton, findOpenButton, iosRuntimeVersion, openInAppPromptShowing, parseCommand, rotateToScreen, runBridgeCommand, snapshotFromTree } = await tsImport("../../src/capture/argent-driver.ts", import.meta.url);
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../fixtures/argent-0.29/${name}`, import.meta.url), "utf8"));
 const IOS_HOME = fixture("fixture-ios-ui-tree-home.json");
@@ -540,4 +540,19 @@ test("a fold whose panel Argent never reads fails clearly instead of capturing t
   const failed = await stuck.run(["fold", "open", ...flags("ios")]);
   assert.equal(failed.json.error.code, "CONTROLLER_FOLD_UNVERIFIED");
   assert.equal(stuck.calls.filter(call => call.tool === "fold").length, 1, "the session is not folded back and forth");
+});
+
+test("an opened iPhone Duo's portrait frame is turned a quarter clockwise to its landscape screen", async () => {
+  const { PNG } = await import("pngjs");
+  // 2 x 3 portrait frame; pixel values number the source positions.
+  const source = new PNG({ width: 2, height: 3 });
+  for (let i = 0; i < 6; i += 1) source.data.set([i * 10, 0, 0, 255], i * 4);
+  const out = PNG.sync.read(rotateToScreen(PNG.sync.write(source), { width: 951, height: 669 }));
+  assert.deepEqual([out.width, out.height], [3, 2]);
+  const red = (x, y) => out.data[(y * out.width + x) * 4];
+  // Clockwise: the source's bottom-left (0, 2) becomes the top-left, its top-left (0, 0) the top-right.
+  assert.deepEqual([red(0, 0), red(1, 0), red(2, 0), red(0, 1), red(1, 1), red(2, 1)], [40, 20, 0, 50, 30, 10]);
+  // A frame already of the screen's shape is left as it is.
+  const portrait = PNG.sync.write(source);
+  assert.equal(rotateToScreen(portrait, { width: 466, height: 678 }), portrait);
 });

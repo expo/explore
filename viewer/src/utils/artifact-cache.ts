@@ -1,5 +1,5 @@
 /** Optional, origin-local storage for report ZIPs the reviewer dropped on this browser. */
-type ArtifactIdentity = { origin?: "local"; repo: string; run: string; attempt: string; platform?: "ios" | "android" };
+type ArtifactIdentity = { origin?: "local"; repo: string; run: string; attempt: string; target?: string };
 export type CachedArtifact = { blob: Blob; digest: string; expiresAt: number };
 
 const CACHE_NAME = "explore-reports";
@@ -32,10 +32,16 @@ function cacheKey(identity: ArtifactIdentity): string | undefined {
   const origin = globalThis.location?.origin;
   if (!origin || !/^https?:\/\//.test(origin)) return undefined;
   const url = new URL(CACHE_PATH, origin);
-  if (identity.platform !== undefined && identity.platform !== "ios" && identity.platform !== "android") return undefined;
+  if (identity.target !== undefined && !targetId(identity.target)) return undefined;
+  // A target named after its platform keeps the `platform` key reports were saved under before targets.
   url.search = new URLSearchParams({ ...(identity.origin ? { origin: identity.origin } : {}), repo: identity.repo.toLowerCase(), run: identity.run, attempt: identity.attempt,
-    ...(identity.platform ? { platform: identity.platform } : {}) }).toString();
+    ...(identity.target ? { [identity.target === "ios" || identity.target === "android" ? "platform" : "target"]: identity.target } : {}) }).toString();
   return url.href;
+}
+
+/** The capture target grammar (isReportTargetId in artifact-report, which imports this module). */
+function targetId(value: unknown): boolean {
+  return typeof value === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(value) && !["base", "head", "report"].includes(value) && !value.startsWith("install-");
 }
 
 function validKey(request: Request): boolean {
@@ -43,10 +49,10 @@ function validKey(request: Request): boolean {
   try {
     const url = new URL(request.url);
     const local = url.searchParams.get("origin") === "local";
-    const platform = url.searchParams.getAll("platform");
-    if (platform.length > 1 || (platform[0] !== undefined && platform[0] !== "ios" && platform[0] !== "android")) return false;
-    if ([...url.searchParams].length !== IDENTITY_KEYS.length + (local ? 1 : 0) + platform.length) return false;
-    const identity: ArtifactIdentity = { ...(local ? { origin: "local" } : {}), ...(platform[0] ? { platform: platform[0] } : {}) } as ArtifactIdentity;
+    const target = [...url.searchParams.getAll("platform"), ...url.searchParams.getAll("target")];
+    if (target.length > 1 || (target[0] !== undefined && !targetId(target[0]))) return false;
+    if ([...url.searchParams].length !== IDENTITY_KEYS.length + (local ? 1 : 0) + target.length) return false;
+    const identity: ArtifactIdentity = { ...(local ? { origin: "local" } : {}), ...(target[0] ? { target: target[0] } : {}) } as ArtifactIdentity;
     for (const key of IDENTITY_KEYS) {
       const values = url.searchParams.getAll(key);
       if (values.length !== 1) return false;

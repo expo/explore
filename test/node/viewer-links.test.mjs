@@ -91,3 +91,21 @@ test('matrix jobs add platform to the Viewer link and nothing else changes', asy
   android.searchParams.delete('platform');
   assert.equal(android.href, plain.href);
 });
+
+test("a target's links select it with ?target=, and a target named after its platform keeps ?platform=", async () => {
+  const { viewerLinks, previewLinks } = await import('../../dist/report/viewer-links.js');
+  const token = "abcdefghijklmnopqrstuvwxyz234567";
+  const page = `https://acme-explore--1lcbdcpwn3.expo.app/p/${token}`;
+  assert.equal(previewLinks(page, null, "ios").open, `${page}?platform=ios`, "byte-identical to links from before targets");
+  assert.equal(previewLinks(page, null, "android").focus("modified"), `${page}?platform=android&focus=modified&inspect=diff`);
+  assert.equal(previewLinks(page, null, "duo-open").open, `${page}?target=duo-open`);
+  assert.equal(previewLinks(page, null, "duo-open").surface("home"), `${page}?target=duo-open&view=compare&screen=home`);
+  for (const bad of ["Duo", "report", "install-x", "a".repeat(33), "duo open"]) assert.throws(() => previewLinks(page, null, bad), /target id/, bad);
+  const input = { repository: 'expo/explore-playground', headSha: 'b'.repeat(40), runId: '42', runAttempt: '1', configPath: '.expo-explore/config.yaml',
+    artifactUrl: 'https://github.com/expo/explore-playground/actions/runs/42/artifacts/7654' };
+  const duo = new URL(viewerLinks({ ...input, platform: "ios", target: "duo-closed" }).viewer.open);
+  assert.equal(duo.searchParams.get('target'), 'duo-closed', "the target wins over its platform");
+  assert.equal(duo.searchParams.get('platform'), null);
+  assert.equal(viewerLinks({ ...input, target: "ios" }).viewer.open, viewerLinks({ ...input, platform: "ios" }).viewer.open);
+  assert.throws(() => viewerLinks({ ...input, target: "Bad" }), /target id/);
+});

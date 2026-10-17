@@ -56,7 +56,10 @@ for (const provider of ['expo-router', 'react-navigation']) {
     const starts = f.requests.slice(before).filter(request => request.args[0] === 'simulator:start');
     assert.equal(starts.length, 1, 'an exact baseline cache avoids a second EAS allocation');
     assert.equal(value(starts[0], '--device'), f.config.device.name);
-    assert.equal(value(starts[0], '--build-id'), `repacked-${f.headSha}`);
+    // The session starts empty beside the repack; the head's repacked app is installed through the controller.
+    assert.equal(starts[0].args.includes('--build-id'), false);
+    const installs = f.requests.slice(before).filter(request => request.args[0] === 'install');
+    assert.equal(installs.length, 1);
     const packaged = await exportCiReport({ inputPath: result.inputPath, outputPath: join(f.root, 'artifact') });
     const report = JSON.parse(await readFile(join(packaged.outputPath, 'review.json'), 'utf8'));
     assert.equal(report.kind, 'explore.report');
@@ -77,6 +80,12 @@ for (const provider of ['expo-router', 'react-navigation']) {
     assert.match(f.comments.at(-1), /\[zip\]\(<https:\/\/github\.com\/acme\/example\/actions\/runs\/1234\/artifacts\/900>\)/);
     assert.match(f.comments.at(-1), /explore-preview\.expo\.app/);
     assert.doesNotMatch(f.comments.at(-1), /viewer\.example/);
+    // A matrix job's report artifact carries its target id: an unsuffixed artifact is not target duo-open's.
+    const publishAs = selection => publishCiReportComment({ inputPath: result.inputPath,
+      artifactUrl: 'https://github.com/acme/example/actions/runs/1234/artifacts/900', environment: f.environment, transport: f.transport, ...selection });
+    await assert.rejects(publishAs({ target: 'duo-open' }), error => error.code === 'REPORT_ARTIFACT_MISMATCH');
+    await assert.rejects(publishAs({ platform: 'ios' }), error => error.code === 'REPORT_ARTIFACT_MISMATCH', '--platform ios names explore-review-<run>-<attempt>-ios');
+    await assert.rejects(publishAs({ target: 'Duo/../x' }), error => error.code === 'TARGET_INVALID');
     assert.equal(git(f.baseProject, 'status', '--porcelain'), '');
     assert.equal(git(f.headProject, 'status', '--porcelain'), '');
     assert.equal(f.requests.filter(request => request.args[0] === 'simulator:start').length,

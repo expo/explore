@@ -800,3 +800,28 @@ test("launch evidence projects as a Launch screen per appearance with a splash c
   assert.equal(surface.visual.mismatchPercentage, 12.5);
   assert.equal(surface.noVisibleChange, false);
 });
+
+test("a target's review carries its target and the run's targets into the map; a review from before targets carries neither", () => {
+  const targets = [
+    { id: "iphone", platform: "ios", label: "iPhone 17" },
+    { id: "duo-open", platform: "ios", label: "iPhone Duo (open)" },
+    { id: "android", platform: "android", label: "Android" },
+  ];
+  const review = fixture();
+  review.runtime = { ...review.runtime, platform: "ios", platforms: ["ios", "android"], target: targets[1], targets };
+  const workspace = publicReviewToWorkspace(review);
+  const { baseline, current } = workspaceSides(workspace);
+  for (const map of [baseline.map, current.map]) {
+    assert.deepEqual(map.run.target, targets[1]);
+    assert.deepEqual(map.run.targets, targets);
+    assert.deepEqual(map.run.platforms, ["ios", "android"]);
+  }
+  const old = workspaceSides(publicReviewToWorkspace(fixture())).current.map.run;
+  assert.equal(old.target, undefined);
+  assert.equal(old.targets, undefined);
+  const odd = fixture();
+  odd.runtime = { ...odd.runtime, target: { id: "Not An Id", platform: "ios", label: "x" }, targets: [targets[0], { id: "x", platform: "web" }] };
+  const oddRun = workspaceSides(publicReviewToWorkspace(odd)).current.map.run;
+  assert.equal(oddRun.target, undefined, "a malformed target is dropped, and the report reads as its platform's");
+  assert.equal(oddRun.targets, undefined);
+});

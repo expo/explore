@@ -1,3 +1,4 @@
+import type { RunTarget } from "../types.js";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -7,17 +8,18 @@ import { join, relative, resolve } from "node:path";
 import { runCiReview } from "./pipeline.js";
 import { resolveCommit } from "./workflow-steps.js";
 import { ciLayout, installCommand, type PackageManager } from "./workflow-install.js";
-import { configPlatforms, readExploreConfig, resolvePlatformConfig, withRunOverrides, DEFAULT_EXPLORE_CONFIG_PATH, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
+import { configPlatforms, readExploreConfig, resolveTargetConfig, configTargets, withRunOverrides, DEFAULT_EXPLORE_CONFIG_PATH, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { AGENT_PROVIDERS, defaultExploreConfig } from "../config/setup.js";
 import type { PrepareCiExplorationOptions } from "../capture/agent/exploration.js";
 import { createCiAgentSession } from "../capture/agent/session.js";
 import { createLocalCiAgentSession } from "../capture/agent/session-local.js";
+import { androidTools, localEmulatorFromState, localSimulatorFromState } from "../capture/local-simulator.js";
 import type { CommandRunner } from "../capture/run.js";
 import { isSafeBranchRef, type LocalReviewPresentation, type PullRequestSidePresentation } from "../contracts/review.js";
 import { exportCiReport, readCiReportInput } from "../report/artifact.js";
 import { reviewChangeCount, reviewDevice, type PublicCommentState } from "../report/pr-comment-body.js";
 import { zipReportDirectory } from "../report/preview-deploy.js";
-import { CiError } from "../shared/ci-errors.js";
+import { CiError, serializeCiError, type CiErrorData } from "../shared/ci-errors.js";
 import { exploreCacheRoot } from "../shared/cache-root.js";
 import { packageBin } from "../shared/package-paths.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
@@ -37,10 +39,16 @@ export type LocalReviewOptions = {
   /** Review the working tree even when eas.json sets cli.requireCommit. Without --head this is the default. */
   uncommitted?: boolean | undefined;
   platform?: ExplorePlatform | undefined;
+  /** `--target`: capture this config.yaml target alone; with `platform`, the targets of that platform. */
+  target?: string | undefined;
+  /** `--parallel`: how many targets capture at once (each runs a simulator or emulator per side); all of them by default. */
+  parallel?: number | undefined;
   scope?: string | undefined;
   expiresIn?: string | undefined;
   /** `--controller`: the device controller for both sides, over the config's `capture.controller`. */
   controller?: string | undefined;
+  /** `--simulator`: `local` runs both sides on simulators this Mac creates, over the config's `capture.simulator`. */
+  simulator?: string | undefined;
   /** Reuse and keep captures in the local capture cache (default true). */
   cache?: boolean | undefined;
   configPath?: string | undefined;
@@ -54,10 +62,12 @@ export type LocalReviewOptions = {
   agentSessionFactory?: PrepareCiExplorationOptions["createSession"];
 };
 
-export type LocalReviewReport = { platform: ExplorePlatform; directory: string; zip: string; changes?: number; device?: string };
+export type LocalReviewReport = { platform: ExplorePlatform; target: RunTarget; directory: string; zip: string; changes?: number; device?: string };
 export type LocalReviewResult = {
   runId: string; base: PullRequestSidePresentation; head: PullRequestSidePresentation & { uncommitted?: string[] };
   work: string; reports: LocalReviewReport[]; config: ExploreConfig; repository: string;
+  /** Targets whose review failed outright; the others' reports are kept and opened all the same. */
+  failures: { target: RunTarget; error: CiErrorData }[];
 };
 
 /** Git, without the user's hooks or fsmonitor, and never with a terminal prompt. */
@@ -175,9 +185,27 @@ export async function installDependencies(project: string, logFile: string, envi
       + "Installs run without credential environment variables: a registry that needs ${NPM_TOKEN} in the project's .npmrc must be authenticated in your own ~/.npmrc instead." });
 }
 
-/** `~/.cache/expo-explore/captures/<platform>/<sha>`: one capture per commit and platform, reused while its recipe matches. */
-export function captureCacheDirectory(environment: NodeJS.ProcessEnv, platform: ExplorePlatform, sha: string): string {
-  return join(exploreCacheRoot(environment), "captures", platform, sha);
+/** Runs `task` on every item, at most `limit` at once, in order; every task settles, as Promise.allSettled does. */
+export async function settleLimited<T, R>(items: readonly T[], limit: number, task: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      try { results[index] = { status: "fulfilled", value: await task(items[index]!) }; }
+      catch (reason) { results[index] = { status: "rejected", reason }; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return results;
+}
+
+/**
+ * `~/.cache/expo-explore/captures/<target>/<sha>`: one capture per commit and target, reused while its recipe matches.
+ * A config without targets names them for their platforms, so its captures stay where they were.
+ */
+export function captureCacheDirectory(environment: NodeJS.ProcessEnv, target: string, sha: string): string {
+  return join(exploreCacheRoot(environment), "captures", target, sha);
 }
 
 async function exists(path: string): Promise<boolean> { try { await lstat(path); return true; } catch { return false; } }
@@ -258,17 +286,33 @@ function recordedSessionIds(outputs: string[]): string[] {
   }));
 }
 
-/** Stop the EAS Simulator sessions a capture recorded and did not stop itself (an interrupted run), with the local login. */
+/** How to stop a recorded session by hand: an EAS Simulator session, or a local simulator or emulator the capture started. */
+function stopHint(id: string): string {
+  const udid = localSimulatorFromState(id);
+  const serial = localEmulatorFromState(id);
+  return udid ? `xcrun simctl delete ${udid}` : serial ? `adb -s ${serial} emu kill` : `eas simulator:stop --id ${id}`;
+}
+
+/**
+ * Stop the simulators a capture recorded and did not stop itself (an interrupted run): EAS Simulator sessions with the
+ * local login, local simulators by deleting them, and local emulators by killing them.
+ */
 export async function stopRecordedSessions(outputs: string[], environment: NodeJS.ProcessEnv, runner: (args: string[]) => { status: number | null } =
-  args => spawnSync(packageBin("eas-cli", "eas"), args, { env: environment, encoding: "utf8", timeout: 120_000 }), quiet = false): Promise<string[]> {
+  args => spawnSync(packageBin("eas-cli", "eas"), args, { env: environment, encoding: "utf8", timeout: 120_000 }), quiet = false,
+  simctl: (args: string[]) => { status: number | null } = args => spawnSync("xcrun", ["simctl", ...args], { env: environment, encoding: "utf8", timeout: 120_000 }),
+  adb: (args: string[]) => { status: number | null } = args => spawnSync(androidTools(environment).adb, args, { env: environment, encoding: "utf8", timeout: 60_000 })): Promise<string[]> {
   const stopped: string[] = [];
   for (const output of outputs) for (const name of ["head-session", "base-session"]) {
     const file = join(output, name);
     const id = (await readFile(file, "utf8").catch(() => "")).trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(id)) continue;
-    if (runner(["simulator:stop", "--id", id, "--json", "--non-interactive"]).status === 0) { stopped.push(id); await rm(file, { force: true }); }
+    const udid = localSimulatorFromState(id);
+    const serial = localEmulatorFromState(id);
+    if (udid) simctl(["shutdown", udid]);
+    const stop = udid ? simctl(["delete", udid]) : serial ? adb(["-s", serial, "emu", "kill"]) : runner(["simulator:stop", "--id", id, "--json", "--non-interactive"]);
+    if (stop.status === 0) { stopped.push(id); await rm(file, { force: true }); }
     // During an interrupt the capture may stop the same session first; only the final pass reports a failure.
-    else if (!quiet) process.stderr.write(`Could not stop EAS Simulator session ${id}; stop it with: eas simulator:stop --id ${id}\n`);
+    else if (!quiet) process.stderr.write(`Could not stop simulator ${id}; stop it with: ${stopHint(id)}\n`);
   }
   return stopped;
 }
@@ -333,13 +377,13 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
   const interrupt = () => {
     interrupts += 1;
     if (interrupts === 1) {
-      process.stderr.write("\nStopping the review and its EAS Simulator sessions… (Ctrl+C again to quit now)\n");
+      process.stderr.write("\nStopping the review and its simulators… (Ctrl+C again to quit now)\n");
       abort.abort(new CiError({ code: "LOCAL_REVIEW_INTERRUPTED", stage: "capture", message: "The review was interrupted.", nextAction: "Rerun it when you are ready." }));
       if (!options.runner) void stopRecordedSessions(outputs, environment, undefined, true);
       return;
     }
     for (const tree of worktrees) git(root, ["worktree", "remove", "--force", tree]);
-    for (const id of recordedSessionIds(outputs)) process.stderr.write(`Still running: stop it with eas simulator:stop --id ${id}\n`);
+    for (const id of recordedSessionIds(outputs)) process.stderr.write(`Still running: stop it with ${stopHint(id)}\n`);
     process.exit(130);
   };
   process.on("SIGINT", interrupt);
@@ -380,7 +424,13 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     const configPath = options.configPath ?? DEFAULT_EXPLORE_CONFIG_PATH;
     const rawConfig = await localReviewConfig({ project, head: projects.head, configPath, explicit: options.configPath !== undefined,
       platform: options.platform, progress });
-    const platforms = options.platform ? [options.platform] : configPlatforms(rawConfig);
+    const allTargets = configTargets(rawConfig);
+    if (options.target !== undefined && !allTargets.some(target => target.id === options.target)) throw new CiError({ code: "TARGET_NOT_CONFIGURED", stage: "preflight",
+      message: `The config has no target ${options.target}.`, nextAction: `Pass one of: ${allTargets.map(target => target.id).join(", ")}.` });
+    const targets = allTargets.filter(target => (options.target === undefined || target.id === options.target) && (options.platform === undefined || target.platform === options.platform));
+    if (!targets.length) throw new CiError({ code: "PLATFORM_NOT_CONFIGURED", stage: "preflight", message: `The config has no ${options.platform} target.`,
+      nextAction: `Pass one of: ${allTargets.map(target => target.id).join(", ")}.` });
+    const platforms = configPlatforms(rawConfig);
     const repository = repositoryName(root, rawConfig);
 
     // Credentials: tokens and keys when set, otherwise your own logins.
@@ -393,19 +443,21 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     const subscription = rawConfig.mode === "agent" && rawConfig.agent !== undefined && !environment[AGENT_PROVIDERS[rawConfig.agent.provider].secret]?.trim();
     if (subscription) progress(`model: your local ${rawConfig.agent!.provider === "anthropic" ? "claude" : "codex"} login (no ${AGENT_PROVIDERS[rawConfig.agent!.provider].secret} set)`);
 
-    let installed = false;
+    // Every target's capture waits on one install of both commits' dependencies.
+    let installed: Promise<void> | undefined;
     const install = options.install ?? (async (project: string, side: "base" | "head") => {
       progress(`installing the ${side} commit's dependencies`);
       await installDependencies(project, join(work, `install-${side}.log`), environment);
     });
-    const reports: LocalReviewReport[] = [];
-    for (const platform of platforms) {
-      const config = withRunOverrides(resolvePlatformConfig(rawConfig, platform), { scope: options.scope, expiresIn: options.expiresIn, controller: options.controller });
-      const output = join(work, platform); await mkdir(output);
+    // The targets run at once, as CI runs them in parallel jobs: each on its own simulators, with its own output.
+    const captureTarget = async (target: RunTarget): Promise<LocalReviewReport> => {
+      const config = withRunOverrides(resolveTargetConfig(rawConfig, { target: target.id }), { scope: options.scope, expiresIn: options.expiresIn, controller: options.controller, simulator: options.simulator });
+      const platform = target.platform;
+      const output = join(work, target.id); await mkdir(output);
       outputs.push(output);
       const platformEnvironment = { ...environment };
       delete platformEnvironment.EXPLORE_CAPTURE_CACHE;
-      const cachedBase = captureCacheDirectory(environment, platform, base.sha);
+      const cachedBase = captureCacheDirectory(environment, target.id, base.sha);
       if (options.cache !== false && await exists(join(cachedBase, CACHE_METADATA))) {
         platformEnvironment.EXPLORE_CAPTURE_CACHE = cachedBase;
         // Reusing a capture counts as using it, so pruning keeps the bases reviews come back to.
@@ -416,10 +468,14 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
       const state: PublicCommentState = { phase: "pending", pullRequest: presentation, mode: config.exploration.scope, executionMode: config.mode,
         configPath: appDirectory === "." ? configPath : `${appDirectory}/${configPath}`,
         links: { viewer: null, download: null, run: "", config: "", artifacts: "" }, startedAt: Date.now(), updatedAt: Date.now(),
-        build: { platform: config.app.platform, easProfile: config.app.easProfile }, artifactOnly: true };
-      progress(`${platform}: reviewing`);
+        build: { platform: config.app.platform, easProfile: config.app.easProfile }, artifactOnly: true,
+        target, ...(allTargets.length > 1 ? { targets: allTargets } : {}) };
+      progress(`${target.id}: reviewing${target.id === platform ? "" : ` (${target.label})`}`);
       const result = await runCiReview({ projects, output, config, presentation, runId, runAttempt: "1", state, environment: platformEnvironment,
-        ...(platforms.length > 1 ? { platforms } : {}), subscription, useLocalEasSession, progress: message => progress(`${platform}: ${message}`),
+        ...(platforms.length > 1 ? { platforms } : {}), ...(allTargets.length > 1 ? { targets: allTargets } : {}),
+        // Targets of one platform capture the same commits from the same build; it is built and repacked once.
+        ...(targets.length > 1 ? { buildShare: join(work, ".builds") } : {}),
+        subscription, useLocalEasSession, progress: message => progress(`${target.id}: ${message}`),
         ...(options.runner ? { runner: options.runner } : {}), ...(options.now ? { now: options.now } : {}), ...(options.sleep ? { sleep: options.sleep } : {}),
         signal: abort.signal,
         // Model requests end on Ctrl+C: the session kills its own process group and restores any login it changed.
@@ -429,11 +485,9 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
             preflight: preflightOptions => session.preflight({ ...preflightOptions, signal: preflightOptions?.signal ? AbortSignal.any([preflightOptions.signal, abort.signal]) : abort.signal }),
             run: request => session.run({ ...request, signal: request.signal ? AbortSignal.any([request.signal, abort.signal]) : abort.signal }) };
         },
-        prepareCapture: async () => {
-          if (installed) return;
+        prepareCapture: () => installed ??= (async () => {
           for (const side of ["head", "base"] as const) await install(projects[side], side);
-          installed = true;
-        },
+        })(),
         assertCurrentHead: async () => {
           abort.signal.throwIfAborted();
           for (const side of ["base", "head"] as const) {
@@ -451,20 +505,31 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
       await writeFile(zip, await zipReportDirectory(directory));
       const input = await readCiReportInput(result.inputPath);
       const changes = reviewChangeCount(input.commentState); const device = reviewDevice(input.commentState);
-      reports.push({ platform, directory, zip, ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) });
+      const report: LocalReviewReport = { platform, target, directory, zip, ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) };
       // Keep both sides' captures for later reviews of these commits; a working-tree snapshot is never reviewed again.
       if (options.cache !== false) for (const side of ["base", "head"] as const) {
         if (side === "head" && head.uncommitted) continue;
-        await keepCapture(join(output, `${side}-export`), captureCacheDirectory(environment, platform, side === "base" ? base.sha : head.sha));
+        await keepCapture(join(output, `${side}-export`), captureCacheDirectory(environment, target.id, side === "base" ? base.sha : head.sha));
       }
-      if (options.cache !== false) await pruneCaptureCache(environment).catch(() => []);
       // The report is all that is kept; the captures, maps and checkouts are the bulk of the run.
       for (const entry of await readdir(output)) if (entry !== "report" && entry !== "report.zip") await rm(join(output, entry), { recursive: true, force: true });
       abort.signal.throwIfAborted();
-    }
+      return report;
+    };
+    // Every target finishes or fails on its own, so each stops the simulators it started; then the first failure is the review's.
+    const settled = await settleLimited(targets, options.parallel ?? targets.length, captureTarget);
+    // One target that fails costs that target's report, not the others': they are kept, and the failure is named.
+    // Only an interrupted review, or one where every target failed, fails as a whole.
+    const reports = settled.flatMap(outcome => outcome.status === "fulfilled" ? [outcome.value] : []);
+    const failed = settled.flatMap((outcome, index) => outcome.status === "rejected" ? [{ target: targets[index]!, reason: outcome.reason as unknown }] : []);
+    abort.signal.throwIfAborted();
+    if (!reports.length && failed.length) throw failed[0]!.reason;
+    const failures = failed.map(({ target, reason }) => ({ target, error: serializeCiError(reason) }));
+    for (const { target, error } of failures) progress(`${target.id}: no report (${error.code}: ${error.message})`);
+    if (options.cache !== false) await pruneCaptureCache(environment).catch(() => []);
     // The install logs and snapshot index go too; the checkouts are removed with git below.
-    for (const entry of await readdir(work)) if (![...platforms, "base", "head"].includes(entry)) await rm(join(work, entry), { recursive: true, force: true });
-    return { runId, base, head, work, reports, config: rawConfig, repository };
+    for (const entry of await readdir(work)) if (![...targets.map(target => target.id), "base", "head"].includes(entry)) await rm(join(work, entry), { recursive: true, force: true });
+    return { runId, base, head, work, reports, config: rawConfig, repository, failures };
   } catch (error) {
     failed = true;
     // A capture interrupted mid-session reports its cleanup; the interruption is what happened.

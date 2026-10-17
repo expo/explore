@@ -514,3 +514,77 @@ test('screens whose comparison did not run are counted as not compared, never as
   assert.match(platformRow(quiet, 'iOS'), /\| 🟩 0 changes · 6m 12s \|/);
   assert.match(quiet, /\nNo screen changed on the reviewed platforms\.\n/);
 });
+
+const duoTargets = [{ id: 'iphone', platform: 'ios', label: 'iPhone 17' }, { id: 'duo-closed', platform: 'ios', label: 'iPhone Duo (closed)' },
+  { id: 'duo-open', platform: 'ios', label: 'iPhone Duo (open)' }, { id: 'android', platform: 'android', label: 'Pixel 7' }];
+const targetState = (target, overrides = {}) => state({ artifactOnly: true, target, targets: duoTargets,
+  build: { ...state().build, platform: target.platform }, runtime: { ...state().runtime, platform: target.platform, deviceModel: target.label }, ...overrides });
+
+test('a config without targets writes the same records and comment as before targets: target ios and android are the platforms', async () => {
+  const { platformSectionMerge, readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
+  const perPlatform = [{ id: 'ios', platform: 'ios', label: 'iOS' }, { id: 'android', platform: 'android', label: 'Android' }];
+  const android = overrides => state({ artifactOnly: true, build: { ...state().build, platform: 'android' }, runtime: { ...state().runtime, platform: 'android', deviceModel: 'Pixel 9' }, ...overrides });
+  const before = platformSectionMerge(android(), 'android').merge(platformSectionMerge(state({ artifactOnly: true }), 'ios').merge(undefined));
+  const after = platformSectionMerge(android({ target: perPlatform[1], targets: perPlatform }), 'android')
+    .merge(platformSectionMerge(state({ artifactOnly: true, target: perPlatform[0], targets: perPlatform }), 'ios').merge(undefined));
+  assert.equal(after, before, 'byte-identical comment, record lines included');
+  const record = platformRecordOf(state({ target: perPlatform[0], targets: perPlatform }));
+  assert.deepEqual(Object.keys(record).slice(0, 3), ['v', 'platform', 'runId'], 'no target, label or order fields');
+  // A writer that knows its target only from the CLI flag (the state names none) keys its record the same way.
+  assert.equal(platformSectionMerge(state({ artifactOnly: true }), 'ios').merge(undefined), renderPublicComment(state({ artifactOnly: true, target: perPlatform[0] })));
+  assert.deepEqual(Object.keys(readCommentRecords(after).current), ['ios', 'android']);
+});
+
+test('several targets share a comment: one row each in config order, labelled by target, keyed by id in the records and history', async () => {
+  const { platformSectionMerge, readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
+  const [iphone, closed, open, android] = duoTargets;
+  // Report jobs finish in any order; the comment follows config order.
+  let body;
+  for (const target of [android, open, iphone]) body = platformSectionMerge(targetState(target), target.id).merge(body);
+  body = platformSectionMerge(targetState(closed, { phase: 'capturing', review: undefined, evidence: undefined,
+    capture: { planned: { base: 3, head: 3 }, done: { base: 3, head: 1 }, baseFromCache: false, current: 'head' } }), 'duo-closed').merge(body);
+  assert.deepEqual([...body.matchAll(/^<!-- expo-explore-record:([a-z0-9-]+):/gm)].map(match => match[1]), ['iphone', 'duo-closed', 'duo-open', 'android']);
+  const records = readCommentRecords(body).current;
+  assert.deepEqual(Object.keys(records).sort(), ['android', 'duo-closed', 'duo-open', 'iphone']);
+  assert.deepEqual([records['duo-open'].platform, records['duo-open'].target, records['duo-open'].label, records['duo-open'].order], ['ios', 'duo-open', 'iPhone Duo (open)', 2]);
+  assert.deepEqual([records.android.platform, records.android.target, records.android.label, records.android.order], ['android', undefined, 'Pixel 7', 3]);
+  const lines = body.split('\n'), header = lines.indexOf('| | Device | Result | Report |');
+  assert.deepEqual(lines.slice(header + 2, lines.indexOf('', header)).map(line => line.split(' | ')[0]),
+    ['| iPhone 17', '| iPhone Duo \\(closed\\)', '| iPhone Duo \\(open\\)', '| Pixel 7']);
+  assert.match(body, /^### Explore review · \[iPhone 17 report\]\(<[^>]+>\) · \[iPhone Duo \\\(open\\\) report\]\(<[^>]+>\) · \[Pixel 7 report\]\(<[^>]+>\)$/m);
+  assert.match(body, /\*\*Changes\*\* · 3 screens · a screen is listed once, with a link per device\n/);
+  assert.match(body, /\n- `\/cats\/care-guide` — Added \/cats\/care\\-guide screen · \[iPhone 17\]\(<[^>]+>\) · \[iPhone Duo \\\(open\\\)\]\(<[^>]+>\) · \[Pixel 7\]\(<[^>]+>\)\n/);
+  assert.match(body, /\| Check \| iPhone 17 \| iPhone Duo \\\(closed\\\) \| iPhone Duo \\\(open\\\) \| Pixel 7 \|\n\|---\|---\|---\|---\|---\|/);
+  assert.deepEqual(summaries(body).at(-1), 'Validation · iPhone 17 🟩 6/6 captured · iPhone Duo \\(closed\\) ⏳ in progress · iPhone Duo \\(open\\) 🟩 6/6 captured · Pixel 7 🟩 6/6 captured');
+  // A newer run moves them all into history, still labelled and ordered by target.
+  const nextHead = 'd'.repeat(40);
+  const next = platformSectionMerge(targetState(open, { phase: 'capturing', review: undefined, evidence: undefined, pullRequest: { ...pullRequest, head: { ref: 'feature', sha: nextHead } },
+    links: viewerLinks({ repository: pullRequest.repository, headSha: nextHead, runId: '43', runAttempt: '1', configPath: '.expo-explore/config.yaml' }) }), 'duo-open').merge(body);
+  assert.deepEqual(Object.keys(readCommentRecords(next).current), ['duo-open']);
+  const history = readCommentRecords(next).history;
+  assert.deepEqual(Object.keys(history[0].platforms).sort(), ['android', 'duo-closed', 'duo-open', 'iphone']);
+  assert.match(next, /\n- \[bbbbbbbb\]\(<[^>]+>\) · iPhone 17 🟩 3 changes \(.*?\) · iPhone Duo \\\(closed\\\) ⏳ did not finish \(.*?\) · iPhone Duo \\\(open\\\) 🟩 3 changes \(.*?\) · Pixel 7 🟩 3 changes /);
+});
+
+test('a comment written by a per-platform version keeps parsing, and malformed target records are dropped', async () => {
+  const { platformSectionMerge, readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
+  const { encodeRecordPayload } = await import('../../dist/report/pr-comment-record.js');
+  const old = platformSectionMerge(state({ artifactOnly: true }), 'ios').merge(undefined);
+  // A run with targets follows a per-platform run: the iOS run lands in history under its old key and label.
+  const nextHead = 'd'.repeat(40);
+  const next = platformSectionMerge(targetState(duoTargets[0], { pullRequest: { ...pullRequest, head: { ref: 'feature', sha: nextHead } },
+    links: viewerLinks({ artifactUrl: 'https://github.com/expo/explore-playground/actions/runs/43/artifacts/7655', repository: pullRequest.repository, headSha: nextHead, runId: '43', runAttempt: '1', configPath: '.expo-explore/config.yaml' }) }), 'iphone').merge(old);
+  assert.deepEqual(Object.keys(readCommentRecords(next).current), ['iphone']);
+  assert.deepEqual(Object.keys(readCommentRecords(next).history[0].platforms), ['ios']);
+  assert.match(next, /\n- \[bbbbbbbb\]\(<[^>]+>\) · iOS 🟩 3 changes /);
+  const valid = platformRecordOf(targetState(duoTargets[2]));
+  const line = (key, record) => `<!-- expo-explore-record:${key}:${encodeRecordPayload(record)} -->`;
+  const parse = (...lines) => Object.keys(readCommentRecords([CI_COMMENT_MARKER, ...lines].join('\n')).current);
+  assert.deepEqual(parse(line('duo-open', valid)), ['duo-open']);
+  assert.deepEqual(parse(line('ios', valid)), [], 'the line names the record it carries');
+  assert.deepEqual(parse(line('base', { ...valid, target: 'base' })), [], 'reserved ids are not targets');
+  assert.deepEqual(parse(line('duo-open', { ...valid, label: 'x'.repeat(81) })), []);
+  assert.deepEqual(parse(line('duo-open', { ...valid, order: 8 })), []);
+  const many = Array.from({ length: 10 }, (_, index) => line(`t${index}`, { ...valid, target: `t${index}` }));
+  assert.equal(parse(...many).length, 8, 'a comment holds at most one record per configurable target');
+});

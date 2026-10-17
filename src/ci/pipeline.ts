@@ -1,3 +1,4 @@
+import type { RunTarget } from "../types.js";
 import { spawnSync } from "node:child_process";
 import { mkdir, open, readFile, realpath, writeFile } from "node:fs/promises";
 import { join, relative, resolve, isAbsolute } from "node:path";
@@ -26,7 +27,7 @@ import type { SourceCapturePlan } from "../source/capture-plan.js";
 import { createSourceChangeSummaries } from "../source/change-summary.js";
 import { assertNoCaptureHealthIssues, partitionCaptureHealthIssues, renderCaptureIssueAnnotation, renderComparisonDiagnosticAnnotation, renderNotesUnavailableAnnotation, renderReviewGapAnnotation, sortedCaptureHealthIssues } from "../capture/health.js";
 import { EXPLORE_PACKAGE, packageBin } from "../shared/package-paths.js";
-import { agentDeviceLauncher, ensureController } from "../shared/controller-cache.js";
+import { agentDeviceLauncher, ensureArgentToolServer, ensureController } from "../shared/controller-cache.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
 
 
@@ -68,6 +69,7 @@ function captureOptions(config: ExploreConfig, environment: NodeJS.ProcessEnv, r
     easProfile: config.app.easProfile, expoToken: environment.EXPO_TOKEN ?? "",
     maxScreens: 5000, maxActions: config.capture.maxActions, maxDurationMinutes: config.capture.maxMinutes,
     setup: config.setup ?? [], forceFreshBuild: false, confirmExternalRun: true, confirmTrustedSource: true, repack: config.capture.repack, appearance: config.capture.appearance, launch: config.capture.launch, reset: config.capture.reset, unattributed: config.capture.unattributed, ...(config.capture.readinessSeconds !== undefined ? { readinessSeconds: config.capture.readinessSeconds } : {}), ...(config.capture.controller ? { controller: config.capture.controller } : {}),
+    ...(config.capture.simulator ? { simulator: config.capture.simulator } : {}),
     environment, ...(runner ? { runner } : {}), easCommand: packageBin("eas-cli", "eas"), agentDeviceCommand: agentDeviceLauncher(environment), repackCommand: packageBin("@expo/repack-app", "repack-app") };
 }
 /**
@@ -78,6 +80,8 @@ function captureOptions(config: ExploreConfig, environment: NodeJS.ProcessEnv, r
 async function prefetchControllers(config: ExploreConfig, environment: NodeJS.ProcessEnv, progress: Progress): Promise<void> {
   await ensureController("agent-device", { environment, progress });
   if (config.capture.controller === "argent") await ensureController("argent", { environment, progress });
+  // Argent on a local device also needs its tool-server, installed once before the targets capture side by side.
+  if (config.capture.controller === "argent" && config.capture.simulator === "local") await ensureArgentToolServer({ environment, progress });
 }
 
 export function captureSidesConcurrently(input: { plan: SourceCapturePlan; agent: boolean; injectedRunner: boolean; baselineMayExist: boolean }): boolean {
@@ -101,8 +105,12 @@ export type PublicCiOptions = {
   measure?: Parameters<typeof assessPublicEvidence>[0]["measure"];
   /** Set when the workflow passes --platform; artifact and report names then carry the platform suffix. */
   platform?: ExplorePlatform;
+  /** The target id a matrix job captures (--target, or --platform from older workflows): its comment section and names. */
+  target?: string;
   /** Every platform config.yaml captures; recorded in the report so the Viewer links the sibling platform's report. */
   platforms?: ExplorePlatform[];
+  /** Every target config.yaml captures, in config order; recorded in the report so the Viewer links the sibling targets' reports. */
+  targets?: RunTarget[];
   baseProject: string; headProject: string; pullRequestPath: string; output: string;
   config: ExploreConfig; configPath?: string; environment?: NodeJS.ProcessEnv; transport?: typeof fetch;
   now?: () => number; sleep?: (milliseconds: number) => void; onComment?: (state: PublicCommentState, body: string) => void;
@@ -120,7 +128,7 @@ function assertRunIdentity(environment: NodeJS.ProcessEnv): void {
 }
 
 /** What both CI adapters check before capture: exact checkouts of both sides and an output outside them. */
-async function prepareCiRun(options: Pick<PublicCiOptions, "baseProject" | "headProject" | "output" | "config" | "configPath" | "now">,
+async function prepareCiRun(options: Pick<PublicCiOptions, "baseProject" | "headProject" | "output" | "config" | "configPath" | "now" | "targets">,
   environment: NodeJS.ProcessEnv, presentation: ReviewPresentation) {
   const now = options.now ?? Date.now;
   const config = options.config;
@@ -141,7 +149,8 @@ async function prepareCiRun(options: Pick<PublicCiOptions, "baseProject" | "head
     executionMode: config.mode, configPath: repositoryConfigPath,
     links: viewerLinks({ repository: presentation.repository, headSha: presentation.head.sha, runId: environment.GITHUB_RUN_ID!,
       runAttempt: environment.GITHUB_RUN_ATTEMPT!, configPath: repositoryConfigPath }),
-    startedAt: now(), updatedAt: now(), build: { platform: config.app.platform, easProfile: config.app.easProfile }, artifactOnly: true };
+    startedAt: now(), updatedAt: now(), build: { platform: config.app.platform, easProfile: config.app.easProfile }, artifactOnly: true,
+    ...(config.target ? { target: config.target } : {}), ...(options.targets && options.targets.length > 1 ? { targets: options.targets } : {}) };
   return { projects, output, state };
 }
 
@@ -168,7 +177,7 @@ export async function runPublicCi(options: PublicCiOptions) {
   const postComment = async () => {
     await assertCurrentPr();
     state.updatedAt = now(); const body = renderPublicComment(state); options.onComment?.(state, body);
-    try { await upsertStickyComment({ repository: pr.repository, issueNumber: pr.number, body, ...platformSectionMerge(state, options.platform), token: githubToken, fetchImpl: transport }); }
+    try { await upsertStickyComment({ repository: pr.repository, issueNumber: pr.number, body, ...platformSectionMerge(state, options.target ?? options.platform), token: githubToken, fetchImpl: transport }); }
     catch (error) { process.stderr.write(`Progress comment unavailable: ${serializeCiError(error).message}\n`); }
   };
   let prVerificationFailed = false;
@@ -241,6 +250,10 @@ export async function runCiReview(options: {
   projects: { base: string; head: string }; output: string; config: ExploreConfig;
   presentation: ReviewPresentation; runId: string; runAttempt: string;
   platforms?: ExplorePlatform[];
+  /** Every target config.yaml captures; `config.target` is the one this review captures. */
+  targets?: RunTarget[];
+  /** A folder shared with the other targets' reviews, so the targets of one platform build each commit once. */
+  buildShare?: string;
   measure?: Parameters<typeof assessPublicEvidence>[0]["measure"];
   state: PublicCommentState; environment: NodeJS.ProcessEnv;
   assertCurrentHead: () => Promise<void>; postComment: () => Promise<void>; canPublish?: () => boolean;
@@ -311,7 +324,7 @@ export async function runCiReview(options: {
         ...(exploration.agent ? { agent: exploration.agent } : {}), project: projects[side],
         mapDirectory: join(output, `${side}-map`), outputDirectory: directory,
         name: config.app.name ?? pr.repository, buildId: pr.origin === "local" ? `local-${pr.runId}-${side}` : pr.origin === "compare" ? `compare-${options.runId}-${side}` : `pr-${pr.number}-${side}`, buildVersion: pr[side].sha.slice(0, 8), gitCommit: pr[side].sha,
-        planPath: join(output, "execution-plan.json"), side, sessionStatePath: join(output, `${side}-session`),
+        planPath: join(output, "execution-plan.json"), side, sessionStatePath: join(output, `${side}-session`), ...(options.buildShare ? { buildShare: options.buildShare } : {}),
         ...(reuseDirectory ? { reuseDirectory } : {}), ...(options.signal ? { signal: options.signal } : {}) };
       const captured = concurrent
         ? await runCiMapOnWorker((({ progress: _progress, runner: _runner, agent: _agent, signal: _signal, ...rest }) => rest)(mapOptions), progress, options.signal)
@@ -358,6 +371,7 @@ export async function runCiReview(options: {
     const result = await prepareCaptureReview({ plan, pullRequest: pr, baseDirectory: sides.base.directory, headDirectory: sides.head.directory,
       runId: options.runId, runAttempt: options.runAttempt, assertCurrentHead, assessments: evidence.surfaces,
       ...(options.platforms ? { platforms: options.platforms } : {}),
+      ...(config.target ? { target: config.target } : {}), ...(options.targets ? { targets: options.targets } : {}),
       app: { ...(state.build?.appVersion ? { version: state.build.appVersion } : {}),
         ...(state.build?.appBuildNumber ? { buildNumber: state.build.appBuildNumber } : {}) } });
     const contract = quarantineReviewContract(result.review);

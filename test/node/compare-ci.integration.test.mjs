@@ -39,6 +39,14 @@ test('any two commits: a capture and report like a pull request\'s, with no pull
   const line = await readFile(runSummary, 'utf8');
   assert.match(line, /^- iOS report of `v1\.1\.0` vs `v1\.0\.0`: \[Open\]\(https:\/\/explore-preview\.expo\.app\/\?repo=acme%2Fexample&run=1234&attempt=1&artifact=900\) · \[zip\]\(https:\/\/github\.com\/acme\/example\/actions\/runs\/1234\/artifacts\/900\) · \d+ changes?\n$/);
   assert.equal(f.comments.length, 0);
+  // A target of a config with targets: is linked by its id and labelled as config.yaml names it, escaped as Markdown text.
+  const targeted = join(f.root, 'targeted-input.json');
+  const input = JSON.parse(await readFile(result.inputPath, 'utf8'));
+  await writeFile(targeted, JSON.stringify({ ...input, commentState: { ...input.commentState, target: { id: 'duo-open', platform: 'ios', label: 'iPhone Duo [open]' } } }));
+  const targetSummary = join(f.root, 'target-summary.md');
+  await publishCiReportComment({ inputPath: targeted, artifactUrl: 'https://github.com/acme/example/actions/runs/1234/artifacts/900', target: 'duo-open',
+    environment: { ...f.environment, GITHUB_TOKEN: '', GITHUB_STEP_SUMMARY: targetSummary }, transport: async input => assert.fail(`no GitHub request: ${input}`) });
+  assert.match(await readFile(targetSummary, 'utf8'), /^- iPhone Duo \\\[open\\\] report of `v1\.1\.0` vs `v1\.0\.0`: \[Open\]\(https:\/\/explore-preview\.expo\.app\/\?repo=acme%2Fexample&run=1234&attempt=1&target=duo-open&artifact=900\) · /);
 
   const summary = renderCompareSummary(result.review.pullRequest, 'https://example.expo.app/p/token', null, [await readCiReportInput(result.inputPath)]);
   assert.match(summary, /^### Explore: `v1\.1\.0` vs `v1\.0\.0`$/m);

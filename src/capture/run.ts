@@ -19,11 +19,16 @@ import { type CiAgentRuntimeOptions } from "./agent/runtime.js";
 import { EAS_CLI_VERSION, CONTROLLER_SESSION, isRecord, parseJson, baseEnvironment, nonEmpty } from "./common.js";
 import { lstatIfExists, isWithin, temporaryCaptureDirectory, absoluteContractFile, readContractJson, assertNoSymlinkAncestors } from "./fs-safety.js";
 import { loadAppIcon, loadCachedAppIcon, storeAppIcon } from "./app-icon.js";
-import { defaultRunner } from "./controller.js";
+import { defaultRunner, runAgentControllerCommand } from "./controller.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
 import { assertCaptureEasProfile, assertSimulatorAvailable, fingerprintFrom, hasEasEnvironmentFetchFailure, nativeBuildFrom, existingBuild, repackProfileFrom, prepareExactSourceBuild, type RepackMode } from "./eas-build.js";
-import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, controllerVersion, simulatorOsVersion, type ActiveSimulatorRuntime } from "./simulator.js";
+import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, controllerVersion, simulatorOsVersion, type ActiveSimulatorRuntime, type SimulatorConnection } from "./simulator.js";
 import { argentControllerInvocation } from "./controller-invocation.js";
+import { sharedBuild } from "./shared-build.js";
+import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
+  deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, approveLinkScheme, localPoseShown,
+  setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
+import { ensureArgentToolServer } from "../shared/controller-cache.js";
 import { type UnattributedSetting } from "./unattributed.js";
 import { appScheme, hasConcreteRoutePath, unavailableRoute, capturePlannedRoutes, deviceArgs } from "./route-capture.js";
 
@@ -56,8 +61,12 @@ export type CiMapOptions = {
   controller?: "agent-device" | "argent";
   /** A foldable's pose (device.pose), set with the controller's `fold` before anything is captured. */
   devicePose?: DevicePose;
+  /** Where the app runs: an EAS Simulator session (default), or a simulator created on this Mac for the capture. */
+  simulator?: "eas" | "local";
   /** Where the route observer is bundled into the app: a hosted EAS repack job (default) or repack-app on this machine. */
   repack?: RepackMode;
+  /** A folder the review's captures share builds through: targets of one platform, profile and commit build and repack once. */
+  buildShare?: string;
   /** Which appearances to capture; `auto` (default) follows the app's `userInterfaceStyle`. */
   appearance?: AppearanceSetting;
   /** Whether to observe the app launch (splash screen) per appearance; `video` also keeps the recording. Defaults to `off`. */
@@ -74,7 +83,7 @@ export type CiMapOptions = {
   signal?: AbortSignal;
 };
 export type SimulatorRuntimeMetadata = {
-  provider: "eas-simulator"; controller: "agent-device" | "argent"; controllerPackageVersion: string;
+  provider: "eas-simulator" | "local-simulator"; controller: "agent-device" | "argent"; controllerPackageVersion: string;
   easCliVersion: string; platform: Platform; deviceModel: string; osVersion: string; locale: string;
   orientation: "portrait" | "landscape"; colorScheme: "light" | "dark" | "system"; colorSchemes?: ColorScheme[];
   sessionLifecycle: "stopped";
@@ -87,6 +96,10 @@ export type CiMapResult = {
   outcomes: CaptureBundle["outcomes"];
 };
 
+
+function parseJsonOrUndefined(text: string): unknown {
+  try { return JSON.parse(text); } catch { return undefined; }
+}
 
 function positiveInteger(value: number, name: string): number {
   if (!Number.isInteger(value) || value <= 0) {
@@ -169,6 +182,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const runner = options.runner ?? defaultRunner;
   const sourceEnvironment = options.environment ?? process.env;
   const controller = options.controller ?? "agent-device";
+  const local = options.simulator === "local";
   const restrictedEnvironment = baseEnvironment(sourceEnvironment);
   const easEnvironment = { ...restrictedEnvironment, ...(options.expoToken ? { EXPO_TOKEN: options.expoToken } : {}) };
   const assertCheckout = () => {
@@ -285,7 +299,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       app = { name: cachedBundle.appName ?? options.name };
       appIcon = await loadCachedAppIcon(cacheRoot, cachedBundle.appIcon);
       const cachedProfile = cachedBundle.runtimeProfile!;
-      runtime = { provider: "eas-simulator", controller, controllerPackageVersion: controllerVersion(controller),
+      runtime = { provider: local ? "local-simulator" : "eas-simulator", controller, controllerPackageVersion: controllerVersion(controller),
         easCliVersion: EAS_CLI_VERSION, platform: options.platform, controllerDeviceId: cachedDeviceId ?? "cached",
         deviceModel: cachedProfile.deviceModel, osVersion: cachedProfile.osVersion, locale: cachedProfile.locale,
         orientation: cachedProfile.orientation === "landscape" ? "landscape" : "portrait",
@@ -311,7 +325,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     const errors = await validateMap(map, store);
     if (errors.length) throw new Error(`Captured map failed validation: ${errors.join("; ")}`);
     await store.exportTo(outputDirectory, map);
-    for (const name of ["setup-accessibility.json", "setup-screen.png", "agent-navigation.jsonl", "alert-inspection.jsonl", "accessibility-deferral.jsonl", "system-prompts.jsonl", "controller-retries.jsonl"]) {
+    for (const name of ["setup-accessibility.json", "setup-screen.png", "agent-navigation.jsonl", "alert-inspection.jsonl", "accessibility-deferral.jsonl", "system-prompts.jsonl", "controller-retries.jsonl", "controller-recoveries.jsonl"]) {
       const source = join(mapDirectory, "capture-diagnostics", name);
       if (!(await lstatIfExists(source))) continue;
       await assertNoSymlinkAncestors(mapDirectory, source, "setup diagnostic");
@@ -387,7 +401,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const configValue = parseJson(configResult.stdout, "eas config") as { appConfig: Record<string, unknown>; buildProfile: Record<string, unknown> };
   scheme ??= appScheme(configValue.appConfig.scheme);
   colorSchemes = resolveColorSchemes(options.appearance ?? "auto", configValue.appConfig, options.platform);
-  if (controller === "argent") {
+  // Argent cannot switch the appearance itself; on a local device the host switches it (simctl, adb), so it is kept.
+  if (controller === "argent" && !local) {
     const single = argentColorSchemes(colorSchemes, configValue.appConfig, options.platform);
     if (single.skipped.length) say(`Argent cannot switch appearance yet (software-mansion/argent#1509); capturing ${single.schemes[0]} only, skipped ${single.skipped.join(", ")}`);
     colorSchemes = single.schemes;
@@ -401,45 +416,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     return finish();
   }
   assertCaptureEasProfile(configValue, options.bundleId, options.platform, { side, commit: options.gitCommit });
-  assertSimulatorAvailable(eas(["simulator:availability", "--json", "--non-interactive"]).stdout);
-  setStage("build");
-  // Historical frames do not replace the fresh build needed for missing targets.
-  easBuildId = null;
-  options.signal?.throwIfAborted();
-  say("computing the native fingerprint");
-  const fingerprintResult = eas(["fingerprint:generate", "--platform", options.platform, "--build-profile", options.easProfile, "--json", "--non-interactive"]);
-  fingerprint = fingerprintFrom(fingerprintResult.stdout);
-  const reusable = options.forceFreshBuild || hasEasEnvironmentFetchFailure(configResult.stderr) || hasEasEnvironmentFetchFailure(fingerprintResult.stderr)
-    ? undefined : existingBuild(eas(["build:list", "--platform", options.platform, "--status", "finished", "--build-profile", options.easProfile,
-      "--fingerprint-hash", fingerprint, ...(options.platform === "ios" ? ["--simulator"] : []), "--limit", "1", "--json", "--non-interactive"]).stdout);
-  if (reusable) {
-    say(`reusing EAS build ${reusable.id} (fingerprint ${fingerprint.slice(0, 12)}); repacking it with this commit's JavaScript and the route observer`);
-    const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
-      project, nativeBuildId: reusable.id, fingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile });
-    if (!repacked) throw new CiError({ code: "CAPTURE_OBSERVER_BUILD_UNSUPPORTED", stage: "instrumentation",
-      message: "The build environment cannot be reproduced for automatic capture instrumentation.",
-      nextAction: "Use a simulator build profile whose required bundle environment can be pulled for local repacking; an uninstrumented build cannot verify captures." });
-    if (repacked) { nativeEasBuildId = reusable.id; easBuildId = repacked; reusedEasBuild = true; }
-    if (!app.version && reusable.appVersion) app.version = reusable.appVersion;
-    if (!app.buildNumber && reusable.appBuildVersion) app.buildNumber = reusable.appBuildVersion;
-  }
-  options.signal?.throwIfAborted();
-  if (!easBuildId) {
-    say(options.forceFreshBuild ? "building on EAS (a fresh build was requested); waiting for it to finish"
-      : `no finished simulator build has fingerprint ${fingerprint.slice(0, 12)}; building on EAS and waiting for it to finish`);
-    const built = nativeBuildFrom(eas(["build", "--platform", options.platform, "--profile", options.easProfile, "--wait", "--json", "--non-interactive"], 45 * 60_000).stdout);
-    nativeEasBuildId = built.id; fingerprint = built.fingerprint;
-    say(`EAS build ${built.id} finished; repacking it with the route observer`);
-    const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
-      project, nativeBuildId: built.id, fingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile });
-    if (!repacked) throw new CiError({ code: "CAPTURE_OBSERVER_BUILD_UNSUPPORTED", stage: "instrumentation",
-      message: "The fresh native build cannot be instrumented with the required route observer.",
-      nextAction: "Use a simulator profile with a reproducible bundle environment so both revisions can be repacked with the same observer." });
-    easBuildId = repacked;
-    if (!app.version && built.appVersion) app.version = built.appVersion;
-    if (!app.buildNumber && built.appBuildVersion) app.buildNumber = built.appBuildVersion;
-  }
-  options.signal?.throwIfAborted();
+  if (!local) assertSimulatorAvailable(eas(["simulator:availability", "--json", "--non-interactive"]).stdout);
   const simulatorProject = await realpath(await mkdtemp(join(tmpdir(), "expo-explore-session-")));
   const dotenvPath = join(simulatorProject, SIMULATOR_DOTENV_FILE_NAME);
   const statePath = options.sessionStatePath ? absoluteContractFile(options.sessionStatePath, "sessionStatePath") : undefined;
@@ -447,73 +424,251 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   await writeFile(join(simulatorProject, "app.json"), JSON.stringify({ expo: { name: profile.projectIdentity.name, slug: profile.projectIdentity.slug,
     owner: profile.projectIdentity.owner, extra: { eas: { projectId } } } }), { mode: 0o600 });
   await writeFile(join(simulatorProject, "package.json"), "{}\n", { mode: 0o600 });
-  const sessionName = simulatorSessionName({ mapName: options.name, mapId: options.buildId, gitCommit: options.gitCommit, easBuildId,
+  // The local simulator's UDID (iOS) or emulator's adb serial (Android): what agent-device is pointed at.
+  let localSimulator: string | undefined;
+  let localEmulator: string | undefined;
+  let localOsVersion: string | undefined;
+  // Argent's tool-server on this machine, when Argent drives a local device.
+  let localArgent: LocalArgentServer | undefined;
+  const localDevice = () => localSimulator ?? localEmulator;
+  // A local device starts booting now and finishes while the app is built and repacked; the session waits for it.
+  let localEmulatorStart: Awaited<ReturnType<typeof startLocalEmulator>> | undefined;
+  const localName = `Explore ${options.device} (${side} ${options.gitCommit.slice(0, 8)})`;
+  // An EAS session's start, once begun (startSession): it resolves with the start command's failure, if any.
+  let sessionStart: Promise<unknown> | undefined;
+  const stopEarlyDevice = async () => {
+    // An EAS session started beside a repack that then failed: stop the exact session its handoff names.
+    if (sessionStart) {
+      await sessionStart;
+      const handoff = await readSimulatorDotenvHandoff(dotenvPath).catch(() => undefined);
+      if (handoff?.sessionId) assertSimulatorStopped(eas(["simulator:stop", "--id", handoff.sessionId, "--json", "--non-interactive"], 2 * 60_000, simulatorProject).stdout, handoff.sessionId);
+    }
+    if (localSimulator) deleteLocalSimulator({ runner, udid: localSimulator, cwd: simulatorProject, environment: restrictedEnvironment });
+    if (localEmulator) await deleteLocalEmulator({ runner, serial: localEmulator, cwd: simulatorProject, environment: restrictedEnvironment });
+    if (statePath) await rm(statePath, { force: true });
+    await rm(simulatorProject, { recursive: true, force: true });
+  };
+  if (local) try {
+    if (options.platform === "android") {
+      say(`starting a local ${options.device} emulator`);
+      localEmulatorStart = await startLocalEmulator({ runner, device: options.device, name: `explore-${side}-${options.gitCommit.slice(0, 8)}`, directory: simulatorProject,
+        cwd: simulatorProject, environment: restrictedEnvironment,
+        // agent-device refuses a serial an interrupted run still claims, even one it reports as stale, so that port is skipped.
+        ...(controller === "agent-device" ? { claimed: (serial: string) => {
+          const status = runner({ command: options.agentDeviceCommand, args: ["device", "status", "--platform", "android", "--serial", serial, "--json"],
+            cwd: simulatorProject, environment: restrictedEnvironment, timeoutMs: 30_000, allowFailure: true });
+          const data = (parseJsonOrUndefined(status.stdout) as { data?: { claims?: unknown[]; hiddenStaleClaims?: number } } | undefined)?.data;
+          return (data?.claims?.length ?? 0) + (data?.hiddenStaleClaims ?? 0) > 0;
+        } } : {}),
+        // Recorded as soon as it starts, so an interrupted review stops it too.
+        started: async serial => {
+          localEmulator = serial;
+          if (statePath) await writeFile(statePath, `${LOCAL_EMULATOR_STATE_PREFIX}${serial}\n`, { flag: "wx", mode: 0o600 });
+        } });
+    } else {
+      say(`starting a local ${options.device} simulator`);
+      const created = await createLocalSimulator({ runner, device: options.device, name: localName, cwd: simulatorProject, environment: restrictedEnvironment,
+        // Recorded before it boots, so an interrupted review deletes it too.
+        created: async udid => {
+          localSimulator = udid;
+          if (statePath) await writeFile(statePath, `${LOCAL_SIMULATOR_STATE_PREFIX}${udid}\n`, { flag: "wx", mode: 0o600 });
+        } });
+      localOsVersion = created.osVersion;
+    }
+  } catch (error) { await stopEarlyDevice().catch(() => undefined); throw error; }
+  // The session is named before its app exists: an EAS session starts while the app is repacked (startSession).
+  const sessionName = simulatorSessionName({ mapName: options.name, mapId: options.buildId, gitCommit: options.gitCommit, easBuildId: local ? "local" : "installed",
     runIdentity: JSON.stringify({ mapDirectory, outputDirectory, run: sourceEnvironment.GITHUB_RUN_ID, attempt: sourceEnvironment.GITHUB_RUN_ATTEMPT }) });
+  /**
+   * Starts the EAS Simulator session in the background, empty, once the build to repack is known (not while a native
+   * build runs, which can take most of an hour of session time). The app is installed through the controller when both
+   * are ready. Resolves with the start command's failure, if any; the session block verifies what EAS handed over.
+   */
+  const startSession = () => {
+    if (local || sessionStart) return;
+    say(`starting an EAS Simulator session (${options.device}) while the app is repacked`);
+    const request = { command: options.easCommand, args: ["simulator:start", "--name", sessionName, "--platform", options.platform, "--device", options.device,
+      "--type", controller, "--package-version", controllerVersion(controller), "--public-link",
+      "--max-duration-minutes", String(options.maxDurationMinutes), "--out-config-type", "dotenv", "--non-interactive"], cwd: simulatorProject, environment: easEnvironment, timeoutMs: 20 * 60_000 };
+    sessionStart = writeFile(dotenvPath, SIMULATOR_DOTENV_HEADER, { flag: "wx", mode: 0o600 })
+      // An injected runner (tests) answers synchronously; a real start runs beside the repack.
+      .then(() => options.runner ? options.runner(request) : runAgentControllerCommand(request, options.signal ?? new AbortController().signal))
+      .then(() => undefined, (error: unknown) => error);
+  };
+  setStage("build");
+  // The instrumented app stays on this machine: a local device installs it, and an EAS session gets it through the
+  // controller. It goes in this capture's own directory, or in the review's shared build folder when other targets use it.
+  const appName = options.platform === "android" ? "app.apk" : "app.app";
+  const appDirectory = !options.buildShare ? await realpath(await mkdtemp(join(tmpdir(), "expo-explore-app-"))) : undefined;
+  let localApp: string | undefined;
+  type BuiltApp = { fingerprint: string; nativeEasBuildId: string | null; easBuildId: string | null; app?: string; reused: boolean; version?: string; buildNumber?: string };
+  const buildApp = async (keepApp: string): Promise<BuiltApp> => {
+    options.signal?.throwIfAborted();
+    say("computing the native fingerprint");
+    const fingerprintResult = eas(["fingerprint:generate", "--platform", options.platform, "--build-profile", options.easProfile, "--json", "--non-interactive"]);
+    const sourceFingerprint = fingerprintFrom(fingerprintResult.stdout);
+    const reusable = options.forceFreshBuild || hasEasEnvironmentFetchFailure(configResult.stderr) || hasEasEnvironmentFetchFailure(fingerprintResult.stderr)
+      ? undefined : existingBuild(eas(["build:list", "--platform", options.platform, "--status", "finished", "--build-profile", options.easProfile,
+        "--fingerprint-hash", sourceFingerprint, ...(options.platform === "ios" ? ["--simulator"] : []), "--limit", "1", "--json", "--non-interactive"]).stdout);
+    if (reusable) {
+      say(`reusing EAS build ${reusable.id} (fingerprint ${sourceFingerprint.slice(0, 12)}); repacking it with this commit's JavaScript and the route observer`);
+      startSession();
+      const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
+        project, nativeBuildId: reusable.id, fingerprint: sourceFingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp });
+      if (!repacked) throw new CiError({ code: "CAPTURE_OBSERVER_BUILD_UNSUPPORTED", stage: "instrumentation",
+        message: "The build environment cannot be reproduced for automatic capture instrumentation.",
+        nextAction: "Use a simulator build profile whose required bundle environment can be pulled for local repacking; an uninstrumented build cannot verify captures." });
+      return { fingerprint: sourceFingerprint, nativeEasBuildId: reusable.id, easBuildId: repacked.buildId, ...(repacked.app ? { app: repacked.app } : {}), reused: true,
+        ...(reusable.appVersion ? { version: reusable.appVersion } : {}), ...(reusable.appBuildVersion ? { buildNumber: reusable.appBuildVersion } : {}) };
+    }
+    options.signal?.throwIfAborted();
+    say(options.forceFreshBuild ? "building on EAS (a fresh build was requested); waiting for it to finish"
+      : `no finished simulator build has fingerprint ${sourceFingerprint.slice(0, 12)}; building on EAS and waiting for it to finish`);
+    const built = nativeBuildFrom(eas(["build", "--platform", options.platform, "--profile", options.easProfile, "--wait", "--json", "--non-interactive"], 45 * 60_000).stdout);
+    say(`EAS build ${built.id} finished; repacking it with the route observer`);
+    startSession();
+    const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
+      project, nativeBuildId: built.id, fingerprint: built.fingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp });
+    if (!repacked) throw new CiError({ code: "CAPTURE_OBSERVER_BUILD_UNSUPPORTED", stage: "instrumentation",
+      message: "The fresh native build cannot be instrumented with the required route observer.",
+      nextAction: "Use a simulator profile with a reproducible bundle environment so both revisions can be repacked with the same observer." });
+    return { fingerprint: built.fingerprint, nativeEasBuildId: built.id, easBuildId: repacked.buildId, ...(repacked.app ? { app: repacked.app } : {}), reused: false,
+      ...(built.appVersion ? { version: built.appVersion } : {}), ...(built.appBuildVersion ? { buildNumber: built.appBuildVersion } : {}) };
+  };
+  try {
+    // Historical frames do not replace the fresh build needed for missing targets.
+    easBuildId = null;
+    const built = options.buildShare
+      ? await sharedBuild({ directory: options.buildShare, appName, ...(options.signal ? { signal: options.signal } : {}), build: buildApp,
+        key: { platform: options.platform, easProfile: options.easProfile, bundleId: options.bundleId, gitCommit: options.gitCommit, repack: options.repack ?? "eas", local,
+          routes: inventory.map(route => route.id) },
+        waiting: () => say("using the build another target of this review is preparing for this commit") })
+      : await buildApp(join(appDirectory!, appName));
+    // A capture that used another target's build starts its session now.
+    startSession();
+    fingerprint = built.fingerprint; nativeEasBuildId = built.nativeEasBuildId; easBuildId = built.easBuildId; localApp = built.app; reusedEasBuild = built.reused;
+    if (!app.version && built.version) app.version = built.version;
+    if (!app.buildNumber && built.buildNumber) app.buildNumber = built.buildNumber;
+    options.signal?.throwIfAborted();
+  } catch (error) {
+    // A build or repack that fails leaves nothing running: a device started for it goes, with the session's files and the app.
+    await stopEarlyDevice().catch(() => undefined);
+    if (appDirectory) await rm(appDirectory, { recursive: true, force: true });
+    throw error;
+  }
   let primaryError: unknown;
   let runtimeStage = "session";
   try {
     setStage(runtimeStage);
-    say(`starting an EAS Simulator session (${options.device}) with build ${easBuildId}`);
-    await writeFile(dotenvPath, SIMULATOR_DOTENV_HEADER, { flag: "wx", mode: 0o600 });
-    let startError: unknown;
-    try { eas(["simulator:start", "--name", sessionName, "--platform", options.platform, "--device", options.device,
-      "--type", controller, "--package-version", controllerVersion(controller), "--build-id", easBuildId, "--public-link",
-      "--max-duration-minutes", String(options.maxDurationMinutes), "--out-config-type", "dotenv", "--non-interactive"], 20 * 60_000, simulatorProject); }
-    catch (error) { startError = error; }
-    const handoff = await readSimulatorDotenvHandoff(dotenvPath);
-    const startSecrets = [options.expoToken, ...(handoff.connection ? [handoff.connection.daemonAuthToken] : [])];
-    const startFailure = startError ? simulatorStartFailure(startError, startSecrets) : undefined;
-    if (handoff.sessionId) {
-      try { assertSimulatorSessionIdentity(eas(["simulator:get", "--id", handoff.sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout,
-        handoff.sessionId, sessionName, profile.projectIdentity, handoff.connection, options.platform); }
-      catch (error) { throw new CiError({ code: "SESSION_HANDOFF_UNVERIFIED", stage: "session",
-        message: "The EAS handoff could not prove ownership of the exact simulator session. The private handoff was preserved.",
-        nextAction: "Inspect the EAS session logs and preserved handoff; confirm ownership before cleaning up the reported session.",
-        details: { handoffDirectory: simulatorProject, reportedSessionId: handoff.sessionId,
-          ...(startFailure ? { startFailure } : {}), verificationFailure: simulatorStartFailure(error, startSecrets) }, cause: error }); }
-      sessionId = handoff.sessionId;
-      if (statePath) await writeFile(statePath, `${sessionId}\n`, { flag: "wx", mode: 0o600 });
+    let connection: SimulatorConnection | undefined;
+    if (localApp && localEmulator && localEmulatorStart) {
+      await assertLocalEmulatorCompatible(localApp, hostEmulatorAbi());
+      localOsVersion = waitForLocalEmulator({ runner, serial: localEmulator, device: options.device, apiLevel: localEmulatorStart.apiLevel, directory: simulatorProject,
+        cwd: simulatorProject, environment: restrictedEnvironment, ...(options.now ? { now: options.now } : {}), ...(options.sleep ? { sleep: options.sleep } : {}) });
+      say(`installing the app on ${localEmulator}`);
+      installOnLocalEmulator({ runner, serial: localEmulator, apk: localApp, cwd: simulatorProject, environment: restrictedEnvironment });
+    } else if (localApp && localSimulator) {
+      waitForLocalSimulator({ runner, udid: localSimulator, cwd: simulatorProject, environment: restrictedEnvironment });
+      if (scheme) approveLinkScheme({ runner, udid: localSimulator, scheme, bundleId: options.bundleId, cwd: simulatorProject, environment: restrictedEnvironment });
+      say(`installing the app on ${localName}`);
+      installOnLocalSimulator({ runner, udid: localSimulator, app: localApp, cwd: simulatorProject, environment: restrictedEnvironment });
+    } else if (local) {
+      throw new Error("The local device did not start before capture");
+    } else {
+      if (!localApp || !sessionStart) throw new Error("An EAS Simulator session needs the instrumented app on this machine");
+      const startError = await sessionStart;
+      const handoff = await readSimulatorDotenvHandoff(dotenvPath);
+      const startSecrets = [options.expoToken, ...(handoff.connection ? [handoff.connection.daemonAuthToken] : [])];
+      const startFailure = startError ? simulatorStartFailure(startError, startSecrets) : undefined;
+      if (handoff.sessionId) {
+        try { assertSimulatorSessionIdentity(eas(["simulator:get", "--id", handoff.sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout,
+          handoff.sessionId, sessionName, profile.projectIdentity, handoff.connection, options.platform); }
+        catch (error) { throw new CiError({ code: "SESSION_HANDOFF_UNVERIFIED", stage: "session",
+          message: "The EAS handoff could not prove ownership of the exact simulator session. The private handoff was preserved.",
+          nextAction: "Inspect the EAS session logs and preserved handoff; confirm ownership before cleaning up the reported session.",
+          details: { handoffDirectory: simulatorProject, reportedSessionId: handoff.sessionId,
+            ...(startFailure ? { startFailure } : {}), verificationFailure: simulatorStartFailure(error, startSecrets) }, cause: error }); }
+        sessionId = handoff.sessionId;
+        if (statePath) await writeFile(statePath, `${sessionId}\n`, { flag: "wx", mode: 0o600 });
+      }
+      if (!sessionId) throw new CiError({ code: startFailure ? "SIMULATOR_START_FAILED" : "SESSION_HANDOFF_UNVERIFIED", stage: "session",
+        message: startFailure ? `EAS simulator:start failed before a session identity could be verified: ${startFailure.message}`
+          : "EAS did not provide an exact verifiable simulator session. The private handoff was preserved.",
+        nextAction: "Inspect the recorded start failure and EAS session list. Allocation status is unknown; verify a session's exact ID and ownership before cleanup.",
+        details: { handoffDirectory: simulatorProject, command: "eas simulator:start", startCommandStatus: startFailure ? "failed" : "completed", allocation: "unknown",
+          ...(startFailure ? { startFailure } : {}),
+          ...(handoff.validationError ? { handoffFailure: simulatorStartFailure(handoff.validationError, startSecrets) } : {}) },
+        cause: startError ?? handoff.validationError });
+      if (startFailure) throw new CiError({ code: "SIMULATOR_START_FAILED", stage: "session",
+        message: `EAS simulator:start failed after the session identity was verified: ${startFailure.message}`,
+        nextAction: "Inspect the recorded start failure; Explore will stop the exact verified session before returning this error.",
+        details: { reportedSessionId: sessionId, command: "eas simulator:start", startCommandStatus: "failed", allocation: "verified", startFailure }, cause: startError });
+      if (handoff.validationError) throw handoff.validationError;
+      if (!handoff.connection) throw new Error("Simulator handoff is missing its controller connection");
+      connection = handoff.connection;
+      await rm(dotenvPath, { force: true });
     }
-    if (!sessionId) throw new CiError({ code: startFailure ? "SIMULATOR_START_FAILED" : "SESSION_HANDOFF_UNVERIFIED", stage: "session",
-      message: startFailure ? `EAS simulator:start failed before a session identity could be verified: ${startFailure.message}`
-        : "EAS did not provide an exact verifiable simulator session. The private handoff was preserved.",
-      nextAction: "Inspect the recorded start failure and EAS session list. Allocation status is unknown; verify a session's exact ID and ownership before cleanup.",
-      details: { handoffDirectory: simulatorProject, command: "eas simulator:start", startCommandStatus: startFailure ? "failed" : "completed", allocation: "unknown",
-        ...(startFailure ? { startFailure } : {}),
-        ...(handoff.validationError ? { handoffFailure: simulatorStartFailure(handoff.validationError, startSecrets) } : {}) },
-      cause: startError ?? handoff.validationError });
-    if (startFailure) throw new CiError({ code: "SIMULATOR_START_FAILED", stage: "session",
-      message: `EAS simulator:start failed after the session identity was verified: ${startFailure.message}`,
-      nextAction: "Inspect the recorded start failure; Explore will stop the exact verified session before returning this error.",
-      details: { reportedSessionId: sessionId, command: "eas simulator:start", startCommandStatus: "failed", allocation: "verified", startFailure }, cause: startError });
-    if (handoff.validationError) throw handoff.validationError;
-    if (!handoff.connection) throw new Error("Simulator handoff is missing its controller connection");
-    await rm(dotenvPath, { force: true });
     const controllerConfig = join(simulatorProject, "agent-device.json");
     await writeFile(controllerConfig, "{}\n", { flag: "wx", mode: 0o400 });
-    const argent = controller === "argent"
-      ? await argentControllerInvocation({ directory: simulatorProject, connection: handoff.connection, platform: options.platform, environment: restrictedEnvironment, sourceEnvironment, bundleId: options.bundleId })
+    if (local && controller === "argent") {
+      // Argent drives a local device through a tool-server of this capture's own, pointed at that device.
+      const cli = await ensureArgentToolServer({ environment: sourceEnvironment, progress: say });
+      localArgent = await startLocalArgentServer({ runner, cli, directory: simulatorProject, cwd: simulatorProject, environment: restrictedEnvironment,
+        ...(options.now ? { now: options.now } : {}), ...(options.sleep ? { sleep: options.sleep } : {}) });
+      connection = { sessionId: `local-${localDevice()}`, daemonBaseUrl: localArgent.url, daemonAuthToken: localArgent.token, controller: "argent" };
+    }
+    const argent = controller === "argent" && connection
+      ? await argentControllerInvocation({ directory: simulatorProject, connection, platform: options.platform, environment: restrictedEnvironment, sourceEnvironment, bundleId: options.bundleId,
+        ...(localDevice() ? { device: localDevice()! } : {}) })
       : undefined;
     const controllerEnvironment = argent?.environment ?? { ...restrictedEnvironment, AGENT_DEVICE_CONFIG: controllerConfig,
-      AGENT_DEVICE_DAEMON_BASE_URL: handoff.connection.daemonBaseUrl, AGENT_DEVICE_DAEMON_AUTH_TOKEN: handoff.connection.daemonAuthToken,
+      // Locally, agent-device runs its own daemon, one per capture, so head and base do not share sessions.
+      ...(connection ? { AGENT_DEVICE_DAEMON_BASE_URL: connection.daemonBaseUrl, AGENT_DEVICE_DAEMON_AUTH_TOKEN: connection.daemonAuthToken }
+        : { AGENT_DEVICE_STATE_DIR: join(simulatorProject, "agent-device-state") }),
       AGENT_DEVICE_SESSION: CONTROLLER_SESSION, AGENT_DEVICE_SESSION_LOCK: "reject", AGENT_DEVICE_PLATFORM: options.platform };
     // Every controller call below goes to the session's controller; for Argent that is the bridge.
     const controllerCommand = argent?.command ?? options.agentDeviceCommand;
+    if (!local && localApp) {
+      // The session started empty while the app was repacked; the controller installs it now.
+      say(`installing the app on session ${sessionId}`);
+      runner({ command: controllerCommand, args: ["install", localApp, "--session", CONTROLLER_SESSION, ...deviceArgs({ platform: options.platform, deviceModel: options.device }),
+        "--platform", options.platform, "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 15 * 60_000 });
+    }
     if (options.devicePose) {
       // A fold relights the other panel and resizes the window. It comes before the app is first opened or read, so the
       // controller's accessibility reader starts on the lit panel: Argent's, started on the outer panel, can stay there.
       say(`folding ${options.device} ${options.devicePose}`);
-      runner({ command: controllerCommand, args: ["fold", options.devicePose, "--session", CONTROLLER_SESSION,
-        ...deviceArgs({ platform: options.platform, deviceModel: options.device }), "--platform", options.platform, "--json"],
-        cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000 });
+      const target = deviceArgs({ platform: options.platform, deviceModel: options.device, ...(localDevice() ? { provider: "local-simulator" as const, controllerDeviceId: localDevice()! } : {}) });
+      const fold = () => runner({ command: controllerCommand, args: ["fold", options.devicePose!, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
+        cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000, ...(localSimulator ? { allowFailure: true } : {}) });
+      if (localSimulator && controller === "argent") {
+        // Argent folds without a session and checks the fold against its own reader; this machine also checks the display.
+        fold();
+        if (!await localPoseShown({ runner, udid: localSimulator, pose: options.devicePose, directory: simulatorProject, cwd: simulatorProject, environment: restrictedEnvironment,
+          ...(options.sleep ? { sleep: options.sleep } : {}) })) throw new CiError({ code: "CONTROLLER_FOLD_UNVERIFIED", stage: "session",
+          message: `${options.device} did not show the ${options.devicePose} display after folding.`, nextAction: "Rerun; if it persists, check that this Xcode's simulator supports folding the device." });
+      } else if (localSimulator) {
+        // A local agent-device folds only inside a session, so the app opens first (its first open also builds the
+        // runner). agent-device then reads the hinge back with a devicectl option Xcode 27.1 no longer has, so on this
+        // machine the pose is checked by the lit display's shape instead of its answer.
+        runner({ command: controllerCommand, args: ["open", options.bundleId, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
+          cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 15 * 60_000 });
+        const folded = fold();
+        if (!await localPoseShown({ runner, udid: localSimulator, pose: options.devicePose, directory: simulatorProject, cwd: simulatorProject, environment: restrictedEnvironment,
+          ...(options.sleep ? { sleep: options.sleep } : {}) })) throw new CiError({ code: "CONTROLLER_FOLD_UNVERIFIED", stage: "session",
+          message: `${options.device} did not show the ${options.devicePose} display after folding: ${(folded.stderr || folded.stdout).trim().split("\n").at(-1) ?? ""}`.trim(),
+          nextAction: "Rerun; if it persists, check that this Xcode's simulator supports folding the device." });
+      } else fold();
     }
     runtimeStage = "runtime";
     setStage(runtimeStage);
-    runtime = collectRuntime({ ...options, agentDeviceCommand: controllerCommand }, controllerEnvironment);
+    const localId = localDevice();
+    runtime = collectRuntime({ ...options, agentDeviceCommand: controllerCommand }, controllerEnvironment, localId ? { id: localId } : undefined);
     runtime.colorScheme = colorSchemes[0]!;
     // The version is descriptive; a capture proceeds without it and records "unknown". Argent names it with the device;
     // agent-device's is always taken from the session, as before.
-    if (runtime.osVersion === "unknown" || controller !== "argent") try {
+    if (localOsVersion) runtime.osVersion = localOsVersion;
+    else if (sessionId && (runtime.osVersion === "unknown" || controller !== "argent")) try {
       runtime.osVersion = await simulatorOsVersion(eas(["simulator:get", "--id", sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout,
         runtime.controllerDeviceId, options.fetch ?? fetch, options.platform);
     } catch (error) {
@@ -524,14 +679,17 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     if (colorSchemes.length > 1) { map.run.environment.colorSchemes = [...colorSchemes]; await store.write(map); }
     runtimeStage = "capture";
     setStage(runtimeStage);
-    say(`simulator session ${sessionId} is ready (${runtime.deviceModel}, ${options.platform === "ios" ? "iOS" : "Android"} ${runtime.osVersion})`);
+    say(`${localSimulator ? "local simulator" : localEmulator ? "local emulator" : "simulator session"} ${localDevice() ?? sessionId} is ready (${runtime.deviceModel}, ${options.platform === "ios" ? "iOS" : "Android"} ${runtime.osVersion})`);
     // Every pass sets the appearance explicitly, so a capture does not inherit whatever the simulator last used.
     const passes: CaptureBundle["outcomes"][] = [];
     const recordingTools = launchSetting === "off" ? undefined : options.recordingTools === undefined ? ffmpegRecordingTools() : options.recordingTools ?? undefined;
     for (const [index, colorScheme] of colorSchemes.entries()) {
-      // Argent cannot switch the appearance yet (software-mansion/argent#1509); its single pass runs as the device starts.
+      // Argent cannot switch the appearance yet (software-mansion/argent#1509): on EAS its single pass runs as the device
+      // starts, and on this machine the host switches it.
       if (controller !== "argent") runner({ command: controllerCommand, args: [...appearanceArgs(colorScheme), "--session", CONTROLLER_SESSION, ...deviceArgs(runtime), "--platform", options.platform],
         cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
+      else if (localSimulator) setLocalSimulatorAppearance({ runner, udid: localSimulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
+      else if (localEmulator) setLocalEmulatorAppearance({ runner, serial: localEmulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
       // A scheme change recreates the Android activity in place, and the sheets it re-presents lose their inset; a
       // relaunch starts the app in the new scheme, the same way the first pass did.
       if (launchSetting !== "off") {
@@ -555,7 +713,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       runtime.colorScheme = colorScheme;
       if (colorSchemes.length > 1) say(`appearance ${colorScheme} (${index + 1}/${colorSchemes.length})`);
       passes.push(await capturePlannedRoutes({ capture: { ...options, agentDeviceCommand: controllerCommand, setup, progress: say }, routes: missingRoutes, inventory, scheme, appName: app.name, runtime,
-        connection: handoff.connection, environment: controllerEnvironment, store, map, acceptedFrames, outcomes: index === 0 ? outcomes : {},
+        connection, environment: controllerEnvironment, store, map, acceptedFrames, outcomes: index === 0 ? outcomes : {},
         ...(colorSchemes.length > 1 ? { appearance: { scheme: colorScheme, primary: index === 0 } } : {}) }));
     }
     runtime.colorScheme = colorSchemes[0]!;
@@ -563,6 +721,38 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   } catch (error) { primaryError = toCiError(error, { code: `CAPTURE_${runtimeStage.toUpperCase()}_FAILED`, stage: runtimeStage,
     nextAction: "Inspect the capture diagnostic, correct the failing prerequisite, and rerun Explore." }); }
   finally {
+    if (appDirectory) await rm(appDirectory, { recursive: true, force: true });
+    if (localArgent) stopLocalArgentServer(localArgent);
+    if (localEmulator) {
+      try {
+        setStage("cleanup");
+        say(`stopping the local emulator ${localEmulator}`);
+        runner({ command: options.agentDeviceCommand, args: ["close", "--session", CONTROLLER_SESSION, "--json"], cwd: simulatorProject,
+          environment: { ...restrictedEnvironment, AGENT_DEVICE_STATE_DIR: join(simulatorProject, "agent-device-state") }, timeoutMs: 60_000, allowFailure: true });
+        await stopLocalAgentDevice(join(simulatorProject, "agent-device-state"));
+        await deleteLocalEmulator({ runner, serial: localEmulator, cwd: simulatorProject, environment: restrictedEnvironment });
+        if (statePath) await rm(statePath, { force: true });
+        // The AVD lives in the capture's directory, so it goes with it.
+        await rm(simulatorProject, { recursive: true, force: true });
+      } catch (error) { throw new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup",
+        message: "The local emulator Explore started could not be stopped.", nextAction: `Stop it with: adb -s ${localEmulator} emu kill`,
+        details: { serial: localEmulator, ...(primaryError ? { originalFailure: serializeCiError(primaryError, { secrets: [options.expoToken] }) } : {}) }, cause: error }); }
+    }
+    if (localSimulator) {
+      try {
+        setStage("cleanup");
+        say(`deleting the local simulator ${localSimulator}`);
+        // Its own agent-device daemon lets go of the device before it goes.
+        runner({ command: options.agentDeviceCommand, args: ["close", "--session", CONTROLLER_SESSION, "--json"], cwd: simulatorProject,
+          environment: { ...restrictedEnvironment, AGENT_DEVICE_STATE_DIR: join(simulatorProject, "agent-device-state") }, timeoutMs: 60_000, allowFailure: true });
+        await stopLocalAgentDevice(join(simulatorProject, "agent-device-state"));
+        deleteLocalSimulator({ runner, udid: localSimulator, cwd: simulatorProject, environment: restrictedEnvironment });
+        if (statePath) await rm(statePath, { force: true });
+        await rm(simulatorProject, { recursive: true, force: true });
+      } catch (error) { throw new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup",
+        message: "The local simulator Explore created could not be deleted.", nextAction: `Delete it with: xcrun simctl delete ${localSimulator}`,
+        details: { udid: localSimulator, ...(primaryError ? { originalFailure: serializeCiError(primaryError, { secrets: [options.expoToken] }) } : {}) }, cause: error }); }
+    }
     if (sessionId) {
       try {
         setStage("cleanup");

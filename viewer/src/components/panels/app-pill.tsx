@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Search } from "lucide-react";
 import { ExpoLogo } from "../shared/expo-logo";
 import { Menu } from "../shared/menu";
-import { isPreviewPath, previewReportsUrl, type ReportPlatform } from "../../utils/artifact-report";
+import { isPreviewPath, isReportTargetId, previewReportsUrl, targetQuery } from "../../utils/artifact-report";
 import { ScreenshotImage } from "../shared/screenshot-image";
 import { artifactUrl } from "../../utils/model";
 import { Tooltip } from "../shared/tooltip";
@@ -15,22 +15,43 @@ import type { PullRequestPresentation } from "../../utils/review-model";
 
 export const PLATFORM_NAMES: Record<string, string> = { ios: "iOS", android: "Android" };
 
-type SiblingReport = { platform: ReportPlatform; changes?: number; device?: string };
+/** What a hosted preview lists of each report it serves; listings from before targets name only the platform. */
+type SiblingReport = { target: string; changes?: number; device?: string };
+/** One report of the run, as the switch offers it. */
+export type SwitchTarget = { id: string; platform: string; label: string };
 
-/** The same review's report for another platform: this page's URL with `platform` swapped (and the artifact id dropped). */
-export function siblingReportUrl(page: URL, platform: ReportPlatform): string | undefined {
+/** The same review's report for another target: this page's URL with the target swapped (and the artifact id dropped). */
+export function siblingReportUrl(page: URL, target: string): string | undefined {
   const preview = isPreviewPath(page.pathname);
   if (!preview && page.searchParams.get("origin") === "local") return undefined;
   if (!preview && !["repo", "run", "attempt"].every(key => page.searchParams.has(key))) return undefined;
+  if (!isReportTargetId(target)) return undefined;
   const url = new URL(page.href);
-  url.searchParams.set("platform", platform);
+  url.searchParams.delete("platform");
+  url.searchParams.delete("target");
+  const [key, value] = targetQuery(target).split("=") as [string, string];
+  url.searchParams.set(key, value);
   url.searchParams.delete("artifact");
   url.searchParams.delete("screen");
   url.hash = "";
   return url.href;
 }
 
-/** On a hosted preview, the deployment lists what it serves per platform; elsewhere only the platform names are known. */
+/**
+ * Every report of this report's run, in config order, and which one this is: `run.targets` with their labels, or for
+ * reports from before targets one per platform of `run.platforms` (iOS first, as they list it). One report: none.
+ */
+export function runTargets(run: ExploreMap["run"]): { current: string; targets: SwitchTarget[] } {
+  const current = run.target?.id ?? run.platform;
+  if (run.targets && run.targets.length > 1) {
+    return { current, targets: run.targets.filter(target => isReportTargetId(target.id)).map(target => ({ id: target.id, platform: target.platform,
+      label: target.label?.trim() || (target.id === target.platform ? PLATFORM_NAMES[target.platform] ?? target.id : target.id) })) };
+  }
+  const platforms = (run.platforms ?? []).filter(platform => platform in PLATFORM_NAMES);
+  return { current, targets: platforms.length > 1 ? platforms.map(platform => ({ id: platform, platform, label: PLATFORM_NAMES[platform]! })) : [] };
+}
+
+/** On a hosted preview, the deployment lists what it serves per target; elsewhere only the targets' names are known. */
 function useSiblingReports(page: URL | undefined): SiblingReport[] | undefined {
   const [reports, setReports] = useState<SiblingReport[]>();
   const url = page ? previewReportsUrl(page) : undefined;
@@ -39,8 +60,12 @@ function useSiblingReports(page: URL | undefined): SiblingReport[] | undefined {
     let cancelled = false;
     fetch(url, { cache: "no-store" }).then(response => response.ok ? response.json() : undefined).then((list: unknown) => {
       if (cancelled || !Array.isArray(list)) return;
-      setReports(list.filter((entry): entry is SiblingReport => typeof entry === "object" && entry !== null
-        && (entry as SiblingReport).platform in PLATFORM_NAMES));
+      setReports(list.flatMap(entry => {
+        if (typeof entry !== "object" || entry === null) return [];
+        const { target, platform, changes, device } = entry as Record<string, unknown>;
+        const id = target ?? platform;
+        return isReportTargetId(id) ? [{ target: id, ...(typeof changes === "number" ? { changes } : {}), ...(typeof device === "string" ? { device } : {}) }] : [];
+      }));
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [url]);
@@ -108,20 +133,28 @@ export function AppPill(props: AppPillProps) {
   // The URL is validated as https://github.com/owner/repo/pull/N (or /compare/<base>..<head>), so its parent is the repository.
   const repositoryUrl = pullRequest?.url && pullRequest.origin !== "local" ? pullRequest.url.replace(/\/(pull\/\d+|compare\/.+)$/, "") : undefined;
   const appTitle = device ? `${applicationName} · ${device}` : applicationName;
-  // Reports of a multi-platform review name every platform; the other ones are one menu away.
-  const siblings = (props.map.run.platforms ?? [])
-    .filter((entry): entry is ReportPlatform => entry !== platform && entry in PLATFORM_NAMES)
-    .map(entry => ({ platform: entry, url: page ? siblingReportUrl(page, entry) : undefined, report: siblingReports?.find(report => report.platform === entry) }))
-    .filter((entry): entry is { platform: ReportPlatform; url: string; report: SiblingReport | undefined } => Boolean(entry.url));
-  const platformItems = siblings.length ? [
-    { kind: "item" as const, label: PLATFORM_NAMES[platform] ?? platform, description: device || undefined, checked: true, onSelect: () => setPlatformOpen(false) },
-    ...siblings.map(sibling => ({
-      kind: "item" as const, label: PLATFORM_NAMES[sibling.platform]!,
+  // Reports of a run with several targets name every target; the others are one menu away, in config order.
+  const run = runTargets(props.map.run);
+  const currentTarget = run.targets.find(target => target.id === run.current);
+  const targetLabel = currentTarget?.label ?? PLATFORM_NAMES[platform] ?? platform;
+  // Platform-named targets (every report from before targets) switch platforms; named targets switch devices.
+  const noun = run.targets.every(target => target.id === target.platform) ? "platform" : "device";
+  const siblings = run.targets
+    .filter(target => target.id !== run.current)
+    .map(target => ({ target, url: page ? siblingReportUrl(page, target.id) : undefined, report: siblingReports?.find(report => report.target === target.id) }))
+    .filter((entry): entry is { target: SwitchTarget; url: string; report: SiblingReport | undefined } => Boolean(entry.url));
+  const platformItems = siblings.length ? run.targets.flatMap(target => {
+    if (target.id === run.current) return [{ kind: "item" as const, label: target.label, description: device || undefined, checked: true, onSelect: () => setPlatformOpen(false) }];
+    const sibling = siblings.find(entry => entry.target.id === target.id);
+    return sibling ? [{
+      kind: "item" as const, label: target.label,
       description: [sibling.report?.changes === undefined ? undefined : `${sibling.report.changes} ${sibling.report.changes === 1 ? "change" : "changes"}`, sibling.report?.device]
-        .filter(Boolean).join(" · ") || "Same review, other platform",
+        .filter(Boolean).join(" · ") || (target.platform === platform ? "Same review, other device" : "Same review, other platform"),
       checked: false, onSelect: () => { setPlatformOpen(false); window.location.assign(sibling.url); },
-    })),
-  ] : [];
+    }] : [];
+  }) : [];
+  // A report whose target is not among the run's (a hand-edited one) still lists itself first, checked.
+  if (siblings.length && !currentTarget) platformItems.unshift({ kind: "item" as const, label: targetLabel, description: device || undefined, checked: true, onSelect: () => setPlatformOpen(false) });
 
   return (
     <div className="left-panel collapsed">
@@ -146,15 +179,15 @@ export function AppPill(props: AppPillProps) {
           </strong>
           {siblings.length ? (
             <>
-              <Tooltip label={`${device || PLATFORM_NAMES[platform] || platform} · open another platform's report`} placement="bottom">
+              <Tooltip label={`${device || targetLabel} · open another ${noun}'s report`} placement="bottom">
                 <button ref={platformRef} type="button" className="collapsed-platform" aria-haspopup="menu" aria-expanded={platformOpen}
-                  aria-label={`Platform: ${PLATFORM_NAMES[platform] ?? platform}. Open another platform's report`}
+                  aria-label={`${noun === "device" ? "Device" : "Platform"}: ${targetLabel}. Open another ${noun}'s report`}
                   onClick={() => setPlatformOpen(open => !open)}>
-                  {PLATFORM_NAMES[platform] ?? platform}
+                  {targetLabel}
                   <svg aria-hidden="true" width="8" height="8" viewBox="0 0 8 8"><path d="M1 2.5 4 5.5 7 2.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 </button>
               </Tooltip>
-              <Menu items={platformItems} open={platformOpen} anchorRef={platformRef} ariaLabel="Platform" onDismiss={() => setPlatformOpen(false)} />
+              <Menu items={platformItems} open={platformOpen} anchorRef={platformRef} ariaLabel={noun === "device" ? "Device" : "Platform"} onDismiss={() => setPlatformOpen(false)} />
             </>
           ) : null}
           {props.appearance ? (

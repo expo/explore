@@ -14,7 +14,7 @@ test("report publishes one normal ZIP artifact to the hosted Viewer", () => {
   assert.ok(packageIndex > 0 && uploadIndex > packageIndex && publishIndex > uploadIndex);
   assert.match(report.steps[packageIndex].run, /ci:report --input/);
   const upload = report.steps[uploadIndex];
-  assert.equal(upload.with.name, "explore-review-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform }}");
+  assert.equal(upload.with.name, "explore-review-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}");
   assert.equal(upload.with.path, "${{ runner.temp }}/explore-report");
   assert.equal(upload.with.archive, undefined);
   assert.equal(upload.with["retention-days"], 30);
@@ -46,7 +46,7 @@ test("report job persists its own diagnostics even when packaging or publication
   assert.equal(step.if, "always()");
   assert.equal(step.with.path, "${{ runner.temp }}/explore-diagnostics");
   assert.equal(step.with["retention-days"], 7);
-  assert.equal(step.with.name, "explore-report-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform }}");
+  assert.equal(step.with.name, "explore-report-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}");
 });
 
 test("failure reporting downloads only this run attempt's failed-job diagnostics", () => {
@@ -65,10 +65,10 @@ test("failure reporting downloads only this run attempt's failed-job diagnostics
     assert.equal(step.with.repository, undefined);
   }
   // A capture job that fails before it resolves the PR (its tool install, say) still gets its failure comment:
-  // the platforms job already resolved and authorized the same PR.
+  // the targets job already resolved and authorized the same PR.
   const report = job.steps.find(step => step.name === "Report failure only on the current PR");
   for (const [env, output] of [["PR_NUMBER", "pr_number"], ["HEAD_SHA", "head"], ["BASE_SHA", "base"]]) {
-    assert.equal(report.env[env], `\${{ needs.capture.outputs.${output} || needs.platforms.outputs.${output} }}`);
-    assert.equal(workflow.jobs.platforms.outputs[output], `\${{ steps.pr.outputs.${output} }}`);
+    assert.equal(report.env[env], `\${{ needs.capture.outputs.${output} || needs.targets.outputs.${output} }}`);
+    assert.equal(workflow.jobs.targets.outputs[output], `\${{ steps.pr.outputs.${output} }}`);
   }
 });

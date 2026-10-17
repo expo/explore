@@ -106,24 +106,31 @@ test("artifact cache isolates repository, run and attempt, ignores the artifact 
   assert.deepEqual(result, { misses: [true, true, true], artifactIgnored: true, deleted: true, retained: true });
 });
 
-test("artifact cache keeps one report per platform of a run and both survive the prune of a later write", async t => {
+test("artifact cache keeps one report per target of a run, under the platform keys reports were saved with before targets", async t => {
   const { open } = await harness(t);
   const page = await open();
-  const result = await page.evaluate(async identity => {
-    const ios = { ...identity, platform: "ios" };
-    const android = { ...identity, platform: "android" };
+  const result = await page.evaluate(async ({ identity, namespace }) => {
+    const ios = { ...identity, target: "ios" };
+    const android = { ...identity, target: "android" };
+    const duo = { ...identity, target: "duo-open" };
     const { digest: iosDigest } = await window.writeArtifact(ios, [80, 75, 3, 4, 1]);
     const { digest: androidDigest } = await window.writeArtifact(android, [80, 75, 3, 4, 2]);
-    // Storing another report prunes every key it does not recognise; platform keys must be recognised.
+    const { digest: duoDigest } = await window.writeArtifact(duo, [80, 75, 3, 4, 3]);
+    // Storing another report prunes every key it does not recognise; target keys must be recognised.
     await window.writeArtifact({ ...identity, run: "999" });
-    const [iosHit, androidHit, unsuffixed] = await Promise.all([ios, android, identity].map(value => window.cacheApi.getCachedArtifact(value)));
+    const [iosHit, androidHit, duoHit, unsuffixed] = await Promise.all([ios, android, duo, identity].map(value => window.cacheApi.getCachedArtifact(value)));
+    const keys = (await (await caches.open(namespace)).keys()).map(request => new URL(request.url).search).sort();
     return {
-      ios: iosHit?.digest === iosDigest, android: androidHit?.digest === androidDigest, distinct: iosHit?.digest !== androidHit?.digest,
+      ios: iosHit?.digest === iosDigest, android: androidHit?.digest === androidDigest, duo: duoHit?.digest === duoDigest,
+      distinct: new Set([iosHit?.digest, androidHit?.digest, duoHit?.digest]).size === 3,
       unsuffixedMisses: !unsuffixed,
-      invalid: !await window.cacheApi.getCachedArtifact({ ...identity, platform: "web" }),
+      invalid: !await window.cacheApi.getCachedArtifact({ ...identity, target: "Duo Open" }),
+      keys,
     };
-  }, identity);
-  assert.deepEqual(result, { ios: true, android: true, distinct: true, unsuffixedMisses: true, invalid: true });
+  }, { identity, namespace });
+  assert.deepEqual(result, { ios: true, android: true, duo: true, distinct: true, unsuffixedMisses: true, invalid: true, keys: [
+    "?repo=expo%2Fexample&run=123&attempt=2&platform=android", "?repo=expo%2Fexample&run=123&attempt=2&platform=ios",
+    "?repo=expo%2Fexample&run=123&attempt=2&target=duo-open", "?repo=expo%2Fexample&run=999&attempt=2"] });
 });
 
 test("artifact cache removes the retired public download cache the first time it is used", async t => {

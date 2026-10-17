@@ -33,7 +33,7 @@ async function authorize(t, { pr = samplePr(), permission = "write", number = "9
 }
 
 test("the review workflow resolves and authorizes the PR with ci:pr from the installed release, in both jobs that need it", () => {
-  for (const job of ["platforms", "capture"]) {
+  for (const job of ["targets", "capture"]) {
     const step = workflow.jobs[job].steps.find(step => step.id === "pr");
     assert.match(step.run, /cli\.js" ci:pr --pr "\$PR_NUMBER"/);
     assert.equal(step.env.GITHUB_TOKEN, "${{ github.token }}");
@@ -88,6 +88,31 @@ test("baseline restore rejects foreign workflows, revisions, branches, and unfin
   };
   assert.deepEqual(await findBaselineArtifact({ sha: "a".repeat(40), platform: "ios", environment, transport }), { id: 20, run: 20 });
   assert.deepEqual(names, [`explore-baseline-${"a".repeat(40)}-ios`, `explore-baseline-${"a".repeat(40)}`], "iOS also accepts the unsuffixed name older baselines used");
+});
+
+test("a target's baseline is named after its id; only target ios also reuses the unsuffixed name", async () => {
+  const lookups = async target => {
+    const names = [];
+    const transport = async input => {
+      const url = new URL(input);
+      if (url.pathname === "/repos/acme/app") return Response.json({ default_branch: "main" });
+      if (url.pathname === "/repos/acme/app/actions/workflows/explore-baseline.yml") return Response.json({ id: 77 });
+      if (url.pathname === "/repos/acme/app/actions/artifacts") { names.push(url.searchParams.get("name")); return Response.json({ artifacts: [] }); }
+      throw new Error(`unexpected request ${url}`);
+    };
+    assert.equal(await findBaselineArtifact({ sha: "a".repeat(40), ...target, environment, transport }), undefined);
+    return names;
+  };
+  const sha = "a".repeat(40);
+  assert.deepEqual(await lookups({ target: "duo-open" }), [`explore-baseline-${sha}-duo-open`]);
+  assert.deepEqual(await lookups({ target: "iphone" }), [`explore-baseline-${sha}-iphone`], "an iOS target other than ios never takes the old unsuffixed baseline");
+  assert.deepEqual(await lookups({ target: "android" }), [`explore-baseline-${sha}-android`]);
+  assert.deepEqual(await lookups({ platform: "android" }), [`explore-baseline-${sha}-android`], "--platform still names the target of that id");
+  assert.deepEqual(await lookups({ target: "ios" }), [`explore-baseline-${sha}-ios`, `explore-baseline-${sha}`]);
+  assert.deepEqual(await lookups({}), [`explore-baseline-${sha}-ios`, `explore-baseline-${sha}`]);
+  for (const target of ["Duo", "base", "install-x", "a/b", "-x"]) {
+    await assert.rejects(findBaselineArtifact({ sha, target, environment, transport: async () => { throw new Error("no request"); } }), error => error.code === "TARGET_INVALID", target);
+  }
 });
 
 test("a failed baseline lookup is a warning and no baseline, never an error a failure comment could blame", async () => {
@@ -232,6 +257,44 @@ test("a failed platform joins the other platform's row in a multi-platform comme
   const [whole] = await reportFailure(t, { capture: sampleDiagnostic(), platform: "android", comments: [{ id: 8, user: { login: "github-actions[bot]" }, body: "<!-- expo-explore-ci -->\nPrevious run" }] });
   assert.match(whole.body, /^<!-- expo-explore-ci -->\n<!-- expo-explore-record:android:/);
   assert.doesNotMatch(whole.body, /\| iOS \|/);
+});
+
+test("a failed target is named by its artifact and keeps the label and config order its capture record posted", async t => {
+  const { renderPublicComment } = await import("../../dist/report/pr-comment-body.js");
+  const { locateFailureDiagnostic } = await import("../../dist/report/failure-comment.js");
+  const { viewerLinks } = await import("../../dist/report/viewer-links.js");
+  const links = viewerLinks({ repository: "acme/app", headSha: "b".repeat(40), runId: "1234", runAttempt: "1", configPath: ".expo-explore/config.yaml" });
+  const pr = samplePr();
+  const targets = [{ id: "iphone", platform: "ios", label: "iPhone 17" }, { id: "duo-closed", platform: "ios", label: "iPhone Duo (closed)" },
+    { id: "duo-open", platform: "ios", label: "iPhone Duo (open)" }, { id: "android", platform: "android", label: "Pixel 7" }];
+  const capturing = target => ({ phase: "capturing", mode: "changes", executionMode: "deterministic", configPath: ".expo-explore/config.yaml",
+    pullRequest: { repositoryId: "12", repository: "acme/app", number: 91, title: "PR", url: pr.html_url, base: { ref: "main", sha: "a".repeat(40) }, head: { ref: "feature/settings", sha: "b".repeat(40) } },
+    links, startedAt: Date.now(), updatedAt: Date.now(), artifactOnly: true, build: { platform: target.platform, easProfile: "x" }, target, targets,
+    capture: { planned: { base: 2, head: 2 }, done: { base: 2, head: 1 }, baseFromCache: false, current: "head" } });
+  let existing;
+  for (const target of [targets[3], targets[2], targets[0]]) existing = renderPublicComment(capturing(target), existing);
+  const [write] = await reportFailure(t, { capture: sampleDiagnostic(), platform: "duo-open", comments: [{ id: 7, user: { login: "github-actions[bot]" }, body: existing }] });
+  assert.equal(write.comment_id, 7);
+  assert.match(write.body, /^<!-- expo-explore-record:duo-open:/m);
+  const lines = write.body.split("\n"), header = lines.indexOf("| | Device | Result | Report |");
+  const rows = lines.slice(header + 2, lines.indexOf("", header));
+  assert.deepEqual(rows.map(line => line.split(" | ")[0].slice(2)), ["iPhone 17", "iPhone Duo \\(open\\)", "Pixel 7"], "config order, each target's own label");
+  assert.match(write.body, /\| iPhone Duo \\\(open\\\) \| [^|]*\| 🟥 failed · capture\\-head \|/);
+  // A target the comment has not seen yet is labelled by its id.
+  const [fresh] = await reportFailure(t, { capture: sampleDiagnostic(), platform: "duo-closed" });
+  assert.match(fresh.body, /^<!-- expo-explore-record:duo-closed:/m);
+  assert.match(fresh.body, /\| duo\\-closed \| [^|]*\| 🟥 failed/);
+  // Artifact directories: any valid id, never a reserved or malformed one.
+  const root = await mkdtemp(join(tmpdir(), "explore-failure-targets-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const name of ["explore-diagnostics-1234-1-base", "explore-diagnostics-1234-1-Duo", "explore-diagnostics-1234-1-pixel-7"]) {
+    await mkdir(join(root, "capture", name, "explore-diagnostics"), { recursive: true });
+    await writeFile(join(root, "capture", name, "explore-diagnostics", "error.json"), JSON.stringify(sampleDiagnostic()));
+  }
+  const located = await locateFailureDiagnostic(root);
+  assert.equal(located.target, "pixel-7");
+  assert.equal(located.platform, undefined);
+  assert.equal(located.diagnostic.code, "APP_INPUT_MISSING");
 });
 
 test("ci.trustedAuthors on the default branch admits listed authors without write access, nobody else", async t => {

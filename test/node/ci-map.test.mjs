@@ -7,6 +7,7 @@ import { mkdtemp, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node
 import { join, relative, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PNG } from 'pngjs';
+import { BlobReader, Uint8ArrayWriter, ZipWriter } from '@zip.js/zip.js';
 import { AGENT_DEVICE_VERSION, captureDeepLink, controllerCommandFailure, revisionSetup, runCiMap, runControllerRead, runControllerReadAsync, runAgentControllerCommand } from '../../dist/capture/run.js';
 import { CiError, serializeCiError } from '../../dist/shared/ci-errors.js';
 import { createSourceCapturePlan } from '../../dist/source/capture-plan.js';
@@ -21,6 +22,16 @@ const SHA = 'a'.repeat(40);
 const HEAD = 'b'.repeat(40);
 const PROJECT_ID = '00000000-0000-4000-8000-000000000001';
 const DAEMON_TOKEN = 'private-controller-token-value';
+const LOCAL_UDID = '0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D';
+// The ABI this machine's emulator runs, as Explore picks it.
+const HOST_ABI = process.arch === 'arm64' ? 'arm64-v8a' : 'x86_64';
+
+/** An APK-shaped zip with native libraries for these ABIs: enough for the local emulator's ABI check. */
+async function apkWithAbis(abis) {
+  const zip = new ZipWriter(new Uint8ArrayWriter());
+  for (const abi of abis) await zip.add(`lib/${abi}/libapp.so`, new BlobReader(new Blob(['so'])));
+  return Buffer.from(await zip.close());
+}
 const PREVIEW_TOKEN = 'private-preview-token-value';
 const PREVIEW_ID = '5f1e08dd0defd834caf6908fe5ebd38b';
 const HEADER = '# Do not commit this file.\n# Do not modify these values manually. They are managed by eas-cli.\n# It holds configuration only for the current simulator session.\n\n';
@@ -79,6 +90,13 @@ let clockMs = Date.now();
 async function fixture(t, settings = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'explore-source-capture-')));
   t.after(() => rm(root, { recursive: true, force: true }));
+  // A local emulator reads the SDK's system images and checks the APK's native libraries.
+  const sdk = join(root, 'android-sdk');
+  if (settings.local && settings.android) {
+    await mkdir(join(sdk, 'system-images', 'android-35', 'google_apis', HOST_ABI), { recursive: true });
+    await writeFile(join(sdk, 'system-images', 'android-35', 'google_apis', HOST_ABI, 'system.img'), '');
+  }
+  const apk = settings.local && settings.android ? await apkWithAbis(settings.abis ?? ['arm64-v8a', 'x86_64']) : 'apk';
   const project = join(root, 'app'); await mkdir(project);
   await writeCaptureObserverPackages(project);
   await writeFile(join(project, 'package.json'), '{"name":"example","main":"index.js"}\n');
@@ -91,14 +109,17 @@ async function fixture(t, settings = {}) {
   const planPath = join(root, 'plan.json'); await writeFile(planPath, JSON.stringify(plan));
   const requests = [];
   let current = '/'; let snapshots = 0; let sessionName; let screenshotAttempts = 0; let splashLeft = 0; let recordingPath = ''; let alert = null; let appearance = 'light'; let alertReads = 0;
-  let enteredName = false; let scrolledToContinue = false; let finishHidden = false;
+  let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false;
   const deviceName = settings.android ? 'Pixel 7' : 'iPhone 17 Pro';
   const platform = settings.android ? 'android' : 'ios';
+  // A local simulator is the one the capture created, named for Explore.
+  const deviceId = settings.local ? (settings.android ? settings.serial ?? 'emulator-5556' : LOCAL_UDID) : 'device-1';
+  const openedName = settings.deviceMismatch ? 'Wrong device' : settings.local && !settings.android ? `Explore ${deviceName} (base ${SHA.slice(0, 8)})` : deviceName;
   const identity = () => ({ session: 'expo-explore-runtime', appBundleId: 'com.example.app',
     // agent-device 0.20.2 reports no runtime or OS version for a simulator.
-    device: { id: 'device-1', name: settings.deviceMismatch ? 'Wrong device' : deviceName, platform, target: 'mobile',
+    device: { id: deviceId, name: openedName, platform, target: 'mobile',
       locale: 'en-US', orientation: 'portrait', colorScheme: 'light' },
-    identifiers: { session: 'expo-explore-runtime', appBundleId: 'com.example.app', deviceId: 'device-1', deviceName: settings.deviceMismatch ? 'Wrong device' : deviceName } });
+    identifiers: { session: 'expo-explore-runtime', appBundleId: 'com.example.app', deviceId, deviceName: openedName } });
   const runner = request => {
     requests.push(request);
     const command = request.args[0];
@@ -107,6 +128,46 @@ async function fixture(t, settings = {}) {
         .filter(entry => entry.isFile() && !relative(project, entry.parentPath).split(sep).includes('node_modules'))
         .map(entry => relative(project, join(entry.parentPath, entry.name))).join('\0') + '\0', stderr: '' };
       return { stdout: command === 'rev-parse' ? `${SHA}\n` : settings.dirty ? ' M app/home.tsx\n' : '', stderr: '' };
+    }
+    if (request.command.endsWith('/avdmanager')) {
+      assert.deepEqual(request.args.slice(0, 2), ['create', 'avd']);
+      mkdirSync(join(request.environment.ANDROID_AVD_HOME, `${value(request, '--name')}.avd`));
+      return { stdout: '', stderr: '' };
+    }
+    if (request.command === '/bin/sh') {
+      // A local Argent tool-server says where it listens, as `argent server start` does.
+      if (request.args[1]?.includes('server start')) { writeFileSync(request.environment.EXPLORE_ARGENT_SERVER_LOG, '      (or: argent link --host 127.0.0.1 --port 4100 --token abc123)\n[t] Tools server listening on http://127.0.0.1:4100\n'); return { stdout: '4242\n', stderr: '' }; }
+      return { stdout: '', stderr: '' };
+    }
+    if (request.command.endsWith('/adb')) {
+      // Another emulator already holds the first console port.
+      if (command === 'devices') return { stdout: 'List of devices attached\nemulator-5554\tdevice\n', stderr: '' };
+      const rest = request.args.slice(2);
+      if (rest[0] === 'shell') return { stdout: rest[2] === 'sys.boot_completed' ? '1\n' : '15\n', stderr: '' };
+      if (rest[0] === 'install') { assert.ok(existsSync(rest[2]), 'the instrumented APK is on this machine when it is installed'); return { stdout: 'Success\n', stderr: '' }; }
+      if (rest[0] === 'wait-for-device' || rest[0] === 'emu') return { stdout: '', stderr: '' };
+    }
+    if (request.command === 'xcrun') {
+      assert.equal(command, 'simctl');
+      const [action, ...rest] = request.args.slice(1);
+      if (action === 'list' && rest[0] === 'devicetypes') return json({ devicetypes: [{ name: 'iPhone 17', identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17' },
+        { name: deviceName, identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro' }] });
+      if (action === 'list' && rest[0] === 'runtimes') return json({ runtimes: [
+        { identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-26-5', version: '26.5', platform: 'iOS', isAvailable: true,
+          supportedDeviceTypes: [{ identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro' }] },
+        { identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-27-0', version: '27.0', platform: 'iOS', isAvailable: true,
+          supportedDeviceTypes: [{ identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro' }] },
+        { identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-27-1', version: '27.1', platform: 'iOS', isAvailable: false,
+          supportedDeviceTypes: [{ identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro' }] }] });
+      if (action === 'create') return { stdout: `${LOCAL_UDID}\n`, stderr: '' };
+      if (action === 'install') { assert.ok(existsSync(rest[1]), 'the instrumented app is on this machine when it is installed'); return { stdout: '', stderr: '' }; }
+      if (['boot', 'bootstatus', 'shutdown', 'delete', 'spawn', 'ui'].includes(action)) return { stdout: '', stderr: '' };
+      // The lit display after a fold: landscape when the inner one is lit, unless the test says the fold did not take.
+      if (action === 'io') {
+        const open = settings.devicePose === 'open' && !settings.foldIgnored;
+        writeFileSync(rest[2], PNG.sync.write(new PNG(open ? { width: 30, height: 20 } : { width: 20, height: 30 })));
+        return { stdout: '', stderr: '' };
+      }
     }
     if (request.command === 'fake-eas') {
       if (command === 'config') return json({ buildProfile: { ...(settings.android ? { buildType: 'apk' } : { simulator: settings.simulator !== false }), distribution: 'internal', environment: 'preview', env: {} },
@@ -120,7 +181,7 @@ async function fixture(t, settings = {}) {
       if (command === 'env:pull') { writeFileSync(value(request, '--path'), '# Environment: preview\nEXPO_PUBLIC_ENDPOINT=sample\n'); return { stdout: '', stderr: '' }; }
       if (command === 'build:download') {
         const path = join(request.environment.TMPDIR, settings.android ? 'native.apk' : 'native.app');
-        if (settings.android) writeFileSync(path, 'apk'); else mkdirSync(path);
+        if (settings.android) writeFileSync(path, apk); else mkdirSync(path);
         return json({ path });
       }
       if (command === 'workflow:run') {
@@ -133,11 +194,11 @@ async function fixture(t, settings = {}) {
         assert.match(readFileSync(join(request.cwd, '.expo-explore-observer/metro.config.cjs'), 'utf8'), /PROJECT_RELATIVE = "\.\."/);
         assert.ok(existsSync(join(request.cwd, 'package.json')), 'tracked files are staged');
         assert.ok(!existsSync(join(request.cwd, 'node_modules')), 'untracked files are not staged');
+        if (settings.workflowPlanLimit) return json({ jobs: [{ key: 'repack', status: 'FAILURE', turtleBuild: { status: 'ERRORED', error: { message: 'This account has used its local builds from the production_plus plan this month, which will reset in 13 days (on Sat Oct 24 2026). | Request ID: 1234 | Error: GraphQL request failed.' } }, outputs: {} }] });
         if (settings.workflowFailure) return { stdout: json({ jobs: [{ key: 'repack', status: 'FAILURE', turtleBuild: { status: 'ERRORED', error: { errorCode: 'UNKNOWN_CUSTOM_BUILD_ERROR', message: 'Build step "Repack" failed.' } }, outputs: {} }] }).stdout, stderr: 'See logs: https://expo.dev/accounts/acme/projects/example/workflows/run-1\n' };
         return json({ jobs: [{ key: 'repack', status: 'SUCCESS', outputs: { build_id: 'repacked-app', platform: settings.android ? 'android' : 'ios' } }] });
       }
       if (command === 'upload') {
-        if (settings.uploadPlanLimit) throw new Error('fake-eas upload exited with status 1: Uploading your app archive to EAS | ✔ Uploaded to EAS | This account has used its local builds from the production_plus plan this month, which will reset in 13 days (on Sat Oct 24 2026). | Request ID: 1234 | Error: GraphQL request failed.');
         return json({ url: 'https://expo.dev/accounts/acme/projects/example/builds/repacked-app' });
       }
       if (command === 'simulator:start') {
@@ -161,18 +222,19 @@ async function fixture(t, settings = {}) {
       }
     }
     if (request.command === 'fake-repack') {
+      if (settings.repackFails) throw new Error('repack-app exited with status 1');
       assert.ok(request.args.includes('--js-bundle-only'));
       const observerConfig = request.environment.EXPO_OVERRIDE_METRO_CONFIG;
       assert.ok(observerConfig && !observerConfig.startsWith(`${project}/`), 'observer is staged outside the clean source checkout');
       assert.match(readFileSync(observerConfig, 'utf8'), /navigation-observer/);
-      if (settings.android) writeFileSync(value(request, '--output'), 'apk'); else mkdirSync(value(request, '--output'));
+      if (settings.android) writeFileSync(value(request, '--output'), apk); else mkdirSync(value(request, '--output'));
       return { stdout: '', stderr: '' };
     }
     // An Argent capture runs its per-run bridge in place of agent-device; the bridge answers in agent-device's envelopes.
     if (request.command === 'fake-controller' || (settings.argent && request.command.endsWith('/argent-controller'))) {
       if (command === '--version') return { stdout: settings.argent ? '0.29.0' : AGENT_DEVICE_VERSION, stderr: '' };
       if (command === 'open') {
-        if (request.args.includes('--relaunch')) splashLeft = settings.splashFrames ?? 0;
+        if (request.args.includes('--relaunch')) { splashLeft = settings.splashFrames ?? 0; if (settings.wedgeAt === current) { wedgeCleared = true; current = '/'; } }
         if (request.args[2]?.startsWith('sample://')) {
           const previous = current;
           current = '/' + request.args[2].slice('sample://'.length);
@@ -189,7 +251,14 @@ async function fixture(t, settings = {}) {
         return ok(settings.wrongForeground ? { appBundleId: 'com.foreign.app' } : identity());
       }
       if (command === 'wait') return ok({});
-      if (command === 'fold') return ok({ action: 'fold', pose: request.args[1] });
+      if (command === 'close') return ok({});
+      // claimedSerials: device claims an interrupted run left behind, which agent-device hides as stale but still enforces.
+      if (command === 'device') return ok({ claims: [], hiddenStaleClaims: (settings.claimedSerials ?? []).includes(value(request, '--serial')) ? 1 : 0 });
+      // An EAS session starts empty while the app is repacked; the controller installs the app from this machine.
+      if (command === 'install') { assert.ok(existsSync(request.args[1]), 'the repacked app is on this machine'); return ok({ installed: true, appBundleId: 'com.example.app' }); }
+      // agent-device 0.21.15 cannot read Xcode 27.1's hinge angle back, so a local fold reports a failure after folding.
+      if (command === 'fold') return settings.local ? json({ success: false, error: { code: 'COMMAND_FAILED', message: "CoreDevice reported no hinge angle sample: Unknown option '--device'" } })
+        : ok({ action: 'fold', pose: request.args[1] });
       if (command === 'record' && settings.recording) {
         if (request.args[1] === 'start') { recordingPath = request.args[2]; return ok({ path: recordingPath }); }
         writeFileSync(recordingPath, 'mp4-bytes'); return ok({ path: recordingPath });
@@ -224,6 +293,9 @@ async function fixture(t, settings = {}) {
         return ok({ message: 'accepted' });
       }
       if (command === 'snapshot') {
+        // wedgeAt: the runner wedges on this screen until the app is restarted, as agent-device's did on iPhone Duo's covered Done.
+        if (settings.wedgeAt === current && !wedgeCleared) return json({ success: false, error: { code: 'COMMAND_FAILED',
+          message: 'The iOS runner is still finishing a previous command that exceeded its execution watchdog (usually an accessibility capture on a heavy or animating screen).' } });
         snapshots += 1;
         // markerMismatchAt: the observer reports another route only at one path (optionally in one appearance).
         const mismatchHere = settings.markerMismatch || (settings.markerMismatchAt && settings.markerMismatchAt.path === current
@@ -288,8 +360,8 @@ async function fixture(t, settings = {}) {
     buildId: 'source-capture', buildVersion: '1', gitCommit: SHA, bundleId: 'com.example.app',
     ...(settings.noScheme ? {} : { scheme: 'sample' }), device: deviceName, easProfile: 'capture', expoToken: 'expo-private', ...(settings.android ? { platform: 'android' } : {}),
     planPath, maxScreens: 120, maxActions: 500, maxDurationMinutes: 30, forceFreshBuild: false,
-    confirmExternalRun: true, confirmTrustedSource: true, easCommand: 'fake-eas', repackCommand: 'fake-repack', agentDeviceCommand: 'fake-controller', ...(settings.argent ? { controller: 'argent' } : {}), ...(settings.devicePose ? { devicePose: settings.devicePose } : {}), ...(settings.launch ? { launch: settings.launch, recordingTools: settings.recordingTools ?? null } : {}), ...(settings.repack ? { repack: settings.repack } : {}),
-    environment: { PATH: process.env.PATH, HOME: root, GITHUB_TOKEN: 'github-private', ANTHROPIC_API_KEY: 'must-not-be-used', AGENT_DEVICE_DAEMON_AUTH_TOKEN: 'wrong-token', ...settings.environment },
+    confirmExternalRun: true, confirmTrustedSource: true, easCommand: 'fake-eas', repackCommand: 'fake-repack', agentDeviceCommand: 'fake-controller', ...(settings.argent ? { controller: 'argent' } : {}), ...(settings.devicePose ? { devicePose: settings.devicePose } : {}), ...(settings.launch ? { launch: settings.launch, recordingTools: settings.recordingTools ?? null } : {}), ...(settings.repack ? { repack: settings.repack } : {}), ...(settings.local ? { simulator: 'local' } : {}),
+    environment: { PATH: process.env.PATH, HOME: root, ...(settings.local && settings.android ? { ANDROID_HOME: sdk, TMPDIR: root } : {}), GITHUB_TOKEN: 'github-private', ANTHROPIC_API_KEY: 'must-not-be-used', AGENT_DEVICE_DAEMON_AUTH_TOKEN: 'wrong-token', ...settings.environment },
     // Every controller round trip advances the fixture clock by one poll interval, as a device snapshot would.
     runner: request => { clockMs += 600; return runner(request); }, now: () => clockMs, sleep: milliseconds => { clockMs += milliseconds; }, fetch: catalog };
   return { root, options, requests, catalogRequests, routes, ids, plan, operations: () => requests.map(request => request.args[0]) };
@@ -408,9 +480,182 @@ test('device.pose folds the device first, before the app is opened, read or capt
     assert.equal(folds.length, 1);
     assert.deepEqual(folds[0].args.slice(0, 2), ['fold', 'open']);
     const foldAt = controller.indexOf(folds[0]);
-    // The fold comes first: the app is not opened, read or captured before it, so the controller starts on the lit panel.
-    assert.deepEqual(controller.slice(0, foldAt).map(request => request.args[0]).filter(command => command !== '--version'), []);
+    // The fold comes first: the app is installed but not opened, read or captured before it, so the controller starts on the lit panel.
+    assert.deepEqual(controller.slice(0, foldAt).map(request => request.args[0]).filter(command => command !== '--version' && command !== 'install'), []);
   }
+});
+
+test('a local simulator capture creates its own iOS simulator, installs the repacked app there, and deletes the simulator', async t => {
+  for (const repack of ['local', 'eas']) {
+    const f = await fixture(t, { local: true, repack });
+    const result = await runCiMap({ ...f.options, sessionStatePath: join(f.root, `session-${repack}`) });
+    assert.equal(result.runStatus, 'complete', JSON.stringify(result.outcomes));
+    const eas = f.requests.filter(request => request.command === 'fake-eas').map(request => request.args[0]);
+    assert.equal(eas.some(command => command.startsWith('simulator:')), false, 'no EAS Simulator session or availability check');
+    // A local repack's app stays on this machine; a hosted one is downloaded back.
+    assert.equal(eas.includes('upload'), false);
+    if (repack === 'eas') assert.ok(eas.includes('workflow:run') && eas.includes('build:download'));
+    const simctl = f.requests.filter(request => request.command === 'xcrun').map(request => request.args.slice(1));
+    assert.deepEqual(simctl.find(args => args[0] === 'create'),
+      ['create', `Explore iPhone 17 Pro (base ${SHA.slice(0, 8)})`, 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro', 'com.apple.CoreSimulator.SimRuntime.iOS-27-0'],
+      'the newest available runtime that runs the device');
+    assert.deepEqual(simctl.map(args => args[0]).filter(action => action !== 'list'), ['create', 'boot', 'bootstatus', 'spawn', 'install', 'shutdown', 'delete']);
+    // The app's links open without iOS asking first.
+    assert.deepEqual(simctl.find(args => args[0] === 'spawn'), ['spawn', LOCAL_UDID, 'defaults', 'write', 'com.apple.launchservices.schemeapproval',
+      'com.apple.CoreSimulator.CoreSimulatorBridge-->sample', '-string', 'com.example.app']);
+    assert.equal(existsSync(join(f.root, `session-${repack}`)), false, 'the recorded simulator is cleared once it is deleted');
+    const controller = f.requests.filter(request => request.command === 'fake-controller' && request.args[0] !== '--version' && request.args[0] !== 'close');
+    assert.ok(controller.length > 0);
+    for (const request of controller) {
+      assert.equal(value(request, '--udid'), LOCAL_UDID, `${request.args[0]} targets the created simulator`);
+      assert.equal(request.args.includes('--device'), false);
+      assert.equal(request.environment.AGENT_DEVICE_DAEMON_BASE_URL, undefined, 'agent-device runs locally');
+      assert.equal(request.environment.AGENT_DEVICE_DAEMON_AUTH_TOKEN, undefined);
+      assert.ok(request.environment.AGENT_DEVICE_STATE_DIR, 'its own daemon, so head and base do not share one');
+    }
+    assert.equal(result.simulatorSessionId, null);
+    assert.equal(result.simulatorRuntime.provider, 'local-simulator');
+    assert.equal(result.simulatorRuntime.deviceModel, 'iPhone 17 Pro', 'the model it was created as, not the Explore name');
+    assert.equal(result.simulatorRuntime.osVersion, '27.0');
+    const execution = parseRuntimeExecutionContext(JSON.parse(await readFile(join(f.options.outputDirectory, 'execution.json'), 'utf8')));
+    assert.equal(execution.provider, 'local-simulator');
+  }
+});
+
+test('Argent drives a local simulator through a tool-server of the capture\'s own, and the host switches the appearance', async t => {
+  const f = await fixture(t, { local: true, argent: true, repack: 'local', userInterfaceStyle: 'automatic' });
+  // The tool-server is installed already, as the pipeline's prefetch leaves it.
+  const cache = join(f.root, 'controllers');
+  mkdirSync(join(cache, 'argent-tool-server@0.29.0'), { recursive: true });
+  writeFileSync(join(cache, 'argent-tool-server@0.29.0', '.explore-controller.json'), '{}');
+  const result = await runCiMap({ ...f.options, environment: { ...f.options.environment, EXPLORE_CONTROLLER_CACHE: cache } });
+  assert.equal(result.runStatus, 'complete', JSON.stringify(result.outcomes));
+  const bridge = f.requests.filter(request => request.command.endsWith('/argent-controller'));
+  assert.ok(bridge.length > 0);
+  for (const request of bridge) {
+    assert.equal(request.environment.ARGENT_TOOLS_URL, 'http://127.0.0.1:4100');
+    assert.equal(request.environment.ARGENT_AUTH_TOKEN, 'abc123');
+    assert.equal(request.environment.EXPLORE_ARGENT_DEVICE, LOCAL_UDID, 'the bridge drives the capture\'s own simulator');
+  }
+  // Both appearances, switched with simctl, since Argent cannot.
+  assert.deepEqual(f.requests.filter(request => request.command === 'xcrun' && request.args[1] === 'ui').map(request => request.args.slice(2)), [[LOCAL_UDID, 'appearance', 'light'], [LOCAL_UDID, 'appearance', 'dark']]);
+  assert.equal(f.requests.some(request => request.command === 'fake-eas' && request.args[0].startsWith('simulator:')), false);
+});
+
+test('a local Android capture starts its own emulator in a private AVD home, installs the APK there, and stops it', async t => {
+  const f = await fixture(t, { local: true, android: true, repack: 'local' });
+  const result = await runCiMap({ ...f.options, sessionStatePath: join(f.root, 'session') });
+  assert.equal(result.runStatus, 'complete', JSON.stringify(result.outcomes));
+  const eas = f.requests.filter(request => request.command === 'fake-eas').map(request => request.args[0]);
+  assert.equal(eas.some(command => command.startsWith('simulator:') || command === 'upload'), false);
+  const create = f.requests.find(request => request.command.endsWith('/avdmanager'));
+  assert.equal(value(create, '--device'), 'Pixel 7');
+  assert.equal(value(create, '--package'), `system-images;android-35;google_apis;${HOST_ABI}`);
+  assert.ok(!create.environment.ANDROID_AVD_HOME.startsWith(f.root + '/app'), 'the AVD is not in the app');
+  const start = f.requests.find(request => request.command === '/bin/sh');
+  assert.equal(start.args[start.args.indexOf('-port') + 1], '5556', 'the next free console port');
+  assert.ok(start.args.includes('-no-window'));
+  const adb = f.requests.filter(request => request.command.endsWith('/adb')).map(request => request.args.slice(2, 3)[0] ?? request.args[0]);
+  assert.ok(adb.indexOf('install') < adb.indexOf('emu'), 'installed, then stopped at the end');
+  assert.deepEqual(adb.slice(adb.lastIndexOf('emu')), ['emu', 'devices'], 'stopped, and checked gone');
+  for (const request of f.requests.filter(request => request.command === 'fake-controller' && !['--version', 'close'].includes(request.args[0]))) {
+    assert.equal(value(request, '--serial'), 'emulator-5556', `${request.args[0]} targets the started emulator`);
+    assert.equal(request.environment.AGENT_DEVICE_DAEMON_BASE_URL, undefined);
+  }
+  assert.equal(result.simulatorRuntime.provider, 'local-simulator');
+  assert.equal(result.simulatorRuntime.osVersion, '15');
+  assert.equal(existsSync(join(f.root, 'session')), false);
+  assert.equal(existsSync(join(f.root, 'expo-explore-emulator-5556.lock')), false, 'its console port is free again');
+});
+
+test('two local Android captures starting at once take different console ports', async t => {
+  const f = await fixture(t, { local: true, android: true, repack: 'local', serial: 'emulator-5558' });
+  // Another capture of this process has reserved 5556, and one that exited left 5558's reservation behind.
+  await writeFile(join(f.root, 'expo-explore-emulator-5556.lock'), String(process.pid));
+  await writeFile(join(f.root, 'expo-explore-emulator-5558.lock'), '999999999');
+  assert.equal((await runCiMap(f.options)).runStatus, 'complete');
+  const start = f.requests.find(request => request.command === '/bin/sh');
+  assert.equal(start.args[start.args.indexOf('-port') + 1], '5558');
+  assert.equal(existsSync(join(f.root, 'expo-explore-emulator-5556.lock')), true, 'the other capture keeps its port');
+});
+
+test('a local emulator skips a port whose serial agent-device still claims for an interrupted run', async t => {
+  const f = await fixture(t, { local: true, android: true, repack: 'local', claimedSerials: ['emulator-5556'], serial: 'emulator-5558' });
+  assert.equal((await runCiMap(f.options)).runStatus, 'complete');
+  const start = f.requests.find(request => request.command === '/bin/sh');
+  assert.equal(start.args[start.args.indexOf('-port') + 1], '5558');
+});
+
+test('a local Android capture refuses an APK without libraries for this machine before installing it, and stops its emulator', async t => {
+  const other = HOST_ABI === 'arm64-v8a' ? 'x86_64' : 'arm64-v8a';
+  const f = await fixture(t, { local: true, android: true, repack: 'local', abis: [other] });
+  await assert.rejects(runCiMap(f.options), error => error.code === 'LOCAL_EMULATOR_ABI_UNSUPPORTED');
+  const adb = f.requests.filter(request => request.command.endsWith('/adb')).map(request => request.args[2] ?? request.args[0]);
+  assert.equal(adb.includes('install'), false);
+  assert.ok(adb.includes('emu'), 'the emulator started during the repack is stopped');
+});
+
+test('a local device starts before the build, so it boots while the app is repacked', async t => {
+  for (const android of [false, true]) {
+    const f = await fixture(t, { local: true, android, repack: 'local' });
+    assert.equal((await runCiMap(f.options)).runStatus, 'complete');
+    const order = f.requests.map(request => request.command === 'fake-repack' ? 'repack'
+      : request.command === 'xcrun' && ['boot', 'bootstatus'].includes(request.args[1]) ? request.args[1]
+      : request.command === '/bin/sh' ? 'boot' : request.command.endsWith('/adb') && request.args[2] === 'wait-for-device' ? 'bootstatus' : undefined).filter(Boolean);
+    assert.deepEqual(order, ['boot', 'repack', 'bootstatus'], android ? 'Android' : 'iOS');
+  }
+});
+
+test('a failed repack deletes the local device it started', async t => {
+  const f = await fixture(t, { local: true, repack: 'local', repackFails: true });
+  await assert.rejects(runCiMap(f.options));
+  assert.deepEqual(f.requests.filter(request => request.command === 'xcrun').map(request => request.args[1]).slice(-2), ['shutdown', 'delete']);
+});
+
+test('a local foldable opens the app, folds, and is checked by the shape of its lit display', async t => {
+  const f = await fixture(t, { local: true, repack: 'local', devicePose: 'open' });
+  assert.equal((await runCiMap(f.options)).runStatus, 'complete');
+  const controller = f.requests.filter(request => request.command === 'fake-controller' && request.args[0] !== '--version');
+  assert.deepEqual(controller.slice(0, 2).map(request => request.args[0]), ['open', 'fold'], 'a local fold needs a session');
+  assert.equal(value(controller[1], '--udid'), LOCAL_UDID);
+  assert.ok(f.requests.some(request => request.command === 'xcrun' && request.args[1] === 'io'));
+
+  const ignored = await fixture(t, { local: true, repack: 'local', devicePose: 'open', foldIgnored: true });
+  await assert.rejects(runCiMap(ignored.options), error => error.code === 'CONTROLLER_FOLD_UNVERIFIED' && /hinge angle/.test(error.message));
+  assert.deepEqual(ignored.requests.filter(request => request.command === 'xcrun').map(request => request.args[1]).slice(-2), ['shutdown', 'delete']);
+});
+
+test('a controller that wedges on one screen costs that route only: the app restarts and later routes are captured', async t => {
+  const f = await fixture(t, { routes: [route('home'), route('settings'), route('profile')], wedgeAt: '/settings', stableLabels: true });
+  const lines = [];
+  const result = await runCiMap({ ...f.options, progress: line => lines.push(line) });
+  assert.equal(result.outcomes[f.ids.home].status, 'captured');
+  assert.equal(result.outcomes[f.ids.settings].status, 'failed');
+  assert.match(result.outcomes[f.ids.settings].reason, /stopped answering on this screen/);
+  assert.match(result.outcomes[f.ids.settings].error.message, /execution watchdog/, 'the report says what the controller did');
+  assert.equal(result.outcomes[f.ids.profile].status, 'captured', 'the route after the wedge starts on a restarted app');
+  assert.ok(lines.some(line => /stopped answering on \/settings/.test(line)), lines.join('\n'));
+  const recoveries = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics', 'controller-recoveries.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(recoveries.map(entry => [entry.where, entry.recovered]), [['/settings', true]]);
+});
+
+test('a controller that wedges during setup does not fail every route: setup stops there and routes go on by app link', async t => {
+  const f = await fixture(t, { routes: [route('home'), route('settings')], wedgeAt: '/setup', stableLabels: true });
+  const lines = [];
+  const result = await runCiMap({ ...f.options, setup: [{ action: 'open', url: 'sample://setup' }], progress: line => lines.push(line) });
+  assert.equal(result.outcomes[f.ids.home].status, 'captured');
+  assert.equal(result.outcomes[f.ids.settings].status, 'captured');
+  assert.ok(lines.some(line => /setup stopped by the device controller/.test(line)), lines.join('\n'));
+  const recoveries = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics', 'controller-recoveries.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(recoveries.map(entry => [entry.where, entry.recovered]), [['a setup step', true]]);
+});
+
+test('a local simulator capture deletes its simulator when the capture fails', async t => {
+  const f = await fixture(t, { local: true, repack: 'local', openFailure: '/' });
+  const result = await runCiMap(f.options).catch(error => error);
+  assert.ok(result instanceof Error || result.runStatus === 'partial');
+  const simctl = f.requests.filter(request => request.command === 'xcrun').map(request => request.args[1]);
+  assert.deepEqual(simctl.slice(-2), ['shutdown', 'delete']);
 });
 
 test('an agent-device capture writes no controller into its bundle', async t => {
@@ -822,6 +1067,22 @@ test('every route link starts from the root link, so a sheet left by the previou
   assert.equal(bundle.procedure.reset, 'root-link');
 });
 
+test('a route costs no more controller calls than it needs: the reset is one open, and no appstate follows the screenshot', async t => {
+  const f = await fixture(t, { routes: [route('home'), route('settings')], userInterfaceStyle: 'light' });
+  assert.equal((await runCiMap(f.options)).runStatus, 'complete');
+  const calls = f.requests.filter(request => request.command === 'fake-controller').map(request => [request.args[0], request.args[2]]);
+  for (const [index, [command, link]] of calls.entries()) {
+    // The route's own link comes straight after the root link; its readiness poll checks where it landed.
+    if (command === 'open' && link === 'sample://') {
+      const [next, nextLink] = calls[index + 1];
+      assert.ok(next === 'open' && nextLink?.startsWith('sample://') && nextLink !== 'sample://', JSON.stringify(calls.slice(index, index + 3)));
+    }
+    // The snapshot after the screenshot also proves which app is in front.
+    if (command === 'screenshot') assert.equal(calls[index + 1][0], 'snapshot');
+  }
+  assert.ok(calls.filter(([command, link]) => command === 'open' && link === 'sample://').length >= 2);
+});
+
 test('capture.reset: none keeps today\'s sequencing, and a sheet left behind makes the next route land elsewhere (unattributed)', async t => {
   const f = await fixture(t, { routes: [route('home'), route('modal'), route('settings')], presentedUntilRoot: '/modal' });
   const result = await runCiMap({ ...f.options, reset: 'none' });
@@ -1097,7 +1358,12 @@ test('fresh and reusable native builds are repacked on EAS from a staged copy wi
     assert.equal(result.app.buildNumber, '42');
     assert.equal(f.operations().includes('workflow:run'), true);
     assert.equal(f.operations().includes('upload'), false);
-    assert.equal(f.operations().includes('build:download'), false);
+    // The session starts empty while the job repacks; the repacked app is downloaded and installed through the controller.
+    const start = f.requests.find(request => request.args[0] === 'simulator:start');
+    assert.equal(start.args.includes('--build-id'), false);
+    assert.ok(f.requests.indexOf(start) < f.requests.findIndex(request => request.args[0] === 'workflow:run'), 'the session starts before the repack');
+    assert.equal(f.operations().includes('build:download'), true);
+    assert.equal(f.operations().filter(operation => operation === 'install').length, 1);
     assert.equal(f.operations().includes('build'), !reuse);
     assert.equal(f.requests.some(request => request.command === 'fake-repack'), false);
     const staged = f.requests.find(request => request.args[0] === 'workflow:run').cwd;
@@ -1110,16 +1376,18 @@ test('fresh and reusable native builds are repacked on EAS from a staged copy wi
 test('a failed hosted repack job stops the capture as EAS_REPACK_FAILED with the workflow logs', async t => {
   const f = await fixture(t, { workflowFailure: true });
   await assert.rejects(runCiMap(f.options), error => error.code === 'EAS_REPACK_FAILED' && /Build step "Repack" failed/.test(error.message) && /workflows\/run-1/.test(error.nextAction));
-  assert.equal(f.operations().includes('simulator:start'), false);
+  // The session started beside the repack, so it is stopped.
+  assert.deepEqual(f.operations().filter(operation => operation.startsWith('simulator:')).filter(operation => operation !== 'simulator:availability'), ['simulator:start', 'simulator:stop']);
 });
 
-test('capture.repack: local repacks on the runner and uploads the result', async t => {
+test('capture.repack: local repacks on the runner and installs the app from it, with no upload', async t => {
   for (const reuse of [false, true]) {
     const f = await fixture(t, { repack: 'local', reuse, buildMetadata: true });
     const result = await runCiMap(f.options);
     assert.equal(result.reusedEasBuild, reuse);
-    assert.equal(result.easBuildId, 'repacked-app');
-    assert.equal(f.operations().includes('upload'), true);
+    assert.equal(result.easBuildId, null);
+    assert.equal(f.operations().includes('upload'), false);
+    assert.equal(f.operations().filter(operation => operation === 'install').length, 1);
     assert.equal(f.operations().includes('workflow:run'), false);
     assert.equal(f.operations().includes('build'), !reuse);
     assert.equal(f.requests.filter(request => request.command === 'fake-repack').length, 1);
@@ -1221,7 +1489,7 @@ test('setup reads again while a system prompt briefly returns an incomplete tree
 });
 
 test('an exhausted EAS build plan is reported as EAS_PLAN_LIMIT_REACHED with the reset date', async t => {
-  const f = await fixture(t, { repack: 'local', uploadPlanLimit: true });
+  const f = await fixture(t, { workflowPlanLimit: true });
   await assert.rejects(runCiMap(f.options), error => {
     assert.equal(error.code, 'EAS_PLAN_LIMIT_REACHED');
     assert.match(error.message, /production_plus plan this month, which will reset in 13 days \(on Sat Oct 24 2026\)/);
@@ -2701,7 +2969,7 @@ test('an Android capture builds an APK, repacks it with the SDK build-tools, and
   assert.equal(result.simulatorRuntime.deviceModel, 'Pixel 7');
   assert.equal(result.simulatorRuntime.osVersion, '15.0');
   assert.deepEqual(f.catalogRequests.map(request => request.url), [`https://web-preview-${PREVIEW_ID}.eas-simulator.ngrok.dev/api/devices`], 'the Android preview server lists emulators at /api/devices, not /grid/api');
-  for (const command of ['config', 'fingerprint:generate', 'build:list', 'build', 'upload', 'simulator:start']) {
+  for (const command of ['config', 'fingerprint:generate', 'build:list', 'build', 'simulator:start']) {
     const request = f.requests.find(item => item.command === 'fake-eas' && item.args[0] === command);
     assert.equal(value(request, '--platform'), 'android', `eas ${command} targets android`);
   }
@@ -2709,7 +2977,8 @@ test('an Android capture builds an APK, repacks it with the SDK build-tools, and
   const repack = f.requests.find(request => request.command === 'fake-repack');
   assert.equal(value(repack, '--platform'), 'android');
   assert.equal(repack.environment.ANDROID_SDK_ROOT, '/opt/android-sdk', 'repack-app reads ANDROID_SDK_ROOT; ANDROID_HOME is the fallback source');
-  assert.match(value(f.requests.find(request => request.args[0] === 'upload'), '--build-path'), /repacked\.apk$/);
+  // The repacked APK is installed through the controller, not uploaded.
+  assert.match(f.requests.find(request => request.command === 'fake-controller' && request.args[0] === 'install').args[1], /app\.apk$/);
   for (const request of f.requests.filter(request => request.command === 'fake-controller' && request.args[0] === 'open')) {
     assert.equal(value(request, '--platform'), 'android');
   }

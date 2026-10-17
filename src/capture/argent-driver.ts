@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 /**
  * Translates the agent-device commands Explore sends into Argent tool calls, and Argent's answers into
  * agent-device's JSON envelopes, so capture, setup, the agent tool host and black-box exploration drive
@@ -38,6 +39,8 @@ export type ArgentBridgeContext = {
   platform: ArgentPlatform;
   /** The app under test when the caller names it outside the command (explore:binary's `install`). */
   bundleId?: string;
+  /** The device to drive (UDID or adb serial) when the tool-server sees several: a local one serves this machine's. */
+  device?: string;
   version: string;
   sleep: (milliseconds: number) => Promise<void>;
   /** Moves a file the Argent client downloaded (a screen recording) to where Explore asked for it. */
@@ -46,6 +49,8 @@ export type ArgentBridgeContext = {
   reachable: () => Promise<boolean>;
   /** A file the bridge may overwrite with a screenshot, and a reader for it (the link-prompt fallback). */
   scratchImage?: { path: string; read: (path: string) => Promise<DecodedFrame> };
+  /** Turns a saved screenshot upright for a screen of this shape, when the image has the other one (rotateToScreen). */
+  orientImage?: (path: string, screen: { width: number; height: number }) => Promise<void>;
 };
 
 export type BridgeResult = { exitCode: number; stdout: string };
@@ -309,11 +314,14 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
       const listed = await call("list-devices");
       const all = Array.isArray(listed.devices) ? listed.devices : [];
       devices = all.map(record).filter(device => device.platform === platform
-        && (platform === "ios" ? device.state === "Booted" && device.runtimeKind !== "tv" : device.state === "device" && device.runtimeKind !== "tv"));
+        && (platform === "ios" ? device.state === "Booted" && device.runtimeKind !== "tv" : device.state === "device" && device.runtimeKind !== "tv")
+        && (!context.device || (platform === "ios" ? device.udid : device.serial) === context.device));
       if (all.length) break;
       await context.sleep(2_000);
     }
-    if (devices.length !== 1) throw new BridgeFailure("DEVICE_UNAVAILABLE", `Argent lists ${devices.length} booted ${platform} devices on this session; Explore drives exactly one.`);
+    if (devices.length !== 1) throw new BridgeFailure("DEVICE_UNAVAILABLE", context.device
+      ? `Argent does not list ${context.device} among the booted ${platform} devices.`
+      : `Argent lists ${devices.length} booted ${platform} devices on this session; Explore drives exactly one.`);
     const device = devices[0]!;
     const udid = platform === "ios" ? device.udid : device.serial;
     if (typeof udid !== "string" || !udid) throw new BridgeFailure("DEVICE_UNAVAILABLE", "Argent did not name the booted device.");
@@ -571,6 +579,8 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         const path = positional[0];
         if (!path) throw new BridgeFailure("INVALID_ARGS", "screenshot needs a path.");
         await call("screenshot", { scale: 1 }, { out: path });
+        // iPhone Duo's opened panel shows its UI in landscape but Argent saves the panel's portrait frame.
+        if (context.orientImage) await context.orientImage(path, await screen());
         return success({ path });
       }
       case "record": {
@@ -718,4 +728,21 @@ class UnsentFailure extends Error {}
 /** Argent's `fill` and `keyboard` would expand `{{secret:NAME}}` from Argent's own secret store; Explore resolves its own. */
 function rejectSecretPlaceholder(text: string) {
   if (/\{\{\s*secret\s*:/i.test(text)) throw new BridgeFailure("INVALID_ARGS", "Text for the device must not contain a {{secret:…}} placeholder.");
+}
+
+/**
+ * A screenshot turned upright for a screen of the given shape. Argent saves iPhone Duo's opened panel in the panel's
+ * portrait orientation while its UI is landscape: the image is the screen turned a quarter counterclockwise, so it is
+ * turned a quarter clockwise back. An image already of the screen's shape is returned as it is.
+ */
+export function rotateToScreen(bytes: Buffer, screen: { width: number; height: number }): Buffer {
+  const { PNG } = createRequire(import.meta.url)("pngjs") as { PNG: { sync: { read(bytes: Buffer): DecodedFrame & { data: Buffer }; write(png: unknown): Buffer } } & (new (options: { width: number; height: number }) => DecodedFrame & { data: Buffer }) };
+  const source = PNG.sync.read(bytes);
+  if (!(screen.width > 0 && screen.height > 0) || (source.width > source.height) === (screen.width > screen.height) || source.width === source.height) return bytes;
+  const rotated = new PNG({ width: source.height, height: source.width });
+  for (let y = 0; y < source.height; y += 1) for (let x = 0; x < source.width; x += 1) {
+    // (x, y) moves to (height - 1 - y, x).
+    source.data.copy(rotated.data, ((x * rotated.width) + (source.height - 1 - y)) * 4, ((y * source.width) + x) * 4, ((y * source.width) + x) * 4 + 4);
+  }
+  return PNG.sync.write(rotated);
 }

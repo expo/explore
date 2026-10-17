@@ -510,12 +510,20 @@ test("doctor checks each configured platform's EAS profile and warns when the wo
 
   for (const name of ["explore-review.yml", "explore-baseline.yml"]) {
     const path = join(root, ".github/workflows", name);
-    await writeFile(path, (await readFile(path, "utf8")).replaceAll("matrix.platform", "github.ref_name"));
+    await writeFile(path, (await readFile(path, "utf8")).replaceAll("matrix.target", "github.ref_name"));
   }
   const single = await runDoctor(offline(root));
   assert.deepEqual(check(single, "workflow-platforms-explore-review.yml").map(item => item.code), ["WORKFLOW_PLATFORM_MATRIX_MISSING"]);
   assert.deepEqual(check(single, "workflow-platforms-explore-baseline.yml").map(item => item.status), ["warn"]);
   const one = await app(t); await workflows(one); assert.deepEqual((await runDoctor(offline(one))).checks.filter(item => item.id.startsWith("workflow-platforms")), []);
+  // A workflow installed before targets runs one job per platform: enough for platforms, not for targets.
+  for (const name of ["explore-review.yml", "explore-baseline.yml"]) {
+    const path = join(root, ".github/workflows", name);
+    await writeFile(path, (await readFile(path, "utf8")).replaceAll("github.ref_name", "matrix.platform"));
+  }
+  assert.deepEqual(check(await runDoctor(offline(root)), "workflow-platforms-explore-review.yml"), []);
+  await write(root, { ".expo-explore/config.yaml": JSON.stringify({ ...baseConfig, targets: { phone: { platform: "ios" }, duo: { platform: "ios", device: "iPhone Duo", pose: "open" } } }) });
+  assert.deepEqual(check(await runDoctor(offline(root)), "workflow-platforms-explore-review.yml").map(item => item.code), ["WORKFLOW_PLATFORM_MATRIX_MISSING"]);
 });
 
 test("doctor warns when ffmpeg is missing and the launch is observed", async t => {
@@ -562,4 +570,23 @@ test("doctor warns when an installed workflow drifts from this version's templat
   assert.equal(edited[0]?.code, "WORKFLOW_TEMPLATE_DRIFT");
   assert.match(edited[0].message, /edited after setup/);
   assert.match(edited[0].nextAction, /--force/);
+});
+
+test("with a local simulator, doctor checks that this Mac can create the device instead of EAS Simulator access", async (t) => {
+  const root = await app(t);
+  const eas = easRun({ available: false });
+  const simctl = (devicetypes, runtimes) => (command, args, cwd) => {
+    if (command !== "xcrun") return eas.run(command, args, cwd);
+    const json = args[2] === "devicetypes" ? devicetypes : runtimes;
+    return { status: 0, stderr: "", stdout: JSON.stringify(json) };
+  };
+  const types = { devicetypes: [{ name: "iPhone 17", identifier: "type.iPhone-17" }, { name: "iPhone 17 Pro", identifier: "type.iPhone-17-Pro" }] };
+  const runtimes = { runtimes: [{ identifier: "runtime.iOS-27-0", version: "27.0", platform: "iOS", isAvailable: true,
+    supportedDeviceTypes: [{ identifier: "type.iPhone-17" }, { identifier: "type.iPhone-17-Pro" }] }] };
+  const ready = await runDoctor({ project: root, github: false, simulator: "local", run: simctl(types, runtimes) });
+  assert.deepEqual(check(ready, "eas-simulator"), [], "EAS Simulator access is not needed");
+  assert.equal(check(ready, "local-simulator")[0].status, "pass");
+  assert.match(check(ready, "local-simulator")[0].message, /iOS 27\.0/);
+  const missing = await runDoctor({ project: root, github: false, simulator: "local", run: simctl({ devicetypes: [] }, runtimes) });
+  assert.equal(check(missing, "local-simulator")[0].code, "LOCAL_SIMULATOR_DEVICE_UNAVAILABLE");
 });

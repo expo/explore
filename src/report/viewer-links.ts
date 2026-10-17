@@ -50,8 +50,22 @@ export type ViewerLinkInput = {
   runAttempt: string;
   /** Set by the matrix workflows; the Viewer then downloads the platform-suffixed report artifact. */
   platform?: "ios" | "android";
+  /** The capture target's id when the run captures several (wins over `platform`); the artifact is suffixed with it. */
+  target?: string;
   configPath: string;
 };
+
+/** The target id grammar (TARGET_ID_PATTERN, minus the names isTargetId reserves). */
+const TARGET_ID = /^[a-z][a-z0-9-]{0,31}$/;
+
+/**
+ * The query parameter that selects a target's report: `platform=<id>` for a target named after its platform, so links for
+ * configs without targets stay byte-identical and old Workers and Viewers still read them; `target=<id>` for any other.
+ */
+export function targetParameter(id: string): ["platform" | "target", string] {
+  if (!TARGET_ID.test(id) || ["base", "head", "report"].includes(id) || id.startsWith("install-")) throw new Error("target id is invalid");
+  return [id === "ios" || id === "android" ? "platform" : "target", id];
+}
 
 const SAFE_ID = /^[A-Za-z0-9._-]{1,200}$/;
 // A secondary appearance surface is `<route>@<scheme>` (see schemeScreenId).
@@ -77,16 +91,17 @@ function repositoryPath(repository: string): string {
 const PREVIEW_PATH = /^\/p\/[a-z2-7]{32}$/;
 
 /** Deep links on a verified preview URL (`https://<project>--<id>.expo.app/p/<token>`), same grammar as the central Viewer. */
-export function previewLinks(previewUrl: string, expiresAt: number | null, platform?: "ios" | "android"): PreviewLinks {
+export function previewLinks(previewUrl: string, expiresAt: number | null, target?: string): PreviewLinks {
   const url = safeHttpUrl(previewUrl, "preview URL");
   if (url.protocol !== "https:" || url.search || url.hash || !PREVIEW_PATH.test(url.pathname)) {
     throw new Error("preview URL must be an https token page without a query or fragment");
   }
   if (expiresAt !== null && (!Number.isFinite(expiresAt) || expiresAt <= 0)) throw new Error("preview expiry must be a timestamp or null");
+  const selection = target ? targetParameter(target) : undefined;
   const make = (params: Record<string, string> = {}) => {
     const link = new URL(url.href);
-    // Several platforms share one token page; `platform` picks this report's archive.
-    if (platform) link.searchParams.set("platform", platform);
+    // Several targets share one token page; `platform` or `target` picks this report's archive.
+    if (selection) link.searchParams.set(...selection);
     for (const [key, value] of Object.entries(params)) link.searchParams.set(key, value);
     return link.href;
   };
@@ -107,6 +122,8 @@ export function viewerLinks(input: ViewerLinkInput): ViewerLinks {
     throw new Error("configPath must be a relative repository path");
   }
   const repository = `https://github.com/${repositoryPath(input.repository)}`;
+  const targetId = input.target ?? input.platform;
+  const selection = targetId ? targetParameter(targetId) : undefined;
   const artifact = input.artifactUrl ? safeHttpUrl(input.artifactUrl, "artifact URL") : undefined;
   if (artifact && (artifact.origin !== "https://github.com" || artifact.search || artifact.hash
     || !new RegExp(`^/${repositoryPath(input.repository).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/actions/runs/${input.runId}/artifacts/[1-9][0-9]*$`).test(artifact.pathname))) {
@@ -119,7 +136,7 @@ export function viewerLinks(input: ViewerLinkInput): ViewerLinks {
         url.searchParams.set("repo", input.repository);
         url.searchParams.set("run", input.runId);
         url.searchParams.set("attempt", input.runAttempt);
-        if (input.platform) url.searchParams.set("platform", input.platform);
+        if (selection) url.searchParams.set(...selection);
         url.searchParams.set("artifact", artifact.pathname.split("/").at(-1)!);
         for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
         return url.href;

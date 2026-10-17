@@ -76,7 +76,8 @@ export function runTitle(run: SavedRun): string {
 }
 
 const PLATFORM_NAMES: Record<string, string> = { ios: "iOS", android: "Android" };
-const platforms = (run: SavedRun) => run.platforms.map(platform => PLATFORM_NAMES[platform] ?? platform).join(" ");
+// A run's targets by label, else its platforms by name, as runs saved before targets list them.
+const platforms = (run: SavedRun) => run.targets?.map(target => target.label).join(", ") ?? run.platforms.map(platform => PLATFORM_NAMES[platform] ?? platform).join(" ");
 
 /** The runs the list shows: this repository's (or all) that match the filter, across title, refs, subjects, SHAs and PR number. */
 export function visibleRuns(state: PickerState): SavedRun[] {

@@ -1,4 +1,4 @@
-import { cp, lstat, realpath, mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { cp, lstat, realpath, mkdtemp, mkdir, writeFile, readFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, basename, dirname, resolve, join } from "node:path";
 import type { SourceRoute } from "../contracts/source-route.js";
@@ -144,35 +144,6 @@ async function downloadedAppPath(stdout: string, privateRoot: string, platform: 
     throw new Error("eas build:download returned an application outside its private directory");
   }
   return canonical;
-}
-
-function uploadedBuildId(stdout: string): string {
-  const value = parseJson(stdout, "eas upload");
-  if (!isRecord(value) || typeof value.url !== "string") {
-    throw new Error("eas upload did not return a build URL");
-  }
-  let url: URL;
-  try {
-    url = new URL(value.url);
-  } catch {
-    throw new Error("eas upload returned an invalid build URL");
-  }
-  if (
-    url.protocol !== "https:"
-    || url.hostname !== "expo.dev"
-    || url.port
-    || url.username
-    || url.password
-    || url.search
-    || url.hash
-  ) {
-    throw new Error("eas upload returned an untrusted build URL");
-  }
-  const segments = url.pathname.split("/").filter(Boolean);
-  if (segments.at(-2) !== "builds") {
-    throw new Error("eas upload returned an unexpected build URL");
-  }
-  return buildIdFrom({ id: segments.at(-1) }, "eas upload");
 }
 
 export type RepackProfile = {
@@ -525,6 +496,12 @@ async function prepareHostedRepack(options: {
   return hostedRepackBuildId(run.stdout, run.stderr, options.platform);
 }
 
+/**
+ * The instrumented app a capture runs, on this machine, and the EAS build it came from when a hosted job repacked it.
+ * A local repack is never uploaded, so it has no build id.
+ */
+export type PreparedBuild = { buildId: string | null; app: string };
+
 export async function prepareExactSourceBuild(options: {
   platform?: "ios" | "android";
   runner: CommandRunner;
@@ -537,14 +514,16 @@ export async function prepareExactSourceBuild(options: {
   easEnvironment: NodeJS.ProcessEnv;
   repackEnvironment: NodeJS.ProcessEnv;
   routes: readonly SourceRoute[];
-  /** `eas` (default) repacks in a hosted EAS workflow job; `local` runs repack-app on this machine and `eas upload`s the result. */
+  /** `eas` (default) repacks in a hosted EAS workflow job; `local` runs repack-app on this machine. */
   repack?: RepackMode | undefined;
   /** The capture build profile name; the hosted repack job builds against it. */
   easProfile?: string | undefined;
-}): Promise<string | undefined> {
+  /** Where to leave the instrumented app on this machine, for the capture to install; it must not exist yet. */
+  keepApp: string;
+}): Promise<PreparedBuild | undefined> {
   const platform = options.platform ?? "ios";
   const root = await mkdtemp(join(tmpdir(), "expo-explore-repack-"));
-  let outcome: string | null | undefined;
+  let outcome: PreparedBuild | null | undefined;
   let primaryError: unknown;
   try {
     const providers = [...new Set(options.routes.map(route => route.provider))];
@@ -553,10 +532,18 @@ export async function prepareExactSourceBuild(options: {
       nextAction: "Select the application's navigation provider in config.yaml and rerun source planning." });
     if ((options.repack ?? "eas") === "eas") {
       if (!options.easProfile) throw new Error("The hosted repack needs the capture build profile name.");
-      outcome = await prepareHostedRepack({ platform, runner: options.runner, easCommand: options.easCommand, project: options.project,
+      const hosted = await prepareHostedRepack({ platform, runner: options.runner, easCommand: options.easCommand, project: options.project,
         nativeBuildId: options.nativeBuildId, easProfile: options.easProfile, repackProfile: options.repackProfile,
         easEnvironment: options.easEnvironment, restrictedEnvironment: options.repackEnvironment, provider: providers[0]!,
         parameterKeys: captureObserverParameterKeys(options.routes), root });
+      {
+        // The hosted job leaves its app on EAS; the capture installs a copy downloaded here.
+        const downloaded = await downloadedAppPath(options.runner({ command: options.easCommand,
+          args: ["build:download", "--build-id", hosted, "--json", "--non-interactive"], cwd: options.project,
+          environment: { ...options.easEnvironment, TMPDIR: root, TMP: root, TEMP: root }, timeoutMs: 10 * 60_000 }).stdout, root, platform);
+        await rename(downloaded, options.keepApp);
+        outcome = { buildId: hosted, app: options.keepApp };
+      }
     } else {
       const shadowProject = join(root, "eas-project");
       const pulledEnvironmentPath = join(root, "server.env");
@@ -671,26 +658,10 @@ export async function prepareExactSourceBuild(options: {
         if (repackedInfo.isSymbolicLink() || (platform === "android" ? !repackedInfo.isFile() : !repackedInfo.isDirectory())) {
           throw new Error(platform === "android" ? "repack-app did not produce a non-symlink Android .apk file" : "repack-app did not produce a non-symlink iOS .app directory");
         }
-        let uploaded;
-        try {
-          uploaded = options.runner({
-            command: options.easCommand,
-            args: [
-              "upload",
-              "--platform", platform,
-              "--build-path", repackedApp,
-              "--fingerprint", options.fingerprint,
-              "--json",
-              "--non-interactive",
-            ],
-            cwd: options.project,
-            environment: privateEasEnvironment,
-            timeoutMs: 10 * 60_000,
-          });
-        } catch (error) {
-          throw easPlanLimitError(error, platform) ?? error;
-        }
-        outcome = uploadedBuildId(uploaded.stdout);
+        // The capture installs the repacked app from here (a local device directly, an EAS session through its
+        // controller), so it is never uploaded.
+        await rename(repackedApp, options.keepApp);
+        outcome = { buildId: null, app: options.keepApp };
       }
     }
   } catch (error) {

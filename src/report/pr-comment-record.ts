@@ -1,17 +1,33 @@
 import { deflateRawSync, inflateRawSync } from "node:zlib";
+import { isTargetId } from "../config/explore-config.js";
 
 /**
- * The sticky PR comment is rendered from compact per-platform records that every writer embeds as hidden
+ * The sticky PR comment is rendered from compact per-target records that every writer embeds as hidden
  * HTML comment lines, so the capture, report, deploy and failure jobs of one run (and the runs that follow
  * it) each rewrite the whole comment from the same data without needing the other jobs' files:
  *
- *   <!-- expo-explore-record:<platform>:<base64url(deflate(json))> -->   one per platform of the current run
- *   <!-- expo-explore-history:<base64url(deflate(json))> -->             earlier runs on this PR
+ *   <!-- expo-explore-record:<target>:<base64url(deflate(json))> -->   one per target of the current run
+ *   <!-- expo-explore-history:<base64url(deflate(json))> -->           earlier runs on this PR
+ *
+ * A config without targets has one target per platform whose id is the platform (`ios`, `android`); its records
+ * carry neither `target` nor `label` nor `order`, so they are byte-identical to the per-platform records of
+ * versions before targets, and those still parse.
  *
  * Records read back from GitHub are untrusted: anything that does not match the schema is dropped and the
  * comment renders without it.
  */
 export type CommentPlatform = "ios" | "android";
+/** A target id (`ios`, `android`, or an id from config.yaml's targets); it keys records and history entries. */
+export type CommentTarget = string;
+/** A config has at most 8 targets; a comment never holds more records than that. */
+export const MAX_COMMENT_TARGETS = 8;
+const PLATFORM_LABELS: Record<CommentPlatform, string> = { ios: "iOS", android: "Android" };
+const LEGACY_ORDER: CommentPlatform[] = ["ios", "android"];
+
+/** The label a target shows without a `label` of its own: iOS and Android for the per-platform ids, else the id. */
+export function defaultTargetLabel(id: CommentTarget): string {
+  return id === "ios" || id === "android" ? PLATFORM_LABELS[id] : id;
+}
 export type RecordPhase = "pending" | "capturing" | "ready" | "failed";
 /**
  * `accessibility-only`: modified, but the screenshots match; only what assistive technology reads changed. A screen
@@ -26,8 +42,8 @@ export const CHANGE_GROUPS: ChangeGroup[] = ["added", "removed", "modified", "ac
  * are changes too (screen readers and voice control see them), but not ones a screenshot shows.
  */
 /**
- * The group of a screen that changed on several platforms. Accessibility only says the screenshots match, so it
- * yields to any other group; otherwise the first platform's group stands, as it always has.
+ * The group of a screen that changed on several targets. Accessibility only says the screenshots match, so it
+ * yields to any other group; otherwise the first target's group stands, as it always has.
  */
 export function strongerGroup(first: ChangeGroup, other: ChangeGroup): ChangeGroup {
   return first === "accessibility-only" ? other : first;
@@ -44,7 +60,14 @@ export type SideHealth = { planned: number; captured: number; verified: number; 
 
 export type PlatformRecord = {
   v: 1;
+  /** The target's platform. A failure record of a target it never saw before guesses ios; nothing renders it. */
   platform: CommentPlatform;
+  /** The target id, when it is not the platform. */
+  target?: CommentTarget;
+  /** What the comment calls the target, when that is not defaultTargetLabel(id). */
+  label?: string;
+  /** The target's position in config.yaml, when the run's targets are not the per-platform ios, android. */
+  order?: number;
   runId: string;
   runAttempt: string;
   headSha: string;
@@ -81,13 +104,36 @@ export type HistoryEntry = {
   baseSha: string;
   runId: string;
   startedAt: number;
-  platforms: Partial<Record<CommentPlatform, { phase: RecordPhase; summary: string; run: string; report?: string; download?: string; superseded?: boolean }>>;
+  /** Keyed by target id (the platform for configs without targets; the key keeps its old name so old entries parse). */
+  platforms: Partial<Record<CommentTarget, HistoryItem>>;
 };
+export type HistoryItem = { phase: RecordPhase; summary: string; run: string; report?: string; download?: string; superseded?: boolean; label?: string; order?: number };
 
-export type CommentRecords = { current: Partial<Record<CommentPlatform, PlatformRecord>>; history: HistoryEntry[] };
+export type CommentRecords = { current: Partial<Record<CommentTarget, PlatformRecord>>; history: HistoryEntry[] };
+
+/** The id a record is keyed by. */
+export function recordTarget(record: Pick<PlatformRecord, "platform" | "target">): CommentTarget {
+  return record.target ?? record.platform;
+}
+
+export function recordLabel(record: Pick<PlatformRecord, "platform" | "target" | "label">): string {
+  return record.label ?? defaultTargetLabel(recordTarget(record));
+}
+
+/** Config order where the run recorded one, else iOS before Android, then by id. */
+export function compareTargets(a: { id: CommentTarget; order?: number | undefined }, b: { id: CommentTarget; order?: number | undefined }): number {
+  const rank = (item: { id: CommentTarget; order?: number | undefined }) => item.order ?? (LEGACY_ORDER.includes(item.id as CommentPlatform) ? LEGACY_ORDER.indexOf(item.id as CommentPlatform) : MAX_COMMENT_TARGETS);
+  return rank(a) - rank(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+
+/** The current records in display order. */
+export function orderedRecords(records: CommentRecords): PlatformRecord[] {
+  return Object.values(records.current).filter((record): record is PlatformRecord => Boolean(record))
+    .sort((a, b) => compareTargets({ id: recordTarget(a), order: a.order }, { id: recordTarget(b), order: b.order }));
+}
 
 export const HISTORY_LIMIT = 5;
-const RECORD_LINE = /^<!-- expo-explore-record:(ios|android):([A-Za-z0-9_-]+) -->$/gm;
+const RECORD_LINE = /^<!-- expo-explore-record:([a-z][a-z0-9-]{0,31}):([A-Za-z0-9_-]+) -->$/gm;
 const HISTORY_LINE = /^<!-- expo-explore-history:([A-Za-z0-9_-]+) -->$/m;
 const MAX_ENCODED = 24_000;
 const MAX_DECODED = 256_000;
@@ -109,7 +155,7 @@ function decodePayload(encoded: string): unknown {
 }
 
 export function recordLine(record: PlatformRecord): string {
-  return `<!-- expo-explore-record:${record.platform}:${encodeRecordPayload(record)} -->`;
+  return `<!-- expo-explore-record:${recordTarget(record)}:${encodeRecordPayload(record)} -->`;
 }
 
 export function historyLine(history: HistoryEntry[]): string | undefined {
@@ -122,6 +168,8 @@ const isCount = (value: unknown): value is number => typeof value === "number" &
 const isTime = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0;
 const isPhase = (value: unknown): value is RecordPhase => value === "pending" || value === "capturing" || value === "ready" || value === "failed";
 const isPlatform = (value: unknown): value is CommentPlatform => value === "ios" || value === "android";
+const isLabel = (value: unknown): value is string => isString(value, 80) && value.trim().length > 0;
+const isOrder = (value: unknown): value is number => isCount(value) && value < MAX_COMMENT_TARGETS;
 const isSide = (value: unknown): value is "base" | "head" => value === "base" || value === "head";
 const isUrl = (value: unknown): value is string => {
   if (!isString(value, 4000)) return false;
@@ -143,9 +191,11 @@ export function parsePlatformRecord(value: unknown): PlatformRecord | undefined 
     || !isRecord(value.links) || !isUrl(value.links.run) || !isUrl(value.links.artifacts) || !isUrl(value.links.config)
     || !optional(value.links.report, isUrl) || !optional(value.links.download, isUrl)
     || !(value.links.expiresAt === undefined || value.links.expiresAt === null || isTime(value.links.expiresAt))
-    || !(value.links.deploying === undefined || value.links.deploying === true)) return undefined;
+    || !(value.links.deploying === undefined || value.links.deploying === true)
+    || !optional(value.target, isTargetId) || !optional(value.label, isLabel) || !optional(value.order, isOrder)) return undefined;
   const record: PlatformRecord = {
-    v: 1, platform: value.platform, runId: value.runId, runAttempt: value.runAttempt, headSha: value.headSha, baseSha: value.baseSha,
+    v: 1, platform: value.platform, ...(value.target !== undefined && value.target !== value.platform ? { target: value.target } : {}),
+    ...(value.label !== undefined ? { label: value.label } : {}), ...(value.order !== undefined ? { order: value.order } : {}), runId: value.runId, runAttempt: value.runAttempt, headSha: value.headSha, baseSha: value.baseSha,
     startedAt: value.startedAt, updatedAt: value.updatedAt, phase: value.phase,
     links: { run: value.links.run, artifacts: value.links.artifacts, config: value.links.config,
       ...(value.links.report ? { report: value.links.report } : {}), ...(value.links.download ? { download: value.links.download } : {}),
@@ -206,12 +256,12 @@ export function parseHistory(value: unknown): HistoryEntry[] {
     if (!isRecord(entry) || !isString(entry.headSha) || !SHA.test(entry.headSha) || !isString(entry.baseSha) || !SHA.test(entry.baseSha)
       || !isString(entry.runId, 200) || !SAFE_ID.test(entry.runId) || !isTime(entry.startedAt) || !isRecord(entry.platforms)) continue;
     const platforms: HistoryEntry["platforms"] = {};
-    for (const platform of ["ios", "android"] as const) {
-      const item = entry.platforms[platform];
+    for (const target of Object.keys(entry.platforms).filter(isTargetId).slice(0, MAX_COMMENT_TARGETS)) {
+      const item = entry.platforms[target];
       if (!isRecord(item) || !isPhase(item.phase) || !isString(item.summary, 400) || !isUrl(item.run)
-        || !optional(item.report, isUrl) || !optional(item.download, isUrl)) continue;
-      platforms[platform] = { phase: item.phase, summary: item.summary, run: item.run, ...(item.report ? { report: item.report } : {}), ...(item.download ? { download: item.download } : {}),
-        ...(item.superseded === true ? { superseded: true } : {}) };
+        || !optional(item.report, isUrl) || !optional(item.download, isUrl) || !optional(item.label, isLabel) || !optional(item.order, isOrder)) continue;
+      platforms[target] = { phase: item.phase, summary: item.summary, run: item.run, ...(item.report ? { report: item.report } : {}), ...(item.download ? { download: item.download } : {}),
+        ...(item.superseded === true ? { superseded: true } : {}), ...(item.label !== undefined ? { label: item.label } : {}), ...(item.order !== undefined ? { order: item.order } : {}) };
     }
     if (Object.keys(platforms).length) entries.push({ headSha: entry.headSha, baseSha: entry.baseSha, runId: entry.runId, startedAt: entry.startedAt, platforms });
     if (entries.length === HISTORY_LIMIT) break;
@@ -225,7 +275,9 @@ export function readCommentRecords(body: string | undefined): CommentRecords {
   if (!body) return records;
   for (const match of body.matchAll(RECORD_LINE)) {
     const record = parsePlatformRecord(decodePayload(match[2]!));
-    if (record && record.platform === match[1]) records.current[record.platform] = record;
+    const target = record && recordTarget(record);
+    if (!record || target !== match[1] || !isTargetId(target)) continue;
+    if (records.current[target] || Object.keys(records.current).length < MAX_COMMENT_TARGETS) records.current[target] = record;
   }
   const history = body.match(HISTORY_LINE);
   if (history) records.history = parseHistory(decodePayload(history[1]!));
@@ -250,9 +302,10 @@ function historyEntryOf(records: PlatformRecord[]): HistoryEntry | undefined {
   if (!first) return undefined;
   const entry: HistoryEntry = { headSha: first.headSha, baseSha: first.baseSha, runId: first.runId, startedAt: Math.min(...records.map(record => record.startedAt)), platforms: {} };
   for (const record of records) {
-    entry.platforms[record.platform] = { phase: record.phase, summary: recordSummary(record), run: record.links.run,
+    entry.platforms[recordTarget(record)] = { phase: record.phase, summary: recordSummary(record), run: record.links.run,
       ...(record.links.report ? { report: record.links.report } : {}), ...(record.links.download ? { download: record.links.download } : {}),
-      ...(record.superseded ? { superseded: true } : {}) };
+      ...(record.superseded ? { superseded: true } : {}), ...(record.label !== undefined ? { label: record.label } : {}),
+      ...(record.order !== undefined ? { order: record.order } : {}) };
   }
   return entry;
 }
@@ -262,27 +315,42 @@ const runOrder = (runId: string): number => Number.parseInt(runId, 10) || 0;
 function pushHistory(history: HistoryEntry[], entry: HistoryEntry | undefined): HistoryEntry[] {
   if (!entry) return history;
   const merged = [entry, ...history.filter(item => item.runId !== entry.runId)];
-  // One entry per run: a platform that reaches history later joins the entry its sibling made.
+  // One entry per run: a target that reaches history later joins the entry its sibling made.
   const existing = history.find(item => item.runId === entry.runId);
   if (existing) merged[0] = { ...existing, platforms: { ...existing.platforms, ...entry.platforms } };
   return merged.sort((a, b) => runOrder(b.runId) - runOrder(a.runId) || b.startedAt - a.startedAt).slice(0, HISTORY_LIMIT);
 }
 
 /**
- * Fold one writer's record into the comment's records. The same run replaces its own platform; a newer run
+ * Fold one writer's record into the comment's records. The same run replaces its own target; a newer run
  * moves the previous run into history; a run that finds a newer run already current (the PR moved while it
  * worked) is superseded and only adds itself to history, so its report stays linked without displacing the
  * current review.
  */
-export function foldRecord(existing: CommentRecords, record: PlatformRecord): CommentRecords {
-  const current = Object.values(existing.current).filter((item): item is PlatformRecord => Boolean(item));
+export function foldRecord(existing: CommentRecords, incoming: PlatformRecord): CommentRecords {
+  const current = orderedRecords(existing);
+  const record = withKnownTarget(incoming, existing);
+  const target = recordTarget(record);
   const currentRun = current[0];
   if (!currentRun && record.superseded) return { current: {}, history: pushHistory(existing.history, historyEntryOf([record])) };
   if (!currentRun || currentRun.runId === record.runId) {
-    return { current: { ...existing.current, [record.platform]: record }, history: existing.history };
+    return { current: { ...existing.current, [target]: record }, history: existing.history };
   }
   if (runOrder(currentRun.runId) > runOrder(record.runId) || record.superseded) {
     return { current: existing.current, history: pushHistory(existing.history, historyEntryOf([{ ...record, superseded: true }])) };
   }
-  return { current: { [record.platform]: record }, history: pushHistory(existing.history, historyEntryOf(current)) };
+  return { current: { [target]: record }, history: pushHistory(existing.history, historyEntryOf(current)) };
+}
+
+/**
+ * The failure job knows a target only by the id in an artifact name: its record takes the label, order and platform
+ * the comment already holds for that id (from the capture job's progress record, or the newest run that had it).
+ */
+function withKnownTarget(record: PlatformRecord, existing: CommentRecords): PlatformRecord {
+  const target = recordTarget(record);
+  if (!record.target || record.label !== undefined || record.order !== undefined) return record;
+  const known = existing.current[target];
+  if (known) return { ...record, platform: known.platform, ...(known.label !== undefined ? { label: known.label } : {}), ...(known.order !== undefined ? { order: known.order } : {}) };
+  const item = existing.history.find(entry => entry.platforms[target])?.platforms[target];
+  return item ? { ...record, ...(item.label !== undefined ? { label: item.label } : {}), ...(item.order !== undefined ? { order: item.order } : {}) } : record;
 }

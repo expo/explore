@@ -13,9 +13,10 @@ import type { ExploreMap, Observation, Screen } from "../types.js";
 import { CAPTURE_OBSERVER_IDENTIFIER } from "../capture/observer.js";
 import { ARGENT_VERSION } from "../shared/argent-version.js";
 
-/** Strict, non-secret subset written after a successful EAS Simulator cleanup. */
+/** Strict, non-secret subset written after a successful simulator cleanup. */
 export type RuntimeExecutionContext = {
-  provider: "eas-simulator";
+  /** EAS Simulator, or a simulator Explore created on the capturing Mac (`capture.simulator: local`). */
+  provider: "eas-simulator" | "local-simulator";
   controller: "agent-device" | "argent";
   /** The pinned package of the controller that drove the session. */
   controllerPackageVersion: typeof AGENT_DEVICE_VERSION | typeof ARGENT_VERSION;
@@ -111,7 +112,7 @@ export function parseRuntimeExecutionContext(value: unknown): RuntimeExecutionCo
   })();
   const controller = literal(context.controller, ["agent-device", "argent"], "Runtime controller");
   return {
-    provider: literal(context.provider, ["eas-simulator"], "Runtime provider"),
+    provider: literal(context.provider, ["eas-simulator", "local-simulator"], "Runtime provider"),
     controller,
     controllerPackageVersion: literal(
       context.controllerPackageVersion,

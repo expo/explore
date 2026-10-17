@@ -9,14 +9,18 @@ import type { PullRequestPresentation } from "./review-model";
 export function handoffPageUrl(page: URL): string | undefined {
   if (!isPreviewPath(page.pathname)) return undefined;
   const url = new URL(page.origin + page.pathname.replace(/\/$/, ""));
-  const platform = page.searchParams.get("platform");
-  if (platform) url.searchParams.set("platform", platform);
+  // The agent API reads the same selection as the report: `target`, or `platform` in links from before targets.
+  for (const key of ["target", "platform"]) {
+    const value = page.searchParams.get(key);
+    if (value) url.searchParams.set(key, value);
+  }
   return url.href;
 }
 
 /** What the reader is looking at, for the scoped prompt's last line. */
 export type HandoffView = {
   view: string;
+  /** The platform, or the target's label when the run captured several. */
   platform?: string;
   appearance?: string;
   /** The selected screen's route or title. */

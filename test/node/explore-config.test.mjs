@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tsImport } from "tsx/esm/api";
 
-const { DEFAULT_EXPLORE_CONFIG_PATH, assertExecutionMode, parseExploreConfig, readExploreConfig, validateExploreConfig, configPlatforms, resolvePlatformConfig, withRunOverrides } =
+const { DEFAULT_EXPLORE_CONFIG_PATH, assertExecutionMode, parseExploreConfig, readExploreConfig, validateExploreConfig, configPlatforms, configTargets, resolvePlatformConfig, resolveTargetConfig, withRunOverrides } =
   await tsImport("../../src/config/explore-config.ts", import.meta.url);
 
 const SOURCE = `app:
@@ -259,6 +259,22 @@ test("--controller overrides the config's controller for one run and is validate
   assert.throws(() => withRunOverrides(plain, { controller: "appium" }), /--controller must be agent-device or argent/);
 });
 
+test("capture.simulator: local runs on a simulator on this Mac; eas, the default, leaves the config as it was", () => {
+  const plain = validateExploreConfig(base());
+  assert.equal("simulator" in plain.capture, false);
+  assert.deepEqual(validateExploreConfig({ ...base(), capture: { simulator: "eas" } }), plain);
+  assert.equal(validateExploreConfig({ ...base(), capture: { simulator: "local" } }).capture.simulator, "local");
+  assert.throws(() => validateExploreConfig({ ...base(), capture: { simulator: "device-farm" } }), error => error.code === "CONFIG_INVALID");
+});
+
+test("--simulator overrides the config's simulator for one run and is validated", () => {
+  const plain = validateExploreConfig(base());
+  const local = withRunOverrides(plain, { simulator: "local" });
+  assert.equal(local.capture.simulator, "local");
+  assert.deepEqual(withRunOverrides(local, { simulator: "eas" }), plain);
+  assert.throws(() => withRunOverrides(plain, { simulator: "remote" }), /--simulator must be eas or local/);
+});
+
 test("device.pose folds the primary platform's device and is validated", () => {
   const open = validateExploreConfig({ ...base(), device: { name: "iPhone Duo", pose: "open" } });
   assert.deepEqual(open.device, { name: "iPhone Duo", pose: "open" });
@@ -268,4 +284,56 @@ test("device.pose folds the primary platform's device and is validated", () => {
     platforms: { ios: {}, android: { device: "pixel_7", bundleId: "com.example.app", easProfile: "explore" } } });
   assert.deepEqual(resolvePlatformConfig(both, "ios").device, { name: "iPhone Duo", pose: "open" });
   assert.deepEqual(resolvePlatformConfig(both, "android").device, { name: "pixel_7" });
+});
+
+test("targets name several captures, even of one platform, each resolved to its own flat config", () => {
+  const config = validateExploreConfig({ ...base(), targets: {
+    iphone: { platform: "ios" },
+    "duo-closed": { platform: "ios", device: "iPhone Duo", pose: "closed" },
+    "duo-open": { platform: "ios", device: "iPhone Duo", pose: "open", label: "Duo open" },
+    android: { platform: "android", bundleId: "com.example.app", easProfile: "explore-apk" },
+  } });
+  assert.deepEqual(configTargets(config), [
+    { id: "iphone", platform: "ios", label: "iPhone 17 Pro" },
+    { id: "duo-closed", platform: "ios", label: "iPhone Duo (closed)" },
+    { id: "duo-open", platform: "ios", label: "Duo open" },
+    { id: "android", platform: "android", label: "pixel_7" },
+  ]);
+  assert.deepEqual(configPlatforms(config), ["ios", "android"]);
+  const open = resolveTargetConfig(config, { target: "duo-open" });
+  assert.deepEqual(open.device, { name: "iPhone Duo", pose: "open" });
+  assert.deepEqual(open.target, { id: "duo-open", platform: "ios", label: "Duo open" });
+  assert.equal("targets" in open, false);
+  const android = resolveTargetConfig(config, { platform: "android" });
+  assert.deepEqual([android.app.platform, android.app.easProfile, android.device.name], ["android", "explore-apk", "pixel_7"]);
+  assert.throws(() => resolveTargetConfig(config, { platform: "ios" }), error => error.code === "TARGET_REQUIRED");
+  assert.throws(() => resolveTargetConfig(config, { target: "tablet" }), error => error.code === "TARGET_NOT_CONFIGURED");
+});
+
+test("a config without targets has one target per platform, named after it", () => {
+  const config = validateExploreConfig({ ...base(), platforms: { ios: {}, android: { bundleId: "com.example.app", easProfile: "explore-apk" } } });
+  assert.deepEqual(configTargets(config).map(target => target.id), ["ios", "android"]);
+  assert.deepEqual(resolveTargetConfig(config, { target: "android" }).target, { id: "android", platform: "android", label: "Android" });
+  assert.deepEqual(resolveTargetConfig(validateExploreConfig(base())).target, { id: "ios", platform: "ios", label: "iOS" });
+});
+
+test("target ids and entries are validated", () => {
+  for (const targets of [{ Base: { platform: "ios" } }, { head: { platform: "ios" } }, { iphone: { platform: "web" } }, { iphone: { platform: "ios", pose: "flat" } },
+    { pixel: { platform: "android" } }, {}]) {
+    assert.throws(() => validateExploreConfig({ ...base(), targets }), error => error.code === "CONFIG_INVALID", JSON.stringify(targets));
+  }
+  assert.throws(() => validateExploreConfig({ ...base(), platforms: { ios: {} }, targets: { iphone: { platform: "ios" } } }), /targets or platforms, not both/);
+});
+
+test("a target can choose its own controller and simulator over capture's", () => {
+  const config = validateExploreConfig({ ...base(), capture: { controller: "argent", simulator: "local" }, targets: {
+    duo: { platform: "ios", device: "iPhone Duo" },
+    android: { platform: "android", bundleId: "com.example.app", easProfile: "explore-apk", controller: "agent-device" },
+    cloud: { platform: "ios", simulator: "eas" },
+  } });
+  const capture = id => resolveTargetConfig(config, { target: id }).capture;
+  assert.deepEqual([capture("duo").controller, capture("duo").simulator], ["argent", "local"]);
+  assert.deepEqual([capture("android").controller, capture("android").simulator], [undefined, "local"], "agent-device is the default, so it is absent");
+  assert.deepEqual([capture("cloud").controller, capture("cloud").simulator], ["argent", undefined]);
+  assert.throws(() => validateExploreConfig({ ...base(), targets: { duo: { platform: "ios", controller: "maestro" } } }), error => error.code === "CONFIG_INVALID");
 });

@@ -206,3 +206,36 @@ test('a screen accessibility-only on one platform and visibly modified on the ot
   assert.equal(both.modified, alone.modified + 1, 'the Android visual change is what the run counts');
   assert.deepEqual((await describeReports([android, ios])).changes, both);
 });
+
+test('a run with several targets of one platform keeps a ZIP per target, in config order, and only valid ids name them', async t => {
+  const environment = await cache(t);
+  const dir = await mkdtemp(join(tmpdir(), 'explore-saved-targets-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, 'a.zip'), review);
+  spawnSync('unzip', ['-q', '-o', join(dir, 'a.zip'), '-d', join(dir, 'report')]);
+  const targets = [{ id: 'phone', platform: 'ios', label: 'iPhone 17' }, { id: 'duo-open', platform: 'ios', label: 'iPhone Duo (open)' }];
+  const variant = async target => {
+    const json = JSON.parse(await readFile(join(dir, 'report', 'review.json'), 'utf8'));
+    Object.assign(json.review.runtime, { target, targets });
+    const copy = join(dir, target.id);
+    await mkdir(copy);
+    await writeFile(join(copy, 'review.json'), JSON.stringify(json));
+    spawnSync('cp', ['-R', join(dir, 'report', 'assets'), join(copy, 'assets')]);
+    return zipReportDirectory(copy);
+  };
+  const [phone, duo] = await Promise.all(targets.map(variant));
+  // Saved one at a time, in the opposite order: the run still lists them in config order.
+  await saveRun([{ platform: 'ios', target: targets[1], zip: duo }], {}, environment);
+  const run = await saveRun([{ platform: 'ios', target: targets[0], zip: phone }], {}, environment);
+  assert.deepEqual(run.platforms, ['ios']);
+  assert.deepEqual(run.targets, targets);
+  assert.deepEqual((await readdir(join(savedRunsDirectory(environment), run.id))).sort(), ['duo-open.zip', 'phone.zip', 'run.json']);
+  assert.deepEqual((await readSavedReports(run, environment)).map(report => [report.target.id, report.zip.byteLength]), [['phone', phone.byteLength], ['duo-open', duo.byteLength]]);
+  assert.deepEqual((await readReportZip(duo)).target, targets[1]);
+  const file = join(savedRunsDirectory(environment), run.id, 'run.json');
+  const saved = JSON.parse(await readFile(file, 'utf8'));
+  for (const id of ['../escape', 'Phone', 'base']) {
+    await writeFile(file, JSON.stringify({ ...saved, targets: [{ ...targets[0], id }] }));
+    assert.deepEqual(await listSavedRuns(environment), [], id);
+  }
+});

@@ -1,3 +1,4 @@
+import type { RunTarget } from "../types.js";
 import { appearancePairs, bundleColorSchemes, routeIdOfScreen } from "../capture/appearance.js";
 import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
@@ -259,6 +260,9 @@ export type CaptureReviewOptions = {
   app?: { version?: string; buildNumber?: string };
   /** The platforms config.yaml captures (this report's platform among them), when more than one. */
   platforms?: Array<"ios" | "android">;
+  /** The target this report captures, and every target config.yaml captures (this one among them), when more than one. */
+  target?: RunTarget;
+  targets?: RunTarget[];
 };
 
 /** Build the validated review independently of where its metadata and images will be stored. */
@@ -298,6 +302,8 @@ async function constructCaptureReview(options: CaptureReviewOptions, store: Scre
       platform: head.bundle.platform ?? "ios", ...(head.bundle.controller === "argent" ? { controller: "argent" as const } : {}), statusBarBandPercent: statusBarBandPercent(head.bundle.platform),
       ...(homeIndicatorBandPercent(head.bundle.platform) > 0 ? { homeIndicatorBandPercent: homeIndicatorBandPercent(head.bundle.platform) } : {}),
       ...(options.platforms && options.platforms.length > 1 ? { platforms: [...options.platforms] } : {}),
+      ...(options.target ? { target: { ...options.target } } : {}),
+      ...(options.targets && options.targets.length > 1 ? { targets: options.targets.map(target => ({ ...target })) } : {}),
       ...(colorSchemes.length > 1 ? { colorSchemes: [...colorSchemes] } : {}),
       ...(head.bundle.runtimeProfile ? { device: { model: head.bundle.runtimeProfile.deviceModel, osVersion: head.bundle.runtimeProfile.osVersion } } : {}),
       ...(head.bundle.appName?.trim() ? { appName: head.bundle.appName.trim() } : {}),

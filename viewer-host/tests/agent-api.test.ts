@@ -334,3 +334,32 @@ test("statuses follow the Viewer: accessibility-only, unavailable for a failed o
   const only = JSON.parse((await agentApiReply(context, loaded, "/screens", new URLSearchParams("status=accessibility-only"), "application/json")).body as string);
   assert.deepEqual(only.items.map((item: { id: string; status: string; sourceStatus: string }) => [item.id, item.status, item.sourceStatus]), [["device-picker", "accessibility-only", "modified"]]);
 });
+
+test("a deployment of several targets keeps each target in its links and names the others in the index", async () => {
+  const listing = [
+    { target: "iphone", platform: "ios", label: "iPhone 17", path: "/_report/abcdefghijklmnop/iphone.zip.enc" },
+    { target: "duo-open", platform: "ios", label: "iPhone Duo (open)", path: "/_report/abcdefghijklmnop/duo-open.zip.enc" },
+    { target: "android", platform: "android", label: "Android", path: "/_report/abcdefghijklmnop/android.zip.enc" },
+  ];
+  const targetsEnv: PreviewEnvironment = { ...reviewEnv, EXPLORE_PREVIEW_REPORT: undefined, EXPLORE_PREVIEW_REPORTS: JSON.stringify(listing) };
+  const site = deployment({ [listing[0]!.path]: await sealed(review), [listing[1]!.path]: await sealed(review), [listing[2]!.path]: await sealed(explorationZip) }, targetsEnv);
+  const duo = await (await site.get("/api/v1?target=duo-open")).json();
+  assert.equal(duo.kind, "pr-review");
+  assert.deepEqual(duo.platforms, ["ios", "android"], "distinct platforms, as before targets");
+  assert.equal(duo.target, "duo-open");
+  assert.deepEqual(duo.targets.map((target: { id: string; current?: boolean }) => [target.id, target.current ?? false]), [["iphone", false], ["duo-open", true], ["android", false]]);
+  assert.equal(duo.targets[2].viewer, `${origin}/p/${token}?platform=android`, "a target named after its platform keeps ?platform=");
+  assert.equal(duo.targets[0].summary, `${origin}/p/${token}/api/v1?target=iphone`);
+  assert.equal(duo.links.screens, `${origin}/p/${token}/api/v1/screens?target=duo-open`);
+  assert.equal(duo.links.viewer, `${origin}/p/${token}?target=duo-open`);
+  const first = await (await site.get("/api/v1")).json();
+  assert.equal(first.target, "iphone");
+  assert.equal(first.links.viewer, `${origin}/p/${token}?target=iphone`);
+  const index = await (await site.get("?target=duo-open")).text();
+  assert.match(index, /^# Expo Explore report: .+ \(iPhone Duo \(open\)\)$/m);
+  assert.ok(index.includes(`- [iPhone 17](${origin}/p/${token}?target=iphone) (ios)`), index);
+  assert.ok(index.includes(`- [Android](${origin}/p/${token}?platform=android) (android)`), index);
+  assert.ok(!index.includes(`- [iPhone Duo (open)]`), "the index does not list its own target among the others");
+  assert.equal((await (await site.get("/api/v1?platform=android")).json()).kind, "exploration");
+  assert.equal((await site.get("/api/v1?target=pixel")).status, 404);
+});

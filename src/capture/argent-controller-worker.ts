@@ -8,7 +8,7 @@ import { appendFile, copyFile, mkdir, readFile, realpath, rename, rm, stat, writ
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import type { DecodedFrame } from "../shared/png-evidence.js";
-import { ArgentCallError, runBridgeCommand, type ArgentBridgeState, type ArgentPlatform, type ArgentTree } from "./argent-driver.js";
+import { ArgentCallError, rotateToScreen, runBridgeCommand, type ArgentBridgeState, type ArgentPlatform, type ArgentTree } from "./argent-driver.js";
 import { ARGENT_VERSION } from "../shared/argent-version.js";
 import { ensureController } from "../shared/controller-cache.js";
 
@@ -96,6 +96,7 @@ async function main(): Promise<number> {
   const result = await runBridgeCommand(argv, {
     state, platform, version: ARGENT_VERSION,
     ...(environment.EXPLORE_ARGENT_BUNDLE_ID ? { bundleId: environment.EXPLORE_ARGENT_BUNDLE_ID } : {}),
+    ...(environment.EXPLORE_ARGENT_DEVICE ? { device: environment.EXPLORE_ARGENT_DEVICE } : {}),
     call: async (tool, args, options) => {
       const started = Date.now();
       try {
@@ -120,6 +121,7 @@ async function main(): Promise<number> {
       return ok;
     },
     sleep: milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
+    orientImage: async (path, screen) => { await writeFile(path, rotateToScreen(await readFile(path), screen)); },
     scratchImage: { path: join(dirname(statePath), "argent-scratch.png"), read: async path => {
       const { PNG } = createRequire(import.meta.url)("pngjs") as { PNG: { sync: { read(bytes: Buffer, options: { checkCRC: boolean }): DecodedFrame } } };
       return PNG.sync.read(await readFile(path), { checkCRC: false });
@@ -141,3 +143,4 @@ async function main(): Promise<number> {
 }
 
 process.exitCode = await main();
+

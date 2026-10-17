@@ -41,7 +41,7 @@ export async function readUsage(output) {
 
 export async function fixture(t, provider, { docsOnly = false, unresolvedParameters = false, observerFailurePath, agentMode = false,
   instructions = 'Explore selected routes in a stable, comparable state.', recoverableOpenFailure = false,
-  userInterfaceStyle, headUserInterfaceStyle, platform: initialPlatform = 'ios' } = {}) {
+  userInterfaceStyle, headUserInterfaceStyle, platform: initialPlatform = 'ios', targets } = {}) {
   let platform = initialPlatform;
   const root = await realpath(await mkdtemp(join(tmpdir(), 'explore-ci-integration-')));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -56,6 +56,7 @@ export async function fixture(t, provider, { docsOnly = false, unresolvedParamet
     device: { name: 'iPhone 17 Pro' }, navigation: { provider, ...(provider === 'react-navigation' ? { entry: 'src/App.tsx' } : {}) },
     exploration: { scope: 'changes' }, capture: { maxMinutes: 30, maxActions: 500, repack: 'eas' },
     parameters: provider === 'expo-router' && !unresolvedParameters ? { '/item/[id]': { id: 'example-item' } } : {} };
+  if (targets) config.targets = targets;
   if (agentMode) { config.mode = 'agent'; config.agent = { provider: 'anthropic', model: 'fixture-model', instructions: '.expo-explore/instructions.md' }; }
   await put('.expo-explore/instructions.md', instructions);
   await put('.gitignore', 'node_modules/\n');
@@ -105,9 +106,10 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
   const environment = { PATH: process.env.PATH, HOME: root, RUNNER_TEMP: root, EXPO_TOKEN: 'test-expo-secret', GITHUB_TOKEN: 'test-github-secret',
     GITHUB_RUN_ID: '1234', GITHUB_RUN_ATTEMPT: '1', GITHUB_REPOSITORY: pr.repository, TOOLS_COMMIT: 'c'.repeat(40), EXPLORE_VIEWER_ORIGIN: 'https://viewer.example' };
   const requests = []; const comments = []; const sessions = new Map(); let currentSession; const idleDevice = { path: '/', scheme: 'light' }; let sessionCounter = 0; let repackedSha; let openFailed = false;
-  const identity = () => ({ session: 'expo-explore-runtime', appBundleId: config.app.bundleId,
-    device: { id: 'device-1', name: config.device.name, platform, target: 'mobile', osVersion: '26.0', locale: 'en-US', orientation: 'portrait', colorScheme: 'light' },
-    identifiers: { session: 'expo-explore-runtime', appBundleId: config.app.bundleId, deviceId: 'device-1', deviceName: config.device.name } });
+  const identity = (session) => ({ session: 'expo-explore-runtime', appBundleId: config.app.bundleId,
+    // The device the session was started with, as EAS starts the one a target names.
+    device: { id: 'device-1', name: session?.device ?? config.device.name, platform, target: 'mobile', osVersion: '26.0', locale: 'en-US', orientation: 'portrait', colorScheme: 'light' },
+    identifiers: { session: 'expo-explore-runtime', appBundleId: config.app.bundleId, deviceId: 'device-1', deviceName: session?.device ?? config.device.name } });
   // The fixture's clock: every controller round trip advances it by one poll interval, as a device snapshot would, so a
   // readiness budget expires in simulated time and a route that never becomes ready costs no real seconds.
   let clockMs = Date.now();
@@ -129,7 +131,13 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
       if (command === 'build:list') return json([]);
       if (command === 'build') return json([{ id: `build-${git(request.cwd, 'rev-parse', 'HEAD')}`, fingerprint: { hash: 'mock-native-fingerprint' }, appVersion: '3.0.0', appBuildVersion: '7' }]);
       if (command === 'env:pull') { writeFileSync(value(request, '--path'), '# Environment: preview\n'); return { stdout: '', stderr: '' }; }
-      if (command === 'build:download') { const path = join(request.environment.TMPDIR, 'native.app'); mkdirSync(path); return json({ path }); }
+      // The app carries its build's id, so the session it is installed on knows which commit it runs.
+      if (command === 'build:download') {
+        const build = value(request, '--build-id');
+        const path = join(request.environment.TMPDIR, platform === 'android' ? 'native.apk' : 'native.app');
+        if (platform === 'android') writeFileSync(path, build); else { mkdirSync(path); writeFileSync(join(path, 'build-id'), build); }
+        return json({ path });
+      }
       if (command === 'upload') return json({ url: `https://expo.dev/accounts/acme/projects/example/builds/repacked-${repackedSha}` });
       if (command === 'workflow:run') {
         assert.equal(request.environment.EAS_NO_VCS, '1');
@@ -142,7 +150,7 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
       }
       if (command === 'simulator:start') {
         const id = `session-${++sessionCounter}`; currentSession = id; openFailed = false;
-        const session = { id, name: value(request, '--name'), build: value(request, '--build-id'), path: '/', scheme: 'light' }; sessions.set(id, session);
+        const session = { id, name: value(request, '--name'), build: value(request, '--build-id'), device: value(request, '--device'), path: '/', scheme: 'light' }; sessions.set(id, session);
         writeFileSync(join(request.cwd, '.env.eas-simulator'), `${HEADER}EAS_SIMULATOR_SESSION_ID='${id}'\nAGENT_DEVICE_DAEMON_BASE_URL='https://controller.example/${id}'\nAGENT_DEVICE_DAEMON_AUTH_TOKEN='controller-private-token'\n`);
         return { stdout: 'ready', stderr: '' };
       }
@@ -152,7 +160,8 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
     if (basename(request.command) === 'repack-app') {
       repackedSha = git(request.cwd, 'rev-parse', 'HEAD');
       assert.ok(request.environment.EXPO_OVERRIDE_METRO_CONFIG, 'fresh and reused native builds must include the automatic observer');
-      mkdirSync(value(request, '--output'));
+      const output = value(request, '--output');
+      if (platform === 'android') writeFileSync(output, `repacked-${repackedSha}`); else { mkdirSync(output); writeFileSync(join(output, 'build-id'), `repacked-${repackedSha}`); }
       return { stdout: '', stderr: '' };
     }
     if (/^agent-device(-|$)/.test(basename(request.command))) {
@@ -168,7 +177,13 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
           }
           device.path = '/' + request.args[2].slice('sample://'.length);
         }
-        return ok(identity());
+        return ok(identity(device));
+      }
+      if (command === 'fold') return ok({ action: 'fold', pose: request.args[1] });
+      if (command === 'install') {
+        const app = request.args[1];
+        device.build = platform === 'android' ? readFileSync(app, 'utf8') : readFileSync(join(app, 'build-id'), 'utf8');
+        return ok({ installed: true, appBundleId: config.app.bundleId });
       }
       if (command === 'appstate') return ok({ platform, appBundleId: config.app.bundleId, source: 'session', device_udid: 'device-1' });
       if (command === 'wait') return ok({});
