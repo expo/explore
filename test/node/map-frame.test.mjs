@@ -13,7 +13,8 @@ test("phone screenshots keep the map's default card", () => {
     assert.equal(frame.width, MAP_SCREEN_WIDTH);
     assert.equal(frame.height, MAP_SCREEN_HEIGHT);
   }
-  assert.deepEqual(mapFrame(size(720, 1600)).screen, { width: 720, height: 1600 }, "a missing screenshot is framed like the run's");
+  assert.deepEqual(mapFrame(size(720, 1600)).screen, { width: 390, height: 845 }, "a missing screenshot keeps the default phone frame");
+  assert.deepEqual(mapFrame(size(1398, 2034)).screen, { width: 1398, height: 2034 }, "a missing screenshot on a wider screen is framed like the run's");
 });
 
 test("a wider screen gets a card in its own shape with about the same screen area", () => {

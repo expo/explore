@@ -19,9 +19,22 @@ export type MapFrame = { width: number; height: number; screen: { width: number;
  * the default card; a wider screen, such as a foldable's, gets a card of the same screen area in its shape.
  */
 export function mapFrame(size: ScreenshotSize | undefined): MapFrame {
-  const screen = size ? { width: size.imageWidth, height: size.imageHeight } : { ...DEFAULT_SCREENSHOT_SIZE };
+  const screen = placeholderScreen(size);
+  if (phoneShaped(size)) return { width: MAP_SCREEN_WIDTH, height: MAP_SCREEN_HEIGHT, screen };
   const ratio = screen.width / screen.height;
-  if (Math.abs(ratio / DEFAULT_SCREENSHOT_RATIO - 1) <= 0.1) return { width: MAP_SCREEN_WIDTH, height: MAP_SCREEN_HEIGHT, screen };
   const slotWidth = Math.round(Math.sqrt(MAP_SLOT_AREA * ratio));
   return { width: slotWidth, height: Math.round(slotWidth / ratio) + MAP_HEADING_HEIGHT, screen };
+}
+
+function phoneShaped(size: ScreenshotSize | undefined): boolean {
+  return !size || Math.abs(size.imageWidth / size.imageHeight / DEFAULT_SCREENSHOT_RATIO - 1) <= 0.1;
+}
+
+/**
+ * The frame of a screen without a screenshot, given its run's typical screenshot size: the default phone
+ * frame in a phone-shaped run, as before, so it lines up with phone screenshots of any exact size; the run's
+ * own shape otherwise.
+ */
+export function placeholderScreen(size: ScreenshotSize | undefined): { width: number; height: number } {
+  return size && !phoneShaped(size) ? { width: size.imageWidth, height: size.imageHeight } : { ...DEFAULT_SCREENSHOT_SIZE };
 }

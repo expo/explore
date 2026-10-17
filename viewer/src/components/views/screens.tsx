@@ -10,6 +10,7 @@ import type { Appearance } from "../../utils/appearance";
 import type { FocusRequest, FocusStatus } from "../../utils/navigation";
 import { shortcutsLive } from "../../utils/shortcuts";
 import { HOLD_INITIAL_DELAY_MS, holdIntervalMs } from "../../utils/key-hold";
+import { placeholderScreen } from "../../utils/map-frame";
 import { ScreenScreenshotCard } from "../canvas/screen-screenshot-card";
 import { useCanvasVisibleFrame } from "../canvas/visible-frame-provider";
 import { PhoneSheet } from "../phone/phone-chrome";
@@ -132,7 +133,7 @@ function ScreenCell(props: {
         {...(props.index.plainTitles ? { plainTitle: true } : {})}
         {...(url ? { screenshot: url } : {})}
         {...(size ? size : {})}
-        {...(props.typicalSize ? { placeholderSize: { width: props.typicalSize.imageWidth, height: props.typicalSize.imageHeight } } : {})}
+        placeholderSize={placeholderScreen(props.typicalSize)}
         {...(status ? { diff: status } : {})}
         {...(props.diff?.screens.get(props.screen.id)?.accessibilityOnly ? { accessibilityOnly: true } : {})}
         selected={props.selected}
