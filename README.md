@@ -337,7 +337,7 @@ Explore pins each controller's version and starts the EAS session with it. Repor
 
 Neither controller is installed with Explore. The first run that needs one downloads its pinned npm release (agent-device 1.4 MB, Argent 27 MB), checks it against the integrity hash Explore pins, and keeps it in `~/.cache/expo-explore/controllers` (`EXPLORE_CONTROLLER_CACHE` moves it). Behind a private registry, set `EXPLORE_NPM_REGISTRY` to a mirror of it.
 
-Argent cannot switch the simulator's appearance yet ([software-mansion/argent#1509](https://github.com/software-mansion/argent/pull/1509)), so an Argent capture records one appearance: the one the app forces, else light. Explore warns when it skips one.
+Argent cannot switch the simulator's appearance yet ([software-mansion/argent#1509](https://github.com/software-mansion/argent/pull/1509)), so an Argent capture on EAS Simulator records one appearance: the one the app forces, else light. Explore warns when it skips one. On a [local simulator](#simulator) the host switches it, so both are captured.
 
 </details>
 
@@ -523,7 +523,7 @@ Reports and baselines are kept for 30 days and diagnostics for 7. Hosted deploym
 - The launch is captured once per appearance and compared like any screen. The comment says how long the splash stayed as it first appeared, when it first changed (a native launch screen handing over to an app-drawn one, an animation starting on it), and when the first screen settled. `capture.launch: video` adds a recording; a launch too fast to observe is reported as "no splash observed".
 - On Android the splash usually shows only in the recording, which needs `ffmpeg`. The generated workflows install it.
 - Hosted acceptance of agent mode with an API key is incomplete.
-- With `capture.controller: argent`, each capture records one appearance (see [device controller](#controller)).
+- With `capture.controller: argent` on EAS Simulator, each capture records one appearance (see [device controller](#controller)).
 
 </details>
 

@@ -30,6 +30,8 @@ export type ScreenScreenshotCardProps = {
   loading?: "eager" | "lazy";
   leading?: ReactNode;
   trailing?: ReactNode;
+  /** Short lines about the screen, inside the card after its screenshot (Screens: how it was reached, where else it changed). */
+  note?: ReactNode;
   onClick: MouseEventHandler<HTMLButtonElement>;
   onMouseEnter?: MouseEventHandler<HTMLDivElement>;
   onMouseLeave?: MouseEventHandler<HTMLDivElement>;
@@ -120,6 +122,7 @@ export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
           </button>
           {props.trailing}
         </span>
+        {props.note ? <span className="screen-node-note">{props.note}</span> : null}
       </div>
     </CanvasActiveFrame>
   );

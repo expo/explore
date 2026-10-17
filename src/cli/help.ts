@@ -26,10 +26,10 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
         without .expo-explore/config.yaml it uses the defaults setup would write;
         it runs both commits' code as you, so review only commits you would run; capture:review is the same command;
         --controller argent drives the simulator with Argent instead of agent-device, the default (or set
-        capture.controller in config.yaml); Argent cannot switch appearance yet, so it captures one appearance;
+        capture.controller in config.yaml); on EAS Simulator Argent captures one appearance, since it cannot switch it yet;
         --simulator local runs each commit on a simulator (Xcode) or emulator (Android SDK) Explore starts on this
         machine, instead of EAS Simulator, and removes it afterwards (or set capture.simulator in config.yaml); builds
-        still run on EAS; agent-device only for now;
+        still run on EAS, and the host switches appearance for either controller;
         with targets in config.yaml it reviews them at once (--parallel N at most N at a time; the targets of a platform
         share each commit's build), --target ID one of them, --platform those of a platform)
   view [--catalog FILE] [--port N] [--no-open]

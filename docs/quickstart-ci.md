@@ -105,8 +105,8 @@ device:
 exploration:
   scope: changes # changes | all
 capture:
-  # controller: agent-device # agent-device (default) | argent (one appearance per capture until Argent can switch it; --controller overrides it for one run)
-  # simulator: eas # eas (EAS Simulator, default) | local (a simulator or emulator Explore starts on this machine with Xcode or the Android SDK; agent-device only; --simulator overrides it for one run)
+  # controller: agent-device # agent-device (default) | argent (one appearance per capture on EAS Simulator until Argent can switch it; --controller overrides it for one run)
+  # simulator: eas # eas (EAS Simulator, default) | local (a simulator or emulator Explore starts on this machine with Xcode or the Android SDK; --simulator overrides it for one run)
   maxMinutes: 30
   maxActions: 500
   repack: eas # eas (hosted EAS workflow job, default) | local (repack-app + eas upload on the runner)
