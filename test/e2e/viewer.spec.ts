@@ -2051,16 +2051,12 @@ test("canonicalizes the legacy Workspace route to Changes and reports the exact 
     if (entry.status === "unchanged") return total;
     return total + (entry.currentScreenIds.length || entry.baselineScreenIds.length);
   }, 0);
-  // The bottom bar's Compare button carries the count.
-  const badge = page.locator(".canvas-toolbar .toolbar-badge");
-  await expect(badge).toHaveText(String(expectedChanges));
   const menu = await openChangesMenu(page);
   await expect(menu.locator(".changes-panel-title .changes-panel-count")).toHaveText(String(expectedChanges));
 
   // Without a baseline there is nothing to count. Compare still opens, and the view says why it is empty.
   await page.goto("/map?baseline=none");
   await expect(page).toHaveURL(/baseline=none/);
-  await expect(badge).toHaveCount(0);
   const compare = page.getByRole("toolbar", { name: "Canvas tools" }).getByRole("button", { name: "Compare", exact: true });
   await expect(compare).not.toHaveAttribute("aria-disabled", "true");
   await compare.click();

@@ -28,9 +28,10 @@ export function holdSchedule(count: number): number[] {
 export type KeyHold = {
   /**
    * Starts holding `code` after its first step already landed. `step` takes the next step and
-   * says whether there was one; the hold ends by itself when there is not.
+   * says whether there was one; the hold ends by itself when there is not. It is told how long
+   * until the step after it, so a step that animates can finish just as the next begins.
    */
-  begin: (code: string, step: () => boolean) => void;
+  begin: (code: string, step: (nextIntervalMs: number) => boolean) => void;
   end: () => void;
   /** Whether `code` is the key being held. */
   holding: (code: string) => boolean;
@@ -48,8 +49,9 @@ export function createKeyHold(): KeyHold {
       end();
       let count = 1;
       const tick = () => {
-        if (!current || !step()) { end(); return; }
-        current = { code, timer: setTimeout(tick, holdIntervalMs(count)) };
+        const next = holdIntervalMs(count);
+        if (!current || !step(next)) { end(); return; }
+        current = { code, timer: setTimeout(tick, next) };
         count += 1;
       };
       current = { code, timer: setTimeout(tick, HOLD_INITIAL_DELAY_MS) };

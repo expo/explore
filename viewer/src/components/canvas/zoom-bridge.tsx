@@ -3,6 +3,7 @@ import { useReactFlow, useStore } from "@xyflow/react";
 import { publishZoom, registerZoomApi, runCanvasZoomCommand } from "../../utils/canvas-zoom";
 import { isTyping, matchesShortcut, SHORTCUTS } from "../../utils/shortcuts";
 import { useCanvasVisibleFrame } from "./visible-frame-provider";
+import { createKeyHold, type KeyHold } from "../../utils/key-hold";
 import {
   canvasBoundsViewport,
   canvasPriorityProjectionBounds,
@@ -15,6 +16,8 @@ import {
 } from "./camera";
 
 const DURATION = 160;
+/** React Flow's zoomIn/zoomOut step; a held key keeps stepping by it on the hold schedule. */
+const KEY_ZOOM_STEP = 1.2;
 const PIXEL_WHEEL_ZOOM_RATE = 0.002;
 const LINE_WHEEL_ZOOM_RATE = 0.05;
 const PAGE_WHEEL_ZOOM_RATE = 1;
@@ -34,6 +37,12 @@ function canvasOwnsKeyboardEvent(event: KeyboardEvent, canvas: HTMLElement): boo
     && canvas.contains(target)
   );
   return focusOwned || canvas.matches(":hover");
+}
+
+function plainZoomDirection(event: KeyboardEvent): 1 | -1 | undefined {
+  if (event.key === "+" || event.key === "=") return 1;
+  if (event.key === "-" || event.key === "_") return -1;
+  return undefined;
 }
 
 function modifiedZoomCommand(event: KeyboardEvent): "in" | "out" | "100" | undefined {
@@ -60,6 +69,12 @@ export function ZoomBridge(props: {
   fitMaxZoom?: number;
 }) {
   const { visibleFrame } = useCanvasVisibleFrame();
+  // Outlives the effect below, which re-runs as the camera moves: a held key must not end just
+  // because its own zoom step re-registered the listeners.
+  const holdRef = useRef<KeyHold>(undefined);
+  holdRef.current ??= createKeyHold();
+  const hold = holdRef.current;
+  useEffect(() => () => hold.end(), [hold]);
   const {
     zoomIn,
     zoomOut,
@@ -201,7 +216,22 @@ export function ZoomBridge(props: {
     };
     registerZoomApi(api);
 
+    // A held + or − zooms on the shared hold schedule rather than the OS key repeat: each repeat
+    // restarting the 160ms easing made holding the key slower than tapping it.
+    const zoomBy = (direction: 1 | -1, duration: number): boolean => {
+      const viewport = getViewport();
+      const next = Math.min(maxZoom, Math.max(minZoom, viewport.zoom * KEY_ZOOM_STEP ** direction));
+      if (next === viewport.zoom) return false;
+      if (direction === 1) void zoomIn({ duration });
+      else void zoomOut({ duration });
+      return true;
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat && hold.holding(event.code)) {
+        event.preventDefault();
+        return;
+      }
       if (isTyping(event.target)) return;
 
       // Browser zoom and canvas zoom use the same familiar chord. The pointer/focus boundary
@@ -225,10 +255,15 @@ export function ZoomBridge(props: {
         event.preventDefault();
         return;
       }
-      if (event.key === "+" || event.key === "=") runCanvasZoomCommand("in");
-      else if (event.key === "-" || event.key === "_") runCanvasZoomCommand("out");
-      else return;
+      const direction = plainZoomDirection(event);
+      if (!direction) return;
       event.preventDefault();
+      onCameraGestureStart.current?.();
+      if (!zoomBy(direction, DURATION)) return;
+      hold.begin(event.code, (nextIntervalMs) => zoomBy(direction, nextIntervalMs));
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (hold.holding(event.code)) hold.end();
     };
 
     const onModifierWheel = (event: WheelEvent) => {
@@ -292,9 +327,13 @@ export function ZoomBridge(props: {
     };
 
     window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", hold.end);
     canvas?.addEventListener("wheel", onModifierWheel, { capture: true, passive: false });
     return () => {
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", hold.end);
       canvas?.removeEventListener("wheel", onModifierWheel, { capture: true });
       if (wheelFrame.current !== undefined) cancelAnimationFrame(wheelFrame.current);
       wheelFrame.current = undefined;

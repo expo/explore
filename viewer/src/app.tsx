@@ -1616,7 +1616,6 @@ function ViewerApp() {
         ) : <CanvasToolbar
           canvas={route.canvas}
           searchOpen={searchOpen}
-          compareCount={compareOrder.length}
           {...(handoffAction ? { actions: handoffAction } : {})}
           onOpenShortcuts={() => setShortcutsOpen(true)}
           onSelectCanvas={selectCanvas}

@@ -1065,11 +1065,7 @@ code {
     filter 170ms ease-in-out calc(var(--toolbar-motion) * 0.35);
 }
 /* Compare's count of changed screens rides on its button's corner. */
-.toolbar-button:has(> .toolbar-corner) { position: relative; }
-/* The button's top-right corner: the held-modifier key hint, then Compare's changed-count badge,
-   side by side so neither covers the neighbouring button's hint. */
-.toolbar-corner { position: absolute; top: -6px; right: -6px; display: flex; align-items: center; gap: 3px; pointer-events: none; }
-.toolbar-corner > .key-hint, .toolbar-corner > .toolbar-badge { position: static; }
+.toolbar-button:has(> .key-hint) { position: relative; }
 .camera-action-button:has(> .key-hint), .collapsed-platform:has(> .key-hint), .compare-nav-picker:has(> .key-hint) { position: relative; }
 
 /* The key that completes a chord, on a button's corner while its modifier is held: hold ⌃ and
@@ -1101,28 +1097,7 @@ code {
   to { opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) { .key-hint { animation: none; } }
-.toolbar-badge {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  display: flex;
-  min-width: 18px;
-  height: 18px;
-  align-items: center;
-  justify-content: center;
-  padding: 0 5px;
-  border-radius: 9px;
-  /* Light theme's deep orange takes white text, as the Modified pill does; dark theme's light
-     orange takes dark text. */
-  color: #fff;
-  background: var(--modified);
-  box-shadow: 0 0 0 2px var(--surface);
-  font-size: 10px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
-:root[data-theme="dark"] .toolbar-badge { color: #0c0d0e; }
+
 /* Reduced motion: the bar takes its new width at once; only the names fade, without the blur. */
 @media (prefers-reduced-motion: reduce) {
   .toolbar-view-label,
@@ -2420,7 +2395,6 @@ html [data-sonner-toaster][data-sonner-theme] {
   border-radius: 8px;
   background: #000;
 }
-
 
 .image-placeholder-reason {
   display: block;

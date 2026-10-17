@@ -22,9 +22,6 @@ const TOOLBAR_MINIMUM_FRAME_WIDTH = 220;
 type CanvasToolbarProps = {
   canvas: CanvasView;
   searchOpen: boolean;
-  /** How many changed screens Compare holds, shown as a badge on its button. Compare's own header
-      steps through them. */
-  compareCount?: number;
   /** Page-wide actions beside Search (Hand off to AI). */
   actions?: React.ReactNode;
   onSelectCanvas: (canvas: CanvasView) => void;
@@ -90,12 +87,7 @@ export function CanvasToolbar(props: CanvasToolbarProps) {
                 onClick={() => props.onSelectCanvas(id)}>
                 {VIEW_ICONS[id]}
                 <span className="toolbar-view-label" aria-hidden="true"><span>{CANVAS_LABELS[id]}</span></span>
-                <span className="toolbar-corner">
-                  {CANVAS_NUMBER_KEYS ? <KeyHint shortcut={SHORTCUTS.canvasByNumber[id]} /> : null}
-                  {id === "compare" && props.compareCount ? (
-                    <span className="toolbar-badge" aria-hidden="true">{props.compareCount}</span>
-                  ) : null}
-                </span>
+                {CANVAS_NUMBER_KEYS ? <KeyHint shortcut={SHORTCUTS.canvasByNumber[id]} /> : null}
               </button>
             </Tooltip>
           );
