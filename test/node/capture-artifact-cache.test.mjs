@@ -135,6 +135,11 @@ test("capture recipes exclude display settings but bind agent instructions and c
   assert.equal(JSON.parse(key).observer, CAPTURE_OBSERVER_HASH);
   assert.match(JSON.parse(key).observer, /^[a-f0-9]{64}$/);
   assert.equal(key,captureRecipeConfig({...config,app:{...config.app,name:"Renamed display"}}));
+  // agent-device recipes are unchanged by Argent support; an Argent capture is keyed to Argent and its version.
+  assert.equal(JSON.parse(key).controllerVersion, undefined);
+  const argent = JSON.parse(captureRecipeConfig({...config,capture:{...config.capture,controller:"argent"}}));
+  assert.equal(argent.capture.controller, "argent");
+  assert.match(argent.controllerVersion, /^\d+\.\d+\.\d+$/);
   const agent = {...config,mode:"agent",agent:{provider:"openai",model:"another-model",instructions:".expo-explore/instructions.md"}};
   assert.notEqual(key,captureRecipeConfig(agent,"a".repeat(64)));
   assert.equal(JSON.parse(captureRecipeConfig(agent,"a".repeat(64))).agent.acceptancePolicy, AGENT_ACCEPTANCE_POLICY);

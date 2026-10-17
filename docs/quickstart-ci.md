@@ -101,9 +101,11 @@ navigation:
   # entry: src/navigation/RootNavigator.tsx
 device:
   name: iPhone 17 # Android: an AVD profile id such as pixel_7
+  # pose: open # a foldable (iPhone Duo): closed (the outer display, how a session starts) | half-open | open (the inner display)
 exploration:
   scope: changes # changes | all
 capture:
+  # controller: agent-device # agent-device (default) | argent (one appearance per capture until Argent can switch it; --controller overrides it for one run)
   maxMinutes: 30
   maxActions: 500
   repack: eas # eas (hosted EAS workflow job, default) | local (repack-app + eas upload on the runner)

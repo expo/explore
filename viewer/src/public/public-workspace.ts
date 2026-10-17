@@ -258,7 +258,8 @@ function sidePayload(review: PublicReview, side: Side): { map: ExploreMap; cover
       // Reports published before Android support carry no platform: they are iOS.
       platform: review.runtime.platform ?? "ios",
       ...(review.runtime.platforms && review.runtime.platforms.length > 1 ? { platforms: [...review.runtime.platforms] } : {}),
-      controller: "agent-device",
+      // Reviews name the controller only when it is not agent-device.
+      controller: review.runtime.controller ?? "agent-device",
       status: "complete",
       createdAt: times[0] ?? review.createdAt,
       updatedAt: review.createdAt,

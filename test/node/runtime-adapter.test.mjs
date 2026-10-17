@@ -7,6 +7,7 @@ import {
 } from "../../dist/review/runtime-adapter.js";
 import { projectRuntimeEvidence } from "../../dist/review/runtime-evidence.js";
 import { AGENT_DEVICE_VERSION } from "../../dist/capture/run.js";
+import { ARGENT_VERSION } from "../../dist/shared/argent-version.js";
 
 const sha = "a".repeat(40);
 
@@ -287,4 +288,12 @@ test("fails closed on provenance, environment, surface, and capture mismatches",
     () => runtimeEvidenceInputFromMap({ ...base, map: noVisual }),
     /visual fingerprint is missing/,
   );
+});
+
+test("an Argent capture's execution context names Argent and its pinned version, never another pairing", () => {
+  const argent = execution({ controller: "argent", controllerPackageVersion: ARGENT_VERSION });
+  assert.deepEqual(parseRuntimeExecutionContext(argent), argent);
+  assert.throws(() => parseRuntimeExecutionContext(execution({ controller: "argent" })), /Controller package version.*invalid/i);
+  assert.throws(() => parseRuntimeExecutionContext(execution({ controllerPackageVersion: ARGENT_VERSION })), /Controller package version.*invalid/i);
+  assert.throws(() => parseRuntimeExecutionContext(execution({ controller: "appium" })), /Runtime controller.*invalid/i);
 });

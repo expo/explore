@@ -15,16 +15,18 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
   doctor [--project DIRECTORY] [--offline] [--no-github] [--check-model] [--json]
        (checks every setup step and prints the next action for each problem; exits 1 until ready)
        (--offline skips EAS and GitHub; --check-model sends one small request with the local provider key)
-  doctor --capture [--project DIRECTORY] [--output DIRECTORY] [--platform ios|android] [--yes]
+  doctor --capture [--project DIRECTORY] [--output DIRECTORY] [--platform ios|android] [--controller agent-device|argent] [--yes]
        (captures the committed HEAD like the baseline workflow, with your eas login, and reports each route)
   capture [--base REF] [--head REF | --committed] [--platform ios|android] [--scope all|changes]
-       [--upload [--expires-in 7d|30d|never]] [--no-open] [--no-cache] [--output DIRECTORY] [--project DIRECTORY]
+       [--controller agent-device|argent] [--upload [--expires-in 7d|30d|never]] [--no-open] [--no-cache] [--output DIRECTORY] [--project DIRECTORY]
        (on this machine: checks out both commits in temporary worktrees, captures them with your eas login and your
         local claude or codex login, and opens the report; the head is HEAD with your uncommitted changes, as eas build
         uploads them (--committed, or cli.requireCommit in eas.json, leaves them out); the base defaults to where HEAD
         left the default branch;
         without .expo-explore/config.yaml it uses the defaults setup would write;
-        it runs both commits' code as you, so review only commits you would run; capture:review is the same command)
+        it runs both commits' code as you, so review only commits you would run; capture:review is the same command;
+        --controller argent drives the simulator with Argent instead of agent-device, the default (or set
+        capture.controller in config.yaml); Argent cannot switch appearance yet, so it captures one appearance)
   view [--catalog FILE] [--port N] [--no-open]
        (opens a report in the Viewer)
   reports [list | open ID | add REPORT... | upload ID | rm ID | prune] [--all] [--json]
@@ -40,6 +42,7 @@ const BINARY = `Prebuilt apps (no source needed; runs on EAS Simulator with your
        (installs the archive in a fresh EAS Simulator session, lets the model explore it, writes a map
         and report under --output, hosts the report on EAS Hosting, and prints the link)
        Flags, all optional: --device NAME --bundle-id ID --launch-url URL --hints "what to focus on"
+        --controller agent-device|argent (the session's device controller; agent-device by default)
         (a sign-in in --hints is written as {{secret:NAME}}: Explore types the value of the environment variable NAME,
         and the model and the report only see the reference)
         --max-duration-minutes N --max-screens N --max-actions N --provider anthropic|openai --model ID
@@ -49,11 +52,12 @@ const BINARY = `Prebuilt apps (no source needed; runs on EAS Simulator with your
        (iOS needs a simulator build; a device .ipa and Android .aab are rejected before any session starts)
   explore:session [SESSION_ID] [--bundle-id ID] [--output DIRECTORY] [--upload] [--json]
        (explores an app that is already installed on an EAS Simulator session you started — run it where
-        "eas simulator:start --type agent-device --out-config-type dotenv" wrote .env.eas-simulator, or pass
-        --env-file FILE, or export EAS_SIMULATOR_SESSION_ID, AGENT_DEVICE_DAEMON_BASE_URL and
-        AGENT_DEVICE_DAEMON_AUTH_TOKEN; writes the map and report, then opens them in the local Viewer;
+        "eas simulator:start --type agent-device --out-config-type dotenv" (or --type argent) wrote .env.eas-simulator,
+        or pass --env-file FILE, or export EAS_SIMULATOR_SESSION_ID with AGENT_DEVICE_DAEMON_BASE_URL and
+        AGENT_DEVICE_DAEMON_AUTH_TOKEN, or with ARGENT_TOOLS_URL and ARGENT_AUTH_TOKEN; writes the map and report, then opens them in the local Viewer;
         --upload hosts the report instead, --no-open skips the Viewer; the session is left running;
-        the app is the one in the foreground, else the only installed one; --bundle-id picks it otherwise)
+        the app is the one in the foreground, else the only installed one; --bundle-id picks it otherwise;
+        the controller follows the session's type, and --controller must match it)
        Extra flags: --app-name NAME --app-version X.Y --port N, plus the explore:binary budget/model flags
        Afterwards: view --dir DIRECTORY, screen:list --dir DIRECTORY, gap:list --dir DIRECTORY`;
 
@@ -61,9 +65,9 @@ const CI = `CI (the installed workflows run these; they manage remote EAS Simula
   config:platforms [--project DIRECTORY] [--config FILE]
        (lists the platforms config.yaml captures; the review workflow's matrix)
   capture:review --base-project DIRECTORY --head-project DIRECTORY (--pull-request FILE | --compare FILE)
-       --output TEMP_DIRECTORY [--config .expo-explore/config.yaml] [--platform ios|android]
+       --output TEMP_DIRECTORY [--config .expo-explore/config.yaml] [--platform ios|android] [--controller agent-device|argent]
        (--compare reviews any two commits without a PR: {"origin":"compare","repositoryId","repository","base":{ref,sha},"head":{ref,sha}})
-  capture:baseline --project DIRECTORY --sha COMMIT --output TEMP_DIRECTORY [--config FILE] [--platform ios|android]
+  capture:baseline --project DIRECTORY --sha COMMIT --output TEMP_DIRECTORY [--config FILE] [--platform ios|android] [--controller agent-device|argent]
   source:verify --base-project DIRECTORY --head-project DIRECTORY
        --base-sha COMMIT --head-sha COMMIT --output DIRECTORY [--config FILE] [--scope all|changes] [--platform ios|android]
   compare --baseline DIRECTORY --current DIRECTORY --output FILE

@@ -24,8 +24,8 @@ Platform, bundle id, app name and version are read from the archive; do not pass
 ## What happens
 
 1. Archive inspection and compatibility checks (size, simulator build, emulator ABI, sha256).
-2. `eas simulator:start` of an empty agent-device session, verified by exact session id before use.
-3. `agent-device install` of the archive straight into the session, then `open <bundle id>`.
+2. `eas simulator:start` of an empty agent-device session (an `argent` one with `--controller argent`), verified by exact session id before use.
+3. `agent-device install` of the archive straight into the session (Argent: `reinstall-app`), then `open <bundle id>`.
 4. The model explores through a small tool set (observe, act, capture, finish); app text is treated as untrusted and destructive controls (delete, reset, sign out, purchase, send, share) are blocked outside the model.
 5. The map and screenshots are written under `--output` (default `./explore-<archive>-<timestamp>`), plus `report/` for the Viewer.
 6. The report is sealed and deployed to EAS Hosting (`--no-upload` skips this; `--expires-in 7d|30d|never`).
@@ -65,14 +65,14 @@ The model only ever sees the reference; Explore types the value into the field. 
 
 ## Already have a session? `explore:session`
 
-When the app is already installed on an agent-device EAS Simulator session you started (for example after `eas simulator:start --type agent-device --out-config-type dotenv`, `agent-device install ...`, `agent-device open ...`), skip intake and install:
+When the app is already installed on an EAS Simulator session you started (for example after `eas simulator:start --type agent-device --out-config-type dotenv`, `agent-device install ...`, `agent-device open ...`; an `--type argent` session works the same way, with Argent's tools), skip intake and install:
 
 ```sh
 npx @expo/explore explore:session                                       # session from ./.env.eas-simulator or EAS_SIMULATOR_SESSION_ID; explores the app in the foreground
 npx @expo/explore explore:session <session-id> --env-file path/.env.eas-simulator --bundle-id dev.brent.euxy --json
 ```
 
-The app is whatever is in the foreground, else the only user-installed app; pass `--bundle-id` when neither is clear (`BUNDLE_ID_REQUIRED` lists what is installed); `--app-name`/`--app-version` label the report. The session is checked with `eas simulator:get` (must be agent-device, in progress, and the same daemon as the connection you passed), your existing `agent-device` session on the device is reused, and the same model, budgets, hints and destructive-action flags apply. The map and `report/` are written under `--output` and opened in the local Viewer (`--port N`); `--no-open` skips that and `--upload` hosts the report instead. The session is never stopped: the output ends with the `eas simulator:stop --id ...` command for when you are done.
+The app is whatever is in the foreground, else the only user-installed app; pass `--bundle-id` when neither is clear (`BUNDLE_ID_REQUIRED` lists what is installed); `--app-name`/`--app-version` label the report. The session is checked with `eas simulator:get` (must be the controller type its connection names, agent-device or argent, in progress, and the same endpoint as the connection you passed; `--controller` must agree with it), your existing `agent-device` session on the device is reused, and the same model, budgets, hints and destructive-action flags apply. The map and `report/` are written under `--output` and opened in the local Viewer (`--port N`); `--no-open` skips that and `--upload` hosts the report instead. The session is never stopped: the output ends with the `eas simulator:stop --id ...` command for when you are done.
 
 ## An Expo project and no build: run it from source
 

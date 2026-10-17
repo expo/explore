@@ -7,7 +7,7 @@ import type { CaptureSetupAction } from "../config/explore-config.js";
 import { createExplorationInputs, explorationSecretNames } from "../config/exploration-inputs.js";
 import type { ExploreStore, PreparedArtifact } from "../map/store.js";
 import { CiError } from "../shared/ci-errors.js";
-import type { ActionKind, ActionRisk, Artifact, ElementRole, ExploreMap, ObservedElement, Observation, Screen } from "../types.js";
+import type { ActionKind, ActionRisk, Artifact, Controller, ElementRole, ExploreMap, ObservedElement, Observation, Screen } from "../types.js";
 
 /** One look at the device: accessibility always, a PNG when the host could take a safe one. */
 export type BlackBoxFrame = {
@@ -278,7 +278,7 @@ function markPressableGroups(nodes: readonly Record<string, unknown>[]): void {
   }
 }
 
-export function elementsOf(nodes: readonly Record<string, unknown>[], allow: readonly string[]): Array<Omit<ObservedElement, "elementId">> {
+export function elementsOf(nodes: readonly Record<string, unknown>[], allow: readonly string[], controller: Controller = "agent-device"): Array<Omit<ObservedElement, "elementId">> {
   markPressableGroups(nodes);
   const occurrences = new Map<string, number>();
   const out: Array<Omit<ObservedElement, "elementId">> = [];
@@ -306,7 +306,7 @@ export function elementsOf(nodes: readonly Record<string, unknown>[], allow: rea
     const occurrence = (occurrences.get(key) ?? 0) + 1;
     occurrences.set(key, occurrence);
     const rect = node.rect && typeof node.rect === "object" ? node.rect as Record<string, unknown> : undefined;
-    out.push({ role, label, ...(identifier ? { identifier } : {}), occurrence, controller: "agent-device",
+    out.push({ role, label, ...(identifier ? { identifier } : {}), occurrence, controller,
       actions: role === "field" ? ["fill"] : role === "toggle" ? ["press"] : ["press"],
       risk: riskOf(label, allow), actionable: true, enabled: node.enabled !== false, visible: true,
       ...(rect && typeof rect.x === "number" && typeof rect.y === "number" && typeof rect.width === "number" && typeof rect.height === "number"
@@ -497,7 +497,7 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
     for (const part of loose) seen.parts.add(part);
     seen.loadingOnly &&= loading;
     evidence.set(screen.id, seen);
-    for (const element of elementsOf(frame.nodes, allow)) {
+    for (const element of elementsOf(frame.nodes, allow, map.run.controller)) {
       const id = elementId(screen.id, element);
       if (!screen.elementIds.includes(id)) {
         screen.elementIds.push(id);
@@ -538,7 +538,7 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
       }
       screenshotArtifactId = artifact.id;
     }
-    const elements = elementsOf(frame.nodes, allow).map(element => ({ elementId: elementId(screen.id, element), ...element }));
+    const elements = elementsOf(frame.nodes, allow, map.run.controller).map(element => ({ elementId: elementId(screen.id, element), ...element }));
     const observation: Observation = { id: observationId, screenId: screen.id, variantId: variant.id, capturedAt: frame.capturedAt, surfaceScope: "app",
       fingerprints: { combined: screenEvidenceKey(frame.nodes), accessibility: accessibilitySha, ...(screenshotArtifactId ? { visual: map.artifacts.find(item => item.id === screenshotArtifactId)!.sha256 } : {}) },
       elementIds: elements.map(element => element.elementId), elements, accessibilityArtifactId: accessibilityArtifact.id, ...(screenshotArtifactId ? { screenshotArtifactId } : {}) };

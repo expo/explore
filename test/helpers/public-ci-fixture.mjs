@@ -67,6 +67,7 @@ export async function fixture(t, provider, { docsOnly = false, unresolvedParamet
   await put('eas.json', JSON.stringify({ build: { capture: { ios: { simulator: true }, android: { buildType: 'apk', distribution: 'internal' } } } }));
   const registration = names => `import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import {createStaticNavigation} from '@react-navigation/native';
+
 ${names.map(name => `import ${name} from './${name}';`).join('\n')}
 const Root=createNativeStackNavigator({screens:{${names.map(name => `${name}:{screen:${name},linking:'${name.toLowerCase()}'}`).join(',')}}});
 const Navigation=createStaticNavigation(Root); export default function App(){return <Navigation/>;}`;
@@ -114,7 +115,7 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
   const sleep = milliseconds => { clockMs += milliseconds; };
   const runner = request => {
     requests.push(request);
-    if (basename(request.command) === 'agent-device') clockMs += 600;
+    if (/^agent-device(-|$)/.test(basename(request.command))) clockMs += 600;
     if (request.command === 'git') { const result = spawnSync('git', request.args, { cwd: request.cwd, encoding: 'utf8', env: request.environment }); assert.equal(result.status, 0); return { stdout: result.stdout, stderr: result.stderr }; }
     const command = request.args[0];
     if (basename(request.command) === 'eas') {
@@ -154,7 +155,7 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
       mkdirSync(value(request, '--output'));
       return { stdout: '', stderr: '' };
     }
-    if (basename(request.command) === 'agent-device') {
+    if (/^agent-device(-|$)/.test(basename(request.command))) {
       // Base and head capture in parallel, each on its own simulator: a request names its session in the daemon URL,
       // so the route, appearance and build it sees are that session's, not whichever session started last.
       const device = sessions.get(/\/([^/]+)$/.exec(request.environment?.AGENT_DEVICE_DAEMON_BASE_URL ?? '')?.[1]) ?? sessions.get(currentSession) ?? idleDevice;

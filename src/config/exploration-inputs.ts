@@ -2,7 +2,7 @@ import { CiError } from "../shared/ci-errors.js";
 import type { CaptureSetupAction } from "./explore-config.js";
 
 const TOKEN = /\{\{secret:([A-Z][A-Z0-9_]{0,127})\}\}/g;
-const RESERVED = /^(?:GITHUB_|RUNNER_|ACTIONS_|AGENT_DEVICE_|OPENAI_|ANTHROPIC_|EXPO_TOKEN$)/;
+const RESERVED = /^(?:GITHUB_|RUNNER_|ACTIONS_|AGENT_DEVICE_|ARGENT_|OPENAI_|ANTHROPIC_|EXPO_TOKEN$)/;
 
 /** References are data, never shell expressions or arbitrary environment access. */
 export function explorationSecretNames(text: string): string[] {

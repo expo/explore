@@ -43,6 +43,10 @@ export const DEFAULT_ANDROID_DEVICE = "pixel_7";
  * One platform's capture target. `platforms.ios` fields default to the flat `app`/`device` fields;
  * `platforms.android` needs its own package and EAS profile (an `android.buildType: apk` profile).
  */
+/** The poses a foldable device can be captured in (`fold` in agent-device and Argent). */
+export const DEVICE_POSES = ["closed", "half-open", "open"] as const;
+export type DevicePose = typeof DEVICE_POSES[number];
+
 export type PlatformConfig = { device?: string; bundleId?: string; easProfile?: string };
 
 /** Source discovery never consumes a user-authored screen inventory. */
@@ -50,7 +54,11 @@ export type ExploreConfig = {
   mode: "deterministic" | "agent";
   app: { name?: string; platform: ExplorePlatform; bundleId: string; easProfile: string; scheme?: string };
   navigation: { provider: "auto" | "expo-router" | "react-navigation"; entry?: string };
-  device: { name: string };
+  /**
+   * `pose` folds a foldable (iPhone Duo) before capture: closed lights the outer display, open the inner one.
+   * Absent leaves the device as it starts (closed). It applies to the primary platform's device.
+   */
+  device: { name: string; pose?: DevicePose };
   /**
    * Each platform Explore captures, in CI as one matrix job each. Absent: the single platform the
    * flat fields describe. Capture code never reads this map; resolvePlatformConfig flattens it.
@@ -58,7 +66,9 @@ export type ExploreConfig = {
   platforms?: Partial<Record<ExplorePlatform, PlatformConfig>>;
   /** `exclude` names routes, as `requiresRoute` does, that stay in the map but are never captured. */
   exploration: { scope: "changes" | "all"; exclude?: string[] };
-  capture: { maxMinutes: number; maxActions: number; repack: "eas" | "local"; appearance: AppearanceSetting; launch: LaunchSetting; reset: RouteResetSetting; unattributed: UnattributedSetting; readinessSeconds?: number };
+  capture: { maxMinutes: number; maxActions: number; repack: "eas" | "local"; appearance: AppearanceSetting; launch: LaunchSetting; reset: RouteResetSetting; unattributed: UnattributedSetting; readinessSeconds?: number;
+    /** The device controller; absent means agent-device, so configs that never chose one keep their cache recipes. */
+    controller?: "argent" };
   parameters?: Record<string, Record<string, string>>;
   setup?: ExploreSetupAction[];
   agent?: { provider: "openai" | "anthropic"; model: string; instructions?: string };
@@ -237,13 +247,15 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
   const app = record(root.app, "app");
   exactKeys(app, ["name", "platform", "bundleId", "easProfile", "scheme"], "app");
   const device = record(root.device, "device");
-  exactKeys(device, ["name"], "device");
+  exactKeys(device, ["name", "pose"], "device");
+  const pose = device.pose === undefined ? undefined : literal(device.pose, DEVICE_POSES, "device.pose", "closed");
   const navigation = optionalRecord(root.navigation, "navigation");
   exactKeys(navigation, ["provider", "entry"], "navigation");
   const exploration = optionalRecord(root.exploration, "exploration");
   exactKeys(exploration, ["scope", "exclude"], "exploration");
   const capture = optionalRecord(root.capture, "capture");
-  exactKeys(capture, ["maxMinutes", "maxActions", "repack", "appearance", "launch", "reset", "unattributed", "readinessSeconds"], "capture");
+  exactKeys(capture, ["maxMinutes", "maxActions", "repack", "appearance", "launch", "reset", "unattributed", "readinessSeconds", "controller"], "capture");
+  const controller = literal(capture.controller, ["agent-device", "argent"] as const, "capture.controller", "agent-device");
   const mode = literal(root.mode, ["deterministic", "agent"] as const, "mode", "deterministic");
   const name = optionalText(app.name, "app.name", 128);
   const scheme = app.scheme === undefined ? undefined : customScheme(app.scheme, "app.scheme");
@@ -276,7 +288,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
       provider: literal(navigation.provider, ["auto", "expo-router", "react-navigation"] as const, "navigation.provider", "auto"),
       ...(navigation.entry === undefined ? {} : { entry: repoPath(navigation.entry, "navigation.entry") }),
     },
-    device: { name: text(device.name, "device.name", 128) },
+    device: { name: text(device.name, "device.name", 128), ...(pose === undefined ? {} : { pose }) },
     ...(platforms === undefined ? {} : { platforms }),
     exploration: {
       scope: literal(exploration.scope, ["changes", "all"] as const, "exploration.scope", "changes"),
@@ -291,6 +303,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
       reset: parseRouteResetSetting(capture.reset, "capture.reset"),
       unattributed: parseUnattributedSetting(capture.unattributed, "capture.unattributed"),
       ...(capture.readinessSeconds !== undefined ? { readinessSeconds: positiveInteger(capture.readinessSeconds, "capture.readinessSeconds") } : {}),
+      ...(controller === "argent" ? { controller } : {}),
     },
     ...(root.parameters === undefined ? {} : { parameters: parameters(root.parameters) }),
     ...(root.setup === undefined ? {} : { setup: setupActions(root.setup, scheme) }),
@@ -362,7 +375,9 @@ export function resolvePlatformConfig(config: ExploreConfig, platform: ExplorePl
   return { ...rest,
     app: { ...config.app, platform, bundleId: entry.bundleId ?? (primary ? config.app.bundleId : fail(`platforms.${platform}.bundleId is required`)),
       easProfile: entry.easProfile ?? (primary ? config.app.easProfile : fail(`platforms.${platform}.easProfile is required`)) },
-    device: { name: entry.device ?? (primary ? config.device.name : platform === "android" ? DEFAULT_ANDROID_DEVICE : config.device.name) } };
+    device: { name: entry.device ?? (primary ? config.device.name : platform === "android" ? DEFAULT_ANDROID_DEVICE : config.device.name),
+      // A pose belongs to the primary platform's device; the other platform's device starts as it is.
+      ...(primary && config.device.pose ? { pose: config.device.pose } : {}) } };
 }
 
 /**
@@ -370,8 +385,13 @@ export function resolvePlatformConfig(config: ExploreConfig, platform: ExplorePl
  * every screen (`scope: all`) and keep its hosted link (`expiresIn: never`). `expiresIn` changes nothing when the
  * config hosts no report.
  */
-export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined }): ExploreConfig {
+export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined; controller?: string | undefined }): ExploreConfig {
   let result = config;
+  if (overrides.controller !== undefined) {
+    if (overrides.controller !== "agent-device" && overrides.controller !== "argent") fail("--controller must be agent-device or argent", "--controller");
+    const { controller: _previous, ...capture } = result.capture;
+    result = { ...result, capture: { ...capture, ...(overrides.controller === "argent" ? { controller: "argent" as const } : {}) } };
+  }
   if (overrides.scope !== undefined) {
     if (overrides.scope !== "changes" && overrides.scope !== "all") fail("--scope must be changes or all", "--scope");
     result = { ...result, exploration: { ...result.exploration, scope: overrides.scope } };

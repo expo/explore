@@ -18,7 +18,8 @@ import {
   type ProjectionNode,
 } from "../../utils/graph-model";
 import { artifactUrl, isLaunchScreen, type ExploreMap, type MapIndex, type Screen } from "../../utils/model";
-import { primaryScreenshotForScreen, screenshotSize, type ScreenshotSize } from "../../utils/screen-images";
+import { primaryScreenshotForScreen, screenshotSize, typicalScreenshotSize, type ScreenshotSize } from "../../utils/screen-images";
+import { mapFrame, type MapFrame } from "../../utils/map-frame";
 import type { BuildDiff, DiffStatus } from "../../utils/build-diff";
 import { CANVAS_MAX_ZOOM } from "../../utils/canvas-zoom";
 import { usePhoneLayout } from "../../utils/phone-layout";
@@ -28,10 +29,6 @@ import { displayPathForScreen } from "../../utils/screen-path";
 import { shortcutsLive } from "../../utils/shortcuts";
 import { mapKeyDirection, mapKeyTarget } from "../../utils/map-keyboard";
 
-// The map is an inspection surface, not a thumbnail cloud. These dimensions preserve the
-// original phone aspect and leave enough vertical room for a wrapped title.
-const MAP_SCREEN_WIDTH = 184;
-const MAP_SCREEN_HEIGHT = 420;
 const HOVER_CLEAR_DELAY = 180;
 const MAP_LAYOUT_REVISION = "flat-v1";
 const MAP_FIT_VIEW_OPTIONS = {
@@ -58,6 +55,7 @@ type ScreenNodeData = {
   missingReason?: string;
   highlighted: boolean;
   direction: MapDirection;
+  frame: MapFrame;
   diff?: DiffStatus;
   accessibilityOnly?: boolean;
   projectionDelayMs?: number;
@@ -74,6 +72,8 @@ type ProjectedStructure = {
   groups: ConnectionGroup[];
   positions: Map<string, Point>;
   screenshots: Map<string, MapScreenshot | undefined>;
+  /** Every card's size, from the shape of the run's screenshots. */
+  frame: MapFrame;
   screenNotes: Map<string, string>;
   hoverPaths: Map<string, { nodeIds: Set<string>; edgeIds: Set<string> }>;
   primaryEdgeKeys: Set<string>;
@@ -98,6 +98,8 @@ function ScreenNodeCard({ data, selected }: NodeProps<ScreenGraphNode>) {
       selected={selected}
       highlighted={data.highlighted}
       style={{
+        "--map-screen-width": `${data.frame.width}px`,
+        "--map-screen-height": `${data.frame.height}px`,
         "--projection-delay": `${data.projectionDelayMs ?? 0}ms`,
         "--projection-scale": data.projectionScreenScale ?? 1,
         ...(data.projectionScreenScale !== undefined
@@ -107,8 +109,10 @@ function ScreenNodeCard({ data, selected }: NodeProps<ScreenGraphNode>) {
       ariaLabel={`Open ${data.screen.title}`}
       ariaPressed={selected}
       // The slot's own proportions stand in only when the screenshot's size is not recorded.
-      imageWidth={data.screenshotSize?.imageWidth ?? MAP_SCREEN_WIDTH - 2}
-      imageHeight={data.screenshotSize?.imageHeight ?? MAP_SCREEN_HEIGHT - 48}
+      // A screenshot of unrecorded size, or none, is framed like the run's other screenshots.
+      imageWidth={data.screenshotSize?.imageWidth ?? data.frame.screen.width}
+      imageHeight={data.screenshotSize?.imageHeight ?? data.frame.screen.height}
+      placeholderSize={data.frame.screen}
       loading="lazy"
       leading={<Handle type="target" position={horizontal ? Position.Left : Position.Top} className="graph-handle" />}
       trailing={<Handle type="source" position={horizontal ? Position.Right : Position.Bottom} className="graph-handle" />}
@@ -128,8 +132,8 @@ function conciseActionLabel(label: string): string | undefined {
   return /^(continue|next|open)$/i.test(concise) ? undefined : concise;
 }
 
-function nodeDimensions(_node: ProjectionNode) {
-  return { width: MAP_SCREEN_WIDTH, height: MAP_SCREEN_HEIGHT };
+function nodeDimensions(frame: MapFrame) {
+  return { width: frame.width, height: frame.height };
 }
 
 function adjacency(groups: readonly ConnectionGroup[]) {
@@ -195,7 +199,7 @@ function hoverNeighborhood(nodes: readonly ProjectionNode[], groups: readonly Co
  * One card per screen, layered by how many transitions it took to reach it from the start screen;
  * a screen never reached by a recorded transition joins the last layer. Edges are the transitions.
  */
-function flatPositions(projection: GraphProjection): { positions: Map<string, Point>; horizontal: boolean } {
+function flatPositions(projection: GraphProjection, frame: MapFrame): { positions: Map<string, Point>; horizontal: boolean } {
   const screenNodes = projection.nodes.filter((node): node is Extract<ProjectionNode, { kind: "screen" }> => node.kind === "screen");
   const ids = new Set(screenNodes.map((node) => node.id));
   const outgoing = new Map<string, string[]>();
@@ -225,8 +229,8 @@ function flatPositions(projection: GraphProjection): { positions: Map<string, Po
   }
   // Lay the deeper axis along the wider screen axis: a long chain of taps reads left to right.
   const horizontal = layers.size > Math.max(...[...layers.values()].map((members) => members.length));
-  const alongPitch = (horizontal ? MAP_SCREEN_WIDTH : MAP_SCREEN_HEIGHT) + 160;
-  const acrossPitch = (horizontal ? MAP_SCREEN_HEIGHT : MAP_SCREEN_WIDTH) + 56;
+  const alongPitch = (horizontal ? frame.width : frame.height) + 160;
+  const acrossPitch = (horizontal ? frame.height : frame.width) + 56;
   const positions = new Map<string, Point>();
   // Order each layer by where its parents sit in the previous one so edges cross as little as possible.
   const incoming = new Map<string, string[]>();
@@ -252,18 +256,21 @@ function flatPositions(projection: GraphProjection): { positions: Map<string, Po
 }
 
 function projectedStructure(projection: GraphProjection, index: MapIndex, plainTitles: boolean): ProjectedStructure {
-  const { positions, horizontal } = flatPositions(projection);
+  const screenshots = new Map(projection.nodes.map((node) => {
+    const artifact = primaryScreenshotForScreen(node.screen, index);
+    const url = artifactUrl(artifact);
+    const size = screenshotSize(artifact);
+    return [node.id, url ? { url, ...(size ? { size } : {}) } : undefined] as const;
+  }));
+  const frame = mapFrame(typicalScreenshotSize([...screenshots.values()].map((screenshot) => screenshot?.size)));
+  const { positions, horizontal } = flatPositions(projection, frame);
   return {
     screenNotes: index.screenNotes,
     projectionNodes: projection.nodes,
     groups: projection.groups,
     positions,
-    screenshots: new Map(projection.nodes.map((node) => {
-      const artifact = primaryScreenshotForScreen(node.screen, index);
-      const url = artifactUrl(artifact);
-      const size = screenshotSize(artifact);
-      return [node.id, url ? { url, ...(size ? { size } : {}) } : undefined] as const;
-    })),
+    frame,
+    screenshots,
     hoverPaths: hoverNeighborhood(projection.nodes, projection.groups),
     primaryEdgeKeys: spanningEdges(projection.nodes, projection.groups),
     horizontal,
@@ -282,7 +289,7 @@ function projectionElements(
 ): { nodes: CanvasGraphNode[]; edges: TransitionGraphEdge[] } {
   const nodes: CanvasGraphNode[] = structure.projectionNodes.map((projectionNode) => {
     const point = structure.positions.get(projectionNode.id) ?? { x: 0, y: 0 };
-    const size = nodeDimensions(projectionNode);
+    const size = nodeDimensions(structure.frame);
     const position = { x: point.x - size.width / 2, y: point.y - size.height / 2 };
     const screen = projectionNode.screen;
     const screenshot = structure.screenshots.get(screen.id);
@@ -319,6 +326,7 @@ function projectionElements(
         ...(!screenshot && structure.screenNotes.get(screen.id) ? { missingReason: structure.screenNotes.get(screen.id)! } : {}),
         highlighted,
         direction: structure.horizontal ? "LR" : "TB",
+        frame: structure.frame,
         ...(status ? { diff: status } : {}),
         ...(diff?.screens.get(screen.id)?.accessibilityOnly ? { accessibilityOnly: true } : {}),
         projectionMotion,

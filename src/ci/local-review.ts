@@ -39,6 +39,8 @@ export type LocalReviewOptions = {
   platform?: ExplorePlatform | undefined;
   scope?: string | undefined;
   expiresIn?: string | undefined;
+  /** `--controller`: the device controller for both sides, over the config's `capture.controller`. */
+  controller?: string | undefined;
   /** Reuse and keep captures in the local capture cache (default true). */
   cache?: boolean | undefined;
   configPath?: string | undefined;
@@ -398,7 +400,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     });
     const reports: LocalReviewReport[] = [];
     for (const platform of platforms) {
-      const config = withRunOverrides(resolvePlatformConfig(rawConfig, platform), { scope: options.scope, expiresIn: options.expiresIn });
+      const config = withRunOverrides(resolvePlatformConfig(rawConfig, platform), { scope: options.scope, expiresIn: options.expiresIn, controller: options.controller });
       const output = join(work, platform); await mkdir(output);
       outputs.push(output);
       const platformEnvironment = { ...environment };

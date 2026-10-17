@@ -5,6 +5,16 @@ import type { MapIndex } from "./model";
 export type ScreenshotSize = { imageWidth: number; imageHeight: number };
 
 /**
+ * The shape a run's screenshots share: the median one, so a stray size (a launch frame, a failed read)
+ * does not decide it. One device captures every screenshot of a run, so they are normally all alike.
+ */
+export function typicalScreenshotSize(sizes: readonly (ScreenshotSize | undefined)[]): ScreenshotSize | undefined {
+  const known = sizes.filter((size): size is ScreenshotSize => !!size)
+    .sort((left, right) => left.imageWidth / left.imageHeight - right.imageWidth / right.imageHeight);
+  return known[Math.floor((known.length - 1) / 2)];
+}
+
+/**
  * A screenshot's recorded size, when the map has one. A canvas frame waiting for the image takes
  * this shape, so it stays put when the pixels arrive.
  */

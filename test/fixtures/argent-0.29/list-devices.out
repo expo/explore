@@ -1,0 +1,117 @@
+{
+  "devices": [
+    {
+      "platform": "ios",
+      "udid": "404F2659-7202-4450-8465-912BD2AB744B",
+      "name": "iPhone 17",
+      "state": "Booted",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      "runtimeKind": "mobile"
+    },
+    {
+      "platform": "ios",
+      "udid": "13145DF8-2591-4879-8B4E-0EE52E38B9DC",
+      "name": "Apple TV 4K (3rd generation)",
+      "state": "Shutdown",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.tvOS-26-5",
+      "runtimeKind": "tv"
+    },
+    {
+      "platform": "ios",
+      "udid": "9F874416-F37E-49D4-BE9F-D03A61447F37",
+      "name": "Apple TV 4K (3rd generation) (at 1080p)",
+      "state": "Shutdown",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.tvOS-26-5",
+      "runtimeKind": "tv"
+    },
+    {
+      "platform": "ios",
+      "udid": "AA581E94-E134-4DEC-8D68-A80C02932E86",
+      "name": "Apple TV",
+      "state": "Shutdown",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.tvOS-26-5",
+      "runtimeKind": "tv"
+    },
+    {
+      "platform": "ios",
+      "udid": "7166D6B3-15EA-485E-B233-D4CF5AA1A9E6",
+      "name": "iPhone 17 Pro",
+      "state": "Shutdown",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      "runtimeKind": "mobile"
+    },
+    {
+      "platform": "ios",
+      "udid": "65AF775B-D9DC-4293-88B6-7862868B66BC",
+      "name": "iPhone 17 Pro Max",
+      "state": "Shutdown",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      "runtimeKind": "mobile"
+    },
+    {
+      "platform": "ios",
+      "udid": "65D86638-6B23-47AB-A60B-B152A3E5FBEC",
+      "name": "iPhone 17e",
+      "state": "Shutdown",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      "runtimeKind": "mobile"
+    },
+    {
+      "platform": "ios",
+      "udid": "A690C59A-DE62-467C-9A93-6B9C81BE7859",
+      "name": "iPhone Air",
+      "state": "Shutdown",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      "runtimeKind": "mobile"
+    },
+    {
+      "platform": "ios",
+      "udid": "9D7FC73C-7A12-4BCF-83C2-9B52ACF9859D",
+      "name": "iPad Pro 13-inch (M5)",
+      "state": "Shutdown",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      "runtimeKind": "mobile"
+    },
+    {
+      "platform": "ios",
+      "udid": "E71C61D3-8D9F-4591-8511-8FE65229C790",
+      "name": "iPad Pro 11-inch (M5)",
+      "state": "Shutdown",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      "runtimeKind": "mobile"
+    },
+    {
+      "platform": "ios",
+      "udid": "ED9D983B-1AA4-4648-8EED-CDCD5327B8D6",
+      "name": "iPad mini (A17 Pro)",
+      "state": "Shutdown",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      "runtimeKind": "mobile"
+    },
+    {
+      "platform": "ios",
+      "udid": "9C0DF431-D699-4862-8CF3-264CA044F515",
+      "name": "iPad Air 13-inch (M4)",
+      "state": "Shutdown",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      "runtimeKind": "mobile"
+    },
+    {
+      "platform": "ios",
+      "udid": "B92DDF42-5EB6-47F1-A1E7-2B3F2CE2CA84",
+      "name": "iPad Air 11-inch (M4)",
+      "state": "Shutdown",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      "runtimeKind": "mobile"
+    },
+    {
+      "platform": "ios",
+      "udid": "44804797-154C-40DB-8559-342C3F95477A",
+      "name": "iPad (A16)",
+      "state": "Shutdown",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      "runtimeKind": "mobile"
+    }
+  ],
+  "avds": []
+}

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tsImport } from "tsx/esm/api";
 
-const { DEFAULT_EXPLORE_CONFIG_PATH, assertExecutionMode, parseExploreConfig, readExploreConfig, validateExploreConfig, configPlatforms, resolvePlatformConfig } =
+const { DEFAULT_EXPLORE_CONFIG_PATH, assertExecutionMode, parseExploreConfig, readExploreConfig, validateExploreConfig, configPlatforms, resolvePlatformConfig, withRunOverrides } =
   await tsImport("../../src/config/explore-config.ts", import.meta.url);
 
 const SOURCE = `app:
@@ -240,4 +240,32 @@ test("capture.reset accepts root-link or none, defaults to root-link, and reject
   assert.equal(validateExploreConfig(base()).capture.reset, "root-link");
   assert.equal(validateExploreConfig({ ...base(), capture: { reset: "none" } }).capture.reset, "none");
   assert.throws(() => validateExploreConfig({ ...base(), capture: { reset: "relaunch" } }), /capture\.reset must be "root-link" or "none"/);
+});
+
+test("capture.controller chooses Argent; agent-device, the default, leaves the config as it was", () => {
+  const plain = validateExploreConfig(base());
+  assert.equal("controller" in plain.capture, false);
+  assert.deepEqual(validateExploreConfig({ ...base(), capture: { controller: "agent-device" } }), plain);
+  assert.equal(validateExploreConfig({ ...base(), capture: { controller: "argent" } }).capture.controller, "argent");
+  assert.throws(() => validateExploreConfig({ ...base(), capture: { controller: "maestro" } }), error => error.code === "CONFIG_INVALID");
+});
+
+test("--controller overrides the config's controller for one run and is validated", () => {
+  const plain = validateExploreConfig(base());
+  const argent = withRunOverrides(plain, { controller: "argent" });
+  assert.equal(argent.capture.controller, "argent");
+  assert.deepEqual(withRunOverrides(argent, { controller: "agent-device" }), plain);
+  assert.deepEqual(withRunOverrides(plain, {}), plain);
+  assert.throws(() => withRunOverrides(plain, { controller: "appium" }), /--controller must be agent-device or argent/);
+});
+
+test("device.pose folds the primary platform's device and is validated", () => {
+  const open = validateExploreConfig({ ...base(), device: { name: "iPhone Duo", pose: "open" } });
+  assert.deepEqual(open.device, { name: "iPhone Duo", pose: "open" });
+  assert.equal("pose" in validateExploreConfig(base()).device, false);
+  assert.throws(() => validateExploreConfig({ ...base(), device: { name: "iPhone Duo", pose: "flat" } }), error => error.code === "CONFIG_INVALID");
+  const both = validateExploreConfig({ ...base(), app: { ...base().app, platform: "ios" }, device: { name: "iPhone Duo", pose: "open" },
+    platforms: { ios: {}, android: { device: "pixel_7", bundleId: "com.example.app", easProfile: "explore" } } });
+  assert.deepEqual(resolvePlatformConfig(both, "ios").device, { name: "iPhone Duo", pose: "open" });
+  assert.deepEqual(resolvePlatformConfig(both, "android").device, { name: "pixel_7" });
 });

@@ -271,7 +271,7 @@ test('Ctrl+C during a deterministic capture stops it before the next route and s
     const name = request.command.split('/').at(-1);
     calls.push({ name, command: request.args[0], afterCtrlC: ctrlC.signal.aborted });
     // The first route link is opened: the person presses Ctrl+C while it loads.
-    if (name === 'agent-device' && request.args[0] === 'open' && /sample:\/\//.test(request.args[2] ?? '') && !ctrlC.signal.aborted) ctrlC.abort();
+    if (/^agent-device(-|$)/.test(name) && request.args[0] === 'open' && /sample:\/\//.test(request.args[2] ?? '') && !ctrlC.signal.aborted) ctrlC.abort();
     return f.runner(request);
   };
   let kept;
@@ -284,7 +284,7 @@ test('Ctrl+C during a deterministic capture stops it before the next route and s
   const after = calls.filter(call => call.afterCtrlC);
   assert.ok(after.some(call => call.command === 'simulator:stop'), 'its session is stopped');
   assert.equal(after.filter(call => call.command === 'simulator:start').length, 0, 'no other session starts');
-  assert.ok(after.filter(call => call.name === 'agent-device' && call.command === 'open').length <= 1, 'no further route is opened');
+  assert.ok(after.filter(call => /^agent-device(-|$)/.test(call.name) && call.command === 'open').length <= 1, 'no further route is opened');
 });
 
 test('Ctrl+C stops the review, and the checkouts are removed while its files are kept', async t => {

@@ -1,0 +1,2217 @@
+{
+  "schemaVersion": 1,
+  "source": "ax-service",
+  "screen": {
+    "width": 466,
+    "height": 678
+  },
+  "roots": [
+    {
+      "role": "AXGroup",
+      "label": " ",
+      "frame": {
+        "y": 0,
+        "x": 0,
+        "width": 1,
+        "height": 1
+      },
+      "children": [
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 1,
+                    "height": 1
+                  },
+                  "children": [],
+                  "type": "Other",
+                  "covered": true
+                }
+              ],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 1,
+                    "height": 1
+                  },
+                  "children": [],
+                  "type": "Other",
+                  "covered": true
+                }
+              ],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 1,
+                    "height": 1
+                  },
+                  "children": [
+                    {
+                      "role": "AXGroup",
+                      "frame": {
+                        "y": 0,
+                        "x": 0,
+                        "width": 1,
+                        "height": 1
+                      },
+                      "children": [],
+                      "type": "Other",
+                      "covered": true
+                    },
+                    {
+                      "role": "AXGroup",
+                      "frame": {
+                        "y": 0,
+                        "x": 0,
+                        "width": 1,
+                        "height": 1
+                      },
+                      "children": [],
+                      "type": "Other",
+                      "covered": true
+                    },
+                    {
+                      "role": "AXGroup",
+                      "frame": {
+                        "y": 0.04326450344149459,
+                        "x": 0.857653791130186,
+                        "width": 0.07939914163090128,
+                        "height": 0.05457227138643068
+                      },
+                      "children": [
+                        {
+                          "role": "AXGroup",
+                          "frame": {
+                            "y": 0.04326450344149459,
+                            "x": 0.857653791130186,
+                            "width": 0.07939914163090128,
+                            "height": 0.05457227138643068
+                          },
+                          "children": [],
+                          "type": "Other",
+                          "covered": true
+                        }
+                      ],
+                      "type": "Other",
+                      "covered": true
+                    }
+                  ],
+                  "type": "Other",
+                  "covered": true
+                }
+              ],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 1,
+                    "height": 1
+                  },
+                  "children": [
+                    {
+                      "role": "AXGroup",
+                      "frame": {
+                        "y": 0,
+                        "x": 0,
+                        "width": 1,
+                        "height": 1
+                      },
+                      "children": [
+                        {
+                          "role": "AXGroup",
+                          "frame": {
+                            "y": 0.04326450344149459,
+                            "x": 0.857653791130186,
+                            "width": 0.07939914163090128,
+                            "height": 0.05457227138643068
+                          },
+                          "children": [
+                            {
+                              "role": "AXGroup",
+                              "frame": {
+                                "y": 0.04326450344149459,
+                                "x": 0.857653791130186,
+                                "width": 0.07939914163090128,
+                                "height": 0.05457227138643068
+                              },
+                              "children": [],
+                              "type": "Other",
+                              "covered": true
+                            },
+                            {
+                              "role": "AXGroup",
+                              "frame": {
+                                "y": 0.04326450344149459,
+                                "x": 0.857653791130186,
+                                "width": 0.07939914163090128,
+                                "height": 0.05457227138643068
+                              },
+                              "children": [
+                                {
+                                  "role": "AXGroup",
+                                  "frame": {
+                                    "y": 0.04326450344149459,
+                                    "x": 0.857653791130186,
+                                    "width": 0.07939914163090128,
+                                    "height": 0.05457227138643068
+                                  },
+                                  "children": [],
+                                  "type": "Other",
+                                  "covered": true
+                                }
+                              ],
+                              "type": "Other",
+                              "covered": true
+                            },
+                            {
+                              "role": "AXGroup",
+                              "frame": {
+                                "y": 0.0447394296951819,
+                                "x": 0.8597997138769672,
+                                "width": 0.07510729613733906,
+                                "height": 0.051622418879056046
+                              },
+                              "children": [],
+                              "type": "Other",
+                              "covered": true
+                            }
+                          ],
+                          "type": "Other",
+                          "covered": true
+                        }
+                      ],
+                      "type": "Other",
+                      "covered": true
+                    },
+                    {
+                      "role": "AXGroup",
+                      "frame": {
+                        "y": 0,
+                        "x": 0,
+                        "width": 1,
+                        "height": 1
+                      },
+                      "children": [
+                        {
+                          "role": "AXGroup",
+                          "frame": {
+                            "y": 0.04326450344149459,
+                            "x": 0.857653791130186,
+                            "width": 0.07939914163090128,
+                            "height": 0.05457227138643068
+                          },
+                          "children": [
+                            {
+                              "role": "AXGroup",
+                              "frame": {
+                                "y": 0.04326450344149459,
+                                "x": 0.857653791130186,
+                                "width": 0.07939914163090128,
+                                "height": 0.05457227138643068
+                              },
+                              "children": [],
+                              "type": "Other",
+                              "covered": true
+                            }
+                          ],
+                          "type": "Other",
+                          "covered": true
+                        },
+                        {
+                          "role": "AXGroup",
+                          "frame": {
+                            "y": 0.04326450344149459,
+                            "x": 0.857653791130186,
+                            "width": 0.07939914163090128,
+                            "height": 0.05457227138643068
+                          },
+                          "children": [
+                            {
+                              "role": "AXGroup",
+                              "frame": {
+                                "y": 0.04424778761061946,
+                                "x": 0.8590844062947067,
+                                "width": 0.07653791130185997,
+                                "height": 0.05260570304818091
+                              },
+                              "children": [],
+                              "type": "Other",
+                              "covered": true
+                            }
+                          ],
+                          "type": "Other",
+                          "covered": true
+                        }
+                      ],
+                      "type": "Other",
+                      "covered": true
+                    },
+                    {
+                      "role": "AXGroup",
+                      "frame": {
+                        "y": 0,
+                        "x": 0,
+                        "width": 1,
+                        "height": 1
+                      },
+                      "children": [
+                        {
+                          "role": "AXGroup",
+                          "frame": {
+                            "y": 0.04326450344149459,
+                            "x": 0.857653791130186,
+                            "width": 0.07939914163090128,
+                            "height": 0.05457227138643068
+                          },
+                          "children": [
+                            {
+                              "role": "AXGroup",
+                              "frame": {
+                                "y": 0.03146509341199606,
+                                "x": 0.8404864091559371,
+                                "width": 0.11373390557939914,
+                                "height": 0.07817109144542773
+                              },
+                              "children": [],
+                              "type": "Other",
+                              "covered": true
+                            },
+                            {
+                              "role": "AXGroup",
+                              "frame": {
+                                "y": 0.04326450344149459,
+                                "x": 0.857653791130186,
+                                "width": 0.07939914163090128,
+                                "height": 0.05457227138643068
+                              },
+                              "children": [
+                                {
+                                  "role": "AXGroup",
+                                  "frame": {
+                                    "y": 0.04326450344149459,
+                                    "x": 0.857653791130186,
+                                    "width": 0.07939914163090128,
+                                    "height": 0.05457227138643068
+                                  },
+                                  "children": [
+                                    {
+                                      "role": "AXGroup",
+                                      "frame": {
+                                        "y": 0.04326450344149459,
+                                        "x": 0.857653791130186,
+                                        "width": 0.07939914163090128,
+                                        "height": 0.05457227138643068
+                                      },
+                                      "children": [],
+                                      "type": "Other",
+                                      "covered": true
+                                    }
+                                  ],
+                                  "type": "Other",
+                                  "covered": true
+                                },
+                                {
+                                  "role": "AXGroup",
+                                  "frame": {
+                                    "y": 0.04326450344149459,
+                                    "x": 0.857653791130186,
+                                    "width": 0.07939914163090128,
+                                    "height": 0.05457227138643068
+                                  },
+                                  "children": [],
+                                  "type": "Other",
+                                  "covered": true
+                                }
+                              ],
+                              "type": "Other",
+                              "covered": true
+                            }
+                          ],
+                          "type": "Other",
+                          "covered": true
+                        }
+                      ],
+                      "type": "Other",
+                      "covered": true
+                    }
+                  ],
+                  "type": "Other",
+                  "covered": true
+                }
+              ],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 1,
+                    "height": 1
+                  },
+                  "children": [],
+                  "type": "Other",
+                  "covered": true
+                },
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 1,
+                    "height": 1
+                  },
+                  "children": [],
+                  "type": "Other",
+                  "covered": true
+                },
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 1,
+                    "height": 1
+                  },
+                  "children": [],
+                  "type": "Other",
+                  "covered": true
+                }
+              ],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "identifier": "SBSwitcherWindow:Main",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 1,
+                    "height": 1
+                  },
+                  "children": [
+                    {
+                      "role": "AXGroup",
+                      "frame": {
+                        "y": 0,
+                        "x": 0,
+                        "width": 1,
+                        "height": 1
+                      },
+                      "children": [
+                        {
+                          "role": "AXGroup",
+                          "frame": {
+                            "y": 0,
+                            "x": 0,
+                            "width": 1,
+                            "height": 1
+                          },
+                          "children": [
+                            {
+                              "role": "AXGroup",
+                              "roleDescription": "Group",
+                              "frame": {
+                                "y": 0,
+                                "x": 0,
+                                "width": 1,
+                                "height": 1
+                              },
+                              "children": [],
+                              "type": "ScrollView",
+                              "covered": true
+                            },
+                            {
+                              "role": "AXGroup",
+                              "identifier": "AppSwitcherContentView",
+                              "frame": {
+                                "y": 0,
+                                "x": 0,
+                                "width": 1,
+                                "height": 1
+                              },
+                              "children": [
+                                {
+                                  "role": "AXGroup",
+                                  "frame": {
+                                    "y": 0,
+                                    "x": 0,
+                                    "width": 1,
+                                    "height": 1
+                                  },
+                                  "children": [
+                                    {
+                                      "role": "AXGroup",
+                                      "frame": {
+                                        "y": 0,
+                                        "x": 0,
+                                        "width": 1,
+                                        "height": 1
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXGroup",
+                                          "frame": {
+                                            "y": 0,
+                                            "x": 0,
+                                            "width": 1,
+                                            "height": 1
+                                          },
+                                          "children": [],
+                                          "type": "Other",
+                                          "covered": true
+                                        }
+                                      ],
+                                      "type": "Other",
+                                      "covered": true
+                                    }
+                                  ],
+                                  "type": "Other",
+                                  "covered": true
+                                },
+                                {
+                                  "role": "AXGroup",
+                                  "label": "euxy",
+                                  "identifier": "card:dev.brent.euxy:sceneID:dev.brent.euxy-default",
+                                  "frame": {
+                                    "y": 0,
+                                    "x": 0,
+                                    "width": 1,
+                                    "height": 1
+                                  },
+                                  "children": [
+                                    {
+                                      "role": "AXGroup",
+                                      "frame": {
+                                        "y": 0,
+                                        "x": 0,
+                                        "width": 1,
+                                        "height": 1
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXGroup",
+                                          "frame": {
+                                            "y": 0,
+                                            "x": 0,
+                                            "width": 1,
+                                            "height": 1
+                                          },
+                                          "children": [
+                                            {
+                                              "role": "AXGroup",
+                                              "frame": {
+                                                "y": -0.4336283185840708,
+                                                "x": -0.4206008583690987,
+                                                "width": 1.8412017167381973,
+                                                "height": 1.8672566371681416
+                                              },
+                                              "children": [
+                                                {
+                                                  "role": "AXGroup",
+                                                  "frame": {
+                                                    "y": 0,
+                                                    "x": 0,
+                                                    "width": 1,
+                                                    "height": 1
+                                                  },
+                                                  "children": [
+                                                    {
+                                                      "role": "AXGroup",
+                                                      "frame": {
+                                                        "y": 0,
+                                                        "x": 0,
+                                                        "width": 1,
+                                                        "height": 1
+                                                      },
+                                                      "children": [
+                                                        {
+                                                          "role": "AXGroup",
+                                                          "roleDescription": "Group",
+                                                          "frame": {
+                                                            "y": -0.5,
+                                                            "x": 0,
+                                                            "width": 1,
+                                                            "height": 1.5
+                                                          },
+                                                          "children": [
+                                                            {
+                                                              "role": "AXGroup",
+                                                              "frame": {
+                                                                "y": 0,
+                                                                "x": 0,
+                                                                "width": 1,
+                                                                "height": 1
+                                                              },
+                                                              "children": [
+                                                                {
+                                                                  "role": "AXGroup",
+                                                                  "frame": {
+                                                                    "y": 0,
+                                                                    "x": 0,
+                                                                    "width": 1,
+                                                                    "height": 1
+                                                                  },
+                                                                  "children": [
+                                                                    {
+                                                                      "role": "AXGroup",
+                                                                      "frame": {
+                                                                        "y": 0,
+                                                                        "x": 0,
+                                                                        "width": 1,
+                                                                        "height": 1
+                                                                      },
+                                                                      "children": [
+                                                                        {
+                                                                          "role": "AXGroup",
+                                                                          "frame": {
+                                                                            "y": 0,
+                                                                            "x": 0,
+                                                                            "width": 1,
+                                                                            "height": 1
+                                                                          },
+                                                                          "children": [
+                                                                            {
+                                                                              "role": "AXGroup",
+                                                                              "frame": {
+                                                                                "y": 0,
+                                                                                "x": 0,
+                                                                                "width": 1,
+                                                                                "height": 1
+                                                                              },
+                                                                              "children": [
+                                                                                {
+                                                                                  "role": "AXGroup",
+                                                                                  "frame": {
+                                                                                    "y": 0,
+                                                                                    "x": 0,
+                                                                                    "width": 1,
+                                                                                    "height": 1
+                                                                                  },
+                                                                                  "children": [
+                                                                                    {
+                                                                                      "role": "AXGroup",
+                                                                                      "frame": {
+                                                                                        "y": 0,
+                                                                                        "x": 0,
+                                                                                        "width": 1,
+                                                                                        "height": 1
+                                                                                      },
+                                                                                      "children": [
+                                                                                        {
+                                                                                          "role": "AXGroup",
+                                                                                          "frame": {
+                                                                                            "y": 0,
+                                                                                            "x": 0,
+                                                                                            "width": 1,
+                                                                                            "height": 1
+                                                                                          },
+                                                                                          "children": [
+                                                                                            {
+                                                                                              "role": "AXGroup",
+                                                                                              "frame": {
+                                                                                                "y": 0,
+                                                                                                "x": 0,
+                                                                                                "width": 1,
+                                                                                                "height": 1
+                                                                                              },
+                                                                                              "children": [
+                                                                                                {
+                                                                                                  "role": "AXGroup",
+                                                                                                  "identifier": "Scroll To Top Region",
+                                                                                                  "frame": {
+                                                                                                    "y": 0,
+                                                                                                    "x": 0,
+                                                                                                    "width": 1,
+                                                                                                    "height": 0.029498525073746312
+                                                                                                  },
+                                                                                                  "children": [],
+                                                                                                  "type": "Other",
+                                                                                                  "covered": true
+                                                                                                }
+                                                                                              ],
+                                                                                              "type": "Other",
+                                                                                              "covered": true
+                                                                                            }
+                                                                                          ],
+                                                                                          "type": "Other",
+                                                                                          "covered": true
+                                                                                        }
+                                                                                      ],
+                                                                                      "type": "Other",
+                                                                                      "covered": true
+                                                                                    },
+                                                                                    {
+                                                                                      "role": "AXGroup",
+                                                                                      "frame": {
+                                                                                        "y": 0,
+                                                                                        "x": 0,
+                                                                                        "width": 1,
+                                                                                        "height": 1
+                                                                                      },
+                                                                                      "children": [
+                                                                                        {
+                                                                                          "role": "AXGroup",
+                                                                                          "frame": {
+                                                                                            "y": 0,
+                                                                                            "x": 0,
+                                                                                            "width": 1,
+                                                                                            "height": 1
+                                                                                          },
+                                                                                          "children": [
+                                                                                            {
+                                                                                              "role": "AXGroup",
+                                                                                              "frame": {
+                                                                                                "y": 0,
+                                                                                                "x": 0,
+                                                                                                "width": 1,
+                                                                                                "height": 1
+                                                                                              },
+                                                                                              "children": [
+                                                                                                {
+                                                                                                  "role": "AXGroup",
+                                                                                                  "frame": {
+                                                                                                    "y": 0,
+                                                                                                    "x": 0,
+                                                                                                    "width": 1,
+                                                                                                    "height": 1
+                                                                                                  },
+                                                                                                  "children": [
+                                                                                                    {
+                                                                                                      "role": "AXGroup",
+                                                                                                      "frame": {
+                                                                                                        "y": 0,
+                                                                                                        "x": 0,
+                                                                                                        "width": 1,
+                                                                                                        "height": 1
+                                                                                                      },
+                                                                                                      "children": [
+                                                                                                        {
+                                                                                                          "role": "AXGroup",
+                                                                                                          "frame": {
+                                                                                                            "y": 0,
+                                                                                                            "x": 0.8111587982832618,
+                                                                                                            "width": 0.1888412017167382,
+                                                                                                            "height": 0.26007866273353003
+                                                                                                          },
+                                                                                                          "children": [
+                                                                                                            {
+                                                                                                              "role": "AXGroup",
+                                                                                                              "frame": {
+                                                                                                                "y": 0.029990167158308722,
+                                                                                                                "x": 0.8383404864091561,
+                                                                                                                "width": 0.11802575107296137,
+                                                                                                                "height": 0.2025565388397247
+                                                                                                              },
+                                                                                                              "children": [
+                                                                                                                {
+                                                                                                                  "role": "AXGroup",
+                                                                                                                  "frame": {
+                                                                                                                    "y": 0.029990167158308722,
+                                                                                                                    "x": 0.8383404864091561,
+                                                                                                                    "width": 0.11802575107296137,
+                                                                                                                    "height": 0.20255653883972466
+                                                                                                                  },
+                                                                                                                  "children": [
+                                                                                                                    {
+                                                                                                                      "role": "AXGroup",
+                                                                                                                      "frame": {
+                                                                                                                        "y": 0.029990167158308722,
+                                                                                                                        "x": 0.8383404864091561,
+                                                                                                                        "width": 0.11802575107296137,
+                                                                                                                        "height": 0.20255653883972466
+                                                                                                                      },
+                                                                                                                      "children": [
+                                                                                                                        {
+                                                                                                                          "role": "AXGroup",
+                                                                                                                          "frame": {
+                                                                                                                            "y": 0.029990167158308722,
+                                                                                                                            "x": 0.8383404864091561,
+                                                                                                                            "width": 0.11802575107296137,
+                                                                                                                            "height": 0.20255653883972466
+                                                                                                                          },
+                                                                                                                          "children": [],
+                                                                                                                          "type": "Other",
+                                                                                                                          "covered": true
+                                                                                                                        }
+                                                                                                                      ],
+                                                                                                                      "type": "Other",
+                                                                                                                      "covered": true
+                                                                                                                    }
+                                                                                                                  ],
+                                                                                                                  "type": "Other",
+                                                                                                                  "covered": true
+                                                                                                                }
+                                                                                                              ],
+                                                                                                              "type": "Other",
+                                                                                                              "covered": true
+                                                                                                            },
+                                                                                                            {
+                                                                                                              "role": "AXGroup",
+                                                                                                              "frame": {
+                                                                                                                "y": 0.04424778761061947,
+                                                                                                                "x": 0.8562231759656652,
+                                                                                                                "width": 0.07939914163090128,
+                                                                                                                "height": 0.05457227138643068
+                                                                                                              },
+                                                                                                              "children": [],
+                                                                                                              "type": "Other",
+                                                                                                              "covered": true
+                                                                                                            },
+                                                                                                            {
+                                                                                                              "role": "AXGroup",
+                                                                                                              "frame": {
+                                                                                                                "y": 0.1224188790560472,
+                                                                                                                "x": 0.8469241773962806,
+                                                                                                                "width": 0.10085836909871244,
+                                                                                                                "height": 0.104228121927237
+                                                                                                              },
+                                                                                                              "children": [],
+                                                                                                              "type": "Other",
+                                                                                                              "covered": true
+                                                                                                            },
+                                                                                                            {
+                                                                                                              "role": "AXStaticText",
+                                                                                                              "label": "4:02 PM",
+                                                                                                              "frame": {
+                                                                                                                "y": 0.1224188790560472,
+                                                                                                                "x": 0.8576537911301861,
+                                                                                                                "width": 0.07868383404864096,
+                                                                                                                "height": 0.028515240904621427
+                                                                                                              },
+                                                                                                              "children": [],
+                                                                                                              "type": "StaticText",
+                                                                                                              "traits": [
+                                                                                                                "staticText"
+                                                                                                              ],
+                                                                                                              "covered": true
+                                                                                                            },
+                                                                                                            {
+                                                                                                              "role": "AXGroup",
+                                                                                                              "frame": {
+                                                                                                                "y": 0.15732546705998035,
+                                                                                                                "x": 0.8469241773962806,
+                                                                                                                "width": 0.10085836909871244,
+                                                                                                                "height": 0.06932153392330384
+                                                                                                              },
+                                                                                                              "children": [
+                                                                                                                {
+                                                                                                                  "role": "AXGroup",
+                                                                                                                  "frame": {
+                                                                                                                    "y": 0.15732546705998035,
+                                                                                                                    "x": 0.8469241773962806,
+                                                                                                                    "width": 0.10085836909871244,
+                                                                                                                    "height": 0.06932153392330384
+                                                                                                                  },
+                                                                                                                  "children": [],
+                                                                                                                  "type": "Other",
+                                                                                                                  "covered": true
+                                                                                                                }
+                                                                                                              ],
+                                                                                                              "type": "Other",
+                                                                                                              "covered": true
+                                                                                                            },
+                                                                                                            {
+                                                                                                              "role": "AXGroup",
+                                                                                                              "frame": {
+                                                                                                                "y": 0.15732546705998035,
+                                                                                                                "x": 0.8469241773962806,
+                                                                                                                "width": 0.10085836909871244,
+                                                                                                                "height": 0.06932153392330384
+                                                                                                              },
+                                                                                                              "children": [
+                                                                                                                {
+                                                                                                                  "role": "AXGroup",
+                                                                                                                  "frame": {
+                                                                                                                    "y": 0.15732546705998035,
+                                                                                                                    "x": 0.8469241773962806,
+                                                                                                                    "width": 0.10085836909871244,
+                                                                                                                    "height": 0.06932153392330384
+                                                                                                                  },
+                                                                                                                  "children": [
+                                                                                                                    {
+                                                                                                                      "role": "AXGroup",
+                                                                                                                      "frame": {
+                                                                                                                        "y": 0.15732546705998035,
+                                                                                                                        "x": 0.8469241773962806,
+                                                                                                                        "width": 0.10085836909871244,
+                                                                                                                        "height": 0.06932153392330384
+                                                                                                                      },
+                                                                                                                      "children": [
+                                                                                                                        {
+                                                                                                                          "role": "AXImage",
+                                                                                                                          "label": "wifi_68_status_bar_C2",
+                                                                                                                          "frame": {
+                                                                                                                            "y": 0.18190757128810225,
+                                                                                                                            "x": 0.8776824034334764,
+                                                                                                                            "width": 0.0393419183886614,
+                                                                                                                            "height": 0.01966568432023042
+                                                                                                                          },
+                                                                                                                          "children": [],
+                                                                                                                          "type": "Image",
+                                                                                                                          "traits": [
+                                                                                                                            "image"
+                                                                                                                          ],
+                                                                                                                          "covered": true
+                                                                                                                        }
+                                                                                                                      ],
+                                                                                                                      "type": "Other",
+                                                                                                                      "covered": true
+                                                                                                                    }
+                                                                                                                  ],
+                                                                                                                  "type": "Other",
+                                                                                                                  "covered": true
+                                                                                                                }
+                                                                                                              ],
+                                                                                                              "type": "Other",
+                                                                                                              "covered": true
+                                                                                                            }
+                                                                                                          ],
+                                                                                                          "type": "Other",
+                                                                                                          "covered": true
+                                                                                                        }
+                                                                                                      ],
+                                                                                                      "type": "Other",
+                                                                                                      "covered": true
+                                                                                                    }
+                                                                                                  ],
+                                                                                                  "type": "StatusBar",
+                                                                                                  "covered": true
+                                                                                                }
+                                                                                              ],
+                                                                                              "type": "Other",
+                                                                                              "covered": true
+                                                                                            }
+                                                                                          ],
+                                                                                          "type": "Other",
+                                                                                          "covered": true
+                                                                                        }
+                                                                                      ],
+                                                                                      "type": "Other",
+                                                                                      "covered": true
+                                                                                    },
+                                                                                    {
+                                                                                      "role": "AXGroup",
+                                                                                      "frame": {
+                                                                                        "y": 0,
+                                                                                        "x": 0,
+                                                                                        "width": 1,
+                                                                                        "height": 1
+                                                                                      },
+                                                                                      "children": [
+                                                                                        {
+                                                                                          "role": "AXGroup",
+                                                                                          "frame": {
+                                                                                            "y": 0,
+                                                                                            "x": 0,
+                                                                                            "width": 1,
+                                                                                            "height": 1
+                                                                                          },
+                                                                                          "children": [
+                                                                                            {
+                                                                                              "role": "AXGroup",
+                                                                                              "frame": {
+                                                                                                "y": 0,
+                                                                                                "x": 0,
+                                                                                                "width": 1,
+                                                                                                "height": 1
+                                                                                              },
+                                                                                              "children": [],
+                                                                                              "type": "Other",
+                                                                                              "covered": true
+                                                                                            }
+                                                                                          ],
+                                                                                          "type": "Other",
+                                                                                          "covered": true
+                                                                                        }
+                                                                                      ],
+                                                                                      "type": "Other",
+                                                                                      "covered": true
+                                                                                    }
+                                                                                  ],
+                                                                                  "type": "Other",
+                                                                                  "covered": true
+                                                                                }
+                                                                              ],
+                                                                              "type": "Other",
+                                                                              "covered": true
+                                                                            }
+                                                                          ],
+                                                                          "type": "Other",
+                                                                          "covered": true
+                                                                        }
+                                                                      ],
+                                                                      "type": "Other",
+                                                                      "covered": true
+                                                                    },
+                                                                    {
+                                                                      "role": "AXGroup",
+                                                                      "frame": {
+                                                                        "y": 0,
+                                                                        "x": 0,
+                                                                        "width": 1,
+                                                                        "height": 1
+                                                                      },
+                                                                      "children": [],
+                                                                      "type": "Other",
+                                                                      "covered": true
+                                                                    },
+                                                                    {
+                                                                      "role": "AXGroup",
+                                                                      "frame": {
+                                                                        "y": 0,
+                                                                        "x": 0,
+                                                                        "width": 1,
+                                                                        "height": 1
+                                                                      },
+                                                                      "children": [],
+                                                                      "type": "Other",
+                                                                      "covered": true
+                                                                    }
+                                                                  ],
+                                                                  "type": "Other",
+                                                                  "covered": true
+                                                                }
+                                                              ],
+                                                              "type": "Other",
+                                                              "covered": true
+                                                            }
+                                                          ],
+                                                          "type": "ScrollView",
+                                                          "covered": true
+                                                        }
+                                                      ],
+                                                      "type": "Other",
+                                                      "covered": true
+                                                    }
+                                                  ],
+                                                  "type": "Other",
+                                                  "covered": true
+                                                }
+                                              ],
+                                              "type": "Other",
+                                              "covered": true
+                                            }
+                                          ],
+                                          "type": "Other",
+                                          "covered": true
+                                        }
+                                      ],
+                                      "type": "Other",
+                                      "covered": true
+                                    }
+                                  ],
+                                  "type": "Other",
+                                  "covered": true
+                                },
+                                {
+                                  "role": "AXGroup",
+                                  "frame": {
+                                    "y": 0,
+                                    "x": 0,
+                                    "width": 1,
+                                    "height": 1
+                                  },
+                                  "children": [
+                                    {
+                                      "role": "AXGroup",
+                                      "frame": {
+                                        "y": 0,
+                                        "x": 0,
+                                        "width": 1,
+                                        "height": 1
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXGroup",
+                                          "frame": {
+                                            "y": 0,
+                                            "x": 0,
+                                            "width": 1,
+                                            "height": 1
+                                          },
+                                          "children": [
+                                            {
+                                              "role": "AXGroup",
+                                              "frame": {
+                                                "y": 0,
+                                                "x": 0,
+                                                "width": 1,
+                                                "height": 1
+                                              },
+                                              "children": [],
+                                              "type": "Other",
+                                              "covered": true
+                                            }
+                                          ],
+                                          "type": "Other",
+                                          "covered": true
+                                        }
+                                      ],
+                                      "type": "Other",
+                                      "covered": true
+                                    }
+                                  ],
+                                  "type": "Other",
+                                  "covered": true
+                                }
+                              ],
+                              "type": "Other",
+                              "covered": true
+                            }
+                          ],
+                          "type": "Other",
+                          "covered": true
+                        }
+                      ],
+                      "type": "Other",
+                      "covered": true
+                    }
+                  ],
+                  "type": "Other",
+                  "covered": true
+                }
+              ],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 1,
+                    "height": 1
+                  },
+                  "children": [],
+                  "type": "Other",
+                  "covered": true
+                }
+              ],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 1,
+                    "height": 1
+                  },
+                  "children": [],
+                  "type": "Other",
+                  "covered": true
+                }
+              ],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 0.33333333333333337,
+            "height": 0.3333333333333333
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 0.33333333333333337,
+                "height": 0.3333333333333333
+              },
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 0.33333333333333337,
+                    "height": 0.3333333333333333
+                  },
+                  "children": [],
+                  "type": "Other",
+                  "covered": true
+                }
+              ],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 1,
+                    "height": 1
+                  },
+                  "children": [],
+                  "type": "Other",
+                  "covered": true
+                }
+              ],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 0.00357653791130186,
+                "height": 0.002458210422812193
+              },
+              "children": [],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [],
+              "type": "StatusBar",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0.017699115044247787,
+                    "x": 0.02575107296137339,
+                    "width": 0.11158798283261803,
+                    "height": 0.0034414945919370708
+                  },
+                  "children": [],
+                  "type": "Other",
+                  "covered": true
+                }
+              ],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [],
+              "type": "Other",
+              "covered": true
+            }
+          ],
+          "type": "Application",
+          "covered": true
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [],
+              "type": "Other"
+            },
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [],
+              "type": "Other"
+            },
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 1,
+                    "height": 1
+                  },
+                  "children": [],
+                  "type": "Other"
+                },
+                {
+                  "role": "AXGroup",
+                  "frame": {
+                    "y": 0,
+                    "x": 0,
+                    "width": 1,
+                    "height": 1
+                  },
+                  "children": [],
+                  "type": "Other"
+                },
+                {
+                  "role": "AXGroup",
+                  "label": "Open in “euxy”?",
+                  "frame": {
+                    "y": 0.38200589970501475,
+                    "x": 0.06652360515021459,
+                    "width": 0.6866952789699571,
+                    "height": 0.18584070796460178
+                  },
+                  "children": [
+                    {
+                      "role": "AXGroup",
+                      "frame": {
+                        "y": 0.38200589970501475,
+                        "x": 0.06652360515021459,
+                        "width": 0.6866952789699571,
+                        "height": 0.18584070796460178
+                      },
+                      "children": [
+                        {
+                          "role": "AXGroup",
+                          "frame": {
+                            "y": 0.38200589970501475,
+                            "x": 0.06652360515021459,
+                            "width": 0.6866952789699571,
+                            "height": 0.18584070796460178
+                          },
+                          "children": [
+                            {
+                              "role": "AXGroup",
+                              "frame": {
+                                "y": 0.38200589970501475,
+                                "x": 0.06652360515021459,
+                                "width": 0.6866952789699571,
+                                "height": 0.18584070796460178
+                              },
+                              "children": [],
+                              "type": "Other"
+                            },
+                            {
+                              "role": "AXGroup",
+                              "frame": {
+                                "y": 0.38200589970501475,
+                                "x": 0.06652360515021459,
+                                "width": 0.6866952789699571,
+                                "height": 0.18584070796460178
+                              },
+                              "children": [
+                                {
+                                  "role": "AXGroup",
+                                  "roleDescription": "Group",
+                                  "frame": {
+                                    "y": 0.38200589970501475,
+                                    "x": 0.06652360515021459,
+                                    "width": 0.6866952789699571,
+                                    "height": 0.06784660766961652
+                                  },
+                                  "children": [
+                                    {
+                                      "role": "AXGroup",
+                                      "frame": {
+                                        "y": 0.38200589970501475,
+                                        "x": 0.06652360515021459,
+                                        "width": 0.6866952789699571,
+                                        "height": 0.06784660766961652
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXStaticText",
+                                          "label": "Open in “euxy”?",
+                                          "frame": {
+                                            "y": 0.4139626352015733,
+                                            "x": 0.13090128755364808,
+                                            "width": 0.5579399141630901,
+                                            "height": 0.029990167158308722
+                                          },
+                                          "children": [],
+                                          "type": "StaticText",
+                                          "traits": [
+                                            "staticText"
+                                          ]
+                                        }
+                                      ],
+                                      "type": "Other"
+                                    },
+                                    {
+                                      "role": "AXGroup",
+                                      "frame": {
+                                        "y": 0.4469026548672566,
+                                        "x": 0.06652360515021459,
+                                        "width": 0.6866952789699571,
+                                        "height": 0.0029498525073746312
+                                      },
+                                      "children": [],
+                                      "type": "Other"
+                                    },
+                                    {
+                                      "role": "AXAdjustable",
+                                      "label": "Vertical scroll bar, 2 pages",
+                                      "value": "0%",
+                                      "frame": {
+                                        "y": 0.38200589970501475,
+                                        "x": 0.6824034334763949,
+                                        "width": 0.06437768240343347,
+                                        "height": 0.06784660766961652
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXGroup",
+                                          "frame": {
+                                            "y": 0.32448377581120946,
+                                            "x": 0.740343347639485,
+                                            "width": 0.006437768240343348,
+                                            "height": 0.05309734513274336
+                                          },
+                                          "children": [],
+                                          "type": "Other",
+                                          "hidden": true
+                                        }
+                                      ],
+                                      "type": "Other",
+                                      "traits": [
+                                        "adjustable"
+                                      ]
+                                    },
+                                    {
+                                      "role": "AXAdjustable",
+                                      "label": "Horizontal scroll bar, 1 page",
+                                      "value": "0%",
+                                      "frame": {
+                                        "y": 0.41150442477876104,
+                                        "x": 0.06652360515021459,
+                                        "width": 0.6866952789699571,
+                                        "height": 0.03392330383480826
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXGroup",
+                                          "frame": {
+                                            "y": 0.4410029498525074,
+                                            "x": -0.017167381974248927,
+                                            "width": 0.07725321888412018,
+                                            "height": 0.004424778761061947
+                                          },
+                                          "children": [],
+                                          "type": "Other",
+                                          "hidden": true
+                                        }
+                                      ],
+                                      "type": "Other",
+                                      "traits": [
+                                        "adjustable"
+                                      ]
+                                    },
+                                    {
+                                      "role": "AXAdjustable",
+                                      "label": "Vertical scroll bar, 2 pages",
+                                      "value": "0%",
+                                      "frame": {
+                                        "y": 0.38200589970501475,
+                                        "x": 0.6824034334763949,
+                                        "width": 0.06437768240343347,
+                                        "height": 0.06784660766961652
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXGroup",
+                                          "frame": {
+                                            "y": 0.32448377581120946,
+                                            "x": 0.740343347639485,
+                                            "width": 0.006437768240343348,
+                                            "height": 0.05309734513274336
+                                          },
+                                          "children": [],
+                                          "type": "Other",
+                                          "hidden": true
+                                        }
+                                      ],
+                                      "type": "Other",
+                                      "traits": [
+                                        "adjustable"
+                                      ]
+                                    },
+                                    {
+                                      "role": "AXAdjustable",
+                                      "label": "Horizontal scroll bar, 1 page",
+                                      "value": "0%",
+                                      "frame": {
+                                        "y": 0.41150442477876104,
+                                        "x": 0.06652360515021459,
+                                        "width": 0.6866952789699571,
+                                        "height": 0.03392330383480826
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXGroup",
+                                          "frame": {
+                                            "y": 0.4410029498525074,
+                                            "x": -0.017167381974248927,
+                                            "width": 0.07725321888412018,
+                                            "height": 0.004424778761061947
+                                          },
+                                          "children": [],
+                                          "type": "Other",
+                                          "hidden": true
+                                        }
+                                      ],
+                                      "type": "Other",
+                                      "traits": [
+                                        "adjustable"
+                                      ]
+                                    }
+                                  ],
+                                  "type": "ScrollView"
+                                },
+                                {
+                                  "role": "AXGroup",
+                                  "roleDescription": "Group",
+                                  "frame": {
+                                    "y": 0.4498525073746313,
+                                    "x": 0.06652360515021459,
+                                    "width": 0.6866952789699571,
+                                    "height": 0.11799410029498525
+                                  },
+                                  "children": [
+                                    {
+                                      "role": "AXGroup",
+                                      "frame": {
+                                        "y": 0.4498525073746313,
+                                        "x": 0.06652360515021459,
+                                        "width": 0.6866952789699571,
+                                        "height": 0.11799410029498525
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXGroup",
+                                          "frame": {
+                                            "y": 0.47345132743362833,
+                                            "x": 0.10085836909871244,
+                                            "width": 0.6180257510729614,
+                                            "height": 0.07079646017699115
+                                          },
+                                          "children": [
+                                            {
+                                              "role": "AXButton",
+                                              "label": "Cancel",
+                                              "frame": {
+                                                "y": 0.47345132743362833,
+                                                "x": 0.10085836909871244,
+                                                "width": 0.30042918454935624,
+                                                "height": 0.07079646017699115
+                                              },
+                                              "children": [],
+                                              "type": "Button",
+                                              "traits": [
+                                                "button"
+                                              ]
+                                            },
+                                            {
+                                              "role": "AXButton",
+                                              "label": "Open",
+                                              "frame": {
+                                                "y": 0.47345132743362833,
+                                                "x": 0.4184549356223176,
+                                                "width": 0.30042918454935624,
+                                                "height": 0.07079646017699115
+                                              },
+                                              "children": [],
+                                              "type": "Button",
+                                              "traits": [
+                                                "button"
+                                              ]
+                                            }
+                                          ],
+                                          "type": "Other"
+                                        }
+                                      ],
+                                      "type": "Other"
+                                    },
+                                    {
+                                      "role": "AXAdjustable",
+                                      "label": "Vertical scroll bar, 1 page",
+                                      "value": "0%",
+                                      "frame": {
+                                        "y": 0.4498525073746313,
+                                        "x": 0.6824034334763949,
+                                        "width": 0.06437768240343347,
+                                        "height": 0.11799410029498525
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXGroup",
+                                          "frame": {
+                                            "y": 0.5825958702064897,
+                                            "x": 0.740343347639485,
+                                            "width": 0.006437768240343348,
+                                            "height": 0.01032448377581121
+                                          },
+                                          "children": [],
+                                          "type": "Other",
+                                          "hidden": true
+                                        }
+                                      ],
+                                      "type": "Other",
+                                      "traits": [
+                                        "adjustable"
+                                      ]
+                                    },
+                                    {
+                                      "role": "AXAdjustable",
+                                      "label": "Horizontal scroll bar, 1 page",
+                                      "value": "0%",
+                                      "frame": {
+                                        "y": 0.5191740412979351,
+                                        "x": 0.06652360515021459,
+                                        "width": 0.6866952789699571,
+                                        "height": 0.04424778761061947
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXGroup",
+                                          "frame": {
+                                            "y": 0.5589970501474927,
+                                            "x": 0.259656652360515,
+                                            "width": 0.015021459227467811,
+                                            "height": 0.004424778761061947
+                                          },
+                                          "children": [],
+                                          "type": "Other"
+                                        }
+                                      ],
+                                      "type": "Other",
+                                      "traits": [
+                                        "adjustable"
+                                      ]
+                                    },
+                                    {
+                                      "role": "AXAdjustable",
+                                      "label": "Vertical scroll bar, 1 page",
+                                      "value": "0%",
+                                      "frame": {
+                                        "y": 0.4498525073746313,
+                                        "x": 0.6824034334763949,
+                                        "width": 0.06437768240343347,
+                                        "height": 0.11799410029498525
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXGroup",
+                                          "frame": {
+                                            "y": 0.5825958702064897,
+                                            "x": 0.740343347639485,
+                                            "width": 0.006437768240343348,
+                                            "height": 0.01032448377581121
+                                          },
+                                          "children": [],
+                                          "type": "Other",
+                                          "hidden": true
+                                        }
+                                      ],
+                                      "type": "Other",
+                                      "traits": [
+                                        "adjustable"
+                                      ]
+                                    },
+                                    {
+                                      "role": "AXAdjustable",
+                                      "label": "Horizontal scroll bar, 1 page",
+                                      "value": "0%",
+                                      "frame": {
+                                        "y": 0.5191740412979351,
+                                        "x": 0.06652360515021459,
+                                        "width": 0.6866952789699571,
+                                        "height": 0.04424778761061947
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXGroup",
+                                          "frame": {
+                                            "y": 0.5589970501474927,
+                                            "x": 0.259656652360515,
+                                            "width": 0.015021459227467811,
+                                            "height": 0.004424778761061947
+                                          },
+                                          "children": [],
+                                          "type": "Other"
+                                        }
+                                      ],
+                                      "type": "Other",
+                                      "traits": [
+                                        "adjustable"
+                                      ]
+                                    }
+                                  ],
+                                  "type": "ScrollView"
+                                }
+                              ],
+                              "type": "Other"
+                            }
+                          ],
+                          "type": "Other"
+                        }
+                      ],
+                      "type": "Other"
+                    },
+                    {
+                      "role": "AXGroup",
+                      "frame": {
+                        "y": 0.38200589970501475,
+                        "x": 0.06652360515021459,
+                        "width": 0.6866952789699571,
+                        "height": 0.18584070796460178
+                      },
+                      "children": [
+                        {
+                          "role": "AXGroup",
+                          "frame": {
+                            "y": 0.38200589970501475,
+                            "x": 0.06652360515021459,
+                            "width": 0.6866952789699571,
+                            "height": 0.18584070796460178
+                          },
+                          "children": [
+                            {
+                              "role": "AXGroup",
+                              "frame": {
+                                "y": 0.38200589970501475,
+                                "x": 0.06652360515021459,
+                                "width": 0.6866952789699571,
+                                "height": 0.18584070796460178
+                              },
+                              "children": [
+                                {
+                                  "role": "AXGroup",
+                                  "frame": {
+                                    "y": 0.38200589970501475,
+                                    "x": 0.06652360515021459,
+                                    "width": 0.6866952789699571,
+                                    "height": 0.18584070796460178
+                                  },
+                                  "children": [
+                                    {
+                                      "role": "AXGroup",
+                                      "frame": {
+                                        "y": 0.38200589970501475,
+                                        "x": 0.06652360515021459,
+                                        "width": 0.6866952789699571,
+                                        "height": 0.18584070796460178
+                                      },
+                                      "children": [
+                                        {
+                                          "role": "AXGroup",
+                                          "frame": {
+                                            "y": 0.38200589970501475,
+                                            "x": 0.06652360515021459,
+                                            "width": 1,
+                                            "height": 1
+                                          },
+                                          "children": [],
+                                          "type": "Other"
+                                        }
+                                      ],
+                                      "type": "Other"
+                                    }
+                                  ],
+                                  "type": "Other"
+                                },
+                                {
+                                  "role": "AXGroup",
+                                  "frame": {
+                                    "y": 0.38200589970501475,
+                                    "x": 0.06652360515021459,
+                                    "width": 0.6866952789699571,
+                                    "height": 0.18584070796460178
+                                  },
+                                  "children": [
+                                    {
+                                      "role": "AXGroup",
+                                      "frame": {
+                                        "y": 0.38200589970501475,
+                                        "x": 0.06652360515021459,
+                                        "width": 1,
+                                        "height": 1
+                                      },
+                                      "children": [],
+                                      "type": "Other"
+                                    }
+                                  ],
+                                  "type": "Other"
+                                }
+                              ],
+                              "type": "Other"
+                            }
+                          ],
+                          "type": "Other"
+                        }
+                      ],
+                      "type": "Other"
+                    }
+                  ],
+                  "type": "Group"
+                }
+              ],
+              "type": "Other"
+            }
+          ],
+          "type": "Application"
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [
+            {
+              "role": "AXGroup",
+              "frame": {
+                "y": 0,
+                "x": 0,
+                "width": 1,
+                "height": 1
+              },
+              "children": [],
+              "type": "Other"
+            }
+          ],
+          "type": "Application"
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [],
+          "type": "Application"
+        },
+        {
+          "role": "AXGroup",
+          "frame": {
+            "y": 0,
+            "x": 0,
+            "width": 1,
+            "height": 1
+          },
+          "children": [],
+          "type": "Application"
+        }
+      ],
+      "type": "Other",
+      "bundleId": "com.apple.springboard"
+    }
+  ],
+  "truncated": false,
+  "alertVisible": false,
+  "keyboardVisible": false,
+  "foregroundApp": "com.apple.springboard",
+  "unsupportedFields": []
+}

@@ -284,6 +284,10 @@ async function constructCaptureReview(options: CaptureReviewOptions, store: Scre
       ? sourceImpactKinds(surface.sourceChange.files.map((file) => file.relation))
       : []
   );
+  // Each controller reads and drives the device its own way; a review compares captures made the same way.
+  if ((head.bundle.controller ?? "agent-device") !== (base.bundle.controller ?? "agent-device")) {
+    throw new Error(`The base was captured with ${base.bundle.controller ?? "agent-device"} and the head with ${head.bundle.controller ?? "agent-device"}; capture both sides with the same controller.`);
+  }
   const colorSchemes = bundleColorSchemes(head.bundle);
   const baseColorSchemes = bundleColorSchemes(base.bundle);
   const review: PublicReview = {
@@ -291,7 +295,7 @@ async function constructCaptureReview(options: CaptureReviewOptions, store: Scre
     runId: options.runId, runAttempt: options.runAttempt,
     ...(plan.navigation ? { navigation: plan.navigation } : {}),
     runtime: { projectId: head.bundle.easProjectId ?? "", buildId: head.bundle.easBuildId ?? "", gitCommit: plan.headSha,
-      platform: head.bundle.platform ?? "ios", statusBarBandPercent: statusBarBandPercent(head.bundle.platform),
+      platform: head.bundle.platform ?? "ios", ...(head.bundle.controller === "argent" ? { controller: "argent" as const } : {}), statusBarBandPercent: statusBarBandPercent(head.bundle.platform),
       ...(homeIndicatorBandPercent(head.bundle.platform) > 0 ? { homeIndicatorBandPercent: homeIndicatorBandPercent(head.bundle.platform) } : {}),
       ...(options.platforms && options.platforms.length > 1 ? { platforms: [...options.platforms] } : {}),
       ...(colorSchemes.length > 1 ? { colorSchemes: [...colorSchemes] } : {}),

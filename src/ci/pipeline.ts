@@ -26,6 +26,7 @@ import type { SourceCapturePlan } from "../source/capture-plan.js";
 import { createSourceChangeSummaries } from "../source/change-summary.js";
 import { assertNoCaptureHealthIssues, partitionCaptureHealthIssues, renderCaptureIssueAnnotation, renderComparisonDiagnosticAnnotation, renderNotesUnavailableAnnotation, renderReviewGapAnnotation, sortedCaptureHealthIssues } from "../capture/health.js";
 import { EXPLORE_PACKAGE, packageBin } from "../shared/package-paths.js";
+import { agentDeviceLauncher, ensureController } from "../shared/controller-cache.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
 
 
@@ -63,16 +64,22 @@ type CaptureClock = { now?: (() => number) | undefined; sleep?: ((milliseconds: 
 
 function captureOptions(config: ExploreConfig, environment: NodeJS.ProcessEnv, runner?: CommandRunner, clock: CaptureClock = {}) {
   return { ...(runner && clock.now ? { now: clock.now } : {}), ...(runner && clock.sleep ? { sleep: clock.sleep } : {}), platform: config.app.platform, bundleId: config.app.bundleId,
-    ...(config.app.scheme ? { scheme: config.app.scheme } : {}), device: config.device.name,
+    ...(config.app.scheme ? { scheme: config.app.scheme } : {}), device: config.device.name, ...(config.device.pose ? { devicePose: config.device.pose } : {}),
     easProfile: config.app.easProfile, expoToken: environment.EXPO_TOKEN ?? "",
     maxScreens: 5000, maxActions: config.capture.maxActions, maxDurationMinutes: config.capture.maxMinutes,
-    setup: config.setup ?? [], forceFreshBuild: false, confirmExternalRun: true, confirmTrustedSource: true, repack: config.capture.repack, appearance: config.capture.appearance, launch: config.capture.launch, reset: config.capture.reset, unattributed: config.capture.unattributed, ...(config.capture.readinessSeconds !== undefined ? { readinessSeconds: config.capture.readinessSeconds } : {}),
-    environment, ...(runner ? { runner } : {}), easCommand: packageBin("eas-cli", "eas"), agentDeviceCommand: packageBin("agent-device", "agent-device"), repackCommand: packageBin("@expo/repack-app", "repack-app") };
+    setup: config.setup ?? [], forceFreshBuild: false, confirmExternalRun: true, confirmTrustedSource: true, repack: config.capture.repack, appearance: config.capture.appearance, launch: config.capture.launch, reset: config.capture.reset, unattributed: config.capture.unattributed, ...(config.capture.readinessSeconds !== undefined ? { readinessSeconds: config.capture.readinessSeconds } : {}), ...(config.capture.controller ? { controller: config.capture.controller } : {}),
+    environment, ...(runner ? { runner } : {}), easCommand: packageBin("eas-cli", "eas"), agentDeviceCommand: agentDeviceLauncher(environment), repackCommand: packageBin("@expo/repack-app", "repack-app") };
 }
 /**
  * Head and base run in parallel worker threads when nothing ties them together: an agent session is
  * shared, an injected runner belongs to this thread, and a plausible baseline needs head's runtime profile.
  */
+/** The controllers a capture of this config runs: agent-device always (it also compares screenshots), Argent when chosen. */
+async function prefetchControllers(config: ExploreConfig, environment: NodeJS.ProcessEnv, progress: Progress): Promise<void> {
+  await ensureController("agent-device", { environment, progress });
+  if (config.capture.controller === "argent") await ensureController("argent", { environment, progress });
+}
+
 export function captureSidesConcurrently(input: { plan: SourceCapturePlan; agent: boolean; injectedRunner: boolean; baselineMayExist: boolean }): boolean {
   return !input.agent && !input.injectedRunner && !input.baselineMayExist
     && input.plan.headCaptureSurfaceIds.length > 0 && input.plan.baseCaptureSurfaceIds.length > 0;
@@ -246,6 +253,9 @@ export async function runCiReview(options: {
 }) {
   const { projects, output, config, environment, state, assertCurrentHead, postComment } = options;
   const progress = options.progress ?? silentProgress;
+  // The controllers are fetched before any EAS work, so a blocked download fails before a session is paid for. agent-device
+  // also compares the screenshots. An injected runner (tests) runs no real controller.
+  if (!options.runner) await prefetchControllers(config, environment, progress);
   const pr = options.presentation;
   const now = options.now ?? Date.now;
   const secretValues = Object.entries(environment).filter(([key]) => /(?:TOKEN|SECRET|PASSWORD|API_KEY)/i.test(key)).flatMap(([, value]) => value ? [value] : []);
@@ -344,7 +354,7 @@ export async function runCiReview(options: {
     stage = "compare";
     progress("comparing base and head captures");
     const sides = { base: await evidenceSide(join(output, "base-export")), head: await evidenceSide(join(output, "head-export")) };
-    const evidence = await assessPublicEvidence({ platform: config.app.platform, plan, ...sides, ...(options.measure ? { measure: options.measure } : {}), profile: `${config.app.easProfile}:${config.app.bundleId}`, agentDeviceCommand: packageBin("agent-device", "agent-device") });
+    const evidence = await assessPublicEvidence({ platform: config.app.platform, plan, ...sides, ...(options.measure ? { measure: options.measure } : {}), profile: `${config.app.easProfile}:${config.app.bundleId}`, agentDeviceCommand: agentDeviceLauncher(options.environment) });
     const result = await prepareCaptureReview({ plan, pullRequest: pr, baseDirectory: sides.base.directory, headDirectory: sides.head.directory,
       runId: options.runId, runAttempt: options.runAttempt, assertCurrentHead, assessments: evidence.surfaces,
       ...(options.platforms ? { platforms: options.platforms } : {}),
@@ -444,6 +454,7 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
   subscription?: boolean }) {
   const environment = options.environment ?? process.env;
   assertCheckout(options.project, options.sha);
+  if (!options.runner) await prefetchControllers(options.config, environment, options.progress ?? silentProgress);
   const output = resolve(options.output);
   const relativeOutput = relative(await realpath(options.project), output);
   if (!relativeOutput.startsWith("..") || isAbsolute(relativeOutput)) throw new Error("Baseline output must be outside the source checkout");

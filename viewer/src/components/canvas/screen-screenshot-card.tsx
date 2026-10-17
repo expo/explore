@@ -25,6 +25,8 @@ export type ScreenScreenshotCardProps = {
   ariaPressed?: boolean;
   imageWidth?: number;
   imageHeight?: number;
+  /** The frame of a screen without a screenshot: its run's screenshots, so it lines up beside them. */
+  placeholderSize?: { width: number; height: number };
   loading?: "eager" | "lazy";
   leading?: ReactNode;
   trailing?: ReactNode;
@@ -42,7 +44,7 @@ export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
   // frame it waited in, and a screen without one is framed like a phone screenshot beside it.
   const frame = props.screenshot && props.imageWidth && props.imageHeight
     ? { width: props.imageWidth, height: props.imageHeight }
-    : DEFAULT_SCREENSHOT_SIZE;
+    : props.placeholderSize ?? DEFAULT_SCREENSHOT_SIZE;
   const missing = (
     <span
       className="image-placeholder"

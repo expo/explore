@@ -565,9 +565,10 @@ code {
   background: transparent;
   text-align: inherit;
 }
+/* A map sizes its cards to the shape of the run's screenshots (semantic-map.tsx mapFrame). */
 .screen-node {
-  width: 184px;
-  height: 420px;
+  width: var(--map-screen-width, 184px);
+  height: var(--map-screen-height, 420px);
   cursor: grab;
 }
 .screen-node:active { cursor: grabbing; }
@@ -846,8 +847,8 @@ code {
 /* Map screens retain the original inspectable phone frame. Semantic hierarchy reduces how many
    screens are present; it must not make the screens themselves unreadable. */
 .map-surface .screen-node {
-  width: 184px;
-  height: 420px;
+  width: var(--map-screen-width, 184px);
+  height: var(--map-screen-height, 420px);
   gap: 14px;
 }
 .map-surface .screen-node-heading { min-height: 20px; padding: 0 4px; }

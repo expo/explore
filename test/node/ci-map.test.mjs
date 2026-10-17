@@ -142,13 +142,16 @@ async function fixture(t, settings = {}) {
       }
       if (command === 'simulator:start') {
         sessionName = value(request, '--name');
-        writeFileSync(join(request.cwd, '.env.eas-simulator'), HEADER + "EAS_SIMULATOR_SESSION_ID='session-1'\nAGENT_DEVICE_DAEMON_BASE_URL='https://controller.example/session'\nAGENT_DEVICE_DAEMON_AUTH_TOKEN='" + DAEMON_TOKEN + "'\n");
+        writeFileSync(join(request.cwd, '.env.eas-simulator'), HEADER + "EAS_SIMULATOR_SESSION_ID='session-1'\n" + (settings.argent
+          ? "ARGENT_TOOLS_URL='https://controller.example/session'\nARGENT_AUTH_TOKEN='" + DAEMON_TOKEN + "'\n"
+          : "AGENT_DEVICE_DAEMON_BASE_URL='https://controller.example/session'\nAGENT_DEVICE_DAEMON_AUTH_TOKEN='" + DAEMON_TOKEN + "'\n"));
         if (settings.startFailure) throw new Error('start reported failure after allocation');
         return { stdout: 'ready', stderr: '' };
       }
-      if (command === 'simulator:get') return json({ id: 'session-1', name: sessionName, type: 'agent-device', platform: settings.android ? 'ANDROID' : 'IOS', status: 'IN_PROGRESS',
+      if (command === 'simulator:get') return json({ id: 'session-1', name: sessionName, type: settings.argent ? 'argent' : 'agent-device', platform: settings.android ? 'ANDROID' : 'IOS', status: 'IN_PROGRESS',
         app: { id: settings.wrongProject ? 'foreign-project' : PROJECT_ID, slug: 'example', ownerAccount: { name: 'acme' } },
-        remoteConfig: { agentDeviceRemoteSessionUrl: 'https://controller.example/session', agentDeviceRemoteSessionToken: DAEMON_TOKEN,
+        remoteConfig: { ...(settings.argent ? { toolsUrl: 'https://controller.example/session', toolsAuthToken: DAEMON_TOKEN }
+          : { agentDeviceRemoteSessionUrl: 'https://controller.example/session', agentDeviceRemoteSessionToken: DAEMON_TOKEN }),
           // eas-cli --json folds the preview token into an expo.dev page that frames the preview server.
           webPreviewUrl: settings.webPreviewUrl ?? `https://expo.dev/simulator-preview/${PREVIEW_ID}?token=${PREVIEW_TOKEN}`,
           ...(settings.previewApiUrl ? { previewApiUrl: settings.previewApiUrl } : {}) } });
@@ -165,8 +168,9 @@ async function fixture(t, settings = {}) {
       if (settings.android) writeFileSync(value(request, '--output'), 'apk'); else mkdirSync(value(request, '--output'));
       return { stdout: '', stderr: '' };
     }
-    if (request.command === 'fake-controller') {
-      if (command === '--version') return { stdout: AGENT_DEVICE_VERSION, stderr: '' };
+    // An Argent capture runs its per-run bridge in place of agent-device; the bridge answers in agent-device's envelopes.
+    if (request.command === 'fake-controller' || (settings.argent && request.command.endsWith('/argent-controller'))) {
+      if (command === '--version') return { stdout: settings.argent ? '0.29.0' : AGENT_DEVICE_VERSION, stderr: '' };
       if (command === 'open') {
         if (request.args.includes('--relaunch')) splashLeft = settings.splashFrames ?? 0;
         if (request.args[2]?.startsWith('sample://')) {
@@ -185,6 +189,7 @@ async function fixture(t, settings = {}) {
         return ok(settings.wrongForeground ? { appBundleId: 'com.foreign.app' } : identity());
       }
       if (command === 'wait') return ok({});
+      if (command === 'fold') return ok({ action: 'fold', pose: request.args[1] });
       if (command === 'record' && settings.recording) {
         if (request.args[1] === 'start') { recordingPath = request.args[2]; return ok({ path: recordingPath }); }
         writeFileSync(recordingPath, 'mp4-bytes'); return ok({ path: recordingPath });
@@ -283,7 +288,7 @@ async function fixture(t, settings = {}) {
     buildId: 'source-capture', buildVersion: '1', gitCommit: SHA, bundleId: 'com.example.app',
     ...(settings.noScheme ? {} : { scheme: 'sample' }), device: deviceName, easProfile: 'capture', expoToken: 'expo-private', ...(settings.android ? { platform: 'android' } : {}),
     planPath, maxScreens: 120, maxActions: 500, maxDurationMinutes: 30, forceFreshBuild: false,
-    confirmExternalRun: true, confirmTrustedSource: true, easCommand: 'fake-eas', repackCommand: 'fake-repack', agentDeviceCommand: 'fake-controller', ...(settings.launch ? { launch: settings.launch, recordingTools: settings.recordingTools ?? null } : {}), ...(settings.repack ? { repack: settings.repack } : {}),
+    confirmExternalRun: true, confirmTrustedSource: true, easCommand: 'fake-eas', repackCommand: 'fake-repack', agentDeviceCommand: 'fake-controller', ...(settings.argent ? { controller: 'argent' } : {}), ...(settings.devicePose ? { devicePose: settings.devicePose } : {}), ...(settings.launch ? { launch: settings.launch, recordingTools: settings.recordingTools ?? null } : {}), ...(settings.repack ? { repack: settings.repack } : {}),
     environment: { PATH: process.env.PATH, HOME: root, GITHUB_TOKEN: 'github-private', ANTHROPIC_API_KEY: 'must-not-be-used', AGENT_DEVICE_DAEMON_AUTH_TOKEN: 'wrong-token', ...settings.environment },
     // Every controller round trip advances the fixture clock by one poll interval, as a device snapshot would.
     runner: request => { clockMs += 600; return runner(request); }, now: () => clockMs, sleep: milliseconds => { clockMs += milliseconds; }, fetch: catalog };
@@ -348,6 +353,74 @@ test('an app pinned to one appearance is captured once, in that appearance', asy
   const map = JSON.parse(await readFile(join(f.options.outputDirectory, 'screen-map.json'), 'utf8'));
   assert.equal(map.run.environment.colorSchemes, undefined);
   assert.deepEqual(map.screens.map(screen => [screen.id, screen.colorScheme]), [[f.ids.home, undefined], [f.ids.settings, undefined]]);
+});
+
+test('an Argent capture starts an argent session, drives it through the bridge, and records Argent as the controller', async t => {
+  const f = await fixture(t, { argent: true, userInterfaceStyle: 'automatic', environment: { AGENT_DEVICE_DAEMON_BASE_URL: 'https://wrong.example', ARGENT_TOOLS_URL: 'https://wrong.example' } });
+  const lines = [];
+  const result = await runCiMap({ ...f.options, progress: line => lines.push(line) });
+  assert.equal(result.runStatus, 'complete');
+  const start = f.requests.find(request => request.args[0] === 'simulator:start');
+  assert.equal(value(start, '--type'), 'argent');
+  assert.equal(value(start, '--package-version'), '0.29.0');
+  assert.ok(start.args.includes('--public-link'));
+  const controller = f.requests.filter(request => request.command.endsWith('/argent-controller'));
+  assert.ok(controller.length > 0);
+  assert.ok(!f.requests.some(request => request.command === 'fake-controller'), 'every controller call goes through the bridge');
+  for (const request of controller) {
+    assert.equal(request.environment.ARGENT_TOOLS_URL, 'https://controller.example/session');
+    assert.equal(request.environment.ARGENT_AUTH_TOKEN, DAEMON_TOKEN);
+    assert.equal(request.environment.DO_NOT_TRACK, '1');
+    assert.equal(request.environment.EXPLORE_ARGENT_PLATFORM, 'ios');
+    assert.equal(request.environment.EXPLORE_ARGENT_BUNDLE_ID, 'com.example.app');
+    assert.ok(request.environment.HOME.endsWith('/argent-home') && request.environment.HOME !== f.options.environment.HOME, 'Argent gets a HOME of its own');
+    assert.deepEqual(Object.keys(request.environment).filter(name => name.startsWith('AGENT_DEVICE_')), []);
+  }
+  // Argent cannot switch appearance yet: one pass, no `settings appearance`, and a warning naming what was skipped.
+  assert.equal(f.requests.some(request => request.args[0] === 'settings'), false);
+  assert.ok(lines.some(line => /Argent cannot switch appearance yet .*capturing light only, skipped dark/.test(line)), lines.join('\n'));
+  const map = JSON.parse(await readFile(join(f.options.outputDirectory, 'screen-map.json'), 'utf8'));
+  assert.equal(map.run.controller, 'argent');
+  assert.equal(map.run.environment.colorSchemes, undefined);
+  assert.deepEqual(map.screens.map(screen => screen.id), [f.ids.home, f.ids.settings]);
+  const bundle = JSON.parse(await readFile(join(f.options.outputDirectory, 'bundle.json'), 'utf8'));
+  assert.equal(bundle.controller, 'argent');
+  const execution = parseRuntimeExecutionContext(JSON.parse(await readFile(join(f.options.outputDirectory, 'execution.json'), 'utf8')));
+  assert.equal(execution.controller, 'argent');
+  assert.equal(execution.controllerPackageVersion, '0.29.0');
+});
+
+test('an Argent capture of an app pinned to dark is labelled dark and is not warned about', async t => {
+  const f = await fixture(t, { argent: true, userInterfaceStyle: 'dark' });
+  const lines = [];
+  await runCiMap({ ...f.options, progress: line => lines.push(line) });
+  assert.equal(lines.some(line => /Argent cannot switch appearance/.test(line)), false);
+  const execution = parseRuntimeExecutionContext(JSON.parse(await readFile(join(f.options.outputDirectory, 'execution.json'), 'utf8')));
+  assert.equal(execution.colorScheme, 'dark');
+});
+
+test('device.pose folds the device first, before the app is opened, read or captured', async t => {
+  for (const argent of [false, true]) {
+    const f = await fixture(t, { devicePose: 'open', argent });
+    assert.equal((await runCiMap(f.options)).runStatus, 'complete');
+    const controller = f.requests.filter(request => request.command === 'fake-controller' || request.command.endsWith('/argent-controller'));
+    const folds = controller.filter(request => request.args[0] === 'fold');
+    assert.equal(folds.length, 1);
+    assert.deepEqual(folds[0].args.slice(0, 2), ['fold', 'open']);
+    const foldAt = controller.indexOf(folds[0]);
+    // The fold comes first: the app is not opened, read or captured before it, so the controller starts on the lit panel.
+    assert.deepEqual(controller.slice(0, foldAt).map(request => request.args[0]).filter(command => command !== '--version'), []);
+  }
+});
+
+test('an agent-device capture writes no controller into its bundle', async t => {
+  const f = await fixture(t);
+  await runCiMap(f.options);
+  const bundle = JSON.parse(await readFile(join(f.options.outputDirectory, 'bundle.json'), 'utf8'));
+  assert.equal('controller' in bundle, false);
+  const start = f.requests.find(request => request.args[0] === 'simulator:start');
+  assert.equal(value(start, '--type'), 'agent-device');
+  assert.equal(value(start, '--package-version'), AGENT_DEVICE_VERSION);
 });
 
 test('a preview URL that names the preview server directly reads its catalog', async t => {
@@ -2548,13 +2621,6 @@ test('a timed-out native alert query is unknown: the snapshot decides, and it is
   assert.equal(failed.outcomes[blocked.ids.home].status, 'failed');
   assert.equal(failed.outcomes[blocked.ids.home].error.code, 'CAPTURE_BLOCKED_BY_ALERT');
   assert.equal(blocked.operations().includes('screenshot'), false);
-});
-
-test('the installed agent-device dependency is the version every controller check uses', async () => {
-  const manifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
-  const lock = JSON.parse(await readFile(new URL('../../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(manifest.dependencies['agent-device'], AGENT_DEVICE_VERSION);
-  assert.equal(lock.packages['node_modules/agent-device'].version, AGENT_DEVICE_VERSION);
 });
 
 test('agent observation waits out a deferred system-surface snapshot instead of failing', async t => {
