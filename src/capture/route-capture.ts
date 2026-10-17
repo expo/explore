@@ -1119,8 +1119,11 @@ export async function capturePlannedRoutes(options: {
    */
   const resetToRoot = (full: boolean) => {
     controller(["open", capture.bundleId, rootLink!, "--level", "full", "--json"]);
-    if (!full) return;
+    // The root link closes what the last route presented; the next link waits until that has finished. A link that lands
+    // while a sheet is still being dismissed can leave the app unable to present another sheet until it is relaunched
+    // (seen on iOS: euxy's share link, opened right after its share sheet, never showed its own).
     settle();
+    if (!full) return;
     if (snapshot().nodes.some(node => node.type === "Alert")) {
       resolveDeepLinkConfirmation();
       settle();

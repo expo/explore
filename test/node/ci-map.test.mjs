@@ -1158,15 +1158,16 @@ test('every route link starts from the root link, so a sheet left by the previou
   assert.equal(bundle.procedure.reset, 'root-link');
 });
 
-test('a route costs no more controller calls than it needs: the reset is one open, and no appstate follows the screenshot', async t => {
+test('a route costs no more controller calls than it needs: the reset is an open and a settle, and no appstate follows the screenshot', async t => {
   const f = await fixture(t, { routes: [route('home'), route('settings')], userInterfaceStyle: 'light' });
   assert.equal((await runCiMap(f.options)).runStatus, 'complete');
   const calls = f.requests.filter(request => request.command === 'fake-controller').map(request => [request.args[0], request.args[2]]);
   for (const [index, [command, link]] of calls.entries()) {
-    // The route's own link comes straight after the root link; its readiness poll checks where it landed.
+    // The route's own link waits for the root link to finish closing what the last route left (a sheet still being
+    // dismissed can stop the next one presenting); its readiness poll then checks where it landed.
     if (command === 'open' && link === 'sample://') {
-      const [next, nextLink] = calls[index + 1];
-      assert.ok(next === 'open' && nextLink?.startsWith('sample://') && nextLink !== 'sample://', JSON.stringify(calls.slice(index, index + 3)));
+      const [[next, nextArg], [after, afterLink]] = [calls[index + 1], calls[index + 2]];
+      assert.ok(next === 'wait' && nextArg === '500' && after === 'open' && afterLink?.startsWith('sample://') && afterLink !== 'sample://', JSON.stringify(calls.slice(index, index + 3)));
     }
     // The snapshot after the screenshot also proves which app is in front.
     if (command === 'screenshot') assert.equal(calls[index + 1][0], 'snapshot');
