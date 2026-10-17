@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, ListTree } from "lucide-react";
 import { artifactUrl, isLaunchScreen, type ExploreMap, type MapIndex, type Screen } from "../../utils/model";
-import { primaryScreenshotForScreen, screenshotSize } from "../../utils/screen-images";
+import { primaryScreenshotForScreen, screenshotSize, typicalScreenshotSize, type ScreenshotSize } from "../../utils/screen-images";
 import { diffClass, type BuildDiff, type DiffStatus } from "../../utils/build-diff";
 import { focusStatusOf, isCapturedChange } from "../../utils/changed-screens";
 import { displayPathForScreen, screenLabel } from "../../utils/screen-path";
@@ -114,6 +114,8 @@ function ScreenCell(props: {
   via?: string | undefined;
   selected: boolean;
   dimmed: boolean;
+  /** The run's screenshot shape, which a screen without a screenshot is framed in. */
+  typicalSize?: ScreenshotSize | undefined;
   onSelect: () => void;
 }) {
   const artifact = primaryScreenshotForScreen(props.screen, props.index);
@@ -130,6 +132,7 @@ function ScreenCell(props: {
         {...(props.index.plainTitles ? { plainTitle: true } : {})}
         {...(url ? { screenshot: url } : {})}
         {...(size ? size : {})}
+        {...(props.typicalSize ? { placeholderSize: { width: props.typicalSize.imageWidth, height: props.typicalSize.imageHeight } } : {})}
         {...(status ? { diff: status } : {})}
         {...(props.diff?.screens.get(props.screen.id)?.accessibilityOnly ? { accessibilityOnly: true } : {})}
         selected={props.selected}
@@ -232,6 +235,10 @@ export function ScreensView(props: ScreensViewProps) {
   const tree: ScreenTree = useMemo(
     () => screenTree(props.map.screens, props.index, props.routeFiles),
     [props.index, props.map.screens, props.routeFiles],
+  );
+  const typicalSize = useMemo(
+    () => typicalScreenshotSize(props.map.screens.map(screen => screenshotSize(primaryScreenshotForScreen(screen, props.index)))),
+    [props.index, props.map.screens],
   );
   const changedIds = useMemo(
     () => new Set(props.map.screens
@@ -453,6 +460,7 @@ export function ScreensView(props: ScreensViewProps) {
       <ScreenCell key={id} screen={screen} index={props.index} diff={props.diff}
         elsewhere={isChanged(props.diff, id) ? undefined : props.changedElsewhere?.get(id)}
         via={tree.via.get(id)}
+        typicalSize={typicalSize}
         selected={props.selectedScreenId === id}
         dimmed={Boolean(props.focus?.length) && !props.focus!.some((state) => state === focusStatusOf(props.diff?.screens.get(id)))}
         onSelect={() => props.onSelectScreen(id)} />
