@@ -603,12 +603,31 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         await ensureDevice();
         const posture = positional[0];
         if (posture !== "closed" && posture !== "half-open" && posture !== "open") throw new BridgeFailure("INVALID_ARGS", "fold needs closed, half-open or open.");
+        const before = (await tree()).screen;
         await beforeAction();
-        const folded = await call("fold", { posture });
+        let folded = await call("fold", { posture });
         // The other panel lights at another size: every stored coordinate and element reference is stale.
         delete state.screen;
         delete state.refs;
         state.generation += 1;
+        // Argent's accessibility reader sometimes keeps reading the panel that went dark (observed on iPhone Duo): its
+        // tree keeps the old screen size and comes back bare. Wait for the new size, and fold back and forth once to
+        // make Argent pick up the lit panel; a capture must not run against the dark one.
+        const followed = async () => {
+          for (let poll = 0; poll < 10; poll++) {
+            const current = await tree();
+            if (!before || !current.screen || current.screen.width !== before.width || current.screen.height !== before.height) return true;
+            await context.sleep(1_000);
+          }
+          return false;
+        };
+        if (posture !== "closed" || before) {
+          if (!await followed()) {
+            await call("fold", { posture: posture === "closed" ? "open" : "closed" });
+            folded = await call("fold", { posture });
+            if (!await followed()) throw new BridgeFailure("CONTROLLER_FOLD_UNVERIFIED", `Argent kept reading the other panel after folding the device ${posture}.`);
+          }
+        }
         return success({ action: "fold", pose: posture, ...(folded.panel !== undefined ? { panel: folded.panel } : {}) });
       }
       case "apps": return success({ apps: [] });

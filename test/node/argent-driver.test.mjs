@@ -396,12 +396,13 @@ test("when Argent reads nothing while the prompt is up, Open is tapped from a sc
 });
 
 test("fold moves a foldable to a pose and forgets the old panel's geometry", async () => {
-  const { run, calls, context } = harness("ios", { "list-devices": DUO_DEVICES, "ui-tree": DUO_HOME, fold: { panel: "inner" } });
+  // Closed for the snapshot and before the fold; the inner panel's tree once folded.
+  const { run, calls, context } = harness("ios", { "list-devices": DUO_DEVICES, "ui-tree": [DUO_HOME, DUO_HOME, DUO_OPEN_EDIT_LANE], fold: { panel: "inner" } });
   await run(["snapshot", ...flags("ios")]);
   const generation = context.state.generation;
   const folded = await run(["fold", "open", ...flags("ios")]);
   assert.deepEqual(folded.json.data, { action: "fold", pose: "open", panel: "inner" });
-  assert.deepEqual(calls.at(-1).args, { udid: "74195B53-4DBC-4EAA-9991-F98E5BB86BA8", posture: "open" });
+  assert.deepEqual(calls.filter(call => call.tool === "fold").map(call => call.args.posture), ["open"]);
   assert.equal(context.state.screen, undefined);
   assert.equal(context.state.refs, undefined);
   assert.equal(context.state.generation, generation + 1);
@@ -524,4 +525,16 @@ test("a node its ancestor clips away is still reported hidden on iOS", () => {
   const { nodes } = snapshotFromTree(clipped, "ios", 1, BUNDLE);
   assert.notEqual(nodes.find(node => node.label === "In view").visible, false);
   assert.equal(nodes.find(node => node.label === "Scrolled away").visible, false);
+});
+
+test("when Argent keeps reading the dark panel after a fold, the bridge folds back and forth once, then gives up clearly", async () => {
+  const blindClosed = { ...DUO_HOME, foregroundApp: undefined, roots: [{ role: "AXGroup", children: [] }] };
+  const recovers = harness("ios", { "list-devices": DUO_DEVICES, fold: {},
+    "ui-tree": [DUO_HOME, ...Array(10).fill(blindClosed), DUO_OPEN_EDIT_LANE] });
+  assert.equal((await recovers.run(["fold", "open", ...flags("ios")])).exitCode, 0);
+  assert.deepEqual(recovers.calls.filter(call => call.tool === "fold").map(call => call.args.posture), ["open", "closed", "open"]);
+
+  const stuck = harness("ios", { "list-devices": DUO_DEVICES, fold: {}, "ui-tree": [DUO_HOME, blindClosed] });
+  const failed = await stuck.run(["fold", "open", ...flags("ios")]);
+  assert.equal(failed.json.error.code, "CONTROLLER_FOLD_UNVERIFIED");
 });
