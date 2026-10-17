@@ -8,7 +8,7 @@ import { appendFile, copyFile, mkdir, readFile, realpath, rename, rm, stat, writ
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import type { DecodedFrame } from "../shared/png-evidence.js";
-import { ArgentCallError, rotateToScreen, runBridgeCommand, type ArgentBridgeState, type ArgentPlatform, type ArgentTree } from "./argent-driver.js";
+import { ArgentCallError, runBridgeCommand, type ArgentBridgeState, type ArgentPlatform, type ArgentTree } from "./argent-driver.js";
 import { ARGENT_VERSION } from "../shared/argent-version.js";
 import { ensureController } from "../shared/controller-cache.js";
 
@@ -97,6 +97,8 @@ async function main(): Promise<number> {
     state, platform, version: ARGENT_VERSION,
     ...(environment.EXPLORE_ARGENT_BUNDLE_ID ? { bundleId: environment.EXPLORE_ARGENT_BUNDLE_ID } : {}),
     ...(environment.EXPLORE_ARGENT_DEVICE ? { device: environment.EXPLORE_ARGENT_DEVICE } : {}),
+    // An opened foldable's inner panel shows its UI in landscape (Argent's fold: "Unfolded, the UI is landscape").
+    ...(platform === "ios" && ["open", "half-open"].includes(environment.EXPLORE_ARGENT_POSE ?? "") ? { landscape: true } : {}),
     call: async (tool, args, options) => {
       const started = Date.now();
       try {
@@ -121,12 +123,11 @@ async function main(): Promise<number> {
       return ok;
     },
     sleep: milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
-    orientImage: async (path, screen) => { await writeFile(path, rotateToScreen(await readFile(path), screen)); },
-    orientVideo: async (path, screen) => {
+    orientVideo: async path => {
       // Turned with ffmpeg, which observing a launch needs anyway; without it the recording is left as it is.
       const probed = spawnSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path], { encoding: "utf8", timeout: 30_000 });
       const [width, height] = (probed.stdout ?? "").trim().split("x").map(Number);
-      if (probed.status !== 0 || !width || !height || width === height || (width > height) === (screen.width > screen.height)) return;
+      if (probed.status !== 0 || !width || !height || width >= height) return;
       const turned = `${path}.upright.mp4`;
       const ffmpeg = spawnSync("ffmpeg", ["-nostdin", "-y", "-loglevel", "error", "-i", path, "-vf", "transpose=clock", "-an", turned], { encoding: "utf8", timeout: 120_000 });
       if (ffmpeg.status === 0) await rename(turned, path);

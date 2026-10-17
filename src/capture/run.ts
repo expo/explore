@@ -619,7 +619,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     }
     const argent = controller === "argent" && connection
       ? await argentControllerInvocation({ directory: simulatorProject, connection, platform: options.platform, environment: restrictedEnvironment, sourceEnvironment, bundleId: options.bundleId,
-        ...(localDevice() ? { device: localDevice()! } : {}) })
+        ...(localDevice() ? { device: localDevice()! } : {}), ...(options.devicePose ? { pose: options.devicePose } : {}) })
       : undefined;
     const controllerEnvironment = argent?.environment ?? { ...restrictedEnvironment, AGENT_DEVICE_CONFIG: controllerConfig,
       // Locally, agent-device runs its own daemon, one per capture, so head and base do not share sessions.

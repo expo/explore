@@ -19,6 +19,8 @@ export async function argentControllerInvocation(options: {
   directory: string; connection: SimulatorConnection; platform: "ios" | "android"; environment: NodeJS.ProcessEnv; bundleId?: string;
   /** The device to drive (UDID or adb serial) when the tool-server sees several, as a local one does. */
   device?: string;
+  /** A foldable's pose (device.pose): opened, its UI is landscape on a portrait panel, which the bridge turns upright. */
+  pose?: string;
   /** The caller's full environment, which names the controller cache and npm registry the narrowed one drops. */
   sourceEnvironment?: NodeJS.ProcessEnv;
 }): Promise<{ command: string; environment: NodeJS.ProcessEnv }> {
@@ -41,6 +43,7 @@ export async function argentControllerInvocation(options: {
       // Opt-in: each Argent call to a JSON-lines log, one file per session, for debugging a controller run.
       ...(source.EXPLORE_ARGENT_LOG_DIR ? { EXPLORE_ARGENT_LOG_DIR: source.EXPLORE_ARGENT_LOG_DIR, EXPLORE_ARGENT_LOG_NAME: options.connection.sessionId } : {}),
       ...(options.bundleId ? { EXPLORE_ARGENT_BUNDLE_ID: options.bundleId } : {}),
-      ...(options.device ? { EXPLORE_ARGENT_DEVICE: options.device } : {}) },
+      ...(options.device ? { EXPLORE_ARGENT_DEVICE: options.device } : {}),
+      ...(options.pose ? { EXPLORE_ARGENT_POSE: options.pose } : {}) },
   };
 }

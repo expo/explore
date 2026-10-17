@@ -4,7 +4,7 @@ import test from "node:test";
 import { tsImport } from "tsx/esm/api";
 
 const { PNG } = await import("pngjs");
-const { ArgentCallError, describedButton, findOpenButton, iosRuntimeVersion, openInAppPromptShowing, parseCommand, rotateToScreen, runBridgeCommand, snapshotFromTree } = await tsImport("../../src/capture/argent-driver.ts", import.meta.url);
+const { ArgentCallError, describedButton, findOpenButton, iosRuntimeVersion, openInAppPromptShowing, parseCommand, runBridgeCommand, snapshotFromTree } = await tsImport("../../src/capture/argent-driver.ts", import.meta.url);
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../fixtures/argent-0.29/${name}`, import.meta.url), "utf8"));
 const IOS_HOME = fixture("fixture-ios-ui-tree-home.json");
@@ -542,29 +542,18 @@ test("a fold whose panel Argent never reads fails clearly instead of capturing t
   assert.equal(stuck.calls.filter(call => call.tool === "fold").length, 1, "the session is not folded back and forth");
 });
 
-test("an opened iPhone Duo's portrait frame is turned a quarter clockwise to its landscape screen", async () => {
-  const { PNG } = await import("pngjs");
-  // 2 x 3 portrait frame; pixel values number the source positions.
-  const source = new PNG({ width: 2, height: 3 });
-  for (let i = 0; i < 6; i += 1) source.data.set([i * 10, 0, 0, 255], i * 4);
-  const out = PNG.sync.read(rotateToScreen(PNG.sync.write(source), { width: 951, height: 669 }));
-  assert.deepEqual([out.width, out.height], [3, 2]);
-  const red = (x, y) => out.data[(y * out.width + x) * 4];
-  // Clockwise: the source's bottom-left (0, 2) becomes the top-left, its top-left (0, 0) the top-right.
-  assert.deepEqual([red(0, 0), red(1, 0), red(2, 0), red(0, 1), red(1, 1), red(2, 1)], [40, 20, 0, 50, 30, 10]);
-  // A frame already of the screen's shape is left as it is.
-  const portrait = PNG.sync.write(source);
-  assert.equal(rotateToScreen(portrait, { width: 466, height: 678 }), portrait);
-});
-
-test("screenshots and recordings are handed to be turned upright for the screen Argent reads", async () => {
-  const { run, context } = harness("android", { "list-devices": ANDROID_DEVICES, screenshot: {}, "screen-recording-start": {},
-    "screen-recording-stop": { video: "/home/.argent/recordings/r.mp4" } }, { state: { generation: 0, screen: { width: 951, height: 669 } } });
-  const oriented = [];
-  context.orientImage = async (path, screen) => { oriented.push(["image", path, screen]); };
-  context.orientVideo = async (path, screen) => { oriented.push(["video", path, screen]); };
-  assert.equal((await run(["screenshot", "/work/screen.png", ...flags("android")])).exitCode, 0);
-  await run(["record", "start", "/work/launch.mp4", ...flags("android")]);
-  await run(["record", "stop", ...flags("android")]);
-  assert.deepEqual(oriented, [["image", "/work/screen.png", { width: 951, height: 669 }], ["video", "/work/launch.mp4", { width: 951, height: 669 }]]);
+test("an opened foldable's screenshots are captured upright and its recordings handed to be turned; others are left as Argent saves them", async () => {
+  const replies = { "list-devices": IOS_DEVICES, screenshot: {}, "screen-recording-start": {}, "screen-recording-stop": { video: "/home/.argent/recordings/r.mp4" } };
+  for (const landscape of [true, false]) {
+    const { run, context, calls } = harness("ios", replies, { state: { generation: 0, screen: { width: 669, height: 951 } } });
+    // Argent reads the opened panel on its portrait axes, like the closed one: only the pose tells them apart.
+    if (landscape) context.landscape = true;
+    const oriented = [];
+    context.orientVideo = async path => { oriented.push(path); };
+    assert.equal((await run(["screenshot", "/work/screen.png", ...flags("ios")])).exitCode, 0);
+    await run(["record", "start", "/work/launch.mp4", ...flags("ios")]);
+    await run(["record", "stop", ...flags("ios")]);
+    assert.deepEqual(calls.find(call => call.tool === "screenshot").args, { udid: UDID, scale: 1, ...(landscape ? { rotation: "LandscapeRight" } : {}) });
+    assert.deepEqual(oriented, landscape ? ["/work/launch.mp4"] : []);
+  }
 });

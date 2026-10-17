@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 /**
  * Translates the agent-device commands Explore sends into Argent tool calls, and Argent's answers into
  * agent-device's JSON envelopes, so capture, setup, the agent tool host and black-box exploration drive
@@ -49,10 +48,14 @@ export type ArgentBridgeContext = {
   reachable: () => Promise<boolean>;
   /** A file the bridge may overwrite with a screenshot, and a reader for it (the link-prompt fallback). */
   scratchImage?: { path: string; read: (path: string) => Promise<DecodedFrame> };
-  /** Turns a saved screenshot upright for a screen of this shape, when the image has the other one (rotateToScreen). */
-  orientImage?: (path: string, screen: { width: number; height: number }) => Promise<void>;
-  /** The same for a screen recording, which Argent saves in the same orientation as its screenshots. */
-  orientVideo?: (path: string, screen: { width: number; height: number }) => Promise<void>;
+  /**
+   * The UI is landscape on a panel whose native axes are portrait, as on an opened iPhone Duo. Argent reads such a panel
+   * on its portrait axes (screen, tree and taps all agree), so only what a person sees is turned: screenshots are
+   * captured upright, and recordings, which Argent cannot turn, go to orientVideo.
+   */
+  landscape?: boolean;
+  /** Turns a portrait screen recording a quarter clockwise, to the landscape UI it shows. */
+  orientVideo?: (path: string) => Promise<void>;
 };
 
 export type BridgeResult = { exitCode: number; stdout: string };
@@ -580,9 +583,8 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         await ensureDevice();
         const path = positional[0];
         if (!path) throw new BridgeFailure("INVALID_ARGS", "screenshot needs a path.");
-        await call("screenshot", { scale: 1 }, { out: path });
-        // iPhone Duo's opened panel shows its UI in landscape but Argent saves the panel's portrait frame.
-        if (context.orientImage) await context.orientImage(path, await screen());
+        // Upright on a portrait panel showing a landscape UI; on the opened iPhone Duo that is LandscapeRight (seen on iOS 27.1).
+        await call("screenshot", { scale: 1, ...(context.landscape ? { rotation: "LandscapeRight" } : {}) }, { out: path });
         return success({ path });
       }
       case "record": {
@@ -599,7 +601,7 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
           delete state.recording;
           if (typeof stopped.video !== "string") return failure("COMMAND_FAILED", "Argent did not return the recording.");
           if (target) await context.moveFile(stopped.video, target);
-          if (target && context.orientVideo) await context.orientVideo(target, await screen());
+          if (target && context.landscape && context.orientVideo) await context.orientVideo(target);
           return success({ outPath: target ?? stopped.video, ...(finite(stopped.durationMs) ? { durationMs: stopped.durationMs } : {}) });
         }
         return failure("INVALID_ARGS", `Unsupported record command: ${positional[0] ?? ""}`);
@@ -731,21 +733,4 @@ class UnsentFailure extends Error {}
 /** Argent's `fill` and `keyboard` would expand `{{secret:NAME}}` from Argent's own secret store; Explore resolves its own. */
 function rejectSecretPlaceholder(text: string) {
   if (/\{\{\s*secret\s*:/i.test(text)) throw new BridgeFailure("INVALID_ARGS", "Text for the device must not contain a {{secret:…}} placeholder.");
-}
-
-/**
- * A screenshot turned upright for a screen of the given shape. Argent saves iPhone Duo's opened panel in the panel's
- * portrait orientation while its UI is landscape: the image is the screen turned a quarter counterclockwise, so it is
- * turned a quarter clockwise back. An image already of the screen's shape is returned as it is.
- */
-export function rotateToScreen(bytes: Buffer, screen: { width: number; height: number }): Buffer {
-  const { PNG } = createRequire(import.meta.url)("pngjs") as { PNG: { sync: { read(bytes: Buffer): DecodedFrame & { data: Buffer }; write(png: unknown): Buffer } } & (new (options: { width: number; height: number }) => DecodedFrame & { data: Buffer }) };
-  const source = PNG.sync.read(bytes);
-  if (!(screen.width > 0 && screen.height > 0) || (source.width > source.height) === (screen.width > screen.height) || source.width === source.height) return bytes;
-  const rotated = new PNG({ width: source.height, height: source.width });
-  for (let y = 0; y < source.height; y += 1) for (let x = 0; x < source.width; x += 1) {
-    // (x, y) moves to (height - 1 - y, x).
-    source.data.copy(rotated.data, ((x * rotated.width) + (source.height - 1 - y)) * 4, ((y * source.width) + x) * 4, ((y * source.width) + x) * 4 + 4);
-  }
-  return PNG.sync.write(rotated);
 }
