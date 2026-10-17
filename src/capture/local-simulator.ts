@@ -280,7 +280,17 @@ export async function deleteLocalEmulator(options: { runner: CommandRunner; seri
     if (attempt === 10) throw new Error(`${options.serial} is still running after emu kill`);
     await new Promise(resolve => setTimeout(resolve, 1_000));
   }
-  await rm(portLock(Number(options.serial.slice("emulator-".length)), options.environment), { force: true });
+  // An emulator adb has lost (its console port closed, a child defunct) is not listed and ignores emu kill, yet runs on
+  // with its AVD open; its process, by the AVD name and port this capture started it with, is stopped instead.
+  const port = Number(options.serial.slice("emulator-".length));
+  const running = () => options.runner({ command: "pgrep", args: ["-f", `qemu-system.* -avd explore-[a-z]+-[0-9a-f]{8} -port ${port} `], cwd: options.cwd,
+    environment: options.environment, timeoutMs: 30_000, allowFailure: true }).stdout.split("\n").map(Number).filter(pid => Number.isInteger(pid) && pid > 0);
+  for (let attempt = 0, pids = running(); pids.length > 0; attempt += 1, pids = running()) {
+    if (attempt === 10) throw new Error(`${options.serial} is still running after it was signalled`);
+    for (const pid of pids) try { process.kill(pid, attempt < 5 ? "SIGTERM" : "SIGKILL"); } catch { /* it has already exited */ }
+    await new Promise(resolve => setTimeout(resolve, 1_000));
+  }
+  await rm(portLock(port, options.environment), { force: true });
 }
 
 /** The adb serial a session state file records for a local emulator, or undefined when it names something else. */

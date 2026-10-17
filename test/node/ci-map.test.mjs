@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
@@ -143,6 +143,8 @@ async function fixture(t, settings = {}) {
       }
       return { stdout: '', stderr: '' };
     }
+    // An emulator process left on a stopped capture's console port: listed until the test's emulatorProcess is killed.
+    if (request.command === 'pgrep') return { stdout: settings.emulatorProcess?.exitCode === null && settings.emulatorProcess.signalCode === null ? `${settings.emulatorProcess.pid}\n` : '', stderr: '' };
     if (request.command.endsWith('/adb')) {
       // Another emulator already holds the first console port.
       if (command === 'devices') return { stdout: 'List of devices attached\nemulator-5554\tdevice\n', stderr: '' };
@@ -491,6 +493,8 @@ test('device.pose folds the device first, before the app is opened, read or capt
     const foldAt = controller.indexOf(folds[0]);
     // The fold comes first: the app is installed but not opened, read or captured before it, so the controller starts on the lit panel.
     assert.deepEqual(controller.slice(0, foldAt).map(request => request.args[0]).filter(command => command !== '--version' && command !== 'install'), []);
+    // Argent's bridge is told the pose, so it captures the opened panel's landscape UI upright.
+    if (argent) for (const request of controller) assert.equal(request.environment.EXPLORE_ARGENT_POSE, 'open');
   }
 });
 
@@ -545,6 +549,7 @@ test('Argent drives a local simulator through a tool-server of the capture\'s ow
     assert.equal(request.environment.ARGENT_TOOLS_URL, 'http://127.0.0.1:4100');
     assert.equal(request.environment.ARGENT_AUTH_TOKEN, 'abc123');
     assert.equal(request.environment.EXPLORE_ARGENT_DEVICE, LOCAL_UDID, 'the bridge drives the capture\'s own simulator');
+    assert.equal(request.environment.EXPLORE_ARGENT_POSE, undefined, 'no pose, so screenshots are captured as Argent reads the screen');
   }
   // Both appearances, switched with simctl, since Argent cannot.
   assert.deepEqual(f.requests.filter(request => request.command === 'xcrun' && request.args[1] === 'ui').map(request => request.args.slice(2)), [[LOCAL_UDID, 'appearance', 'light'], [LOCAL_UDID, 'appearance', 'dark']]);
@@ -575,6 +580,20 @@ test('a local Android capture starts its own emulator in a private AVD home, ins
   assert.equal(result.simulatorRuntime.osVersion, '15');
   assert.equal(existsSync(join(f.root, 'session')), false);
   assert.equal(existsSync(join(f.root, 'expo-explore-emulator-5556.lock')), false, 'its console port is free again');
+});
+
+test('a local emulator adb has lost is stopped by its process', async t => {
+  // A real process stands in for the emulator: adb does not list it and emu kill does not reach it.
+  const emulatorProcess = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  t.after(() => emulatorProcess.kill('SIGKILL'));
+  const exited = new Promise(resolve => emulatorProcess.once('exit', resolve));
+  const f = await fixture(t, { local: true, android: true, repack: 'local', emulatorProcess });
+  const result = await runCiMap({ ...f.options, sessionStatePath: join(f.root, 'session') });
+  assert.equal(result.runStatus, 'complete', JSON.stringify(result.outcomes));
+  assert.equal(await exited, null, 'the emulator process was signalled');
+  const pgrep = f.requests.find(request => request.command === 'pgrep');
+  assert.equal(pgrep.args[1], 'qemu-system.* -avd explore-[a-z]+-[0-9a-f]{8} -port 5556 ', 'only an Explore emulator on this capture\'s port');
+  assert.equal(existsSync(join(f.root, 'expo-explore-emulator-5556.lock')), false);
 });
 
 test('two local Android captures starting at once take different console ports', async t => {
