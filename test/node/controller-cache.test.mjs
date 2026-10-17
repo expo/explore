@@ -9,7 +9,7 @@ import test from "node:test";
 import { gzipSync } from "node:zlib";
 import { AGENT_DEVICE_VERSION } from "../../dist/shared/agent-device-version.js";
 import { ARGENT_VERSION } from "../../dist/shared/argent-version.js";
-import { CONTROLLER_PACKAGES, agentDeviceLauncher, controllerBin, controllerCacheRoot, controllerCached, controllerDirectory, controllerTarballUrl, ensureController } from "../../dist/shared/controller-cache.js";
+import { CONTROLLER_PACKAGES, agentDeviceLauncher, argentToolServerDirectory, controllerBin, controllerCacheRoot, controllerCached, controllerDirectory, controllerTarballUrl, ensureArgentToolServer, ensureController, npmEnvironment } from "../../dist/shared/controller-cache.js";
 
 /** A gzip tarball of `entries` ({ name, contents?, type?, mode?, link? }), laid out as npm publishes one. */
 function tarball(entries) {
@@ -121,4 +121,39 @@ test("the agent-device command runs the cached release with the caller's argumen
   const run = spawnSync(command, ["snapshot", "--json", "--", "-h"], { encoding: "utf8", env: { PATH: process.env.PATH } });
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(JSON.parse(run.stdout), ["snapshot", "--json", "--", "-h"]);
+});
+
+test("the tool-server's shipped lockfile locks the Argent release Explore pins, and every package with an integrity", async () => {
+  const lock = JSON.parse(await readFile(new URL("../../controllers/argent-tool-server/package-lock.json", import.meta.url), "utf8"));
+  const argent = lock.packages["node_modules/@swmansion/argent"];
+  assert.deepEqual([argent.version, argent.integrity], [CONTROLLER_PACKAGES.argent.version, CONTROLLER_PACKAGES.argent.integrity]);
+  const unlocked = Object.entries(lock.packages).filter(([path, entry]) => path && !entry.link && !/^sha512-/.test(entry.integrity ?? ""));
+  assert.deepEqual(unlocked.map(([path]) => path), [], "every package is locked to its tarball");
+  const manifest = JSON.parse(await readFile(new URL("../../controllers/argent-tool-server/package.json", import.meta.url), "utf8"));
+  assert.deepEqual(manifest.dependencies, { "@swmansion/argent": CONTROLLER_PACKAGES.argent.version });
+  assert.ok(JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8")).files.includes("controllers/argent-tool-server"), "it ships with Explore");
+});
+
+test("the tool-server installs from the shipped lockfile into a folder named for it, once", async t => {
+  const root = await mkdtemp(join(tmpdir(), "explore-tool-server-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const environment = { EXPLORE_CONTROLLER_CACHE: root, HOME: root };
+  const installs = [];
+  const install = async directory => {
+    installs.push(await readdir(directory));
+    // npm ci leaves the lockfile it installed from, and the package under node_modules.
+    await mkdir(join(directory, "node_modules", "@swmansion", "argent", "dist"), { recursive: true });
+  };
+  const cli = await ensureArgentToolServer({ environment, install });
+  assert.ok(cli.startsWith(argentToolServerDirectory(root)));
+  assert.match(argentToolServerDirectory(root), /argent-tool-server@0\.29\.0-[0-9a-f]{12}$/);
+  assert.deepEqual(installs, [["package-lock.json", "package.json"]]);
+  assert.equal(await ensureArgentToolServer({ environment, install }), cli);
+  assert.equal(installs.length, 1, "an installed copy is reused");
+});
+
+test("npm installing the tool-server gets what reaches the registry and none of a capture's secrets", () => {
+  const passed = npmEnvironment({ PATH: "/usr/bin", HOME: "/home/me", TMPDIR: "/tmp/me", HTTPS_PROXY: "http://proxy", npm_config_registry: "https://mirror",
+    EXPO_TOKEN: "expo", GITHUB_TOKEN: "github", ANTHROPIC_API_KEY: "key", OPENAI_API_KEY: "key", AGENT_DEVICE_DAEMON_AUTH_TOKEN: "token" });
+  assert.deepEqual(Object.keys(passed).sort(), ["HOME", "HTTPS_PROXY", "PATH", "TMPDIR", "npm_config_registry"]);
 });

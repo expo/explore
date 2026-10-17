@@ -1,8 +1,10 @@
 /**
  * The device controllers Explore drives, fetched on first use instead of installed with Explore. Each is pinned to
  * an exact npm release and its sha512 integrity; the tarball is checked before anything in it is written, nothing in
- * it runs at install time, and neither controller needs other packages at run time.
+ * it runs at install time, and neither controller needs other packages at run time. Argent's tool-server, which a
+ * local simulator needs, is the exception: ensureArgentToolServer installs it with its dependencies.
  */
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { chmod, mkdir, open, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -19,7 +21,7 @@ export type ControllerName = "agent-device" | "argent";
 /** Each controller's npm release, the file Explore runs from it, and the integrity npm publishes for it. */
 export const CONTROLLER_PACKAGES: Record<ControllerName, { name: string; version: string; bin: string; integrity: string }> = {
   "agent-device": { name: "agent-device", version: AGENT_DEVICE_VERSION, bin: "bin/agent-device.mjs",
-    integrity: "sha512-Om1j6oNJkeKlkk8lBM+0V9bKwpxUXLMf/PDDSvAt3RFquBRqAiM58J81E0rvPQNxs6GCjhABYpwVvIAXptxjjA==" },
+    integrity: "sha512-uGEENVhPzSpIACrVlt16O1mloODWJyAemTCT0boDb4L006JXN2rG747u1TRoQJudOpdP/Pm2urxNRHeECLMLfg==" },
   argent: { name: "@swmansion/argent", version: ARGENT_VERSION, bin: "dist/cli.js",
     integrity: "sha512-XXWlWZJlHKqnAvNx3RDhuiVFQOPqh5EDB76+mFAyqC2mutC6irzw03+M/6S/WQ+Dzz2IYOkEfOzQnOOdhrGgJg==" },
 };
@@ -165,6 +167,69 @@ export async function ensureController(controller: ControllerName, options: {
     return bin;
   } finally {
     await rm(tarball, { force: true });
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+/** The tool-server's package and its lockfile, shipped with Explore: every dependency is the version and tarball locked there. */
+const ARGENT_TOOL_SERVER_LOCK = fileURLToPath(new URL("../../controllers/argent-tool-server/", import.meta.url));
+
+/**
+ * Where the tool-server is installed in the controller cache: by Argent's version and the lockfile's hash, so a changed
+ * lock (or an install from before there was one) is installed afresh.
+ */
+export function argentToolServerDirectory(root: string): string {
+  const lock = createHash("sha256").update(readFileSync(join(ARGENT_TOOL_SERVER_LOCK, "package-lock.json"))).digest("hex").slice(0, 12);
+  return join(root, `argent-tool-server@${CONTROLLER_PACKAGES.argent.version}-${lock}`);
+}
+
+/** npm gets what it needs to reach the registry, never the tokens and keys a capture's environment carries. */
+export function npmEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => /^(PATH|HOME|USER|LOGNAME|SHELL|TMPDIR|TEMP|TMP|LANG|LC_ALL|LC_CTYPE|SystemRoot|WINDIR|APPDATA|LOCALAPPDATA|NODE_EXTRA_CA_CERTS|(HTTPS?|NO|ALL)_PROXY|(https?|no|all)_proxy|npm_config_\w+|NPM_CONFIG_\w+)$/.test(name)));
+}
+
+/**
+ * Argent's tool-server, for driving simulators on this machine (`capture.simulator: local`): unlike the client, it
+ * needs Argent's dependencies, some with native prebuilds (tree-sitter). They are installed once, on first use, with
+ * `npm ci` from the lockfile Explore ships, so each package is the exact tarball locked there, and without running any
+ * package's install scripts. Returns its CLI.
+ */
+export async function ensureArgentToolServer(options: { environment?: NodeJS.ProcessEnv; progress?: (message: string) => void;
+  /** Tests: stands in for `npm ci`, given the folder to install into (its package.json and lockfile are there). */
+  install?: (directory: string) => Promise<void> } = {}): Promise<string> {
+  const environment = options.environment ?? process.env;
+  const pinned = CONTROLLER_PACKAGES.argent;
+  const root = controllerCacheRoot(environment);
+  const directory = argentToolServerDirectory(root);
+  const cli = join(directory, "node_modules", "@swmansion", "argent", pinned.bin);
+  if (existsSync(join(directory, COMPLETE))) return cli;
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  await removeAbandonedStaging(root);
+  const staging = join(root, `.staging-${process.pid}-${randomUUID()}`);
+  try {
+    options.progress?.(`installing Argent's tool-server (${pinned.name}@${pinned.version} and its locked dependencies)`);
+    await mkdir(staging, { mode: 0o700 });
+    for (const file of ["package.json", "package-lock.json"]) await writeFile(join(staging, file), readFileSync(join(ARGENT_TOOL_SERVER_LOCK, file)));
+    await (options.install ?? (async target => {
+      const registry = environment.EXPLORE_NPM_REGISTRY ? ["--registry", environment.EXPLORE_NPM_REGISTRY] : [];
+      const npm = spawnSync("npm", ["ci", "--omit=optional", "--ignore-scripts", "--no-audit", "--no-fund", ...registry],
+        { cwd: target, env: npmEnvironment(environment), encoding: "utf8", timeout: 10 * 60_000 });
+      if (npm.error || npm.status !== 0) throw new CiError({ code: "CONTROLLER_DOWNLOAD_FAILED", stage: "preflight",
+        message: `Argent's tool-server could not be installed: ${(npm.error?.message ?? npm.stderr ?? "").trim().split("\n").at(-1) ?? "npm failed"}`,
+        nextAction: "Check that npm is on PATH and can reach the registry (or set EXPLORE_NPM_REGISTRY), then rerun." });
+    }))(staging);
+    // npm ci checked every package against the lockfile; Argent itself must also be the exact release Explore pins.
+    const lock = JSON.parse(readFileSync(join(staging, "package-lock.json"), "utf8")) as { packages?: Record<string, { version?: string; integrity?: string }> };
+    const installed = lock.packages?.[`node_modules/${pinned.name}`];
+    if (installed?.version !== pinned.version || installed.integrity !== pinned.integrity) throw new CiError({ code: "CONTROLLER_INTEGRITY_MISMATCH", stage: "preflight",
+      message: `The ${pinned.name} npm installed (${installed?.version ?? "none"}, ${installed?.integrity ?? "no integrity"}) is not the release Explore pins.`,
+      nextAction: "Do not use this registry for Explore's controllers; unset EXPLORE_NPM_REGISTRY or point it at a faithful mirror." });
+    await writeFile(join(staging, COMPLETE), `${JSON.stringify({ name: pinned.name, version: pinned.version, integrity: pinned.integrity })}\n`);
+    // Several captures may install at once; the first to finish keeps its copy.
+    try { await rename(staging, directory); }
+    catch (error) { if (!existsSync(join(directory, COMPLETE))) throw error; }
+    return cli;
+  } finally {
     await rm(staging, { recursive: true, force: true });
   }
 }

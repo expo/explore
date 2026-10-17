@@ -38,6 +38,8 @@ export type ArgentBridgeContext = {
   platform: ArgentPlatform;
   /** The app under test when the caller names it outside the command (explore:binary's `install`). */
   bundleId?: string;
+  /** The device to drive (UDID or adb serial) when the tool-server sees several: a local one serves this machine's. */
+  device?: string;
   version: string;
   sleep: (milliseconds: number) => Promise<void>;
   /** Moves a file the Argent client downloaded (a screen recording) to where Explore asked for it. */
@@ -46,6 +48,14 @@ export type ArgentBridgeContext = {
   reachable: () => Promise<boolean>;
   /** A file the bridge may overwrite with a screenshot, and a reader for it (the link-prompt fallback). */
   scratchImage?: { path: string; read: (path: string) => Promise<DecodedFrame> };
+  /**
+   * The UI is landscape on a panel whose native axes are portrait, as on an opened iPhone Duo. Argent reads such a panel
+   * on its portrait axes (screen, tree and taps all agree), so only what a person sees is turned: screenshots are
+   * captured upright, and recordings, which Argent cannot turn, go to orientVideo.
+   */
+  landscape?: boolean;
+  /** Turns a portrait screen recording a quarter clockwise, to the landscape UI it shows. */
+  orientVideo?: (path: string) => Promise<void>;
 };
 
 export type BridgeResult = { exitCode: number; stdout: string };
@@ -309,11 +319,14 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
       const listed = await call("list-devices");
       const all = Array.isArray(listed.devices) ? listed.devices : [];
       devices = all.map(record).filter(device => device.platform === platform
-        && (platform === "ios" ? device.state === "Booted" && device.runtimeKind !== "tv" : device.state === "device" && device.runtimeKind !== "tv"));
+        && (platform === "ios" ? device.state === "Booted" && device.runtimeKind !== "tv" : device.state === "device" && device.runtimeKind !== "tv")
+        && (!context.device || (platform === "ios" ? device.udid : device.serial) === context.device));
       if (all.length) break;
       await context.sleep(2_000);
     }
-    if (devices.length !== 1) throw new BridgeFailure("DEVICE_UNAVAILABLE", `Argent lists ${devices.length} booted ${platform} devices on this session; Explore drives exactly one.`);
+    if (devices.length !== 1) throw new BridgeFailure("DEVICE_UNAVAILABLE", context.device
+      ? `Argent does not list ${context.device} among the booted ${platform} devices.`
+      : `Argent lists ${devices.length} booted ${platform} devices on this session; Explore drives exactly one.`);
     const device = devices[0]!;
     const udid = platform === "ios" ? device.udid : device.serial;
     if (typeof udid !== "string" || !udid) throw new BridgeFailure("DEVICE_UNAVAILABLE", "Argent did not name the booted device.");
@@ -570,7 +583,8 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         await ensureDevice();
         const path = positional[0];
         if (!path) throw new BridgeFailure("INVALID_ARGS", "screenshot needs a path.");
-        await call("screenshot", { scale: 1 }, { out: path });
+        // Upright on a portrait panel showing a landscape UI; on the opened iPhone Duo that is LandscapeRight (seen on iOS 27.1).
+        await call("screenshot", { scale: 1, ...(context.landscape ? { rotation: "LandscapeRight" } : {}) }, { out: path });
         return success({ path });
       }
       case "record": {
@@ -587,6 +601,7 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
           delete state.recording;
           if (typeof stopped.video !== "string") return failure("COMMAND_FAILED", "Argent did not return the recording.");
           if (target) await context.moveFile(stopped.video, target);
+          if (target && context.landscape && context.orientVideo) await context.orientVideo(target);
           return success({ outPath: target ?? stopped.video, ...(finite(stopped.durationMs) ? { durationMs: stopped.durationMs } : {}) });
         }
         return failure("INVALID_ARGS", `Unsupported record command: ${positional[0] ?? ""}`);

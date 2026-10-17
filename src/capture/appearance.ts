@@ -82,6 +82,8 @@ export function mergeSchemeOutcomes(passes: readonly Record<string, CaptureOutco
       // frame too: the review then shows that appearance and marks the primary one unavailable, instead of nothing.
       if (verified(outcome)) {
         if (scheme && !(primary && primary.status === "captured")) merged[schemeScreenId(id, scheme)] = outcome;
+        // Its note (setup that did not complete in that appearance) stays with the route the frame is published under.
+        else if (outcome.reason && merged[id]) merged[id] = { ...merged[id], reason: [merged[id].reason, scheme ? `In ${scheme}: ${outcome.reason}` : outcome.reason].filter(Boolean).join(" ") };
         continue;
       }
       if (scheme && primary && primary.status === "captured") merged[schemeScreenId(id, scheme)] = outcome;

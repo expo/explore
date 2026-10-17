@@ -3,10 +3,10 @@ import { readFile, stat } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { DEFAULT_BINARY_PROJECT } from "../binary/run.js";
 import { pruneCaptureCache, repositoryName } from "../ci/local-review.js";
-import { readExploreConfig, previewDays, DEFAULT_EXPLORE_CONFIG_PATH, PREVIEW_DEFAULT_DAYS, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
+import { readExploreConfig, previewDays, DEFAULT_EXPLORE_CONFIG_PATH, PREVIEW_DEFAULT_DAYS, type ExploreConfig } from "../config/explore-config.js";
 import { assertHostingExport, deployLocalReports, previewProjectSlug, readReportZip, zipReportDirectory, MAX_REPORT_BYTES, type ReportZipSummary } from "../report/preview-deploy.js";
 import { startLocalReportServer } from "../report/local-report-server.js";
-import { findSavedRun, listSavedRuns, pruneSavedRuns, readSavedReports, removeSavedRun, saveRun, savedRunsDirectory, SAVED_RUN_LIMITS, type SavedReport, type SavedRun } from "../report/saved-runs.js";
+import { findSavedRun, listSavedRuns, pruneSavedRuns, readSavedReports, removeSavedRun, reportTarget, saveRun, savedRunsDirectory, SAVED_RUN_LIMITS, type SavedReport, type SavedRun } from "../report/saved-runs.js";
 import { openViewerInBrowser } from "../map/viewer-server.js";
 import { formatBytes, friendlyTime, kindLabel, runPicker, runTitle } from "./reports-picker.js";
 import { pickIntro } from "./title-intros.js";
@@ -70,18 +70,18 @@ async function repositoryPreview(repository: string): Promise<{ preview: Preview
 
 type ReadReport = Awaited<ReturnType<typeof readReport>>;
 
-/** Several reports share one link only as one review's platforms; an exploration goes up on its own. */
+/** Several reports share one link only as one review's targets; an exploration goes up on its own. */
 function assertOneReview(reports: ReadReport[]): void {
   const [first, ...others] = reports as [ReadReport, ...ReadReport[]];
-  const platforms = new Set<ExplorePlatform>([first.summary.platform]);
+  const targets = new Set<string>([first.summary.target.id]);
   for (const report of others) {
-    if (platforms.has(report.summary.platform)) throw new CiError({ code: "PREVIEW_REPORTS_INVALID", stage: "preflight",
-      message: `More than one ${report.summary.platform} report: one link holds one report per platform.`, nextAction: "Upload each platform's report once." });
-    platforms.add(report.summary.platform);
+    if (targets.has(report.summary.target.id)) throw new CiError({ code: "PREVIEW_REPORTS_INVALID", stage: "preflight",
+      message: `More than one ${report.summary.target.id} report: one link holds one report per target.`, nextAction: "Upload each target's report once." });
+    targets.add(report.summary.target.id);
     const a = first.summary, b = report.summary;
     if (a.kind !== "review" || b.kind !== "review" || a.repository !== b.repository || a.runId !== b.runId || a.base !== b.base || a.head !== b.head) {
-      throw new CiError({ code: "PREVIEW_REPORTS_MISMATCH", stage: "preflight", message: `${first.path} and ${report.path} are not the same review's platforms.`,
-        nextAction: "Upload the reports of one review together (one per platform), and anything else on its own." });
+      throw new CiError({ code: "PREVIEW_REPORTS_MISMATCH", stage: "preflight", message: `${first.path} and ${report.path} are not the same review's targets.`,
+        nextAction: "Upload the reports of one review together (one per target), and anything else on its own." });
     }
   }
 }
@@ -100,13 +100,13 @@ async function hostReports(reports: ReadReport[]): Promise<void> {
   const expiresAfterDays = has("expires-in") ? previewDays(required("expires-in"), "--expires-in")
     : preview ? preview.expiresAfterDays : review ? PREVIEW_DEFAULT_DAYS : EXPLORATION_DEFAULT_DAYS;
   const hosted = await deployLocalReports({ project, ...(owner ? { owner } : {}), expiresAfterDays,
-    reports: reports.map(report => ({ platform: report.summary.platform, zip: report.zip,
+    reports: reports.map(report => ({ platform: report.summary.platform, target: report.summary.target, zip: report.zip,
       ...(report.summary.changes === undefined ? {} : { changes: report.summary.changes }), ...(report.summary.device ? { device: report.summary.device } : {}) })),
     ownerHint: "Pass --owner with the Expo account that should host the report.",
     projectHint: "Give this EAS login permission to create projects under the owner, or pass --project with an existing project slug." });
   if (has("json")) {
     output({ ok: true, url: hosted.previewUrl, expiresAt: hosted.expiresAt, project: hosted.project, owner: hosted.owner,
-      reports: reports.map(report => ({ path: report.path, platform: report.summary.platform, kind: report.summary.kind })) });
+      reports: reports.map(report => ({ path: report.path, platform: report.summary.platform, target: report.summary.target.id, kind: report.summary.kind })) });
     return;
   }
   console.log(`Report: ${hosted.previewUrl}${hosted.expiresAt ? ` (until ${hosted.expiresAt.slice(0, 10)})` : ""}`);
@@ -141,7 +141,7 @@ export async function reportUpload(): Promise<void> {
   assertOneReview(reports);
   const review = reports[0]!.summary.kind === "review" ? reports[0]!.summary : undefined;
   const head = review && commitSubject(process.cwd(), review.head), base = review && commitSubject(process.cwd(), review.base);
-  await keepReports(reports.map(report => ({ platform: report.summary.platform, zip: report.zip })), { subjects: { ...(head ? { head } : {}), ...(base ? { base } : {}) } });
+  await keepReports(reports.map(report => ({ platform: report.summary.platform, target: report.summary.target, zip: report.zip })), { subjects: { ...(head ? { head } : {}), ...(base ? { base } : {}) } });
   await hostReports(reports);
 }
 
@@ -171,14 +171,14 @@ async function savedRun(id: string | undefined): Promise<SavedRun> {
 
 async function uploadSavedRun(run: SavedRun): Promise<void> {
   const reports: ReadReport[] = [];
-  for (const report of await readSavedReports(run)) reports.push({ path: `${run.id}/${report.platform}.zip`, zip: report.zip, summary: await readReportZip(report.zip) });
+  for (const report of await readSavedReports(run)) reports.push({ path: `${run.id}/${reportTarget(report).id}.zip`, zip: report.zip, summary: await readReportZip(report.zip) });
   await hostReports(reports);
 }
 
 function listLines(runs: SavedRun[], now = Date.now()): string[] {
   if (!runs.length) return ["No saved runs yet. expo-explore capture reviews your branch on this machine, and its report is kept here."];
   const idWidth = Math.max(...runs.map(run => run.id.length));
-  return [...runs.map(run => `${run.id.padEnd(idWidth)}  ${kindLabel(run).padEnd(9)}${runTitle(run)}  (${run.platforms.join(", ")}, ${friendlyTime(run.createdAt, now)})`),
+  return [...runs.map(run => `${run.id.padEnd(idWidth)}  ${kindLabel(run).padEnd(9)}${runTitle(run)}  (${(run.targets?.map(target => target.id) ?? run.platforms).join(", ")}, ${friendlyTime(run.createdAt, now)})`),
     "", "Open one with: expo-explore reports open <id>"];
 }
 
@@ -204,7 +204,7 @@ export async function reports(): Promise<void> {
       assertOneReview(read);
       const review = read[0]!.summary.kind === "review" ? read[0]!.summary : undefined;
       const head = review && commitSubject(process.cwd(), review.head), base = review && commitSubject(process.cwd(), review.base);
-      const run = await saveRun(read.map(report => ({ platform: report.summary.platform, zip: report.zip })), { subjects: { ...(head ? { head } : {}), ...(base ? { base } : {}) } });
+      const run = await saveRun(read.map(report => ({ platform: report.summary.platform, target: report.summary.target, zip: report.zip })), { subjects: { ...(head ? { head } : {}), ...(base ? { base } : {}) } });
       if (has("json")) output({ ok: true, run }); else console.log(`Kept ${runTitle(run)} as ${run.id}.`);
       return;
     }

@@ -89,3 +89,14 @@ test("map semantic validation rejects dangling, unsafe, and duplicate source lin
     });
   }
 });
+
+test("map schema accepts a run's capture target and its sibling targets", () => {
+  const map = fixture();
+  const targets = [{ id: "iphone", platform: "ios", label: "iPhone 17" }, { id: "duo-open", platform: "ios", label: "iPhone Duo (open)" }];
+  map.run = { ...map.run, target: targets[1], targets };
+  assert.equal(validate(map), true, JSON.stringify(validate.errors));
+  for (const target of [{ id: "Duo", platform: "ios", label: "x" }, { id: "duo", platform: "web", label: "x" }, { id: "duo", platform: "ios" }]) {
+    assert.equal(validate({ ...map, run: { ...map.run, target } }), false, JSON.stringify(target));
+  }
+  assert.equal(validate({ ...map, run: { ...map.run, targets: [targets[0]] } }), false, "one target is no sibling");
+});

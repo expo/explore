@@ -4,7 +4,7 @@ import { CiError } from "../shared/ci-errors.js";
 import { renderPublicComment, platformSectionMerge, type PublicCommentState } from "./pr-comment-body.js";
 import { upsertStickyComment } from "./pr-comment.js";
 import { viewerLinks } from "./viewer-links.js";
-import type { ExplorePlatform } from "../config/explore-config.js";
+import { isTargetId, type ExplorePlatform } from "../config/explore-config.js";
 
 export type FailureCommentOptions = {
   repository: string;
@@ -15,6 +15,9 @@ export type FailureCommentOptions = {
   runAttempt: string;
   /** The directory the failure job downloaded diagnostics artifacts into (`<stage>/<artifact>/…/error.json`). */
   diagnosticsPath?: string;
+  /** The failed target's id; otherwise the one the first diagnostics artifact's name carries. */
+  target?: string;
+  /** What callers from before targets pass: a platform is the id of its default target. */
   platform?: ExplorePlatform;
   configPath?: string;
   environment?: NodeJS.ProcessEnv;
@@ -23,7 +26,9 @@ export type FailureCommentOptions = {
 
 type Diagnostic = { code: string; stage: string; message: string; nextAction: string };
 const SHA = /^[0-9a-f]{40}$/;
-const ARTIFACT_DIR = /^explore-[a-z-]+-\d+-\d+-(ios|android)$/;
+// `explore-<kind>-<run>-<attempt>-<target>`: the kind has no digits, so the first number is the run and the rest is the target id.
+const ARTIFACT_DIR = /^explore-[a-z-]+-\d+-\d+-([a-z][a-z0-9-]{0,31})$/;
+const artifactTarget = (name: string): string | undefined => { const id = ARTIFACT_DIR.exec(name)?.[1]; return isTargetId(id) ? id : undefined; };
 
 const MAX_DIAGNOSTIC_BYTES = 32_768;
 const CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
@@ -42,21 +47,23 @@ function parseDiagnostic(text: string, stage: string): Diagnostic | undefined {
 }
 
 /**
- * The error.json a failed job left behind and the platform its artifact name carries. A report failure's
- * diagnostic takes precedence over capture's; a present but unreadable file yields the generic failure
- * rather than an earlier stage's error, and only regular files count (never symlinks out of the artifact).
+ * The error.json a failed job left behind and the target its artifact name carries (`ios` or `android` for a config
+ * without targets, and for artifacts of versions before targets). A report failure's diagnostic takes precedence over
+ * capture's; a present but unreadable file yields the generic failure rather than an earlier stage's error, and only
+ * regular files count (never symlinks out of the artifact). `platform` is set when the target id is a platform's.
  */
-export async function locateFailureDiagnostic(root: string): Promise<{ diagnostic?: Diagnostic; platform: ExplorePlatform } | undefined> {
+export async function locateFailureDiagnostic(root: string): Promise<{ diagnostic?: Diagnostic; target: string; platform?: ExplorePlatform } | undefined> {
   for (const [stage, file] of [["report", "error.json"], ["capture", join("explore-diagnostics", "error.json")]] as const) {
     const entries = await readdir(join(root, stage), { withFileTypes: true }).catch(() => []);
-    for (const entry of entries.filter(entry => entry.isDirectory() && ARTIFACT_DIR.test(entry.name)).sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const entry of entries.filter(entry => entry.isDirectory() && artifactTarget(entry.name)).sort((a, b) => a.name.localeCompare(b.name))) {
       const path = join(root, stage, entry.name, file);
       const info = await lstat(path).catch(() => undefined);
       if (!info) continue;
-      const platform = ARTIFACT_DIR.exec(entry.name)![1] as ExplorePlatform;
-      if (!info.isFile() || info.size > MAX_DIAGNOSTIC_BYTES) return { platform };
+      const target = artifactTarget(entry.name)!;
+      const located: { target: string; platform?: ExplorePlatform } = { target, ...(target === "ios" || target === "android" ? { platform: target as ExplorePlatform } : {}) };
+      if (!info.isFile() || info.size > MAX_DIAGNOSTIC_BYTES) return located;
       const diagnostic = parseDiagnostic(await readFile(path, "utf8"), stage);
-      return diagnostic ? { diagnostic, platform } : { platform };
+      return diagnostic ? { diagnostic, ...located } : located;
     }
   }
   return undefined;
@@ -64,7 +71,7 @@ export async function locateFailureDiagnostic(root: string): Promise<{ diagnosti
 
 /**
  * The failure job's comment: a job died outside Explore's own progress comments (install, checkout, a crash
- * before the pipeline posted), so the sticky comment gets a failed record for that platform from the same
+ * before the pipeline posted), so the sticky comment gets a failed record for that target from the same
  * renderer every other writer uses. Nothing is posted when the PR is closed; a PR that moved on is marked
  * superseded so the failure lands under previous runs.
  */
@@ -75,6 +82,9 @@ export async function publishFailureComment(options: FailureCommentOptions): Pro
   if (!token) throw new CiError({ code: "GITHUB_TOKEN_MISSING", stage: "publication", message: "GITHUB_TOKEN is required to post the failure comment",
     nextAction: "Pass GITHUB_TOKEN to the failure job with PR comment write permission." });
   if (!SHA.test(options.headSha) || !SHA.test(options.baseSha)) return { posted: false, reason: "The capture job did not record the PR head and base." };
+  const requested = options.target ?? options.platform;
+  if (requested !== undefined && !isTargetId(requested)) throw new CiError({ code: "TARGET_INVALID", stage: "publication", message: `${requested} is not a target id.`,
+    nextAction: "Pass --target with an id from targets: in .expo-explore/config.yaml (ios or android without targets:)." });
   const response = await transport(`https://api.github.com/repos/${options.repository}/pulls/${options.pullNumber}`, {
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json" }, redirect: "error", signal: AbortSignal.timeout(15_000) });
   if (!response.ok) throw new CiError({ code: "GITHUB_REQUEST_FAILED", stage: "publication", message: `GitHub PR lookup failed (${response.status})`,
@@ -85,7 +95,9 @@ export async function publishFailureComment(options: FailureCommentOptions): Pro
   }
   const superseded = pr.head?.sha !== options.headSha || pr.base?.sha !== options.baseSha;
   const located = options.diagnosticsPath ? await locateFailureDiagnostic(options.diagnosticsPath) : undefined;
-  const platform = options.platform ?? located?.platform;
+  const target = requested ?? located?.target;
+  // The failure job knows a target by its id alone; the comment's own record for that id supplies its label and platform.
+  const platform: ExplorePlatform | undefined = target === "ios" || target === "android" ? target : undefined;
   const configPath = options.configPath ?? ".expo-explore/config.yaml";
   const now = Date.now();
   const diagnostic = located?.diagnostic;
@@ -93,7 +105,8 @@ export async function publishFailureComment(options: FailureCommentOptions): Pro
     phase: "failed", mode: "changes", executionMode: "deterministic", configPath,
     pullRequest: { repositoryId: String(pr.base?.repo?.id ?? ""), repository: options.repository, number: options.pullNumber, title: String(pr.title ?? ""), url: String(pr.html_url ?? ""),
       base: { ref: String(pr.base?.ref ?? ""), sha: options.baseSha }, head: { ref: String(pr.head?.ref ?? ""), sha: options.headSha } },
-    links: viewerLinks({ repository: options.repository, headSha: options.headSha, runId: options.runId, runAttempt: options.runAttempt, configPath, ...(platform ? { platform } : {}) }),
+    // No artifact URL, so no Viewer link: the target would only pick a report that this failure never uploaded.
+    links: viewerLinks({ repository: options.repository, headSha: options.headSha, runId: options.runId, runAttempt: options.runAttempt, configPath }),
     startedAt: now, updatedAt: now, artifactOnly: true,
     ...(platform ? { build: { platform, easProfile: "" } } : {}),
     failure: { step: diagnostic?.stage ?? "workflow", message: diagnostic
@@ -101,7 +114,7 @@ export async function publishFailureComment(options: FailureCommentOptions): Pro
       : "Explore could not finish this review. See the run for the error code, cause, and next action. Fix the reported issue and rerun Explore." },
     ...(superseded ? { superseded: true } : {}),
   };
-  await upsertStickyComment({ repository: options.repository, issueNumber: options.pullNumber, body: renderPublicComment(state),
-    ...platformSectionMerge(state, platform), token, fetchImpl: transport });
+  await upsertStickyComment({ repository: options.repository, issueNumber: options.pullNumber, body: renderPublicComment(state, undefined, target),
+    ...platformSectionMerge(state, target), token, fetchImpl: transport });
   return { posted: true, ...(superseded ? { superseded: true } : {}) };
 }

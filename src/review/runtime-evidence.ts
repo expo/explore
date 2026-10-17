@@ -92,7 +92,7 @@ export type RawCaptureSample = {
 };
 
 export type RawSimulatorEnvironment = {
-  provider: "eas-simulator";
+  provider: "eas-simulator" | "local-simulator";
   controller: "agent-device" | "argent";
   platform: Platform;
   deviceModel: string;
@@ -246,7 +246,7 @@ export type RuntimeEnvironmentEvidence = {
   id: "environment";
   profile: EvidenceField<"capture-context", string>;
   fixturePersona?: EvidenceField<"capture-context", string>;
-  provider: EvidenceField<"eas-agent-device", "eas-simulator">;
+  provider: EvidenceField<"eas-agent-device", "eas-simulator" | "local-simulator">;
   controller: EvidenceField<"eas-agent-device", "agent-device" | "argent">;
   controllerPackageVersion?: EvidenceField<"capture-context", string>;
   easCliVersion?: EvidenceField<"capture-context", string>;
@@ -784,7 +784,7 @@ function parseEnvironment(value: unknown): RawSimulatorEnvironment {
     "Runtime environment",
   );
   return {
-    provider: literal(environment.provider, ["eas-simulator"], "Runtime provider"),
+    provider: literal(environment.provider, ["eas-simulator", "local-simulator"], "Runtime provider"),
     controller: literal(environment.controller, ["agent-device", "argent"], "Runtime controller"),
     platform: literal(environment.platform, PLATFORMS, "Runtime platform"),
     deviceModel: safeString(environment.deviceModel, "Device model", 256),

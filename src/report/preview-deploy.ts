@@ -8,7 +8,9 @@ import { MAX_METADATA_BYTES } from "./agent-api.js";
 import { publishCiReportComment, readCiReportInput, type CiReportInput } from "./artifact.js";
 import { readZipDirectory, readZipEntry } from "./zip-reader.js";
 import { reviewChangeCount, reviewDevice } from "./pr-comment-body.js";
-import type { ExplorePlatform } from "../config/explore-config.js";
+import { isTargetId, type ExplorePlatform } from "../config/explore-config.js";
+import type { RunTarget } from "../types.js";
+import { targetParameter } from "./viewer-links.js";
 import type { ArtifactReport } from "../contracts/artifact-report.js";
 import { normalizePublicReviewForReading } from "../contracts/review-validation.js";
 import { EXPLORATION_REPORT_KIND, type ExplorationReport } from "../contracts/standalone-report.js";
@@ -31,6 +33,11 @@ export type CommandRunner = (command: string, args: readonly string[], options: 
 export type PreviewReportInput = {
   /** Set by the matrix workflows; the preview then serves this report at report.zip?platform=<platform>. */
   platform?: ExplorePlatform;
+  /**
+   * The capture target, set by the matrix workflows (wins over `platform`): the preview serves the report as
+   * `<target id>.zip.enc` at report.zip?target=<id> (?platform=<id> for a target named after its platform).
+   */
+  target?: RunTarget;
   inputPath: string;
   /** The `ci:report` output directory: review.json and assets/. */
   reportPath: string;
@@ -67,7 +74,7 @@ export type PreviewDeployResult = {
   /** The first (or only) report's archive, as before; `reports` lists every platform's. */
   reportSha256: string;
   reportBytes: number;
-  reports: Array<{ platform?: ExplorePlatform; artifactUrl: string; reportSha256: string; reportBytes: number }>;
+  reports: Array<{ platform?: ExplorePlatform; target?: RunTarget; artifactUrl: string; reportSha256: string; reportBytes: number }>;
   headSha: string;
   /** A comparison's link is in the run summary only: callers must not print previewUrl, which is unmasked for it. */
   linkedFromRunSummary?: true;
@@ -79,6 +86,33 @@ const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 /** The largest report ZIP a hosted preview serves. */
 export const MAX_REPORT_BYTES = 256 * 1024 * 1024;
 const ZIP_DATE = new Date("2000-01-01T00:00:00Z");
+const PLATFORM_LABELS: Record<ExplorePlatform, string> = { ios: "iOS", android: "Android" };
+
+/** The target of a report from before targets, or of a config without them: its platform, under the platform's name. */
+export function platformTarget(platform: ExplorePlatform): RunTarget {
+  return { id: platform, platform, label: PLATFORM_LABELS[platform] };
+}
+
+/** The report.zip query that selects a target (see targetParameter): `?platform=ios` for configs without targets, as before. */
+function targetQuery(target: RunTarget): string {
+  const [key, value] = targetParameter(target.id);
+  return `?${key}=${value}`;
+}
+
+/** A target as untrusted JSON names it (a report's review.runtime.target): its id, platform and a plain label, or undefined. */
+function readTarget(value: unknown): RunTarget | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { id, platform, label } = value as Record<string, unknown>;
+  if (!isTargetId(id) || (platform !== "ios" && platform !== "android")) return undefined;
+  const shown = typeof label === "string" ? listingLabel(label) : "";
+  return { id, platform, label: shown || PLATFORM_LABELS[platform] };
+}
+
+function assertTargets(targets: RunTarget[], message: string, nextAction: string): void {
+  // At most 8, as a config names: the Worker refuses a longer listing.
+  if (!targets.length || targets.length > 8 || targets.some(target => !isTargetId(target.id) || (target.platform !== "ios" && target.platform !== "android"))
+    || new Set(targets.map(target => target.id)).size !== targets.length) throw previewError("PREVIEW_REPORTS_INVALID", message, nextAction);
+}
 
 function base32(bytes: Uint8Array): string {
   let bits = 0; let value = 0; let out = "";
@@ -163,8 +197,11 @@ export async function zipReportDirectory(reportPath: string): Promise<Uint8Array
   return writer.close();
 }
 
-/** What a report ZIP holds, from its review.json or exploration.json: where to host it and how the platform switch labels it. */
-export type ReportZipSummary = { platform: ExplorePlatform; changes?: number; device?: string }
+/**
+ * What a report ZIP holds, from its review.json or exploration.json: where to host it and how the target switch labels it.
+ * `target` is review.runtime.target, or for reports from before targets (and explorations) the platform's own target.
+ */
+export type ReportZipSummary = { platform: ExplorePlatform; target: RunTarget; changes?: number; device?: string }
   & ({ kind: "review"; repository: string; runId: string; base: string; head: string } | { kind: "exploration" });
 
 /**
@@ -189,7 +226,7 @@ export async function readReportZip(zip: Uint8Array): Promise<ReportZipSummary> 
     if (report?.kind !== EXPLORATION_REPORT_KIND || !exploration || (exploration.app?.platform !== "ios" && exploration.app?.platform !== "android")) {
       throw new Error("exploration.json is not an Explore exploration report");
     }
-    return { kind: "exploration", platform: exploration.app.platform, device: `${exploration.device.model} ${exploration.device.osVersion}`.trim() };
+    return { kind: "exploration", platform: exploration.app.platform, target: platformTarget(exploration.app.platform), device: `${exploration.device.model} ${exploration.device.osVersion}`.trim() };
   }
   const review = (report as Partial<ArtifactReport>).review;
   const pr = review?.pullRequest;
@@ -207,7 +244,10 @@ export async function readReportZip(zip: Uint8Array): Promise<ReportZipSummary> 
   const changes = reviewChangeCount({ review: normalizePublicReviewForReading(review) });
   const device = reviewDevice({ runtime: { deviceModel: review.runtime?.device?.model ?? "", osVersion: review.runtime?.device?.osVersion ?? "",
     ...(review.runtime?.colorSchemes ? { colorSchemes: review.runtime.colorSchemes } : {}) } });
-  return { kind: "review", platform, repository: pr.repository, runId: review.runId, base: pr.base.sha, head: pr.head.sha,
+  // A target whose platform is not the report's own is not this report's target.
+  const named = readTarget(review.runtime?.target);
+  const target = named?.platform === platform ? named : platformTarget(platform);
+  return { kind: "review", platform, target, repository: pr.repository, runId: review.runId, base: pr.base.sha, head: pr.head.sha,
     ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) };
 }
 
@@ -232,11 +272,10 @@ async function assertExport(exportPath: string): Promise<void> {
   }
 }
 
-type SealedReport = { entry: PreviewReportInput; input: CiReportInput; zip: Uint8Array; sha256: string; file: string };
+type SealedReport = { entry: PreviewReportInput; input: CiReportInput; target?: RunTarget; zip: Uint8Array; sha256: string; file: string };
 
 function previewError(code: string, message: string, nextAction: string): CiError { return new CiError({ code, stage: "preflight", message, nextAction }); }
 
-/** A device label for the platform switch, safe in the sealed .env: no `#` (a dotenv comment), markup or control characters, and short. */
 /**
  * A device label for the platform switch, safe in the sealed .env: letters, digits and a few separators only. `eas
  * deploy` reads that file with variable expansion, so a `$` (even single-quoted) would pull the deploying process's
@@ -245,15 +284,21 @@ function previewError(code: string, message: string, nextAction: string): CiErro
 function listingDevice(device: string): string {
   return device.replace(/[^\p{L}\p{N} .,()+·_:/-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 120);
 }
+/** A target's label for the switch, as safe as a device label and shorter. */
+function listingLabel(label: string): string {
+  return listingDevice(label).slice(0, 80).trim();
+}
 
-/** The worker's EXPLORE_PREVIEW_REPORTS entries, in the order the workflow lists platforms; also what reports.json must echo. */
-export function previewReportListing(reports: ReadonlyArray<Pick<SealedReport, "entry" | "input" | "file">>, reportDirectory: string) {
-  return reports.map(report => {
-    const changes = reviewChangeCount(report.input.commentState);
-    const device = listingDevice(reviewDevice(report.input.commentState));
-    return { platform: report.entry.platform!, path: `/_report/${reportDirectory}/${report.file}`,
-      ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) };
-  });
+/** One EXPLORE_PREVIEW_REPORTS entry, keys in the order the Worker echoes them in reports.json. */
+export type PreviewListingEntry = { target: string; platform: ExplorePlatform; label?: string; path: string; changes?: number; device?: string };
+function listingEntry(target: RunTarget, path: string, changes?: number, device?: string): PreviewListingEntry {
+  const label = listingLabel(target.label), shown = device ? listingDevice(device) : "";
+  return { target: target.id, platform: target.platform, ...(label ? { label } : {}), path, ...(changes === undefined ? {} : { changes }), ...(shown ? { device: shown } : {}) };
+}
+
+/** The worker's EXPLORE_PREVIEW_REPORTS entries, in the order the workflow lists targets; also what reports.json must echo. */
+export function previewReportListing(reports: ReadonlyArray<Pick<SealedReport, "input" | "file"> & { target: RunTarget }>, reportDirectory: string): PreviewListingEntry[] {
+  return reports.map(report => listingEntry(report.target, `/_report/${reportDirectory}/${report.file}`, reviewChangeCount(report.input.commentState), reviewDevice(report.input.commentState)));
 }
 
 export async function deployPreview(options: PreviewDeployOptions): Promise<PreviewDeployResult> {
@@ -263,12 +308,19 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
     : [{ inputPath: options.inputPath, reportPath: options.reportPath, artifactUrl: options.artifactUrl }];
   if (!entries.length) throw previewError("PREVIEW_REPORTS_MISSING", "There is no platform report to deploy",
     "Pass --inputs and --reports directories holding one explore-capture and one explore-review artifact per platform.");
-  const multi = entries.some(entry => entry.platform !== undefined);
-  if (multi && (entries.some(entry => !entry.platform) || new Set(entries.map(entry => entry.platform)).size !== entries.length)) {
-    throw previewError("PREVIEW_REPORTS_INVALID", "Each report of a multi-platform preview must name a distinct platform", "Deploy one report per platform of the same run.");
+  const multi = entries.some(entry => entry.platform !== undefined || entry.target !== undefined);
+  if (multi) {
+    if (entries.some(entry => !entry.platform && !entry.target)) throw previewError("PREVIEW_REPORTS_INVALID", "Each report of a multi-target preview must name its target", "Deploy one report per target of the same run.");
+    assertTargets(entries.map(entry => entry.target ?? platformTarget(entry.platform!)), "Each report of a multi-target preview must name a distinct target", "Deploy one report per target of the same run.");
   }
-  const inputs: Array<{ entry: PreviewReportInput; input: CiReportInput }> = [];
-  for (const entry of entries) inputs.push({ entry, input: await readCiReportInput(entry.inputPath) });
+  const inputs: Array<{ entry: PreviewReportInput; input: CiReportInput; target?: RunTarget }> = [];
+  for (const entry of entries) {
+    const input = await readCiReportInput(entry.inputPath);
+    // A platform-named entry takes the report's own label when the report names that target.
+    const named = readTarget(input.publicReview.runtime.target);
+    const target = entry.target ?? (entry.platform ? (named?.id === entry.platform ? named : platformTarget(entry.platform)) : undefined);
+    inputs.push({ entry, input, ...(target ? { target } : {}) });
+  }
   const first = inputs[0]!.input; const review = first.publicReview; const pr = review.pullRequest;
   if (!first.preview) throw new CiError({ code: "PREVIEW_NOT_CONFIGURED", stage: "preflight",
     message: "This review did not request a hosted preview", nextAction: "Set report.preview.hosting: eas in .expo-explore/config.yaml, or remove the deploy job." });
@@ -281,29 +333,29 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
     const other = input.publicReview;
     if (!input.preview || other.pullRequest.origin !== pr.origin || other.pullRequest.repository !== pr.repository || other.pullRequest.number !== pr.number
       || other.pullRequest.head.sha !== pr.head.sha || other.pullRequest.base.sha !== pr.base.sha || other.runId !== review.runId || other.runAttempt !== review.runAttempt) {
-      throw previewError("PREVIEW_REPORTS_MISMATCH", "The platform reports do not come from the same review run", "Deploy only the reports this workflow run produced for the same PR head.");
+      throw previewError("PREVIEW_REPORTS_MISMATCH", "The target reports do not come from the same review run", "Deploy only the reports this workflow run produced for the same PR head.");
     }
   }
   const exportPath = resolve(options.exportPath ?? PREVIEW_EXPORT_PATH);
   await assertExport(exportPath);
 
   const reports: SealedReport[] = [];
-  for (const { entry, input } of inputs) {
+  for (const { entry, input, target } of inputs) {
     let zip: Uint8Array;
     try { zip = await zipReportDirectory(entry.reportPath); }
     catch (error) { throw toCiError(error, { code: "REPORT_ZIP_FAILED", stage: "export",
       nextAction: "Pass the ci:report output directory downloaded from this run's explore-review artifact." }); }
-    reports.push({ entry, input, zip, sha256: createHash("sha256").update(zip).digest("hex"), file: multi ? `${entry.platform}.zip.enc` : "report.zip.enc" });
+    reports.push({ entry, input, ...(target ? { target } : {}), zip, sha256: createHash("sha256").update(zip).digest("hex"), file: multi && target ? `${target.id}.zip.enc` : "report.zip.enc" });
   }
 
   const reportDirectory = base32(random(10));
   const expiresAt = first.preview.expiresAfterDays === null ? null : now() + first.preview.expiresAfterDays * 86_400_000;
   const project = previewProjectSlug(pr.repository, first.preview.project);
-  const listing = multi ? previewReportListing(reports, reportDirectory) : undefined;
+  const listing = multi ? previewReportListing(reports.map(report => ({ ...report, target: report.target! })), reportDirectory) : undefined;
   let hosted: Awaited<ReturnType<typeof deploySealedReports>>;
   try {
     hosted = await deploySealedReports({
-    reports: reports.map(report => ({ zip: report.zip, sha256: report.sha256, file: report.file, query: multi ? `?platform=${report.entry.platform}` : "" })),
+    reports: reports.map(report => ({ zip: report.zip, sha256: report.sha256, file: report.file, query: multi && report.target ? targetQuery(report.target) : "" })),
     reportDirectory, ...(listing ? { listing } : {}), project, ...(first.preview.owner ? { owner: first.preview.owner } : {}),
     ownerHint: "Set report.preview.owner in .expo-explore/config.yaml to the account that should hold the preview project.",
     projectHint: "Give EXPO_TOKEN's account permission to create projects, or set report.preview.project to an existing project it can deploy to.",
@@ -317,7 +369,7 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
     if (pr.origin !== "compare") for (const report of reports) {
       try {
         await publishCiReportComment({ inputPath: report.entry.inputPath, artifactUrl: report.entry.artifactUrl, environment, transport,
-          ...(report.entry.platform ? { platform: report.entry.platform } : {}), previewFailed: true });
+          ...commentTarget(report), previewFailed: true });
       } catch { /* the deployment failure is the one to report */ }
     }
     throw error;
@@ -329,23 +381,30 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
     let headSha = pr.head.sha;
     if (pr.origin !== "compare") for (const report of reports) {
       const published = await publishCiReportComment({ inputPath: report.entry.inputPath, artifactUrl: report.entry.artifactUrl, environment, transport,
-        ...(report.entry.platform ? { platform: report.entry.platform } : {}), preview: { url: previewUrl, expiresAt } });
+        ...commentTarget(report), preview: { url: previewUrl, expiresAt } });
       headSha = published.headSha;
     }
     return { previewUrl, expiresAt: expiresAt === null ? null : new Date(expiresAt).toISOString(), deploymentId: hosted.deploymentId, deploymentUrl: hosted.deploymentUrl,
       project, owner: hosted.owner, reportSha256: reports[0]!.sha256, reportBytes: reports[0]!.zip.byteLength,
-      reports: reports.map(report => ({ ...(report.entry.platform ? { platform: report.entry.platform } : {}), artifactUrl: report.entry.artifactUrl,
+      reports: reports.map(report => ({ ...(report.entry.platform ? { platform: report.entry.platform } : {}), ...(report.target ? { target: report.target } : {}), artifactUrl: report.entry.artifactUrl,
         reportSha256: report.sha256, reportBytes: report.zip.byteLength })), headSha,
       ...(pr.origin === "compare" ? { linkedFromRunSummary: true as const } : {}) };
   }
 }
 
-/** The comparison's job summary: what was compared, the hosted link, and each platform's change count. */
+/** Which comment section and artifact a report is: its target, or (single-report runs) none. */
+function commentTarget(report: SealedReport): { target?: string; platform?: ExplorePlatform } {
+  if (report.target) return { target: report.target.id, platform: report.target.platform };
+  return report.entry.platform ? { platform: report.entry.platform } : {};
+}
+
+/** The comparison's job summary: what was compared, the hosted link, and each target's change count. */
 export function renderCompareSummary(comparison: CompareReviewPresentation, previewUrl: string, expiresAt: number | null, inputs: CiReportInput[]): string {
   const platforms = inputs.map(input => {
     const changes = reviewChangeCount(input.commentState);
     const device = reviewDevice(input.commentState);
-    return `- ${input.publicReview.runtime.platform === "android" ? "Android" : "iOS"}${device ? ` (${device})` : ""}: ${changes === undefined ? "no review" : `${changes} ${changes === 1 ? "change" : "changes"}`}`;
+    const label = readTarget(input.publicReview.runtime.target)?.label ?? (input.publicReview.runtime.platform === "android" ? "Android" : "iOS");
+    return `- ${label}${device ? ` (${device})` : ""}: ${changes === undefined ? "no review" : `${changes} ${changes === 1 ? "change" : "changes"}`}`;
   });
   return [`### Explore: ${compareTitleMarkdown(comparison)}`, "",
     `[Open the report](${previewUrl}) · [${comparison.base.sha.slice(0, 8)}..${comparison.head.sha.slice(0, 8)}](${comparison.url})`
@@ -528,9 +587,10 @@ export async function deployExplorationReport(options: ExplorationDeployOptions)
   const now = options.now ?? Date.now;
   const sha256 = createHash("sha256").update(zip).digest("hex");
   const reportDirectory = base32(random(10));
-  const file = options.platform ? `${options.platform}.zip.enc` : "report.zip.enc";
-  const hosted = await deploySealedReports({ reports: [{ zip, sha256, file, query: options.platform ? `?platform=${options.platform}` : "" }], reportDirectory,
-    ...(options.platform ? { listing: [{ platform: options.platform, path: `/_report/${reportDirectory}/${file}` }] } : {}), project: options.project,
+  const target = options.platform ? platformTarget(options.platform) : undefined;
+  const file = target ? `${target.id}.zip.enc` : "report.zip.enc";
+  const hosted = await deploySealedReports({ reports: [{ zip, sha256, file, query: target ? targetQuery(target) : "" }], reportDirectory,
+    ...(target ? { listing: [listingEntry(target, `/_report/${reportDirectory}/${file}`)] } : {}), project: options.project,
     ...(options.owner ? { owner: options.owner } : {}), ownerHint: "Pass --owner with the Expo account that should host the report.",
     projectHint: "Give this EAS login permission to create projects under the owner, or pass --project with an existing slug.",
     expiresAt: options.expiresAfterDays === null ? null : now() + options.expiresAfterDays * 86_400_000, exportPath, environment, run: options.run ?? defaultRun, ...(options.sleep ? { sleep: options.sleep } : {}),
@@ -540,8 +600,8 @@ export async function deployExplorationReport(options: ExplorationDeployOptions)
 }
 
 export type FixturePreviewOptions = {
-  /** Report ZIPs as a hosted preview serves them from report.zip, one per platform, with what the platform switch says of each. */
-  reports: Array<{ platform: ExplorePlatform; zipPath: string; changes?: number; device?: string }>;
+  /** Report ZIPs as a hosted preview serves them from report.zip, one per target (`platform` alone: the platform's target), with what the switch says of each. */
+  reports: Array<{ platform: ExplorePlatform; target?: RunTarget; zipPath: string; changes?: number; device?: string }>;
   project: string;
   owner?: string;
   alias: string;
@@ -568,21 +628,19 @@ export async function deployFixturePreview(options: FixturePreviewOptions): Prom
     message: "An EAS login is required to deploy the Viewer preview", nextAction: "Run `eas login` or set EXPO_TOKEN." });
   if (!HOSTING_ALIAS.test(options.alias)) throw previewError("PREVIEW_ALIAS_INVALID", `Invalid EAS Hosting alias: ${options.alias}`, "Pass --alias as a lowercase slug such as pr-123.");
   if (options.token !== undefined && !HOSTED_TOKEN.test(options.token)) throw previewError("PREVIEW_TOKEN_INVALID", "The preview token must be 32 characters of a-z and 2-7.", "Pass the /p/<token> segment of the previous preview link, or none for a new one.");
-  if (!options.reports.length || new Set(options.reports.map(report => report.platform)).size !== options.reports.length) {
-    throw previewError("PREVIEW_REPORTS_INVALID", "A fixture preview needs one report per platform", "Pass each platform's report ZIP once.");
-  }
+  assertTargets(options.reports.map(report => report.target ?? platformTarget(report.platform)), "A fixture preview needs one report per target", "Pass each target's report ZIP once.");
   const exportPath = resolve(options.exportPath ?? PREVIEW_EXPORT_PATH);
   await assertExport(exportPath);
   const random = options.random ?? (bytes => new Uint8Array(randomBytes(bytes)));
   const reportDirectory = base32(random(10));
   const reports = await Promise.all(options.reports.map(async report => {
     const zip = new Uint8Array(await readFile(report.zipPath));
-    return { ...report, zip, sha256: createHash("sha256").update(zip).digest("hex"), file: `${report.platform}.zip.enc` };
+    const target = report.target ?? platformTarget(report.platform);
+    return { ...report, target, zip, sha256: createHash("sha256").update(zip).digest("hex"), file: `${target.id}.zip.enc` };
   }));
-  const listing = reports.map(report => ({ platform: report.platform, path: `/_report/${reportDirectory}/${report.file}`,
-    ...(report.changes === undefined ? {} : { changes: report.changes }), ...(report.device ? { device: report.device } : {}) }));
+  const listing = reports.map(report => listingEntry(report.target, `/_report/${reportDirectory}/${report.file}`, report.changes, report.device));
   return deploySealedReports({
-    reports: reports.map(report => ({ zip: report.zip, sha256: report.sha256, file: report.file, query: `?platform=${report.platform}` })),
+    reports: reports.map(report => ({ zip: report.zip, sha256: report.sha256, file: report.file, query: targetQuery(report.target) })),
     reportDirectory, listing, project: options.project, ...(options.owner ? { owner: options.owner } : {}),
     ownerHint: "Pass --owner with the Expo account that holds the preview project.",
     projectHint: "Give EXPO_TOKEN's account permission to create projects, or pass --project with an existing slug.",
@@ -592,11 +650,12 @@ export async function deployFixturePreview(options: FixturePreviewOptions): Prom
 }
 
 /**
- * Report ZIPs on this machine behind one token (`capture:review --upload`, `report:upload`), one per platform: the same
+ * Report ZIPs on this machine behind one token (`capture:review --upload`, `report:upload`), one per target: the same
  * sealed deployment as a PR preview, from ZIPs instead of GitHub artifacts, with the local EAS login or EXPO_TOKEN.
  */
 export async function deployLocalReports(options: {
-  reports: Array<{ platform: ExplorePlatform; zip: Uint8Array; changes?: number; device?: string }>;
+  /** One per target; an entry without `target` is its platform's target, as before targets. */
+  reports: Array<{ platform: ExplorePlatform; target?: RunTarget; zip: Uint8Array; changes?: number; device?: string }>;
   project: string; owner?: string; expiresAfterDays: number | null;
   /** What to change when the owner or project is not usable; defaults name report.preview in config.yaml. */
   ownerHint?: string; projectHint?: string;
@@ -604,22 +663,20 @@ export async function deployLocalReports(options: {
   transport?: typeof fetch; now?: () => number; random?: (bytes: number) => Uint8Array; verifyTimeoutMs?: number;
 }): Promise<HostedDeployment> {
   const environment = options.environment ?? process.env;
-  if (!options.reports.length || new Set(options.reports.map(report => report.platform)).size !== options.reports.length) {
-    throw previewError("PREVIEW_REPORTS_INVALID", "A local upload needs one report per platform", "Capture each platform once, then upload.");
-  }
+  assertTargets(options.reports.map(report => report.target ?? platformTarget(report.platform)), "A local upload needs one report per target", "Capture each target once, then upload.");
   const exportPath = resolve(options.exportPath ?? PREVIEW_EXPORT_PATH);
   await assertExport(exportPath);
   const now = options.now ?? Date.now;
   const random = options.random ?? (bytes => new Uint8Array(randomBytes(bytes)));
   const reportDirectory = base32(random(10));
   // Always listed, even alone: the Worker takes an unlisted report for iOS, so an Android one would be mislabelled.
-  const reports = options.reports.map(report => ({ ...report, sha256: createHash("sha256").update(report.zip).digest("hex"), file: `${report.platform}.zip.enc` }));
-  const listing = reports.map(report => {
-    const device = report.device ? listingDevice(report.device) : "";
-    return { platform: report.platform, path: `/_report/${reportDirectory}/${report.file}`, ...(report.changes === undefined ? {} : { changes: report.changes }), ...(device ? { device } : {}) };
+  const reports = options.reports.map(report => {
+    const target = report.target ?? platformTarget(report.platform);
+    return { ...report, target, sha256: createHash("sha256").update(report.zip).digest("hex"), file: `${target.id}.zip.enc` };
   });
+  const listing = reports.map(report => listingEntry(report.target, `/_report/${reportDirectory}/${report.file}`, report.changes, report.device));
   return deploySealedReports({
-    reports: reports.map(report => ({ zip: report.zip, sha256: report.sha256, file: report.file, query: `?platform=${report.platform}` })),
+    reports: reports.map(report => ({ zip: report.zip, sha256: report.sha256, file: report.file, query: targetQuery(report.target) })),
     reportDirectory, listing, project: options.project, ...(options.owner ? { owner: options.owner } : {}),
     ownerHint: options.ownerHint ?? "Set report.preview.owner in .expo-explore/config.yaml to the account that should hold the hosted reports.",
     projectHint: options.projectHint ?? "Make sure your Expo account can create projects, or set report.preview.project to an existing project you can deploy to.",
@@ -628,36 +685,52 @@ export async function deployLocalReports(options: {
     verifyTimeoutMs: options.verifyTimeoutMs ?? 180_000 });
 }
 
-const ARTIFACT_DIRECTORY = /^explore-(capture|review)-\d+-\d+-(ios|android)$/;
+/** explore-(capture|review)-<run>-<attempt>-<target id>; the id starts with a letter, so the run and attempt end unambiguously. */
+const ARTIFACT_DIRECTORY = /^explore-(capture|review)-\d+-\d+-([a-z][a-z0-9-]{0,31})$/;
 
 /**
- * The fan-in deploy job's inputs: actions/download-artifact puts each explore-capture-<run>-<attempt>-<platform>
- * directory under --inputs and each explore-review-… directory under --reports. Pairs them by platform and
- * looks up each report artifact's URL on the run, since matrix jobs cannot hand their artifact URLs forward.
+ * The fan-in deploy job's inputs: actions/download-artifact puts each explore-capture-<run>-<attempt>-<target>
+ * directory under --inputs and each explore-review-… directory under --reports (the target is the platform for
+ * configs without targets). Pairs them by target, in the order the run's review lists its targets, and looks up each
+ * report artifact's URL on the run, since matrix jobs cannot hand their artifact URLs forward.
  */
 export async function collectPlatformReports(options: { inputsPath: string; reportsPath: string; environment?: NodeJS.ProcessEnv; transport?: typeof fetch }): Promise<PreviewReportInput[]> {
   const environment = options.environment ?? process.env; const transport = options.transport ?? fetch;
   const directories = async (root: string, kind: "capture" | "review") => {
-    const found = new Map<ExplorePlatform, string>();
+    const found = new Map<string, string>();
     for (const name of (await readdir(root)).sort()) {
       const match = ARTIFACT_DIRECTORY.exec(name);
-      if (!match || match[1] !== kind) continue;
-      if (found.has(match[2] as ExplorePlatform)) throw previewError("PREVIEW_REPORTS_INVALID", `Several ${kind} artifacts for ${match[2]} were downloaded`,
+      if (!match || match[1] !== kind || !isTargetId(match[2])) continue;
+      if (found.has(match[2]!)) throw previewError("PREVIEW_REPORTS_INVALID", `Several ${kind} artifacts for ${match[2]} were downloaded`,
         "Download only this run attempt's artifacts into the --inputs and --reports directories.");
-      found.set(match[2] as ExplorePlatform, join(root, name));
+      found.set(match[2]!, join(root, name));
     }
     return found;
   };
   const inputs = await directories(options.inputsPath, "capture"); const reports = await directories(options.reportsPath, "review");
-  if (!inputs.size) throw previewError("PREVIEW_REPORTS_MISSING", "No explore-capture-<run>-<attempt>-<platform> artifact was downloaded",
+  if (!inputs.size) throw previewError("PREVIEW_REPORTS_MISSING", "No explore-capture-<run>-<attempt>-<target> artifact was downloaded",
     "Download this run's explore-capture artifacts into the --inputs directory before ci:deploy.");
+  if (inputs.size > 8) throw previewError("PREVIEW_REPORTS_INVALID", `${inputs.size} capture artifacts were downloaded; a run has at most 8 targets`,
+    "Download only this run attempt's artifacts into the --inputs and --reports directories.");
   const entries: PreviewReportInput[] = [];
-  for (const [platform, inputDirectory] of inputs) {
-    const reportPath = reports.get(platform);
-    if (!reportPath) throw previewError("PREVIEW_REPORTS_INCOMPLETE", `The ${platform} capture has no report artifact to deploy`,
-      "Rerun the workflow; the report job for that platform did not upload its explore-review artifact.");
-    entries.push({ platform, inputPath: join(inputDirectory, "report-input.json"), reportPath, artifactUrl: "" });
+  for (const [id, inputDirectory] of inputs) {
+    const reportPath = reports.get(id);
+    if (!reportPath) throw previewError("PREVIEW_REPORTS_INCOMPLETE", `The ${id} capture has no report artifact to deploy`,
+      "Rerun the workflow; the report job for that target did not upload its explore-review artifact.");
+    const inputPath = join(inputDirectory, "report-input.json");
+    const runtime = (await readCiReportInput(inputPath)).publicReview.runtime;
+    // A report from before targets names only its platform, and its artifact is named after it.
+    const named = readTarget(runtime.target);
+    if (named && named.id !== id) throw previewError("PREVIEW_REPORTS_INVALID", `The ${id} capture artifact holds the report of ${named.id}`,
+      "Download only this run attempt's artifacts, as the capture jobs named them.");
+    const target = named ?? (id === "ios" || id === "android" ? platformTarget(id) : { id, platform: runtime.platform ?? "ios", label: id });
+    entries.push({ ...(id === target.platform ? { platform: target.platform } : {}), target, inputPath, reportPath, artifactUrl: "" });
   }
+  // Config order, as the review lists its targets (or, before targets, its platforms); directory order otherwise.
+  const listed = (await readCiReportInput(entries[0]!.inputPath)).publicReview.runtime;
+  const order: string[] = listed.targets?.map(target => target.id) ?? listed.platforms ?? [];
+  const rank = (entry: PreviewReportInput) => { const index = order.indexOf(entry.target!.id); return index === -1 ? order.length : index; };
+  entries.sort((a, b) => rank(a) - rank(b));
   const review = (await readCiReportInput(entries[0]!.inputPath)).publicReview;
   if (review.pullRequest.origin === "local") throw new Error("Local reports cannot be deployed as hosted previews");
   const repository = review.pullRequest.repository;
@@ -665,7 +738,7 @@ export async function collectPlatformReports(options: { inputsPath: string; repo
     throw previewError("REPORT_INPUT_INVALID", "The report input does not name a GitHub run", "Use the report-input.json produced by this run's capture job.");
   }
   for (const entry of entries) {
-    const name = `explore-review-${review.runId}-${review.runAttempt}-${entry.platform}`;
+    const name = `explore-review-${review.runId}-${review.runAttempt}-${entry.target!.id}`;
     const url = `https://api.github.com/repos/${repository}/actions/runs/${review.runId}/artifacts?per_page=100&name=${encodeURIComponent(name)}`;
     const response = await transport(url, { headers: { accept: "application/vnd.github+json", authorization: `Bearer ${environment.GITHUB_TOKEN ?? ""}`,
       "x-github-api-version": "2022-11-28" }, signal: AbortSignal.timeout(60_000) });
@@ -673,7 +746,7 @@ export async function collectPlatformReports(options: { inputsPath: string; repo
     const artifact = body?.artifacts?.find(candidate => candidate.name === name && candidate.expired !== true);
     if (!artifact || typeof artifact.id !== "number" || !Number.isSafeInteger(artifact.id) || artifact.id <= 0) {
       throw deployError("REPORT_ARTIFACT_MISSING", `The run has no artifact named ${name} (HTTP ${response.status}).`,
-        "Rerun the workflow so every platform's report job uploads its artifact before the deploy job runs.", { retryable: true });
+        "Rerun the workflow so every target's report job uploads its artifact before the deploy job runs.", { retryable: true });
     }
     entry.artifactUrl = `https://github.com/${repository}/actions/runs/${review.runId}/artifacts/${artifact.id}`;
   }
@@ -723,7 +796,7 @@ async function verifyDeployment(check: { origin: string; token: string; reports:
   if (check.listing !== undefined) {
     const list = await get(`/p/${check.token}/reports.json`);
     const body = list.status === 200 ? await list.text() : "";
-    if (list.status !== 200 || body !== check.listing) throw deployError("PREVIEW_VERIFY_FAILED", "The hosted preview did not list the platforms that were deployed.",
+    if (list.status !== 200 || body !== check.listing) throw deployError("PREVIEW_VERIFY_FAILED", "The hosted preview did not list the targets that were deployed.",
       "Rerun the deploy job; the deployment's report listing did not match.", { details: { status: list.status } });
   }
   const other = check.token.endsWith("a") ? `${check.token.slice(0, -1)}b` : `${check.token.slice(0, -1)}a`;

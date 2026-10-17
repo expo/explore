@@ -42,6 +42,8 @@ export function baseEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessE
     "ANDROID_SDK_ROOT",
     "ANDROID_HOME",
     "JAVA_HOME",
+    // A local simulator runs with this Xcode instead of xcode-select's, e.g. one that adds iPhone Duo.
+    "DEVELOPER_DIR",
   ]) {
     if (environment[name] !== undefined) result[name] = environment[name];
   }

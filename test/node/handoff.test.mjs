@@ -15,6 +15,8 @@ test("a hosted preview and a local review's Viewer have a link an agent can fetc
   assert.equal(handoffPageUrl(new URL("http://127.0.0.1:4319/#/map")), undefined);
   assert.equal(handoffPageUrl(new URL(`http://127.0.0.1:4319/p/${TOKEN}?platform=ios`)), `http://127.0.0.1:4319/p/${TOKEN}?platform=ios`, "a local review's Viewer serves the agent API too");
   assert.equal(handoffPageUrl(new URL("https://explore.expo.app/r?repo=a/b&run=1&attempt=1")), undefined);
+  assert.equal(handoffPageUrl(new URL(`https://app-explore--abc.expo.app/p/${TOKEN}?target=duo-open&view=compare&screen=x`)), `https://app-explore--abc.expo.app/p/${TOKEN}?target=duo-open`,
+    "a target's link keeps the agent on that target's report");
 });
 
 const input = {

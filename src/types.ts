@@ -77,12 +77,22 @@ export type RunEnvironment = {
   instructions?: string;
 };
 
+/**
+ * A named capture target: one platform's device, in one pose, captured as its own report. A config without `targets`
+ * has one target per platform, named after it (`ios`, `android`).
+ */
+export type RunTarget = { id: string; platform: Platform; label: string };
+
 export type ExploreRun = {
   id: string;
   name: string;
   platform: Platform;
   /** Every platform the review captured, when more than one; the Viewer links the sibling report. */
   platforms?: Platform[];
+  /** The target this report captured; absent in reports from before targets, which are named for their platform. */
+  target?: RunTarget;
+  /** Every target the review captured, in config order, when more than one; the Viewer links the sibling reports. */
+  targets?: RunTarget[];
   controller: Controller;
   bundleId?: string;
   deviceId?: string;

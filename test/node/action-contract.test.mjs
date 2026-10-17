@@ -119,7 +119,7 @@ test("trusted tools retain native agent runtimes while omitting development depe
   const builds = [action.runs.steps.find(step => step.name === "Build the pinned Explore CLI"),
     ...workflows.flatMap(workflow => Object.values(workflow.jobs)
       .flatMap(job => job.steps.filter(step => step.name === "Install Explore")))];
-  assert.equal(builds.length, 12, "composite action, review platforms/capture/report/deploy/failure, baseline platforms/baseline, and compare platforms/capture/report/deploy install the trusted tools");
+  assert.equal(builds.length, 12, "composite action, review targets/capture/report/deploy/failure, baseline targets/baseline, and compare targets/capture/report/deploy install the trusted tools");
   for (const step of builds) {
     const install = step.run.split("\n").find(line => /^\s*npm ci\b/.test(line));
     assert.ok(install, step.name);
@@ -136,18 +136,18 @@ test("baseline captures a complete single default-branch commit without a PR", (
   assert.ok(Object.hasOwn(baseline.on, "push"));
   assert.ok(Object.hasOwn(baseline.on, "workflow_dispatch"));
   const job = baseline.jobs.baseline;
-  assert.match(baseline.jobs.platforms.if, /github\.event\.repository\.default_branch/);
-  assert.deepEqual(job.needs, "platforms");
-  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { platform: "${{ fromJSON(needs.platforms.outputs.platforms) }}" } });
-  assert.equal(job.env.PLATFORM, "${{ matrix.platform }}");
-  assert.match(baseline.jobs.platforms.steps.at(-1).run, /config:platforms .* \| jq -c '\.platforms'/);
+  assert.match(baseline.jobs.targets.if, /github\.event\.repository\.default_branch/);
+  assert.deepEqual(job.needs, "targets");
+  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { target: "${{ fromJSON(needs.targets.outputs.targets) }}" } });
+  assert.equal(job.env.TARGET, "${{ matrix.target }}");
+  assert.match(baseline.jobs.targets.steps.at(-1).run, /config:targets .* \| jq -c '\[\.targets\[\]\.id\]'/);
   const verify = job.steps.find(step => step.name === "Verify deterministic source planning");
   assert.match(verify.run, /--base-sha "\$GITHUB_SHA" --head-sha "\$GITHUB_SHA" --scope all/);
   const capture = job.steps.find(step => step.name === "Capture complete single-commit baseline");
   assert.match(capture.run, /capture:baseline/);
   assert.doesNotMatch(baselineSource, /--pull-request|capture:review|inputs\.pr/);
   const upload = job.steps.find(step => step.name === "Upload exact-commit baseline evidence");
-  assert.equal(upload.with.name, "explore-baseline-${{ github.sha }}-${{ matrix.platform }}");
+  assert.equal(upload.with.name, "explore-baseline-${{ github.sha }}-${{ matrix.target }}");
   assert.equal(upload.with["retention-days"], 30);
   const diagnostics = job.steps.find(step => step.name === "Upload planning and baseline diagnostics");
   assert.equal(diagnostics.if, "always()");
@@ -291,7 +291,7 @@ test("action rejects unsupported Node versions before installing tools", async t
 
 test("the deploy job is the only post-capture job that holds EXPO_TOKEN, and it runs only for a requested hosted preview", () => {
   const deploy = review.jobs.deploy;
-  assert.deepEqual(deploy.needs, ["platforms", "capture", "report"]);
+  assert.deepEqual(deploy.needs, ["targets", "capture", "report"]);
   assert.equal(deploy.if, "needs.capture.outputs.preview == 'eas'");
   assert.deepEqual(deploy.permissions, { contents: "read", actions: "read", "pull-requests": "write" });
   const step = deploy.steps.find(step => step.name === "Deploy the hosted preview and publish its Explore report links");
@@ -299,7 +299,7 @@ test("the deploy job is the only post-capture job that holds EXPO_TOKEN, and it 
   assert.equal(step.env.GITHUB_TOKEN, "${{ github.token }}");
   assert.equal(step.env.ARTIFACT_URL, undefined);
   assert.match(step.run, /ci:deploy --inputs "\$RUNNER_TEMP\/explore-review" --reports "\$RUNNER_TEMP\/explore-report"/);
-  // Every platform's capture and report artifact, one directory each, so the deployment serves all of them.
+  // Every target's capture and report artifact, one directory each, so the deployment serves all of them.
   const downloads = deploy.steps.filter(step => step.uses?.startsWith("actions/download-artifact@"));
   assert.deepEqual(downloads.map(step => step.with.pattern), ["explore-capture-${{ github.run_id }}-${{ github.run_attempt }}-*", "explore-review-${{ github.run_id }}-${{ github.run_attempt }}-*"]);
   assert.ok(downloads.every(step => step.with.name === undefined && step.with["merge-multiple"] === undefined));
@@ -308,44 +308,49 @@ test("the deploy job is the only post-capture job that holds EXPO_TOKEN, and it 
   // capture:review writes preview=<hosting> to the step outputs from the reviewed config.
   assert.equal(review.jobs.capture.outputs.preview, "${{ steps.capture.outputs.preview }}");
   assert.match(review.jobs.capture.steps.find(step => step.id === "capture").run, /capture:review/);
-  assert.deepEqual(review.jobs.failure.needs, ["platforms", "capture", "report", "deploy"]);
-  assert.match(review.jobs.failure.if, /needs\.platforms\.result == 'failure'/);
+  assert.deepEqual(review.jobs.failure.needs, ["targets", "capture", "report", "deploy"]);
+  assert.match(review.jobs.failure.if, /needs\.targets\.result == 'failure'/);
   assert.match(review.jobs.failure.if, /needs\.deploy\.result == 'failure'/);
 });
 
 test("closing a pull request runs nothing: hosted previews stay until a developer deletes them", () => {
   assert.ok(!review.on.pull_request_target.types.includes("closed"));
-  assert.doesNotMatch(review.jobs.platforms.if, /closed/);
+  assert.doesNotMatch(review.jobs.targets.if, /closed/);
   assert.equal(review.jobs.cleanup, undefined);
   for (const workflow of workflows) assert.doesNotMatch(JSON.stringify(workflow), /ci:cleanup|deploy:delete/);
 });
 
-test("review captures and reports each configured platform in its own matrix job, with platform-suffixed artifacts", () => {
-  const platforms = review.jobs.platforms;
-  assert.deepEqual(platforms.permissions, { contents: "read", "pull-requests": "read" });
-  assert.equal(platforms.outputs.platforms, "${{ steps.platforms.outputs.platforms }}");
-  assert.match(platforms.steps.at(-1).run, /config:platforms --project "\$GITHUB_WORKSPACE\/app-head\/\$APP_PROJECT_DIR" --config \.expo-explore\/config\.yaml \| jq -c '\.platforms'/);
-  assert.doesNotMatch(JSON.stringify(platforms), /EXPO_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|APP_REVIEW/);
-  for (const job of [review.jobs.capture, review.jobs.report]) {
-    assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { platform: "${{ fromJSON(needs.platforms.outputs.platforms) }}" } });
-    assert.equal(job.env.PLATFORM, "${{ matrix.platform }}");
+test("review captures and reports each configured target in its own matrix job, with target-suffixed artifacts", () => {
+  const targets = review.jobs.targets;
+  assert.deepEqual(targets.permissions, { contents: "read", "pull-requests": "read" });
+  assert.equal(targets.outputs.targets, "${{ steps.targets.outputs.targets }}");
+  // config:targets lists ids in config order; a config without targets: lists ["ios"] / ["ios","android"], as config:platforms did.
+  assert.match(targets.steps.at(-1).run, /config:targets --project "\$GITHUB_WORKSPACE\/app-head\/\$APP_PROJECT_DIR" --config \.expo-explore\/config\.yaml \| jq -c '\[\.targets\[\]\.id\]'/);
+  assert.doesNotMatch(JSON.stringify(targets), /EXPO_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|APP_REVIEW/);
+  for (const workflow of [review, compare, baseline]) {
+    assert.doesNotMatch(JSON.stringify(workflow), /matrix\.platform|config:platforms|\$PLATFORM|needs\.platforms/, "every job is keyed by target, never by platform");
+    assert.match(JSON.stringify(workflow), /matrix\.target/, "doctor looks for matrix.target in an installed workflow");
   }
-  assert.equal(review.jobs.capture.needs, "platforms");
-  assert.deepEqual(review.jobs.report.needs, ["platforms", "capture"]);
+  for (const job of [review.jobs.capture, review.jobs.report]) {
+    assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { target: "${{ fromJSON(needs.targets.outputs.targets) }}" } });
+    assert.equal(job.env.TARGET, "${{ matrix.target }}");
+  }
+  assert.equal(review.jobs.capture.needs, "targets");
+  assert.deepEqual(review.jobs.report.needs, ["targets", "capture"]);
   const runs = [review.jobs.capture, review.jobs.report, baseline.jobs.baseline].flatMap(job => job.steps.filter(step => step.run).map(step => step.run));
   for (const command of ["source:verify", "capture:review", "capture:baseline", "ci:report", "ci:publish"]) {
     const uses = runs.filter(run => run.includes(`cli.js" ${command}`));
     assert.ok(uses.length > 0, command);
-    for (const run of uses) assert.match(run, /--platform "\$PLATFORM"/, command);
+    for (const run of uses) assert.match(run, /--target "\$TARGET"/, command);
   }
   for (const workflow of [review, compare]) {
     assert.equal(workflow.jobs.capture.steps.find(step => step.name === "Find optional exact-base evidence").run,
-      'node "$TOOLS/dist/cli.js" ci:find-baseline --sha "$BASE_SHA" --platform "$PLATFORM"');
+      'node "$TOOLS/dist/cli.js" ci:find-baseline --sha "$BASE_SHA" --target "$TARGET"');
   }
   for (const [job, name] of [[review.jobs.capture, "Upload captured review for packaging"], [review.jobs.capture, "Upload planning and failure diagnostics"],
     [review.jobs.report, "Upload hosted review bundle"], [review.jobs.report, "Upload report failure diagnostics"],
     [baseline.jobs.baseline, "Upload exact-commit baseline evidence"], [baseline.jobs.baseline, "Upload planning and baseline diagnostics"]]) {
-    assert.ok(job.steps.find(step => step.name === name).with.name.endsWith("-${{ matrix.platform }}"), name);
+    assert.ok(job.steps.find(step => step.name === name).with.name.endsWith("-${{ matrix.target }}"), name);
   }
 });
 
@@ -363,13 +368,13 @@ test("compare reviews any two refs from a manual run or another workflow, with n
   // Each override reaches the CLI only when the caller set it; the CLI validates the value.
   assert.match(capture.run, /\$\{SCOPE:\+--scope "\$SCOPE"\} \$\{EXPIRES_IN:\+--expires-in "\$EXPIRES_IN"\}/);
   assert.match(compare.jobs.capture.steps.find(step => step.name === "Verify deterministic source planning").run, /\$\{SCOPE:\+--scope "\$SCOPE"\}/);
-  assert.match(compare.jobs.report.steps.find(step => step.name === "Link the report from the run summary").run, /ci:publish --input .* --artifact-url "\$ARTIFACT_URL" --platform "\$PLATFORM"/);
-  assert.equal(compare.jobs.capture.env.BASE_SHA, "${{ needs.platforms.outputs.base }}", "capture checks out the commits the refs resolved to once");
-  assert.equal(compare.jobs.capture.env.HEAD_SHA, "${{ needs.platforms.outputs.head }}");
+  assert.match(compare.jobs.report.steps.find(step => step.name === "Link the report from the run summary").run, /ci:publish --input .* --artifact-url "\$ARTIFACT_URL" --target "\$TARGET"/);
+  assert.equal(compare.jobs.capture.env.BASE_SHA, "${{ needs.targets.outputs.base }}", "capture checks out the commits the refs resolved to once");
+  assert.equal(compare.jobs.capture.env.HEAD_SHA, "${{ needs.targets.outputs.head }}");
   assert.equal(compare.concurrency.group, "explore-compare-${{ inputs.base }}..${{ inputs.head }}", "\"..\" cannot appear in a ref, so groups never collide");
   const diagnostics = compare.jobs.report.steps.find(step => step.name === "Upload report failure diagnostics");
   assert.deepEqual([diagnostics.if, diagnostics.with.path], ["always()", "${{ runner.temp }}/explore-diagnostics"]);
-  assert.match(compare.jobs.platforms.steps.find(step => step.id === "refs").run, /ci:compare-refs --project app-head --base "\$BASE_REF" --head "\$HEAD_REF"/);
+  assert.match(compare.jobs.targets.steps.find(step => step.id === "refs").run, /ci:compare-refs --project app-head --base "\$BASE_REF" --head "\$HEAD_REF"/);
   assert.match(compare.jobs.capture.steps.find(step => step.id === "capture").run, /printf '%s' "\$COMPARE" > "\$RUNNER_TEMP\/explore-compare\.json"/);
   assert.match(compare.jobs.deploy.steps.at(-1).run, /ci:deploy --inputs/);
 });

@@ -15,8 +15,8 @@ import { installCiFiles } from "../ci/workflow-install.js";
 import { readRouteEntry } from "../ci/route-entry.js";
 import { buildVerifiedPlan } from "../ci/verified-plan.js";
 import { formatCaptureCheck, formatDoctorReport, referencedSecretNames, runCaptureCheck, runDoctor } from "../ci/doctor.js";
-import { readExploreConfig, readExploreInstructions, resolvePlatformConfig, withRunOverrides, previewDays, configPlatforms as listPlatforms, EXPLORE_PLATFORMS, DEFAULT_EXPLORE_CONFIG_PATH, PREVIEW_DEFAULT_DAYS, type ExplorePlatform } from "../config/explore-config.js";
-import { argumentError, output, required, has, flag, flags, nonNegativeInteger, oneOf } from "./args.js";
+import { readExploreConfig, readExploreInstructions, resolveTargetConfig, configTargets, isTargetId, withRunOverrides, previewDays, configPlatforms as listPlatforms, EXPLORE_PLATFORMS, DEFAULT_EXPLORE_CONFIG_PATH, PREVIEW_DEFAULT_DAYS, type ExplorePlatform } from "../config/explore-config.js";
+import { argumentError, output, required, has, flag, flags, nonNegativeInteger, oneOf, positiveInteger } from "./args.js";
 import { help } from "./help.js";
 import { CiError } from "../shared/ci-errors.js";
 import { cleanupAfterCapture, findOptionalBaseline, resolveCompareRefs, resolvePullRequest, writeCaptureOutputs, writeStepOutputs } from "../ci/workflow-steps.js";
@@ -26,7 +26,7 @@ export async function doctor(): Promise<void> {
   if (has("help")) return help();
   const project = flag("project") ?? process.cwd();
   const report = await runDoctor({ project, online: !has("offline"), github: !has("no-github") && !has("offline"),
-    checkModel: has("check-model"), controller: flag("controller") });
+    checkModel: has("check-model"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") });
   if (!has("capture")) {
     if (has("json")) output({ ...report });
     else console.log(formatDoctorReport(report));
@@ -53,7 +53,7 @@ Fix the problems in steps 1–5 before a capture check.`);
   let result: Awaited<ReturnType<typeof runCaptureCheck>>;
   try {
     const platform = platformFlag();
-    result = await runCaptureCheck({ project, ...(platform ? { platform } : {}), controller: flag("controller"), output: resolve(flag("output") ?? await mkdtemp(join(tmpdir(), "expo-explore-capture-"))), progress: stderrProgress() });
+    result = await runCaptureCheck({ project, ...(platform ? { platform } : {}), target: targetFlag(), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack"), output: resolve(flag("output") ?? await mkdtemp(join(tmpdir(), "expo-explore-capture-"))), progress: stderrProgress() });
   } catch (error) {
     // A refusal before any EAS work: show it with its next action next to the static report.
     if (!(error instanceof CiError)) throw error;
@@ -84,20 +84,20 @@ export async function ciDeploy(): Promise<void> {
 }
 
 export async function ciPublish(): Promise<void> {
-  const platform = platformFlag();
-  output({ ok: true, ...await publishCiReportComment({ inputPath: required("input"), artifactUrl: required("artifact-url"), ...(platform ? { platform } : {}) }) });
+  const platform = platformFlag(), target = targetFlag();
+  output({ ok: true, ...await publishCiReportComment({ inputPath: required("input"), artifactUrl: required("artifact-url"), ...(platform ? { platform } : {}), ...(target ? { target } : {}) }) });
 }
 
 /** The failure job's comment for a job that died before Explore could post its own: `ci:failure --pr N --head SHA --base SHA [--diagnostics DIR] [--platform P]`. */
 export async function ciFailure(): Promise<void> {
-  const platform = platformFlag();
+  const platform = platformFlag(), target = targetFlag();
   const repository = process.env.GITHUB_REPOSITORY, runId = process.env.GITHUB_RUN_ID, runAttempt = process.env.GITHUB_RUN_ATTEMPT;
   if (!repository || !runId || !runAttempt) throw new CiError({ code: "CONFIG_MISSING", stage: "preflight", message: "GITHUB_REPOSITORY, GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT are required",
     nextAction: "Run ci:failure inside the GitHub Actions failure job." });
   const pullNumber = Number(required("pr"));
   if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0) { output({ ok: true, posted: false, reason: "No PR number: the capture job never started." }); return; }
   output({ ok: true, ...await publishFailureComment({ repository, pullNumber, headSha: required("head"), baseSha: required("base"), runId, runAttempt,
-    ...(has("diagnostics") ? { diagnosticsPath: required("diagnostics") } : {}), ...(platform ? { platform } : {}) }) });
+    ...(has("diagnostics") ? { diagnosticsPath: required("diagnostics") } : {}), ...(platform ? { platform } : {}), ...(target ? { target } : {}) }) });
 }
 
 /** `ci:pr --pr N [--output FILE]`: the live, authorized pull request; its commits go to the step outputs. */
@@ -111,8 +111,8 @@ export async function ciPullRequest(): Promise<void> {
 
 /** `ci:find-baseline --sha SHA [--platform P]`: a reusable baseline artifact of the base commit, if one exists. */
 export async function ciFindBaseline(): Promise<void> {
-  const platform = platformFlag();
-  const { baseline, warning } = await findOptionalBaseline({ sha: required("sha"), ...(platform ? { platform } : {}) });
+  const platform = platformFlag(), target = targetFlag();
+  const { baseline, warning } = await findOptionalBaseline({ sha: required("sha"), ...(platform ? { platform } : {}), ...(target ? { target } : {}) });
   if (baseline) await writeStepOutputs(process.env, { id: String(baseline.id), run: String(baseline.run) });
   if (warning && process.env.GITHUB_ACTIONS) console.log(`::warning title=${warning.code}::${warning.message.replace(/[\r\n]+/g, " ")}`);
   output({ ok: true, baseline: baseline ?? null, ...(warning ? { warning } : {}) });
@@ -140,10 +140,29 @@ export function platformFlag(): ExplorePlatform | undefined {
   return has("platform") ? oneOf("platform", EXPLORE_PLATFORMS) : undefined;
 }
 
-/** The platforms config.yaml captures, for the review workflow's matrix. */
+/** The `--target` flag, when given: the config.yaml target to capture. */
+export function targetFlag(): string | undefined {
+  const value = flag("target");
+  if (value !== undefined && !isTargetId(value)) argumentError("--target must be a target id from config.yaml: lowercase letters, digits and dashes.", "target");
+  return value;
+}
+
+/** The target `--target` (or `--platform`, from workflows installed before targets) selects. */
+function targetSelection(): { target?: string; platform?: ExplorePlatform } {
+  const target = targetFlag(), platform = platformFlag();
+  return { ...(target ? { target } : {}), ...(platform ? { platform } : {}) };
+}
+
+/** The targets config.yaml captures, as ids (the review workflow's matrix); workflows installed before targets read them as platforms. */
 export async function configPlatforms(): Promise<void> {
   const config = await readExploreConfig(flag("project") ?? process.cwd(), flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH);
-  output({ ok: true, platforms: listPlatforms(config) });
+  output({ ok: true, platforms: configTargets(config).map(target => target.id) });
+}
+
+/** The targets config.yaml captures, in order, with their platforms and labels: the review workflow's matrix. */
+export async function configTargetList(): Promise<void> {
+  const config = await readExploreConfig(flag("project") ?? process.cwd(), flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH);
+  output({ ok: true, targets: configTargets(config) });
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -189,7 +208,7 @@ export async function setup(): Promise<void> {
 
 export async function sourceVerify(): Promise<void> {
   const headProject = required("head-project");
-  const config = resolvePlatformConfig(await readExploreConfig(headProject, flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH), platformFlag());
+  const config = resolveTargetConfig(await readExploreConfig(headProject, flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH), targetSelection());
   const scope = oneOf("scope", ["all", "changes"] as const, config.exploration.scope);
   const plan = await buildVerifiedPlan({ baseProject: required("base-project"), headProject,
     baseSha: required("base-sha"), headSha: required("head-sha"), config, scope, output: required("output") });
@@ -201,11 +220,14 @@ export async function captureReview(): Promise<void> {
   if (!has("base-project") && !has("head-project") && !has("pull-request") && !has("compare")) return localReview();
   const headProject = required("head-project");
   const configPath = flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH;
-  const platform = platformFlag();
+  const selection = targetSelection();
   const rawConfig = await readExploreConfig(headProject, configPath);
-  const config = withRunOverrides(resolvePlatformConfig(rawConfig, platform), { scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller") });
+  const config = withRunOverrides(resolveTargetConfig(rawConfig, selection), { scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") });
   if (has("pull-request") === has("compare")) argumentError("Pass --pull-request FILE for a pull request, or --compare FILE for any two commits.", has("compare") ? "compare" : "pull-request");
-  const common = { ...(platform ? { platform } : {}), platforms: listPlatforms(rawConfig), baseProject: required("base-project"), headProject,
+  // A matrix job names its target; its artifacts, report and comment section carry the target's id.
+  const named = selection.target !== undefined || selection.platform !== undefined;
+  const common = { ...(named ? { target: config.target!.id } : {}), ...(selection.platform ? { platform: selection.platform } : {}),
+    platforms: listPlatforms(rawConfig), targets: configTargets(rawConfig), baseProject: required("base-project"), headProject,
     output: required("output"), config, configPath, progress: stderrProgress() };
   const result = has("compare") ? await runCompareCi({ ...common, comparePath: required("compare") })
     : await runPublicCi({ ...common, pullRequestPath: required("pull-request") });
@@ -216,36 +238,41 @@ export async function captureReview(): Promise<void> {
 
 export async function captureBaseline(): Promise<void> {
   const project = required("project");
-  const platform = platformFlag();
-  const config = withRunOverrides(resolvePlatformConfig(await readExploreConfig(project, flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH), platform), { controller: flag("controller") });
-  output({ ok: true, ...await runBaselineCi({ ...(platform ? { platform } : {}), project, sha: required("sha"), output: required("output"), config, progress: stderrProgress() }) });
+  const config = withRunOverrides(resolveTargetConfig(await readExploreConfig(project, flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH), targetSelection()), { controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") });
+  output({ ok: true, ...await runBaselineCi({ platform: config.app.platform, project, sha: required("sha"), output: required("output"), config, progress: stderrProgress() }) });
 }
 
 /** `capture` (or `capture:review`) `[--base REF] [--head REF | --committed]`: a local review, opened in the Viewer or hosted with --upload. */
 async function localReview(): Promise<void> {
-  const platform = platformFlag();
-  const result = await runLocalReview({ project: flag("project") ?? process.cwd(), base: flag("base"), head: flag("head"),
+  const platform = platformFlag(), target = targetFlag();
+  const parallel = has("parallel") ? positiveInteger("parallel") : undefined;
+  const result = await runLocalReview({ project: flag("project") ?? process.cwd(), base: flag("base"), head: flag("head"), ...(target ? { target } : {}),
+    ...(parallel ? { parallel } : {}),
     // --include-untracked is accepted from before untracked files were included by default.
     committed: has("committed"), uncommitted: has("uncommitted"), ...(platform ? { platform } : {}),
-    scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), cache: !has("no-cache"), configPath: flag("config"), progress: stderrProgress() });
+    scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack"), cache: !has("no-cache"), configPath: flag("config"), progress: stderrProgress() });
   if (has("output")) {
     for (const report of result.reports) {
-      const target = resolve(required("output"), report.platform);
-      await cp(report.directory, join(target, "report"), { recursive: true });
-      await cp(report.zip, join(target, "report.zip"));
-      report.directory = join(target, "report"); report.zip = join(target, "report.zip");
+      const destination = resolve(required("output"), report.target.id);
+      await cp(report.directory, join(destination, "report"), { recursive: true });
+      await cp(report.zip, join(destination, "report.zip"));
+      report.directory = join(destination, "report"); report.zip = join(destination, "report.zip");
     }
     // The reports now live under --output; the temporary copies are not needed.
     await rm(result.work, { recursive: true, force: true });
   }
-  const summary = { ok: true, runId: result.runId, base: result.base, head: result.head,
-    reports: result.reports.map(({ platform, directory, zip, changes, device }) => ({ platform, directory, zip, ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) })) };
-  const zips = await Promise.all(result.reports.map(async report => ({ platform: report.platform, zip: new Uint8Array(await readFile(report.zip)),
+  // A target that failed outright has no report; the others still open, save and upload, and the command exits 1.
+  if (result.failures.length) process.exitCode = 1;
+  const summary = { ok: result.failures.length === 0, runId: result.runId, base: result.base, head: result.head,
+    ...(result.failures.length ? { failures: result.failures.map(({ target, error }) => ({ target: target.id, code: error.code, message: error.message })) } : {}),
+    reports: result.reports.map(({ platform, target, directory, zip, changes, device }) => ({ platform, target: target.id, label: target.label, directory, zip,
+      ...(changes === undefined ? {} : { changes }), ...(device ? { device } : {}) })) };
+  const zips = await Promise.all(result.reports.map(async report => ({ platform: report.platform, target: report.target, zip: new Uint8Array(await readFile(report.zip)),
     ...(report.changes === undefined ? {} : { changes: report.changes }), ...(report.device ? { device: report.device } : {}) })));
   // Kept among the saved runs, with the commits' subjects (an uncommitted head is named by the commit under it).
   const project = resolve(flag("project") ?? process.cwd());
   const headSubject = commitSubject(project, result.head.uncommitted ? `${result.head.sha}^` : result.head.sha), baseSubject = commitSubject(project, result.base.sha);
-  const saved = await keepReports(zips.map(({ platform, zip }) => ({ platform, zip })), { subjects: { ...(headSubject ? { head: headSubject } : {}), ...(baseSubject ? { base: baseSubject } : {}) },
+  const saved = await keepReports(zips.map(({ platform, target, zip }) => ({ platform, target, zip })), { subjects: { ...(headSubject ? { head: headSubject } : {}), ...(baseSubject ? { base: baseSubject } : {}) },
     ...(result.head.uncommitted?.length ? { uncommittedFiles: result.head.uncommitted.length } : {}) });
   if (has("upload")) {
     const preview = result.config.report?.preview;
@@ -262,7 +289,7 @@ async function localReview(): Promise<void> {
   }
   if (has("json") || has("no-open")) {
     if (has("json")) output(summary);
-    else for (const report of result.reports) console.log(`${report.platform}: ${report.zip}`);
+    else for (const report of result.reports) console.log(`${report.target.id}: ${report.zip}`);
     return;
   }
   const server = await startLocalReportServer({ reports: zips, ...(has("port") ? { port: nonNegativeInteger("port") } : {}) });

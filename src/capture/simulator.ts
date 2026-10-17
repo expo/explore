@@ -351,19 +351,27 @@ function remoteDaemonDomain(value: string, controller: "agent-device" | "argent"
   return url.hostname;
 }
 
-export function collectRuntime(options: CiMapOptions & { platform: NonNullable<CiMapOptions["platform"]> }, environment: NodeJS.ProcessEnv): ActiveSimulatorRuntime {
+export function collectRuntime(options: CiMapOptions & { platform: NonNullable<CiMapOptions["platform"]> }, environment: NodeJS.ProcessEnv,
+  /** The local simulator (UDID) or emulator (adb serial) Explore started; absent for an EAS session. */
+  local?: { id: string }): ActiveSimulatorRuntime {
   const runner = options.runner ?? defaultRunner;
   const controller = options.controller ?? "agent-device";
   const version = runner({ command: options.agentDeviceCommand, args: ["--version"], cwd: options.project,
     environment: controller === "argent" ? environment : baseEnvironment(options.environment ?? process.env), timeoutMs: 30_000 }).stdout.trim();
   if (version !== controllerVersion(controller)) throw new Error(`${controller} version must be ${controllerVersion(controller)}`);
   const opened = runner({ command: options.agentDeviceCommand,
-    args: ["open", options.bundleId, "--session", CONTROLLER_SESSION, ...(options.platform === "ios" ? ["--device", options.device] : []),
+    args: ["open", options.bundleId, "--session", CONTROLLER_SESSION,
+      ...(local ? [options.platform === "ios" ? "--udid" : "--serial", local.id] : options.platform === "ios" ? ["--device", options.device] : []),
       "--platform", options.platform, "--level", "full", "--json"], cwd: options.project, environment,
     // Argent's first call can wait for a tool-server that is still starting, then relaunch the app until it is readable.
-    timeoutMs: controller === "argent" ? 180_000 : 60_000 });
+    // A local simulator's first open also builds agent-device's XCTest runner, once per agent-device release.
+    timeoutMs: controller === "argent" ? 180_000 : local ? 15 * 60_000 : 60_000 });
   const device = openedSimulatorDevice(opened.stdout, options.bundleId, "initial app open", options.platform);
-  if (options.platform === "ios" && device.deviceModel !== options.device) throw new CiError({ code: "DEVICE_MISMATCH", stage: "runtime",
+  if (local && device.deviceId !== local.id) throw new CiError({ code: "DEVICE_MISMATCH", stage: "runtime",
+    message: `agent-device opened ${device.deviceId} instead of the device Explore started (${local.id}).`,
+    nextAction: "Rerun capture; if it happens again, check xcrun simctl list devices for leftover Explore simulators." });
+  // A local simulator is named for Explore; its model is the configured device it was created as.
+  if (!local && options.platform === "ios" && device.deviceModel !== options.device) throw new CiError({ code: "DEVICE_MISMATCH", stage: "runtime",
     message: `EAS opened ${device.deviceModel} instead of the configured ${options.device}.`,
     nextAction: "Select an available exact device name in config.yaml and rerun capture." });
   const data = controllerData(opened.stdout, "initial app open");
@@ -372,8 +380,8 @@ export function collectRuntime(options: CiMapOptions & { platform: NonNullable<C
     const value = deviceData[key] ?? data[key];
     return typeof value === "string" && value.trim() ? value : "unknown";
   };
-  return { provider: "eas-simulator", controller, controllerPackageVersion: controllerVersion(controller),
-    easCliVersion: EAS_CLI_VERSION, platform: options.platform, controllerDeviceId: device.deviceId, deviceModel: device.deviceModel,
+  return { provider: local ? "local-simulator" : "eas-simulator", controller, controllerPackageVersion: controllerVersion(controller),
+    easCliVersion: EAS_CLI_VERSION, platform: options.platform, controllerDeviceId: device.deviceId, deviceModel: local ? options.device : device.deviceModel,
     osVersion: observed("osVersion"), locale: observed("locale"),
     orientation: observed("orientation") === "landscape" ? "landscape" : "portrait",
     colorScheme: observed("colorScheme") === "light" ? "light" : observed("colorScheme") === "dark" ? "dark" : "system" };

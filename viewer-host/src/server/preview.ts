@@ -17,40 +17,58 @@ export type PreviewEnvironment = {
   /** Absolute path of the encrypted report inside this deployment, e.g. /_report/<id>/report.zip.enc (single-report deployments). */
   EXPLORE_PREVIEW_REPORT?: string | undefined;
   /**
-   * JSON, one entry per platform in the order the review lists them:
-   * `[{"platform":"ios","path":"/_report/<id>/ios.zip.enc","changes":3,"device":"iPhone 17 Pro 26.0"}]`.
-   * Set instead of EXPLORE_PREVIEW_REPORT by deployments that serve several platforms' reports.
+   * JSON, one entry per capture target in config order:
+   * `[{"target":"duo-open","platform":"ios","label":"iPhone Duo (open)","path":"/_report/<id>/duo-open.zip.enc","changes":3,"device":"iPhone Duo 26.0"}]`.
+   * Deployments from before targets list `{"platform":"ios","path":"/_report/<id>/ios.zip.enc",…}`: the target is the platform.
+   * Set instead of EXPLORE_PREVIEW_REPORT by deployments that serve several reports (or one that is not iOS).
    */
   EXPLORE_PREVIEW_REPORTS?: string | undefined;
 };
 
 export type PreviewPlatform = "ios" | "android";
-export type PreviewReport = { platform: PreviewPlatform; path: string; changes?: number; device?: string };
+/** `target` names the report (and its file, `<target>.zip.enc`); `platform` is the device's. */
+export type PreviewReport = { target: string; platform: PreviewPlatform; label?: string; path: string; changes?: number; device?: string };
 export type PreviewConfig = { token: string; key: Uint8Array<ArrayBuffer>; expiresAt: number | null; reports: PreviewReport[] };
 
 export const PREVIEW_TOKEN = /^[a-z2-7]{32}$/;
-const REPORT_PATH = /^\/_report\/[a-z2-7]{16,64}\/(?:report|ios|android)\.zip\.enc$/;
+/** A capture target id, as the CLI's isTargetId accepts it: the Worker does not bundle the config reader. */
+const TARGET_ID = /^[a-z][a-z0-9-]{0,31}$/;
+export function isPreviewTargetId(value: unknown): value is string {
+  return typeof value === "string" && TARGET_ID.test(value) && !["base", "head", "report"].includes(value) && !value.startsWith("install-");
+}
+const REPORT_PATH = /^\/_report\/[a-z2-7]{16,64}\/(report|[a-z][a-z0-9-]{0,31})\.zip\.enc$/;
 const PLATFORMS: readonly PreviewPlatform[] = ["ios", "android"];
+/** As many targets as a config may name. */
+export const MAX_PREVIEW_REPORTS = 8;
+const PLAIN_TEXT = /[\u0000-\u001f\u007f<>[\]]/;
 
-/** The report list, strictly shaped: unknown platforms, duplicates, odd paths, or extra keys reject the whole configuration. */
+/**
+ * The report list, strictly shaped: an unknown platform, an invalid or repeated target, a path that is not
+ * `<target>.zip.enc`, an odd label or device, or extra keys reject the whole configuration.
+ */
 function parseReports(env: PreviewEnvironment): PreviewReport[] | undefined {
   if (env.EXPLORE_PREVIEW_REPORTS === undefined) {
     const reportPath = env.EXPLORE_PREVIEW_REPORT ?? "";
-    return REPORT_PATH.test(reportPath) ? [{ platform: "ios", path: reportPath }] : undefined;
+    return REPORT_PATH.test(reportPath) ? [{ target: "ios", platform: "ios", path: reportPath }] : undefined;
   }
-  if (env.EXPLORE_PREVIEW_REPORT !== undefined || env.EXPLORE_PREVIEW_REPORTS.length > 4096) return undefined;
+  if (env.EXPLORE_PREVIEW_REPORT !== undefined || env.EXPLORE_PREVIEW_REPORTS.length > 8192) return undefined;
   let parsed: unknown;
   try { parsed = JSON.parse(env.EXPLORE_PREVIEW_REPORTS); } catch { return undefined; }
-  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > PLATFORMS.length) return undefined;
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > MAX_PREVIEW_REPORTS) return undefined;
   const reports: PreviewReport[] = [];
   for (const entry of parsed as unknown[]) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return undefined;
-    const { platform, path, changes, device, ...rest } = entry as Record<string, unknown>;
-    if (Object.keys(rest).length || !PLATFORMS.includes(platform as PreviewPlatform) || typeof path !== "string" || !REPORT_PATH.test(path)) return undefined;
+    const { platform, path, changes, device, label, ...rest } = entry as Record<string, unknown>;
+    // Listings from before targets name each report by its platform.
+    const { target = platform, ...extra } = rest;
+    if (Object.keys(extra).length || !PLATFORMS.includes(platform as PreviewPlatform) || !isPreviewTargetId(target)) return undefined;
+    if (typeof path !== "string" || REPORT_PATH.exec(path)?.[1] !== target) return undefined;
     if (changes !== undefined && (typeof changes !== "number" || !Number.isInteger(changes) || changes < 0 || changes > 100_000)) return undefined;
-    if (device !== undefined && (typeof device !== "string" || device.length > 120 || /[\u0000-\u001f\u007f<>]/.test(device))) return undefined;
-    if (reports.some(report => report.platform === platform)) return undefined;
-    reports.push({ platform: platform as PreviewPlatform, path, ...(changes === undefined ? {} : { changes }), ...(device === undefined ? {} : { device }) });
+    if (device !== undefined && (typeof device !== "string" || device.length > 120 || PLAIN_TEXT.test(device))) return undefined;
+    if (label !== undefined && (typeof label !== "string" || !label.trim() || label.length > 80 || PLAIN_TEXT.test(label))) return undefined;
+    if (reports.some(report => report.target === target)) return undefined;
+    reports.push({ target, platform: platform as PreviewPlatform, ...(label === undefined ? {} : { label }), path,
+      ...(changes === undefined ? {} : { changes }), ...(device === undefined ? {} : { device }) });
   }
   return reports;
 }
@@ -125,8 +143,8 @@ const reportCache = new Map<string, Promise<LoadedReport | undefined>>();
  * `GET /p/<token>` serves the Viewer shell to browsers and the report's Markdown index to anything
  * that does not ask for HTML (agents fetch with `Accept: text/markdown` or `*​/*`); the shell itself
  * carries that index as text inside `#root` until the Viewer hydrates, and a `Link` header names the
- * JSON API. `GET /p/<token>/report.zip` streams the decrypted report (`?platform=` selects one of
- * several; the first listed otherwise), `GET /p/<token>/reports.json` lists the platforms the
+ * JSON API. `GET /p/<token>/report.zip` streams the decrypted report (`?target=`, or `?platform=` in older
+ * links, selects one of several; the first listed otherwise), `GET /p/<token>/reports.json` lists the targets the
  * deployment serves, `GET /p/<token>/llms.txt` is the Markdown index, and `GET /p/<token>/api/v1/...`
  * answers the agent API (see agent-api.ts). Every other method, path, or token is an identical 404,
  * so the response never confirms that a deployment or token exists. After the sealed expiry the exact
@@ -183,16 +201,24 @@ export async function previewResponse(request: Request, options: PreviewRequestO
   return new Response(reply.body, { status: reply.status, headers });
 }
 
-/** `?platform=` picks one of several reports; the first listed otherwise; two values or an unknown platform match nothing. */
-function selectReport(config: PreviewConfig, url: URL): PreviewReport | undefined {
-  const platforms = url.searchParams.getAll("platform");
-  if (platforms.length > 1) return undefined;
-  return platforms.length ? config.reports.find(report => report.platform === platforms[0]) : config.reports[0];
+/**
+ * `?target=` picks one of several reports by id; `?platform=` (links from before targets) picks the target named after
+ * it, else the first of that platform; neither picks the first listed. Two values, both parameters, or no match: nothing.
+ */
+export function selectReport(config: PreviewConfig, url: URL): PreviewReport | undefined {
+  const targets = url.searchParams.getAll("target"), platforms = url.searchParams.getAll("platform");
+  if (targets.length + platforms.length > 1) return undefined;
+  if (targets.length) return config.reports.find(report => report.target === targets[0]);
+  if (platforms.length) return config.reports.find(report => report.target === platforms[0]) ?? config.reports.find(report => report.platform === platforms[0]);
+  return config.reports[0];
 }
 
 function agentContext(pageUrl: string, config: PreviewConfig, report: PreviewReport): AgentContext {
-  return { pageUrl, platform: report.platform, platforms: config.reports.map(entry => entry.platform), expiresAt: config.expiresAt === null ? null : new Date(config.expiresAt).toISOString() };
+  return { pageUrl, platform: report.platform, platforms: [...new Set(config.reports.map(entry => entry.platform))], target: report.target,
+    targets: config.reports.map(entry => ({ id: entry.target, platform: entry.platform, label: entry.label ?? (entry.target === entry.platform ? PLATFORM_LABELS[entry.platform] : entry.target) })),
+    expiresAt: config.expiresAt === null ? null : new Date(config.expiresAt).toISOString() };
 }
+const PLATFORM_LABELS: Record<PreviewPlatform, string> = { ios: "iOS", android: "Android" };
 
 /** The agent index as the shell's initial `#root` content; the Viewer replaces it when it renders. */
 export function shellWithIndex(indexHtml: string, indexBlock: string): string {

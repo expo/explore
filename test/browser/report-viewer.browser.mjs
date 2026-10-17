@@ -436,3 +436,27 @@ test("dev opens the report ZIP named by EXPLORE_REPORT and preserves the explici
   assert.equal(payload.map.screens.length, 32);
   await expectStopped(mapDev, "SIGINT");
 });
+
+test("a Screens card keeps its status dot on the route's line, however tall its row", { timeout: 60_000 }, async t => {
+  const { page, url, errors } = await openReport(t, { width: 1440, height: 900 });
+  await page.goto(`${url}#/screens`);
+  const all = page.getByRole("button", { name: /^All/ }).first();
+  await expect(all).toBeVisible();
+  if ((await all.getAttribute("aria-pressed")) !== "true") await all.click();
+  await expect(page.locator(".screens-cell .diff-label").first()).toBeVisible();
+  const layout = await page.locator(".screens-page").evaluate(async () => {
+    const cards = [...document.querySelectorAll(".screens-cell .screen-screenshot-card")];
+    // A row grows with a neighbour's notes ("Changed in dark") and stretches every card in it: stretch each one well past its content.
+    for (const card of cards) card.style.height = `${card.getBoundingClientRect().height + 48}px`;
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const offsets = cards.filter(card => card.querySelector(".diff-label")).map(card => {
+      const dot = card.querySelector(".diff-label").getBoundingClientRect(), title = card.querySelector(".screen-node-title").getBoundingClientRect();
+      const line = parseFloat(getComputedStyle(card.querySelector(".screen-node-title")).lineHeight);
+      return Math.abs(dot.top + dot.height / 2 - (title.top + line / 2));
+    });
+    return { offsets };
+  });
+  assert.ok(layout.offsets.length > 0, "the report has changed screens");
+  assert.ok(layout.offsets.every(offset => offset <= 1), `each dot is centred on its route's first line: ${layout.offsets}`);
+  assert.deepEqual(errors, []);
+});

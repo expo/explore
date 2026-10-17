@@ -299,6 +299,26 @@ platforms:
 </details>
 
 <details>
+<summary id="targets"><strong>Several devices: targets</strong></summary>
+
+To capture more than one device of a platform, such as a phone and a foldable, or a foldable both closed and open, name each one under `targets` instead of `platforms`. Each target is captured and reported on its own, in this order:
+
+```yaml
+targets:
+  iphone: { platform: ios, device: iPhone 17 }
+  duo-closed: { platform: ios, device: iPhone Duo, pose: closed }
+  duo-open: { platform: ios, device: iPhone Duo, pose: open }
+  android: { platform: android, device: pixel_7, bundleId: com.example.myapp, easProfile: explore-android }
+```
+
+- A target takes the flat `app` and `device` fields it does not set; a target of another platform than `app.platform` sets its own `bundleId` and `easProfile`. `label` names it in reports (by default its device and pose).
+- Ids are lowercase letters, digits and dashes. A config with `platforms` has one target per platform, named `ios` and `android`.
+- The workflows run one capture job per target, the PR comment has a section per target, and each report links its sibling targets' reports.
+- `capture --target duo-open` reviews one target on this machine; `--platform ios` the iOS ones.
+
+</details>
+
+<details>
 <summary id="controller"><strong>Device controller: agent-device or Argent</strong></summary>
 
 Explore drives EAS Simulator with [agent-device](https://github.com/callstackincubator/agent-device) by default. To use [Argent](https://github.com/software-mansion/argent) instead, set it in the config or pass it for one run:
@@ -317,7 +337,34 @@ Explore pins each controller's version and starts the EAS session with it. Repor
 
 Neither controller is installed with Explore. The first run that needs one downloads its pinned npm release (agent-device 1.4 MB, Argent 27 MB), checks it against the integrity hash Explore pins, and keeps it in `~/.cache/expo-explore/controllers` (`EXPLORE_CONTROLLER_CACHE` moves it). Behind a private registry, set `EXPLORE_NPM_REGISTRY` to a mirror of it.
 
-Argent cannot switch the simulator's appearance yet ([software-mansion/argent#1509](https://github.com/software-mansion/argent/pull/1509)), so an Argent capture records one appearance: the one the app forces, else light. Explore warns when it skips one.
+Argent cannot switch the simulator's appearance yet ([software-mansion/argent#1509](https://github.com/software-mansion/argent/pull/1509)), so an Argent capture on EAS Simulator records one appearance: the one the app forces, else light. Explore warns when it skips one. On a [local simulator](#simulator) the host switches it, so both are captured.
+
+</details>
+
+<details>
+<summary id="simulator"><strong>Local simulator instead of EAS Simulator</strong></summary>
+
+To capture on your Mac instead of EAS Simulator, set it in the config or pass it for one run:
+
+```yaml
+capture:
+  simulator: local # eas (default) | local
+```
+
+```sh
+npx @expo/explore capture --simulator local
+```
+
+For each commit, Explore starts a device of its own and removes it afterwards; head and base each get one:
+
+- **iOS:** a simulator of the configured device with Xcode's newest runtime that runs it. `DEVELOPER_DIR` picks another Xcode, such as one that adds iPhone Duo. Explore approves the app's URL scheme on it, so links open without iOS asking "Open in …?", and checks a foldable's pose by the shape of its lit display.
+- **Android:** an emulator of the configured device profile (such as `pixel_7`), from the newest Google APIs system image installed for this machine (`arm64-v8a` on Apple silicon), in a private AVD folder. The APK must ship native libraries for that ABI; a universal build does.
+
+Builds still run on EAS. The app is repacked with the route observer on your machine as well, so it is never uploaded; on Android that needs the SDK's build-tools and a JDK. `capture.repack: eas` (or `--repack eas`) keeps the repack in a hosted EAS job. `doctor --simulator local` checks that Xcode and the Android SDK can start each device, and that Android can be repacked locally.
+
+With `--controller argent`, Explore installs Argent's tool-server on first use (with its dependencies, about 165 MB, in the controller cache) and starts one per device. The host switches the appearance, so a local Argent capture records light and dark. Reports record where they were captured, and a baseline is reused only by a review captured the same way.
+
+A review's targets run at once, the targets of a platform sharing each commit's build; `--parallel N` runs at most N at a time. A device controller that stops answering on one screen costs that route: Explore restarts the app, goes on with the next route, and records what happened in `capture-diagnostics/controller-recoveries.jsonl`. A target that fails outright costs its own report; the others still open.
 
 </details>
 
@@ -476,7 +523,7 @@ Reports and baselines are kept for 30 days and diagnostics for 7. Hosted deploym
 - The launch is captured once per appearance and compared like any screen. The comment says how long the splash stayed as it first appeared, when it first changed (a native launch screen handing over to an app-drawn one, an animation starting on it), and when the first screen settled. `capture.launch: video` adds a recording; a launch too fast to observe is reported as "no splash observed".
 - On Android the splash usually shows only in the recording, which needs `ffmpeg`. The generated workflows install it.
 - Hosted acceptance of agent mode with an API key is incomplete.
-- With `capture.controller: argent`, each capture records one appearance (see [device controller](#controller)).
+- With `capture.controller: argent` on EAS Simulator, each capture records one appearance (see [device controller](#controller)).
 
 </details>
 

@@ -510,12 +510,20 @@ test("doctor checks each configured platform's EAS profile and warns when the wo
 
   for (const name of ["explore-review.yml", "explore-baseline.yml"]) {
     const path = join(root, ".github/workflows", name);
-    await writeFile(path, (await readFile(path, "utf8")).replaceAll("matrix.platform", "github.ref_name"));
+    await writeFile(path, (await readFile(path, "utf8")).replaceAll("matrix.target", "github.ref_name"));
   }
   const single = await runDoctor(offline(root));
   assert.deepEqual(check(single, "workflow-platforms-explore-review.yml").map(item => item.code), ["WORKFLOW_PLATFORM_MATRIX_MISSING"]);
   assert.deepEqual(check(single, "workflow-platforms-explore-baseline.yml").map(item => item.status), ["warn"]);
   const one = await app(t); await workflows(one); assert.deepEqual((await runDoctor(offline(one))).checks.filter(item => item.id.startsWith("workflow-platforms")), []);
+  // A workflow installed before targets runs one job per platform: enough for platforms, not for targets.
+  for (const name of ["explore-review.yml", "explore-baseline.yml"]) {
+    const path = join(root, ".github/workflows", name);
+    await writeFile(path, (await readFile(path, "utf8")).replaceAll("github.ref_name", "matrix.platform"));
+  }
+  assert.deepEqual(check(await runDoctor(offline(root)), "workflow-platforms-explore-review.yml"), []);
+  await write(root, { ".expo-explore/config.yaml": JSON.stringify({ ...baseConfig, targets: { phone: { platform: "ios" }, duo: { platform: "ios", device: "iPhone Duo", pose: "open" } } }) });
+  assert.deepEqual(check(await runDoctor(offline(root)), "workflow-platforms-explore-review.yml").map(item => item.code), ["WORKFLOW_PLATFORM_MATRIX_MISSING"]);
 });
 
 test("doctor warns when ffmpeg is missing and the launch is observed", async t => {
@@ -562,4 +570,80 @@ test("doctor warns when an installed workflow drifts from this version's templat
   assert.equal(edited[0]?.code, "WORKFLOW_TEMPLATE_DRIFT");
   assert.match(edited[0].message, /edited after setup/);
   assert.match(edited[0].nextAction, /--force/);
+});
+
+test("with a local Android emulator, doctor checks the device profile and that the APK can be repacked on this machine", async (t) => {
+  const root = await app(t, { ...baseConfig, app: { ...baseConfig.app, platform: "android" }, device: { name: "pixel_7" } });
+  const sdk = await mkdtemp(join(tmpdir(), "explore-doctor-sdk-"));
+  t.after(() => rm(sdk, { recursive: true, force: true }));
+  for (const abi of ["arm64-v8a", "x86_64"]) {
+    await mkdir(join(sdk, "system-images", "android-35", "google_apis", abi), { recursive: true });
+    await writeFile(join(sdk, "system-images", "android-35", "google_apis", abi, "system.img"), "");
+  }
+  const eas = easRun({ available: false });
+  const run = ({ java = true } = {}) => (command, args, cwd) => {
+    if (command.endsWith("/avdmanager")) return { status: 0, stderr: "", stdout: "pixel_7\npixel_8\n" };
+    if (command === "java") return java ? { status: 0, stdout: "", stderr: "openjdk version \"17.0.20.1\" 2026-08-18 LTS\nOpenJDK Runtime Environment\n" } : { status: 127, stdout: "", stderr: "java: not found" };
+    return eas.run(command, args, cwd);
+  };
+  const doctor = (options = {}) => runDoctor({ project: root, github: false, simulator: "local", environment: { ...process.env, ANDROID_HOME: sdk }, run: run(options), ...options.extra });
+  // Without build-tools the local repack, now the default with a local emulator, cannot run.
+  const noTools = await doctor();
+  assert.equal(check(noTools, "local-emulator")[0].status, "pass");
+  assert.equal(check(noTools, "local-repack")[0].code, "LOCAL_REPACK_UNAVAILABLE");
+  assert.match(check(noTools, "local-repack")[0].message, /build-tools/);
+  await mkdir(join(sdk, "build-tools", "35.0.0"), { recursive: true });
+  const ready = await doctor();
+  assert.equal(check(ready, "local-repack")[0].status, "pass");
+  assert.match(check(ready, "local-repack")[0].message, /build-tools 35\.0\.0, openjdk version "17\.0\.20\.1"/);
+  assert.match(check(await doctor({ java: false }), "local-repack")[0].message, /needs Java/);
+  // A hosted EAS repack needs neither.
+  assert.deepEqual(check(await doctor({ extra: { repack: "eas" } }), "local-repack"), []);
+});
+
+test("with a local simulator, doctor checks that this Mac can create the device instead of EAS Simulator access", async (t) => {
+  const root = await app(t);
+  const eas = easRun({ available: false });
+  const simctl = (devicetypes, runtimes) => (command, args, cwd) => {
+    if (command !== "xcrun") return eas.run(command, args, cwd);
+    const json = args[2] === "devicetypes" ? devicetypes : runtimes;
+    return { status: 0, stderr: "", stdout: JSON.stringify(json) };
+  };
+  const types = { devicetypes: [{ name: "iPhone 17", identifier: "type.iPhone-17" }, { name: "iPhone 17 Pro", identifier: "type.iPhone-17-Pro" }] };
+  const runtimes = { runtimes: [{ identifier: "runtime.iOS-27-0", version: "27.0", platform: "iOS", isAvailable: true,
+    supportedDeviceTypes: [{ identifier: "type.iPhone-17" }, { identifier: "type.iPhone-17-Pro" }] }] };
+  const ready = await runDoctor({ project: root, github: false, simulator: "local", run: simctl(types, runtimes) });
+  assert.deepEqual(check(ready, "eas-simulator"), [], "EAS Simulator access is not needed");
+  assert.equal(check(ready, "local-simulator")[0].status, "pass");
+  assert.match(check(ready, "local-simulator")[0].message, /iOS 27\.0/);
+  const missing = await runDoctor({ project: root, github: false, simulator: "local", run: simctl({ devicetypes: [] }, runtimes) });
+  assert.equal(check(missing, "local-simulator")[0].code, "LOCAL_SIMULATOR_DEVICE_UNAVAILABLE");
+});
+
+test("doctor checks each target where it runs: local tools for local targets, EAS Simulator access when any target uses it", async (t) => {
+  const eas = easRun();
+  const run = (command, args, cwd) => {
+    if (command !== "xcrun") return eas.run(command, args, cwd);
+    return { status: 0, stderr: "", stdout: JSON.stringify(args[2] === "devicetypes"
+      ? { devicetypes: [{ name: "iPhone 17", identifier: "type.iPhone-17" }, { name: "iPhone 17 Pro", identifier: "type.iPhone-17-Pro" }] }
+      : { runtimes: [{ identifier: "runtime.iOS-27-0", version: "27.0", platform: "iOS", isAvailable: true, supportedDeviceTypes: [{ identifier: "type.iPhone-17" }, { identifier: "type.iPhone-17-Pro" }] }] }) };
+  };
+  const doctor = async (config, options = {}) => runDoctor({ project: await app(t, config), github: false, run, ...options });
+  const devices = report => check(report, "local-simulator").map(item => item.message.match(/create an (.+) simulator/)[1]);
+  // Every target runs locally on its own say, with nothing at the top level: no EAS Simulator access is needed.
+  const local = await doctor({ ...baseConfig, targets: { phone: { platform: "ios", simulator: "local" }, pro: { platform: "ios", device: "iPhone 17 Pro", simulator: "local" } } });
+  assert.deepEqual(devices(local), ["iPhone 17", "iPhone 17 Pro"]);
+  assert.deepEqual(check(local, "eas-simulator"), []);
+  // A local config with one target on EAS: that target needs EAS Simulator access, and the local one this Mac's tools.
+  const mixed = await doctor({ ...baseConfig, capture: { ...baseConfig.capture, simulator: "local" },
+    targets: { phone: { platform: "ios" }, cloud: { platform: "ios", device: "iPhone 17 Pro", simulator: "eas", controller: "argent" } } });
+  assert.deepEqual(devices(mixed), ["iPhone 17"]);
+  assert.equal(check(mixed, "eas-simulator")[0].status, "pass");
+  // The target's Argent is reported as a top-level one would be.
+  assert.equal(check(mixed, "controller")[0].code, "CONTROLLER_APPEARANCE_FIXED");
+  // --simulator and --controller decide for every target, as they do in a capture.
+  const forced = await doctor({ ...baseConfig, targets: { phone: { platform: "ios", simulator: "local", controller: "argent" } } }, { simulator: "eas", controller: "agent-device" });
+  assert.deepEqual(devices(forced), []);
+  assert.equal(check(forced, "eas-simulator")[0].status, "pass");
+  assert.deepEqual(check(forced, "controller"), []);
 });

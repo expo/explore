@@ -23,10 +23,13 @@ import { createExplorationInputs } from "../config/exploration-inputs.js";
 import { isRecord, captureError, CONTROLLER_SESSION, parseJson } from "./common.js";
 import { MAX_ACCESSIBILITY_EVIDENCE_BYTES, adbDeviceOffline, remoteDaemonUnavailable, controllerData, defaultRunner, type ControllerReadRecovery, type RemoteDaemonRetry, runControllerRead, controllerCommandFailure, runControllerReadAsync, runAgentControllerCommand, wedgedControllerReadFailure, openedSimulatorDevice, alertWatchdogFailure } from "./controller.js";
 import type { ActiveSimulatorRuntime, SimulatorConnection } from "./simulator.js";
+import { androidTools } from "./local-simulator.js";
 import type { CiMapOptions, CommandResult } from "./run.js";
 
 /** iOS commands name the simulator; an EAS Android session has exactly one emulator, selected by the session. */
-export function deviceArgs(runtime: Pick<ActiveSimulatorRuntime, "platform" | "deviceModel">): string[] {
+export function deviceArgs(runtime: Pick<ActiveSimulatorRuntime, "platform" | "deviceModel"> & Partial<Pick<ActiveSimulatorRuntime, "provider" | "controllerDeviceId">>): string[] {
+  // A local simulator is picked by its UDID, a local emulator by its adb serial: this machine may run others of the same model.
+  if (runtime.provider === "local-simulator" && runtime.controllerDeviceId) return [runtime.platform === "android" ? "--serial" : "--udid", runtime.controllerDeviceId];
   return runtime.platform === "android" ? [] : ["--device", runtime.deviceModel];
 }
 
@@ -90,12 +93,16 @@ function snapshotNodes(raw: string): Record<string, unknown>[] {
 }
 
 /** The visible element each required label matched, so an image assessor can find icon-only controls. */
-export function verifiedCaptureLabels(nodes: readonly Record<string, unknown>[], requiredLabels: readonly string[]) {
+export function verifiedCaptureLabels(nodes: readonly Record<string, unknown>[], requiredLabels: readonly string[],
+  /** The screen's portrait height, when the screenshot is that screen turned a quarter clockwise (an opened iPhone Duo). */
+  turned?: { height: number }) {
   return requiredLabels.flatMap(value => nodes.filter(node => node.visible !== false && (node.label === value || node.identifier === value)).slice(0, 3).map(node => {
     const rect = isRecord(node.rect) && ["x", "y", "width", "height"].every(key => Number.isFinite((node.rect as Record<string, unknown>)[key]))
       ? node.rect as { x: number; y: number; width: number; height: number } : undefined;
+    // The bounds are given on the image's axes: turned a quarter clockwise, the portrait point (x, y) is at (H - y, x).
+    const shown = rect && turned ? { x: turned.height - rect.y - rect.height, y: rect.x, width: rect.height, height: rect.width } : rect;
     return { value, matchedField: node.label === value ? "label" as const : "identifier" as const,
-      ...(typeof node.type === "string" ? { type: node.type } : {}), ...(rect ? { rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } } : {}) };
+      ...(typeof node.type === "string" ? { type: node.type } : {}), ...(shown ? { rect: { x: shown.x, y: shown.y, width: shown.width, height: shown.height } } : {}) };
   }));
 }
 
@@ -136,7 +143,9 @@ function landing(nodes: readonly Record<string, unknown>[], route: SourceRoute, 
 /** Execute source-owned targets in order. Live content never changes the source inventory. */
 export async function capturePlannedRoutes(options: {
   capture: CiMapOptions; routes: readonly SourceRoute[]; scheme: string | undefined; appName: string;
-  runtime: ActiveSimulatorRuntime; connection: SimulatorConnection; environment: NodeJS.ProcessEnv;
+  runtime: ActiveSimulatorRuntime;
+  /** The EAS session's controller connection; a local simulator has none. */
+  connection?: SimulatorConnection | undefined; environment: NodeJS.ProcessEnv;
   store: ExploreStore; map: ExploreMap;
   inventory?: readonly SourceRoute[];
   acceptedFrames?: Record<string, AgentAcceptedFrame>;
@@ -328,7 +337,7 @@ export async function capturePlannedRoutes(options: {
         message: "The Open confirmation did not complete within its capture budget.",
         nextAction: "Inspect the controller diagnostic and verify that the pinned controller can dismiss the configured app's Open confirmation.",
         details: { controller: serializeCiError(toCiError(error, { code: "CONTROLLER_ALERT_FAILED", stage: "capture" }),
-          { secrets: [capture.expoToken, options.connection.daemonAuthToken] }) } });
+          { secrets: [capture.expoToken, ...(options.connection ? [options.connection.daemonAuthToken] : [])] }) } });
     }
     const remainingAlert = alertInspection("deep-link-confirmed");
     if (remainingAlert && (!allowExplicitSetupAlert || expectedTitles.includes(remainingAlert.message.normalize("NFC").trim()))) {
@@ -337,7 +346,7 @@ export async function capturePlannedRoutes(options: {
     controllerApp();
     controller(["wait", "500", "--level", "full", "--json"]);
   };
-  const secrets = [capture.expoToken, options.connection.daemonAuthToken, ...inputs.values, ...(capture.agent?.secretValues ?? [])];
+  const secrets = [capture.expoToken, ...(options.connection ? [options.connection.daemonAuthToken] : []), ...inputs.values, ...(capture.agent?.secretValues ?? [])];
   const redact = (text: string): string => secrets.filter(Boolean).flatMap(value => [value, JSON.stringify(value).slice(1, -1), encodeURIComponent(value)])
     .sort((a, b) => b.length - a.length).reduce((result, value) => result.split(value).join("[REDACTED]"), inputs.redact(text));
   const redactValue = <T>(value: T): T => {
@@ -521,9 +530,13 @@ export async function capturePlannedRoutes(options: {
       const height = png.readUInt32BE(20);
       runtime.orientation = width > height ? "landscape" : "portrait";
       map.run.environment.orientation = runtime.orientation;
-      controllerApp();
       const raw = controller(["snapshot", "--force-full", "--level", "full", "--json"]).stdout;
       const confirmed = snapshotNodes(raw);
+      // The snapshot after the screenshot names the app in front, which saves an `appstate` call per route; a
+      // controller whose snapshot does not name it is asked.
+      const read = controllerData(raw, "snapshot");
+      if (read.appBundleId !== undefined || isRecord(read.identifiers)) assertIdentity(read, capture.bundleId, runtime.controllerDeviceId);
+      else controllerApp();
       assertNoAlert({ route, nodes: confirmed });
       const verifiedLanding: "verified" | "unverified" = unattributed ? "unverified" : landing(confirmed, route, inventory);
       assertSafeScreenshot(confirmed);
@@ -673,17 +686,39 @@ export async function capturePlannedRoutes(options: {
       rect: isRecord(node.rect) ? Object.fromEntries(Object.entries(node.rect).sort(([left], [right]) => left.localeCompare(right))) : node.rect,
       parentIndex: node.parentIndex,
     })));
+    /**
+     * The logical coordinate space a frame's normalized taps map into. On a panel whose native axes are portrait but
+     * whose UI is landscape (an opened iPhone Duo under Argent), the screenshot is taken upright: the portrait screen
+     * turned a quarter clockwise, while the accessibility tree and taps stay on the panel's portrait axes. Its root is
+     * then the transpose of the frame, and a tap is turned back (see `toLogical`).
+     */
     const bounds = (frame: Candidate) => {
-      const roots = frame.snapshot.nodes.filter(node => node.type === "Application" && isRecord(node.rect)
+      const roots = (transposed: boolean) => frame.snapshot.nodes.filter(node => node.type === "Application" && isRecord(node.rect)
         && node.rect.x === 0 && node.rect.y === 0 && typeof node.rect.width === "number" && typeof node.rect.height === "number"
         && Number.isFinite(node.rect.width) && Number.isFinite(node.rect.height) && node.rect.width > 0 && node.rect.height > 0
-        && node.rect.width * frame.height === node.rect.height * frame.width);
-      if (roots.length !== 1) throw captureError("AGENT_COORDINATE_BOUNDS_UNVERIFIED", "The screenshot does not identify one matching full-screen logical coordinate space.");
+        && (transposed ? node.rect.width * frame.width === node.rect.height * frame.height : node.rect.width * frame.height === node.rect.height * frame.width));
+      // A square screen matches both ways; it is read upright, as before rotated frames existed.
+      const upright = roots(false), turned = upright.length ? [] : roots(true);
+      const matched = upright.length ? upright : turned;
+      if (matched.length !== 1) throw captureError("AGENT_COORDINATE_BOUNDS_UNVERIFIED", "The screenshot does not identify one matching full-screen logical coordinate space.");
       // The official iOS screenshot is full-screen. Its default is 1x, but a proven
       // uniform pixel density must still map to XCTest points rather than raw pixels.
-      const rect = roots[0]!.rect as { width: number; height: number };
-      return { width: rect.width, height: rect.height };
+      const rect = matched[0]!.rect as { width: number; height: number };
+      return { width: rect.width, height: rect.height, transposed: turned.length === 1 };
     };
+    /**
+     * A normalized point (x, y) in the screenshot, in the tree's logical points. Upright, it scales by the root. Turned:
+     * a portrait screen W wide and H tall, turned a quarter clockwise, is an image H wide and W tall in which the portrait
+     * point (px, py) lands at (u, v) = (H - py, px); so the image point (u, v) is the portrait point (v, H - u). With
+     * u = x * H and v = y * W, that is (y * W, (1 - x) * H). (A 2x3 portrait pixel at (0, 0), centre (0.5, 0.5), sits at
+     * column 2 of the turned 3x2 image, centre (2.5, 0.5), which maps back to (0.5, 3 - 2.5).)
+     */
+    /** The portrait screen a turned (upright landscape) frame shows, or undefined for a frame on the screen's own axes. */
+    const turnedSpace = (frame: Candidate): { height: number } | undefined => {
+      try { const space = bounds(frame); return space.transposed ? { height: space.height } : undefined; } catch { return undefined; }
+    };
+    const toLogical = (space: { width: number; height: number; transposed: boolean }, x: number, y: number): [number, number] =>
+      space.transposed ? [y * space.width, (1 - x) * space.height] : [x * space.width, y * space.height];
     /**
      * agent-device's in-app back taps a navigation control and cannot leave a sheet without one.
      * Swipe such a sheet down, then require the observed destination to change.
@@ -826,7 +861,7 @@ export async function capturePlannedRoutes(options: {
                   retryable: true, details: changes });
               }
               await discard();
-              await command(["press", String(action.x * oldBounds.width), String(action.y * oldBounds.height), "--level", "full", "--json"], signal);
+              await command(["press", ...toLogical(oldBounds, action.x, action.y).map(String), "--level", "full", "--json"], signal);
             } finally { await discard(); await rm(previous.directory, { recursive: true, force: true }); }
             return;
           }
@@ -862,7 +897,7 @@ export async function capturePlannedRoutes(options: {
               let assessment;
               try {
                 assessment = rejectedReadiness.get(key) ?? await agent.assessCapture({ image: frame.png, route: route.route, context,
-                  instructions: agent.instructions, verifiedLabels: verifiedCaptureLabels(frame.snapshot.nodes, context.requiredLabels),
+                  instructions: agent.instructions, verifiedLabels: verifiedCaptureLabels(frame.snapshot.nodes, context.requiredLabels, turnedSpace(frame)),
                   deadlineMs: deadline, signal: liveSignal(signal) });
                 if (assessment.imageSha256 !== frame.imageSha256) throw new Error("Readiness assessment belongs to another frame");
                 await writeFile(join(diagnostics, `${stem}.json`), JSON.stringify(redactValue({ route: route.route, context, ...assessment })), { mode: 0o600 });
@@ -949,6 +984,52 @@ export async function capturePlannedRoutes(options: {
    * reported as the failure it is. Only steps up to the fault have run, so no later state exists.
    */
   const transientControllerFault = (error: unknown) => adbDeviceOffline(error) || remoteDaemonUnavailable(error);
+  /**
+   * A controller that stopped answering on one screen (its runner wedged on an accessibility capture or a covered
+   * control, or its reads stayed busy past their recovery window) fails every later read the same way. That costs the
+   * step or route it happened on, not the capture: the app is stopped (from the host on a local device, which a wedged
+   * runner cannot block) and started again, the read recovery starts over, and the controller must answer before the
+   * next route. Each recovery is recorded in capture-diagnostics/controller-recoveries.jsonl.
+   */
+  const controllerWedged = (error: unknown): boolean => {
+    if (wedgedControllerReadFailure(error)) return true;
+    const failure = toCiError(error);
+    // An accessibility read that never completes (or never returns a whole tree) is the controller's failure, not the app's.
+    return ["CONTROLLER_READ_BUSY", "RUNNER_WEDGED", "CONTROLLER_RUNNER_WEDGED", "INVALID_ACCESSIBILITY_EVIDENCE", "SETUP_SYSTEM_SURFACE_BLOCKING"].includes(failure.code)
+      || /execution watchdog|accessibility responsiveness|requires a valid viewport/.test(failure.message);
+  };
+  /**
+   * A setup step that left another app in front (a tap that landed on a system control drawn over the app, as iPhone
+   * Duo's status pill over a sheet's Done button) is recovered the same way: the app is started again.
+   */
+  const appLeft = (error: unknown): boolean => toCiError(error).code === "CONTROLLER_IDENTITY_MISMATCH";
+  let recoveries = 0;
+  /** `next` records what the capture did once the app restarted: `setup-rerun` or `setup-incomplete` after a setup step. */
+  const recoverController = (where: string, error: unknown, next?: "setup-rerun" | "setup-incomplete"): boolean => {
+    const reported = serializeCiError(toCiError(error), { secrets });
+    const record = (recovered: boolean) => {
+      const diagnostics = join(store.root, "capture-diagnostics");
+      mkdirSync(diagnostics, { recursive: true, mode: 0o700 });
+      appendFileSync(join(diagnostics, "controller-recoveries.jsonl"), `${JSON.stringify({ where, code: reported.code, message: reported.message, recovered,
+        ...(recovered && next ? { next } : {}), at: new Date(clock()).toISOString() })}\n`, { mode: 0o600 });
+    };
+    if (recoveries >= 3 || deadline - clock() < 60_000) { record(false); return false; }
+    recoveries += 1;
+    say(`${appLeft(error) ? "the app was no longer in front" : "the device controller stopped answering"} on ${where} (${reported.code}); restarting the app before going on`);
+    try {
+      if (runtime.provider === "local-simulator") runner(runtime.platform === "ios"
+        ? { command: "xcrun", args: ["simctl", "terminate", runtime.controllerDeviceId, capture.bundleId], cwd: store.root, environment: options.environment, timeoutMs: 60_000, allowFailure: true }
+        : { command: androidTools(options.environment).adb, args: ["-s", runtime.controllerDeviceId, "shell", "am", "force-stop", capture.bundleId],
+          cwd: store.root, environment: options.environment, timeoutMs: 60_000, allowFailure: true });
+      for (const key of Object.keys(readRecovery)) delete (readRecovery as Record<string, unknown>)[key];
+      readRecovery.busyAttempts = 0;
+      controller(["open", capture.bundleId, "--relaunch", "--level", "full", "--json"]);
+      settle();
+      snapshot();
+    } catch { record(false); return false; }
+    record(true);
+    return true;
+  };
   const recoverFromControllerFault = (error: unknown): boolean => {
     if (!transientControllerFault(error) || deadline - clock() < 30_000) return false;
     const reported = serializeCiError(toCiError(error), { secrets });
@@ -965,6 +1046,14 @@ export async function capturePlannedRoutes(options: {
       fault: reported.message, at: new Date(clock()).toISOString() })}\n`, { mode: 0o600 });
     return true;
   };
+  /**
+   * A setup step that wedged the controller or left the app has not run, nor have the steps after it (a login, seeded
+   * data, a permission), so routes opened by app link may show the wrong state. Once the app is restarted, setup runs
+   * again from the start, once. When it stops the same way again, the routes go on by app link (so one covered control
+   * does not fail the whole capture), and each route captured afterwards says in its outcome that setup did not complete.
+   */
+  let setupRerunAfterRecovery = false;
+  let setupIncomplete: string | undefined;
   for (let setupAttempt = 0; ; setupAttempt += 1) try {
     await executeCaptureSetup((capture.setup ?? []).map(action => action.action === "fill" || action.action === "type" ? { ...action, text: inputs.resolve(action.text) } : action), {
       command: args => { controllerApp(); return controller(args); },
@@ -996,6 +1085,19 @@ export async function capturePlannedRoutes(options: {
     break;
   } catch (error) {
     if (setupAttempt === 0 && recoverFromControllerFault(error)) continue;
+    // A wedged controller says nothing about the app's state: the routes the steps before it prepared are captured or
+    // failed on their own. Once the controller answers again, setup runs again from the start, once.
+    if ((controllerWedged(error) || appLeft(error)) && recoverController("a setup step", error, setupRerunAfterRecovery ? "setup-incomplete" : "setup-rerun")) {
+      const reported = serializeCiError(toCiError(error), { secrets });
+      if (!setupRerunAfterRecovery) {
+        setupRerunAfterRecovery = true;
+        say(`setup stopped (${reported.code}); running setup again from the start`);
+        continue;
+      }
+      setupIncomplete = `Setup did not complete: a setup step stopped twice (${reported.code}), so this route was opened by app link without the state the remaining setup steps prepare.`;
+      say(`setup stopped again (${reported.code}); setup did not complete, and the routes it had not reached go on by app link marked as such`);
+      break;
+    }
     const failure = toCiError(error, { code: "SETUP_FAILED", stage: "setup" });
     const diagnostics: Record<string, string> = {};
     const directory = join(store.root, "capture-diagnostics");
@@ -1051,14 +1153,18 @@ export async function capturePlannedRoutes(options: {
   const linked = options.routes.filter(route => !(outcomes[route.id]?.status === "captured" && !setupFailure) && !(prepared.has(route.id) && outcomes[route.id]?.status !== "captured"));
   let opened = 0;
   /**
-   * Opens the app's root link and lets it settle, so the route link that follows starts from the
-   * app's home rather than from the sheet, modal or list the previous link left on screen. The
-   * OS may ask to confirm the root link too; that confirmation is answered here so the route's
-   * own poll never mistakes it for its own.
+   * Opens the app's root link, so the route link that follows starts from the app's home rather than from the sheet,
+   * modal or list the previous link left on screen. The first attempt only opens it: the route's own readiness poll
+   * checks where its link landed and answers a confirmation the OS asks for. A route that landed wrong is retried
+   * after a full reset, which lets the root settle and answers the root link's own confirmation first.
    */
-  const resetToRoot = () => {
+  const resetToRoot = (full: boolean) => {
     controller(["open", capture.bundleId, rootLink!, "--level", "full", "--json"]);
+    // The root link closes what the last route presented; the next link waits until that has finished. A link that lands
+    // while a sheet is still being dismissed can leave the app unable to present another sheet until it is relaunched
+    // (seen on iOS: euxy's share link, opened right after its share sheet, never showed its own).
     settle();
+    if (!full) return;
     if (snapshot().nodes.some(node => node.type === "Alert")) {
       resolveDeepLinkConfirmation();
       settle();
@@ -1093,10 +1199,12 @@ export async function capturePlannedRoutes(options: {
       try {
         // Every route link starts from the app's home, not from what the previous link left on
         // screen; the app keeps running, since relaunching invalidates photo and translation prerequisites.
-        if (rootLink && deepLink !== rootLink) resetToRoot();
+        if (rootLink && deepLink !== rootLink) resetToRoot(attempt > 1);
         const opened = controller(["open", capture.bundleId, deepLink, "--level", "full", "--json"]);
         const device = openedSimulatorDevice(opened.stdout, capture.bundleId, "capture open", runtime.platform);
-        if (device.deviceId !== runtime.controllerDeviceId || device.deviceModel !== runtime.deviceModel) throw captureError("CONTROLLER_IDENTITY_MISMATCH", "The controller changed the selected device.");
+        // A local simulator is named for Explore and recorded as the model it was created as; its UDID identifies it.
+        if (device.deviceId !== runtime.controllerDeviceId
+          || (runtime.provider !== "local-simulator" && device.deviceModel !== runtime.deviceModel)) throw captureError("CONTROLLER_IDENTITY_MISMATCH", "The controller changed the selected device.");
         // The open response already proved the controller's device and app; the capture asserts the
         // session again after its screenshot, and resolves a link confirmation only if the snapshot calls for it.
         readiness = { startedAt: clock(), budgetMs: readinessBudgetMs(attempt), attempt };
@@ -1104,7 +1212,26 @@ export async function capturePlannedRoutes(options: {
         await captureCurrent(route, attempt);
         break;
       } catch (error) {
+        // The emulator's adb connection dropped (a local one does once, early, under load) or the daemon was unreachable:
+        // that says nothing about this route. Once the device answers again, the route opens again from the app's root.
+        if (attempt === 1 && transientControllerFault(error) && deadline - clock() > 30_000) {
+          let answered = true;
+          try { controllerApp(); } catch { answered = false; }
+          if (answered) {
+            const diagnostics = join(store.root, "capture-diagnostics");
+            mkdirSync(diagnostics, { recursive: true, mode: 0o700 });
+            appendFileSync(join(diagnostics, "controller-retries.jsonl"), `${JSON.stringify({ command: "open", route: route.route, reason: "route-reopened-after-device-lost",
+              fault: serializeCiError(toCiError(error), { secrets }).message, at: new Date(clock()).toISOString() })}\n`, { mode: 0o600 });
+            continue;
+          }
+        }
         const failure = failedOutcome(error, attempt);
+        // A wedged controller costs this route only: once its retries are spent, the next route starts on a restarted app.
+        if (controllerWedged(error) && (attempt === 2 || !failure.error?.retryable)) {
+          outcomes[route.id] = { ...failure, reason: "The device controller stopped answering on this screen; Explore restarted the app and went on with the next route." };
+          recoverController(route.route, error);
+          break;
+        }
         if (failure.status === "budget-exhausted" || !failure.error?.retryable || attempt === 2) {
           outcomes[route.id] = failure;
           if (attempt === 2) await captureUnattributed(route, attempt, error);
@@ -1112,6 +1239,8 @@ export async function capturePlannedRoutes(options: {
         }
       }
     }
+    const outcome = outcomes[route.id];
+    if (setupIncomplete && outcome?.status === "captured") outcomes[route.id] = { ...outcome, reason: outcome.reason ? `${outcome.reason} ${setupIncomplete}` : setupIncomplete };
     reportOutcome(route, "by app link");
   }
   return outcomes;

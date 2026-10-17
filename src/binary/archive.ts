@@ -372,6 +372,11 @@ class FileRangeReader extends Reader<unknown> {
 
 const readers = new WeakMap<object, FileRangeReader>();
 
+/** The ABIs an APK ships native libraries for (`lib/<abi>/`), without reading its manifest. */
+export async function apkAbis(path: string): Promise<string[]> {
+  return [...new Set((await zipEntries(path)).map(entry => /^lib\/([^/]+)\//.exec(entry.filename)?.[1]).filter((abi): abi is string => !!abi))].sort();
+}
+
 async function zipEntries(path: string): Promise<ZipEntry[]> {
   configure({ useWebWorkers: false });
   const reader = new FileRangeReader(path);

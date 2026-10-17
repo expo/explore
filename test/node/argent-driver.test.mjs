@@ -541,3 +541,19 @@ test("a fold whose panel Argent never reads fails clearly instead of capturing t
   assert.equal(failed.json.error.code, "CONTROLLER_FOLD_UNVERIFIED");
   assert.equal(stuck.calls.filter(call => call.tool === "fold").length, 1, "the session is not folded back and forth");
 });
+
+test("an opened foldable's screenshots are captured upright and its recordings handed to be turned; others are left as Argent saves them", async () => {
+  const replies = { "list-devices": IOS_DEVICES, screenshot: {}, "screen-recording-start": {}, "screen-recording-stop": { video: "/home/.argent/recordings/r.mp4" } };
+  for (const landscape of [true, false]) {
+    const { run, context, calls } = harness("ios", replies, { state: { generation: 0, screen: { width: 669, height: 951 } } });
+    // Argent reads the opened panel on its portrait axes, like the closed one: only the pose tells them apart.
+    if (landscape) context.landscape = true;
+    const oriented = [];
+    context.orientVideo = async path => { oriented.push(path); };
+    assert.equal((await run(["screenshot", "/work/screen.png", ...flags("ios")])).exitCode, 0);
+    await run(["record", "start", "/work/launch.mp4", ...flags("ios")]);
+    await run(["record", "stop", ...flags("ios")]);
+    assert.deepEqual(calls.find(call => call.tool === "screenshot").args, { udid: UDID, scale: 1, ...(landscape ? { rotation: "LandscapeRight" } : {}) });
+    assert.deepEqual(oriented, landscape ? ["/work/launch.mp4"] : []);
+  }
+});

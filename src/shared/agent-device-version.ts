@@ -3,4 +3,4 @@
  * controller (`--package-version`), the daemon health check, and the screenshot diff tool must
  * all be this version; each caller checks it by exact equality.
  */
-export const AGENT_DEVICE_VERSION = "0.21.15";
+export const AGENT_DEVICE_VERSION = "0.21.28";

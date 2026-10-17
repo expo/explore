@@ -17,8 +17,11 @@ export const ARTIFACT_LIMITS = {
 /** The workflow run attempt a report belongs to; `artifact` is GitHub's id of its ZIP when a link carries it. */
 export type ReportPlatform = "ios" | "android";
 export const REPORT_PLATFORMS: readonly ReportPlatform[] = ["ios", "android"];
-/** `platform` names the matrix job's report artifact (explore-review-<run>-<attempt>-<platform>); absent for single-platform runs. */
-export type ArtifactIdentity = { origin?: "local"; repo: string; run: string; attempt: string; artifact?: string; platform?: ReportPlatform };
+/**
+ * `target` names the matrix job's report artifact (explore-review-<run>-<attempt>-<target>); absent for single-target
+ * runs. For configs without targets it is the platform, as `?platform=` links name it.
+ */
+export type ArtifactIdentity = { origin?: "local"; repo: string; run: string; attempt: string; artifact?: string; target?: string };
 export type ArtifactLoadProgress = { phase: "cache" | "downloading" | "verifying" | "opening"; cached?: boolean; loaded?: number; total?: number };
 export type ReportFileErrorCode = "not-zip" | "not-report" | "mismatch" | "too-large" | "invalid";
 
@@ -59,22 +62,38 @@ export function isPreviewPath(pathname: string): boolean {
 export function previewReportUrl(page: URL): string | undefined {
   const match = PREVIEW_PATH.exec(page.pathname);
   if (!match) return undefined;
-  const platform = reportPlatform(page);
-  return `/p/${match[1]}/report.zip${platform ? `?platform=${platform}` : ""}`;
+  const target = reportTarget(page);
+  return `/p/${match[1]}/report.zip${target ? `?${targetQuery(target)}` : ""}`;
 }
 
-/** The hosted preview's list of the platforms it serves (`/p/<token>/reports.json`). */
+/** The hosted preview's list of the targets it serves (`/p/<token>/reports.json`). */
 export function previewReportsUrl(page: URL): string | undefined {
   const match = PREVIEW_PATH.exec(page.pathname);
   return match ? `/p/${match[1]}/reports.json` : undefined;
 }
 
-/** The `platform` query value when it is one platform Explore captures; throws on other values. */
-export function reportPlatform(page: URL): ReportPlatform | undefined {
-  const values = page.searchParams.getAll("platform");
+/** A capture target id (the CLI's isTargetId): lowercase, starting with a letter, never a reserved name. */
+export function isReportTargetId(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(value) && !["base", "head", "report"].includes(value) && !value.startsWith("install-");
+}
+
+/**
+ * The query that selects a target's report: `platform=<id>` for a target named after its platform, as every link before
+ * targets did (and as the local report server and older Workers read it), `target=<id>` for any other.
+ */
+export function targetQuery(id: string): string {
+  return `${id === "ios" || id === "android" ? "platform" : "target"}=${id}`;
+}
+
+/**
+ * The target a link selects: `?target=<id>`, or `?platform=<id>` from links before targets (the target named after the
+ * platform, which the Worker falls back to the platform's first target for). Throws on two values or an invalid id.
+ */
+export function reportTarget(page: URL): string | undefined {
+  const values = [...page.searchParams.getAll("target"), ...page.searchParams.getAll("platform")];
   if (values.length === 0) return undefined;
-  if (values.length > 1 || !REPORT_PLATFORMS.includes(values[0] as ReportPlatform)) throw new Error("This report link needs one platform: ios or android.");
-  return values[0] as ReportPlatform;
+  if (values.length > 1 || !isReportTargetId(values[0])) throw new Error("This report link needs one target, such as ios or android.");
+  return values[0];
 }
 
 function validIdentity(values: ArtifactIdentity): boolean {
@@ -94,8 +113,8 @@ export function artifactIdentity(page: URL): ArtifactIdentity | undefined {
   const artifacts = page.searchParams.getAll("artifact");
   if (artifacts.length > 1 || artifacts[0] === "") throw new Error("This report link needs one artifact value.");
   if (artifacts[0]) values.artifact = artifacts[0];
-  const platform = reportPlatform(page);
-  if (platform) values.platform = platform;
+  const target = reportTarget(page);
+  if (target) values.target = target;
   if (page.searchParams.has("origin")) {
     if (page.searchParams.getAll("origin").length !== 1 || page.searchParams.get("origin") !== "local") throw new Error("Invalid report origin");
     values.origin = "local";
@@ -105,8 +124,8 @@ export function artifactIdentity(page: URL): ArtifactIdentity | undefined {
   return identity;
 }
 
-export function reportFileName(identity: Pick<ArtifactIdentity, "run" | "attempt" | "platform">): string {
-  return `explore-review-${identity.run}-${identity.attempt}${identity.platform ? `-${identity.platform}` : ""}.zip`;
+export function reportFileName(identity: Pick<ArtifactIdentity, "run" | "attempt" | "target">): string {
+  return `explore-review-${identity.run}-${identity.attempt}${identity.target ? `-${identity.target}` : ""}.zip`;
 }
 
 export function workflowRunUrl(identity: ArtifactIdentity): string | undefined {

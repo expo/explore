@@ -69,10 +69,15 @@ async function harness(t, bytes, { app = false, open = true, name = fileName, re
         // A preview deployment's Worker: the decrypted report behind the token, or the same 404 as any other path.
         if (preview && url.pathname === `${pagePath}/report.zip`) {
           preview.requests = (preview.requests ?? 0) + 1;
+          preview.queries = [...(preview.queries ?? []), url.search];
           if (preview.status && preview.status !== 200) { response.statusCode = preview.status; return response.end(preview.body ?? "Not found"); }
           response.setHeader("content-type", "application/zip");
           response.setHeader("content-length", String(bytes.length));
           return response.end(bytes);
+        }
+        if (preview?.listing && url.pathname === `${pagePath}/reports.json`) {
+          response.setHeader("content-type", "application/json");
+          return response.end(JSON.stringify(preview.listing));
         }
         if (url.pathname !== pagePath) return next();
         response.setHeader("content-type", "text/html");
@@ -406,6 +411,91 @@ test("a hosted preview link downloads the report from its own token route, opens
   await expect(goneShell).toContainText("This preview link expired on Jan 1, 2030. Download the report from the pull request or workflow run instead");
   await expect(gone.page.locator(".report-drop-input")).toHaveCount(0);
   assert.deepEqual(gone.errors, []);
+});
+
+test("a hosted run of several targets opens the linked target and switches between all of them in config order", { timeout: 60_000 }, async t => {
+  const targets = [
+    { id: "iphone", platform: "ios", label: "iPhone 17" },
+    { id: "duo-closed", platform: "ios", label: "iPhone Duo (closed)" },
+    { id: "duo-open", platform: "ios", label: "iPhone Duo (open)" },
+    { id: "android", platform: "android", label: "Android" },
+  ];
+  const report = reportFixture();
+  report.review.runtime = { ...report.review.runtime, platform: "ios", platforms: ["ios", "android"], target: targets[2], targets };
+  const preview = { token: "defghijklmnopqrstuvwxyz234567234", listing: [
+    { target: "iphone", platform: "ios", label: "iPhone 17", changes: 1 },
+    { target: "duo-closed", platform: "ios", label: "iPhone Duo (closed)" },
+    { target: "duo-open", platform: "ios", label: "iPhone Duo (open)", changes: 1 },
+    { target: "android", platform: "android", label: "Android", changes: 2, device: "Pixel 9 16" },
+  ] };
+  const { page, errors } = await harness(t, await archive(report), { app: true, reportIdentity: null, preview, query: "&target=duo-open" });
+  const button = page.getByRole("button", { name: "Device: iPhone Duo (open). Open another device's report" });
+  await expect(button).toBeVisible();
+  assert.deepEqual(preview.queries, ["?target=duo-open"], "the Viewer asks the Worker for the linked target's report");
+  await button.click();
+  const items = page.getByRole("menu", { name: "Device" }).getByRole("menuitemradio");
+  await expect(items).toHaveCount(4);
+  assert.deepEqual(await items.evaluateAll(rows => rows.map(row => [row.querySelector(".menu-row-label")?.firstChild?.textContent, row.getAttribute("aria-checked")])),
+    [["iPhone 17", "false"], ["iPhone Duo (closed)", "false"], ["iPhone Duo (open)", "true"], ["Android", "false"]]);
+  await expect(items.nth(3)).toContainText("2 changes · Pixel 9 16");
+  await expect(items.nth(1)).toContainText("Same review, other device");
+  await items.nth(3).click();
+  await page.waitForURL(url => new URL(url).searchParams.get("platform") === "android");
+  const next = new URL(page.url());
+  assert.equal(next.searchParams.get("target"), null, "a target named after its platform is linked as before targets");
+  await expect.poll(() => preview.queries.at(-1)).toBe("?platform=android");
+  assert.deepEqual(errors, []);
+});
+
+test("a hosted report from before targets still switches platforms by ?platform=", { timeout: 60_000 }, async t => {
+  const report = reportFixture();
+  report.review.runtime = { ...report.review.runtime, platform: "android", platforms: ["ios", "android"] };
+  const preview = { token: "efghijklmnopqrstuvwxyz2345672345", listing: [{ platform: "ios", changes: 3 }, { platform: "android" }] };
+  const { page, errors } = await harness(t, await archive(report), { app: true, reportIdentity: null, preview, query: "&platform=android" });
+  const button = page.getByRole("button", { name: "Platform: Android. Open another platform's report" });
+  await expect(button).toBeVisible();
+  assert.deepEqual(preview.queries, ["?platform=android"]);
+  await button.click();
+  const items = page.getByRole("menu", { name: "Platform" }).getByRole("menuitemradio");
+  assert.deepEqual(await items.evaluateAll(rows => rows.map(row => [row.querySelector(".menu-row-label")?.firstChild?.textContent, row.getAttribute("aria-checked")])),
+    [["iOS", "false"], ["Android", "true"]]);
+  await expect(items.nth(0)).toContainText("3 changes");
+  await items.nth(0).click();
+  await page.waitForURL(url => new URL(url).searchParams.get("platform") === "ios");
+  assert.deepEqual(errors, []);
+});
+
+test("report links name their target: ?target=, ?platform= from before targets, and the artifact file name", async t => {
+  const { page } = await harness(t, undefined, { reportIdentity: null, query: "" });
+  const result = await page.evaluate(() => {
+    const api = window.archiveApi;
+    const attempt = fn => { try { return fn(); } catch (error) { return `error: ${error.message}`; } };
+    const preview = "http://x/p/abcdefghijklmnopqrstuvwxyz234567";
+    return {
+      target: api.previewReportUrl(new URL(`${preview}?target=duo-open`)),
+      platform: api.previewReportUrl(new URL(`${preview}?platform=android`)),
+      none: api.previewReportUrl(new URL(preview)),
+      both: attempt(() => api.reportTarget(new URL(`${preview}?target=duo-open&platform=ios`))),
+      invalid: attempt(() => api.reportTarget(new URL(`${preview}?target=Duo`))),
+      reserved: attempt(() => api.reportTarget(new URL(`${preview}?target=report`))),
+      identity: api.artifactIdentity(new URL("http://x/r?repo=expo/example&run=1&attempt=2&target=duo-open")),
+      legacy: api.artifactIdentity(new URL("http://x/r?repo=expo/example&run=1&attempt=2&platform=android")),
+      fileName: api.reportFileName({ run: "1", attempt: "2", target: "duo-open" }),
+      legacyFileName: api.reportFileName({ run: "1", attempt: "2", target: "ios" }),
+    };
+  });
+  assert.deepEqual(result, {
+    target: "/p/abcdefghijklmnopqrstuvwxyz234567/report.zip?target=duo-open",
+    platform: "/p/abcdefghijklmnopqrstuvwxyz234567/report.zip?platform=android",
+    none: "/p/abcdefghijklmnopqrstuvwxyz234567/report.zip",
+    both: "error: This report link needs one target, such as ios or android.",
+    invalid: "error: This report link needs one target, such as ios or android.",
+    reserved: "error: This report link needs one target, such as ios or android.",
+    identity: { repo: "expo/example", run: "1", attempt: "2", target: "duo-open" },
+    legacy: { repo: "expo/example", run: "1", attempt: "2", target: "android" },
+    fileName: "explore-review-1-2-duo-open.zip",
+    legacyFileName: "explore-review-1-2-ios.zip",
+  });
 });
 
 test("a bare /r opens any report and takes its identity from review.json", async t => {

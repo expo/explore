@@ -123,13 +123,14 @@ test("a multi-platform deployment serves reports.json, one report per platform, 
   const multi: PreviewEnvironment = { ...rest, EXPLORE_PREVIEW_REPORTS: JSON.stringify(reports) };
   const fetchImpl = staticFiles({ [reports[0]!.path]: await sealed(keyBytes), [reports[1]!.path]: await sealed(keyBytes, android) });
   const options = { env: multi, indexHtml: html, fetchImpl, subtle };
-  assert.deepEqual(previewConfig(multi)?.reports, reports);
+  // A listing from before targets names each report by its platform, which is then its target.
+  assert.deepEqual(previewConfig(multi)?.reports, reports.map(entry => ({ target: entry.platform, ...entry })));
 
   const list = await previewResponse(new Request(`${origin}/p/${token}/reports.json`), options);
   assert.equal(list.status, 200);
   assert.equal(list.headers.get("content-type"), "application/json; charset=utf-8");
   assert.equal(list.headers.get("cache-control"), "private, no-store");
-  assert.deepEqual(await list.json(), [{ platform: "ios", changes: 3, device: "iPhone 17 Pro 26.0" }, { platform: "android", changes: 0, device: "Pixel 7 15" }]);
+  assert.deepEqual(await list.json(), [{ target: "ios", platform: "ios", changes: 3, device: "iPhone 17 Pro 26.0" }, { target: "android", platform: "android", changes: 0, device: "Pixel 7 15" }]);
 
   const first = await previewResponse(new Request(`${origin}/p/${token}/report.zip`), options);
   assert.deepEqual(new Uint8Array(await first.arrayBuffer()), report);
@@ -142,7 +143,7 @@ test("a multi-platform deployment serves reports.json, one report per platform, 
   }
   // Single-report deployments still answer reports.json (one iOS entry) and ignore an unknown platform.
   const single = { env, indexHtml: html, fetchImpl: staticFiles({ [env.EXPLORE_PREVIEW_REPORT!]: await sealed(keyBytes) }), subtle };
-  assert.deepEqual(await (await previewResponse(new Request(`${origin}/p/${token}/reports.json`), single)).json(), [{ platform: "ios" }]);
+  assert.deepEqual(await (await previewResponse(new Request(`${origin}/p/${token}/reports.json`), single)).json(), [{ target: "ios", platform: "ios" }]);
   assert.equal((await previewResponse(new Request(`${origin}/p/${token}/report.zip?platform=android`), single)).status, 404);
 
   const loose: Array<[string, unknown]> = [
@@ -160,4 +161,49 @@ test("a multi-platform deployment serves reports.json, one report per platform, 
     assert.equal(previewConfig(value as PreviewEnvironment), undefined, name);
     assert.equal((await previewResponse(new Request(`${origin}/p/${token}`), { ...options, env: value as PreviewEnvironment })).status, 404, name);
   }
+});
+
+test("a deployment of several targets, three of them iOS, selects by ?target= and still by ?platform=", async () => {
+  const targets = [
+    { target: "iphone", platform: "ios", label: "iPhone 17", path: "/_report/abcdefghijklmnop/iphone.zip.enc", changes: 1 },
+    { target: "duo-closed", platform: "ios", label: "iPhone Duo (closed)", path: "/_report/abcdefghijklmnop/duo-closed.zip.enc" },
+    { target: "duo-open", platform: "ios", label: "iPhone Duo (open)", path: "/_report/abcdefghijklmnop/duo-open.zip.enc", device: "iPhone Duo 26.0" },
+    { target: "android", platform: "android", label: "Android", path: "/_report/abcdefghijklmnop/android.zip.enc" },
+  ];
+  const bodies = targets.map(entry => new TextEncoder().encode(`PK\u0003\u0004 ${entry.target} report stand-in`));
+  const { EXPLORE_PREVIEW_REPORT: _single, ...rest } = env;
+  const multi: PreviewEnvironment = { ...rest, EXPLORE_PREVIEW_REPORTS: JSON.stringify(targets) };
+  const files: Record<string, Uint8Array<ArrayBuffer>> = {};
+  for (const [index, entry] of targets.entries()) files[entry.path] = await sealed(keyBytes, bodies[index]!);
+  const options = { env: multi, indexHtml: html, fetchImpl: staticFiles(files), subtle };
+  assert.deepEqual(previewConfig(multi)?.reports, targets);
+  assert.deepEqual(await (await previewResponse(new Request(`${origin}/p/${token}/reports.json`), options)).json(), targets.map(({ path: _path, ...entry }) => entry));
+  const served = async (query: string) => {
+    const response = await previewResponse(new Request(`${origin}/p/${token}/report.zip${query}`), options);
+    return response.status === 200 ? new TextDecoder().decode(await response.arrayBuffer()).split(" ")[1] : response.status;
+  };
+  assert.equal(await served(""), "iphone", "the first listed");
+  assert.equal(await served("?target=duo-open"), "duo-open");
+  assert.equal(await served("?target=android"), "android");
+  assert.equal(await served("?platform=android"), "android", "an old link names the target after its platform");
+  assert.equal(await served("?platform=ios"), "iphone", "with no target named ios, the first iOS target");
+  for (const query of ["?target=web", "?target=duo-open&target=iphone", "?target=duo-open&platform=ios", "?target=", "?target=Duo-Open"]) {
+    assert.equal(await served(query), 404, query);
+  }
+
+  const eight = Array.from({ length: 8 }, (_, index) => ({ target: `t${index}`, platform: "ios", path: `/_report/abcdefghijklmnop/t${index}.zip.enc` }));
+  assert.equal(previewConfig({ ...rest, EXPLORE_PREVIEW_REPORTS: JSON.stringify(eight) })?.reports.length, 8);
+  const loose: Array<[string, unknown]> = [
+    ["nine targets", [...eight, { target: "t8", platform: "ios", path: "/_report/abcdefghijklmnop/t8.zip.enc" }]],
+    ["duplicate target", [targets[0], { ...targets[1], target: "iphone", path: targets[0]!.path }]],
+    ["invalid id", [{ ...targets[0], target: "iPhone", path: "/_report/abcdefghijklmnop/iPhone.zip.enc" }]],
+    ["reserved id", [{ ...targets[0], target: "report", path: "/_report/abcdefghijklmnop/report.zip.enc" }]],
+    ["install id", [{ ...targets[0], target: "install-x", path: "/_report/abcdefghijklmnop/install-x.zip.enc" }]],
+    ["path of another target", [{ ...targets[0], path: targets[1]!.path }]],
+    ["null target", [{ ...targets[0], target: null }]],
+    ["markup label", [{ ...targets[0], label: "<b>x</b>" }]],
+    ["empty label", [{ ...targets[0], label: " " }]],
+    ["long label", [{ ...targets[0], label: "x".repeat(81) }]],
+  ];
+  for (const [name, value] of loose) assert.equal(previewConfig({ ...rest, EXPLORE_PREVIEW_REPORTS: JSON.stringify(value) }), undefined, name);
 });

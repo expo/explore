@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import type { ArtifactReport } from "../contracts/artifact-report.js";
 import { compareTitleMarkdown, projectReviewPresentation, type CompareReviewPresentation } from "../contracts/review.js";
 import { renderPublicComment, platformSectionMerge, reviewChangeCount, type PublicCommentState } from "./pr-comment-body.js";
-import type { ExplorePlatform } from "../config/explore-config.js";
+import { isTargetId, type ExplorePlatform } from "../config/explore-config.js";
 import { upsertStickyComment } from "./pr-comment.js";
 import { previewLinks, viewerLinks } from "./viewer-links.js";
 import type { PublicReview } from "../contracts/capture.js";
@@ -112,10 +112,23 @@ async function exportCiReportUnchecked(options: { inputPath: string; outputPath:
 
 }
 
+/**
+ * The suffix of this matrix job's artifacts: `--target`, else for a `--platform` caller the captured target when it
+ * has that platform (its id is the platform for a config without targets), else nothing (a workflow without a matrix).
+ */
+function reportTarget(options: { target?: string; platform?: ExplorePlatform }, state: PublicCommentState): string | undefined {
+  const target = options.target ?? (options.platform && state.target?.platform === options.platform ? state.target.id : options.platform);
+  if (target !== undefined && !isTargetId(target)) throw new CiError({ code: "TARGET_INVALID", stage: "preflight", message: `${target} is not a target id.`,
+    nextAction: "Pass --target with an id from targets: in .expo-explore/config.yaml (ios or android without targets:)." });
+  return target;
+}
+
 /** Finalize only an uploaded artifact from this run while the captured PR is still current. */
 export async function publishCiReportComment(options: {
   inputPath: string; artifactUrl: string; environment?: NodeJS.ProcessEnv; transport?: typeof fetch;
-  /** Set by the matrix workflows: the artifact carries the platform suffix and the comment gets one section per platform. */
+  /** Set by the matrix workflows: the artifact carries the target suffix and the comment gets one section per target. */
+  target?: string;
+  /** What callers from before targets pass: the platform of the captured target, whose id then names the artifact. */
   platform?: ExplorePlatform;
   /** A verified hosted preview from `ci:deploy`; the comment then links to it as Explore report. */
   preview?: { url: string; expiresAt: number | null };
@@ -135,10 +148,11 @@ export async function publishCiReportComment(options: {
       nextAction: "Publish the report-input.json produced by this repository's current workflow run and attempt." });
   }
   if (pr.origin === "local") throw new Error("Local reports cannot be published as GitHub PR comments");
+  const target = reportTarget(options, input.commentState);
   const links = viewerLinks({ repository: pr.repository, headSha: pr.head.sha, runId: review.runId,
     runAttempt: review.runAttempt, configPath: input.commentState.configPath, artifactUrl: options.artifactUrl,
-    ...(options.platform ? { platform: options.platform } : {}) });
-  if (options.preview) links.preview = previewLinks(options.preview.url, options.preview.expiresAt, options.platform);
+    ...(target ? { target } : {}) });
+  if (options.preview) links.preview = previewLinks(options.preview.url, options.preview.expiresAt, target);
   else if (input.preview && !options.previewFailed) links.deploying = true;
   const api = async (path: string) => {
     let response: Response;
@@ -171,7 +185,7 @@ export async function publishCiReportComment(options: {
       message: "GitHub returned invalid report metadata.", nextAction: "Rerun publication; if the response remains invalid, inspect the GitHub metadata request.", cause: error }); }
   };
   const artifact = await api(`actions/artifacts/${new URL(options.artifactUrl).pathname.split("/").at(-1)}`);
-  if (artifact.expired || artifact.name !== `explore-review-${review.runId}-${review.runAttempt}${options.platform ? `-${options.platform}` : ""}` || String(artifact.workflow_run?.id) !== review.runId) {
+  if (artifact.expired || artifact.name !== `explore-review-${review.runId}-${review.runAttempt}${target ? `-${target}` : ""}` || String(artifact.workflow_run?.id) !== review.runId) {
     throw new CiError({ code: artifact.expired ? "REPORT_ARTIFACT_EXPIRED" : "REPORT_ARTIFACT_MISMATCH", stage: "publication",
       message: "The uploaded report artifact is unavailable or belongs to another run",
       nextAction: artifact.expired ? "Rerun Explore to upload a fresh report artifact." : "Pass the final report artifact from this workflow run and attempt." });
@@ -188,9 +202,9 @@ export async function publishCiReportComment(options: {
   const superseded = current.head?.sha !== pr.head.sha || current.base?.sha !== pr.base.sha;
   const state: PublicCommentState = { ...input.commentState, phase: "ready", updatedAt: Date.now(),
     review, links, artifactOnly: true, ...(superseded ? { superseded: true } : {}) };
-  const body = renderPublicComment(state);
+  const body = renderPublicComment(state, undefined, target);
   let previousBody: string | undefined;
-  try { previousBody = (await upsertStickyComment({ repository: pr.repository, issueNumber: pr.number, body, ...platformSectionMerge(state, options.platform),
+  try { previousBody = (await upsertStickyComment({ repository: pr.repository, issueNumber: pr.number, body, ...platformSectionMerge(state, target),
     token: environment.GITHUB_TOKEN, fetchImpl: transport })).previousBody; }
   catch (error) { throw toCiError(error, { code: "COMMENT_PUBLICATION_FAILED", stage: "publication",
     nextAction: "Grant the GitHub token PR comment write permission and retry publication for the current PR head." }); }
@@ -200,9 +214,9 @@ export async function publishCiReportComment(options: {
 
 /**
  * A comparison has no pull request to comment on: `ci:publish` links its report from the run summary instead,
- * with the same Open (central Viewer) and zip links a PR comment carries for this platform.
+ * with the same Open (central Viewer) and zip links a PR comment carries for this target, labelled as the comment labels it.
  */
-async function publishCompareSummary(input: CiReportInput, options: { artifactUrl: string; platform?: ExplorePlatform }, environment: NodeJS.ProcessEnv) {
+async function publishCompareSummary(input: CiReportInput, options: { artifactUrl: string; target?: string; platform?: ExplorePlatform }, environment: NodeJS.ProcessEnv) {
   const review = input.publicReview; const comparison = review.pullRequest as CompareReviewPresentation;
   if (review.runId !== environment.GITHUB_RUN_ID || review.runAttempt !== environment.GITHUB_RUN_ATTEMPT
     || (environment.GITHUB_REPOSITORY && environment.GITHUB_REPOSITORY !== comparison.repository)) {
@@ -210,14 +224,21 @@ async function publishCompareSummary(input: CiReportInput, options: { artifactUr
       message: "Report input is not from the current repository run and attempt",
       nextAction: "Publish the report-input.json produced by this repository's current workflow run and attempt." });
   }
+  const target = reportTarget(options, input.commentState);
   const links = viewerLinks({ repository: comparison.repository, headSha: comparison.head.sha, runId: review.runId,
     runAttempt: review.runAttempt, configPath: input.commentState.configPath, artifactUrl: options.artifactUrl,
-    ...(options.platform ? { platform: options.platform } : {}) });
+    ...(target ? { target } : {}) });
   const changes = input.commentState.review ?? review;
   const count = reviewChangeCount({ review: changes }) ?? 0;
-  const platform = (options.platform ?? review.runtime.platform) === "android" ? "Android" : "iOS";
+  const label = summaryText(input.commentState.target?.label ?? review.runtime.target?.label
+    ?? ((options.platform ?? review.runtime.platform) === "android" ? "Android" : "iOS"));
   if (environment.GITHUB_STEP_SUMMARY) {
-    await appendFile(environment.GITHUB_STEP_SUMMARY, `- ${platform} report of ${compareTitleMarkdown(comparison)}: [Open](${links.viewer!.open}) · [zip](${links.download!}) · ${count} ${count === 1 ? "change" : "changes"}\n`);
+    await appendFile(environment.GITHUB_STEP_SUMMARY, `- ${label} report of ${compareTitleMarkdown(comparison)}: [Open](${links.viewer!.open}) · [zip](${links.download!}) · ${count} ${count === 1 ? "change" : "changes"}\n`);
   }
   return { artifactUrl: links.viewer!.open, headSha: comparison.head.sha };
+}
+
+/** A config-authored label as plain Markdown text on one line. */
+function summaryText(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/[\\`*_{}[\]()#+!|<>~]/g, "\\$&").trim().slice(0, 80);
 }

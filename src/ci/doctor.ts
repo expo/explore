@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { CiError, toCiError } from "../shared/ci-errors.js";
@@ -8,9 +8,10 @@ import type { CaptureBundle } from "../contracts/capture.js";
 import type { SourceCapturePlan } from "../source/capture-plan.js";
 import type { CommandRunner } from "../capture/run.js";
 import { runBaselineCi } from "./pipeline.js";
-import { DEFAULT_EXPLORE_CONFIG_PATH, configPlatforms, readExploreConfig, readExploreInstructions, resolvePlatformConfig, withRunOverrides, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
+import { DEFAULT_EXPLORE_CONFIG_PATH, captureRepack, configTargets, readExploreConfig, readExploreInstructions, resolveTargetConfig, withRunOverrides, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { explorationSecretNames } from "../config/exploration-inputs.js";
 import { controllerCached } from "../shared/controller-cache.js";
+import { androidTools, hostEmulatorAbi, localSimulatorTarget, localSystemImage } from "../capture/local-simulator.js";
 import { ARGENT_VERSION } from "../shared/argent-version.js";
 import { AGENT_PROVIDERS as PROVIDERS, DRAFT_INSTRUCTIONS_MARKER, EXPO_TOKENS_URL as TOKENS, appConfig, simulatorProfiles } from "../config/setup.js";
 import { captureCompatibility } from "../capture/observer.js";
@@ -50,6 +51,10 @@ export type DoctorOptions = {
   checkModel?: boolean;
   /** `--controller`: the device controller to check, over the config's `capture.controller`. */
   controller?: string | undefined;
+  /** `--simulator`: where the app runs, over the config's `capture.simulator`. */
+  simulator?: string | undefined;
+  /** `--repack`: where the app is repacked, over the config's `capture.repack`. */
+  repack?: string | undefined;
   run?: DoctorRun;
   environment?: NodeJS.ProcessEnv;
   nodeVersion?: string;
@@ -153,7 +158,71 @@ function routeChecks(config: ExploreConfig, report: RouteEntryReport): DoctorChe
   return checks;
 }
 
-async function easChecks(project: string, config: ExploreConfig, run: DoctorRun): Promise<DoctorCheck[]> {
+/** Every target, resolved, once per platform, EAS profile and app: targets that differ only by device or pose share these checks. */
+function resolvedTargets(config: ExploreConfig, by: (target: ExploreConfig) => string = target => `${target.app.platform}:${target.app.easProfile}:${target.app.bundleId}`): ExploreConfig[] {
+  const seen = new Set<string>();
+  return configTargets(config).map(target => resolveTargetConfig(config, { target: target.id })).filter(target => !seen.has(by(target)) && !!seen.add(by(target)));
+}
+
+/**
+ * Every target as a capture of it runs: its own controller and simulator (else the config's), with the run's
+ * --controller and --simulator over both.
+ */
+function runTargets(config: ExploreConfig, overrides: { controller?: string | undefined; simulator?: string | undefined }): ExploreConfig[] {
+  return configTargets(config).map(target => withRunOverrides(resolveTargetConfig(config, { target: target.id }), overrides));
+}
+
+/**
+ * The targets that run on a local simulator, in place of EAS Simulator access: this Mac's Xcode can create each iOS
+ * target's device, and the Android SDK can start each Android target's device profile with a system image this machine runs.
+ */
+async function localSimulatorChecks(project: string, targets: readonly ExploreConfig[], run: DoctorRun, environment: NodeJS.ProcessEnv): Promise<DoctorCheck[]> {
+  const checks: DoctorCheck[] = [];
+  const seen = new Set<string>();
+  for (const target of targets.filter(each => !seen.has(`${each.app.platform}:${each.device.name}`) && !!seen.add(`${each.app.platform}:${each.device.name}`))) {
+    const device = target.device.name;
+    if (target.app.platform === "ios") {
+      const types = run("xcrun", ["simctl", "list", "devicetypes", "-j"], project);
+      const runtimes = run("xcrun", ["simctl", "list", "runtimes", "-j"], project);
+      try {
+        if (types.status !== 0 || runtimes.status !== 0) throw new Error(lastLine(types.stderr || runtimes.stderr || "xcrun simctl failed"));
+        const local = localSimulatorTarget(types.stdout, runtimes.stdout, device);
+        checks.push({ step: 1, id: "local-simulator", status: "pass", message: `This Mac can create an ${device} simulator (iOS ${local.osVersion}).` });
+      } catch (error) {
+        checks.push(fromError(1, "local-simulator", error, { code: "LOCAL_SIMULATOR_UNAVAILABLE",
+          nextAction: "Install Xcode and an iOS simulator runtime for the configured device, select it with xcode-select (or DEVELOPER_DIR), then rerun doctor." }));
+      }
+      continue;
+    }
+    try {
+      const tools = androidTools(environment);
+      const image = await localSystemImage(tools.sdk, hostEmulatorAbi());
+      const devices = run(tools.avdmanager, ["list", "device", "-c"], project);
+      if (devices.status !== 0) throw new Error(lastLine(devices.stderr || devices.stdout || "avdmanager failed"));
+      if (!devices.stdout.split("\n").map(line => line.trim()).includes(device)) throw new CiError({ code: "LOCAL_EMULATOR_DEVICE_UNAVAILABLE", stage: "preflight",
+        message: `The Android SDK has no ${device} device profile.`, nextAction: "Set the target's device to a profile listed by avdmanager list device -c, such as pixel_7." });
+      checks.push({ step: 1, id: "local-emulator", status: "pass", message: `This machine can start a ${device} emulator (${image.image.split(";").slice(1).join(" ")}).` });
+    } catch (error) {
+      checks.push(fromError(1, "local-emulator", error, { code: "LOCAL_EMULATOR_UNAVAILABLE",
+        nextAction: "Install the Android SDK's emulator, platform-tools, cmdline-tools and a system image with sdkmanager, export ANDROID_HOME, then rerun doctor." }));
+    }
+    // A local simulator repacks on this machine too, unless capture.repack says eas: repack-app signs the APK with the
+    // SDK's build-tools and runs apktool and apksigner with Java.
+    if (captureRepack(target) === "local") {
+      const java = run("java", ["-version"], project);
+      let buildTools: string[] = [];
+      try { buildTools = await readdir(join(androidTools(environment).sdk, "build-tools")); } catch { /* no SDK or no build-tools */ }
+      checks.push(buildTools.length && java.status === 0
+        ? { step: 1, id: "local-repack", status: "pass", message: `This machine can repack the APK (build-tools ${buildTools.sort().at(-1)}, ${(java.stderr || java.stdout).trim().split("\n")[0] || "Java"}).` }
+        : { step: 1, id: "local-repack", status: "fail", code: "LOCAL_REPACK_UNAVAILABLE",
+          message: buildTools.length ? "Repacking the APK on this machine needs Java, and java -version did not run." : "Repacking the APK on this machine needs the Android SDK build-tools, and none are installed.",
+          nextAction: "Install the build-tools (sdkmanager \"build-tools;35.0.0\") and a JDK 17, or set capture.repack: eas to repack in a hosted EAS job, then rerun doctor." });
+    }
+  }
+  return checks;
+}
+
+async function easChecks(project: string, config: ExploreConfig, run: DoctorRun, environment: NodeJS.ProcessEnv, simulator?: string): Promise<DoctorCheck[]> {
   let eas: string;
   try { eas = packageBin("eas-cli", "eas"); if (!await exists(eas)) throw new Error(); }
   catch { return [{ step: 1, id: "eas-cli", status: "fail", code: "EXPLORE_TOOLS_MISSING",
@@ -172,17 +241,23 @@ async function easChecks(project: string, config: ExploreConfig, run: DoctorRun)
     ? { step: 1, id: "eas-project", status: "pass", message: "The app is linked to an EAS project this account can access." }
     : { step: 1, id: "eas-project", status: "fail", code: "EAS_PROJECT_UNAVAILABLE", message: `EAS project check failed: ${lastLine(info.stderr || info.stdout)}`,
       nextAction: "Run eas init in the app directory to link it, or ask the project's owner for access. The CI EXPO_TOKEN must belong to an account with the same access." });
-  const availability = run(eas, ["simulator:availability", "--json", "--non-interactive"], project);
-  try {
-    if (availability.status !== 0) throw new Error(lastLine(availability.stderr || availability.stdout));
-    assertSimulatorAvailable(availability.stdout);
-    checks.push({ step: 1, id: "eas-simulator", status: "pass", message: "EAS Simulator is available for this account." });
-  } catch (error) {
-    checks.push({ ...fromError(1, "eas-simulator", error, { code: "SIMULATOR_UNAVAILABLE", nextAction: "" }),
-      code: "SIMULATOR_UNAVAILABLE", nextAction: `Join the EAS Simulator waitlist at ${WAITLIST} with ${account}, the account the CI EXPO_TOKEN must use. Capture cannot run until access is granted.` });
+  // The targets on a local simulator need this machine's tools, and EAS Simulator access is checked when any target uses it.
+  const targets = runTargets(config, { simulator });
+  const local = targets.filter(target => target.capture.simulator === "local");
+  if (local.length) checks.push(...await localSimulatorChecks(project, local, run, environment));
+  if (local.length < targets.length) {
+    const availability = run(eas, ["simulator:availability", "--json", "--non-interactive"], project);
+    try {
+      if (availability.status !== 0) throw new Error(lastLine(availability.stderr || availability.stdout));
+      assertSimulatorAvailable(availability.stdout);
+      checks.push({ step: 1, id: "eas-simulator", status: "pass", message: "EAS Simulator is available for this account." });
+    } catch (error) {
+      checks.push({ ...fromError(1, "eas-simulator", error, { code: "SIMULATOR_UNAVAILABLE", nextAction: "" }),
+        code: "SIMULATOR_UNAVAILABLE", nextAction: `Join the EAS Simulator waitlist at ${WAITLIST} with ${account}, the account the CI EXPO_TOKEN must use. Capture cannot run until access is granted.` });
+    }
   }
   const checkedEnvironments = new Set<string>();
-  for (const target of configPlatforms(config).map(platform => resolvePlatformConfig(config, platform))) {
+  for (const target of resolvedTargets(config)) {
     const { platform, easProfile, bundleId } = target.app;
     const resolved = run(eas, ["config", "--platform", platform, "--profile", easProfile, "--json", "--non-interactive"], project);
     if (resolved.status !== 0) {
@@ -231,7 +306,8 @@ async function easChecks(project: string, config: ExploreConfig, run: DoctorRun)
   return checks;
 }
 
-async function ciFileChecks(project: string, secretNames: readonly string[], run: DoctorRun, online: boolean, platformCount = 1): Promise<{ checks: DoctorCheck[]; root?: string }> {
+/** `named`: the config names its own targets, so only a workflow with a target matrix captures each one. */
+async function ciFileChecks(project: string, secretNames: readonly string[], run: DoctorRun, online: boolean, platformCount = 1, named = false): Promise<{ checks: DoctorCheck[]; root?: string }> {
   let layout: Awaited<ReturnType<typeof ciLayout>>;
   try { layout = await ciLayout(project); }
   catch (error) { return { checks: [fromError(6, "repository", error, { code: "NOT_A_GIT_REPOSITORY", nextAction: "Put the app in a Git repository, commit it, and rerun doctor." })] }; }
@@ -266,8 +342,10 @@ async function ciFileChecks(project: string, secretNames: readonly string[], run
     if (drift) checks.push({ step: 6, id: `workflow-template-${name}`, status: "warn", code: "WORKFLOW_TEMPLATE_DRIFT",
       message: `${file} ${drift === "stale" ? "was generated by an older @expo/explore template" : "differs from the @expo/explore template (edited after setup, or generated by an older version)"}; steps the ${EXPLORE_VERSION} template adds (such as installing ffmpeg for launch recordings) are missing from CI.`,
       nextAction: drift === "stale" ? "Run expo-explore setup --workflows, then commit the workflows." : "Run expo-explore setup --workflows --force to regenerate it (reapply your edits), then commit the workflows." });
-    if (platformCount > 1 && !text.includes("matrix.platform")) checks.push({ step: 6, id: `workflow-platforms-${name}`, status: "warn", code: "WORKFLOW_PLATFORM_MATRIX_MISSING",
-      message: `${DEFAULT_EXPLORE_CONFIG_PATH} configures ${platformCount} platforms, but ${file} captures one platform (no matrix.platform).`,
+    // Workflows installed before targets run one job per platform, which covers a config whose targets are its platforms.
+    const matrix = text.includes("matrix.target") || (text.includes("matrix.platform") && !named);
+    if (platformCount > 1 && !matrix) checks.push({ step: 6, id: `workflow-platforms-${name}`, status: "warn", code: "WORKFLOW_PLATFORM_MATRIX_MISSING",
+      message: `${DEFAULT_EXPLORE_CONFIG_PATH} configures ${platformCount} targets, but ${file} does not capture each one (no matrix.target).`,
       nextAction: "Run expo-explore setup --workflows to install the matrix workflows, then commit them." });
   }
   if (online) for (const version of versions) {
@@ -387,7 +465,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     return { ok: false, mode: null, checks, ...(routes ? { routes } : {}) };
   }
   let config: ExploreConfig;
-  try { config = withRunOverrides(await readExploreConfig(project), { controller: options.controller }); }
+  try { config = withRunOverrides(await readExploreConfig(project), { controller: options.controller, simulator: options.simulator, repack: options.repack }); }
   catch (error) {
     checks.push(fromError(4, "config", error, { code: "CONFIG_INVALID", nextAction: `Correct ${DEFAULT_EXPLORE_CONFIG_PATH} and rerun doctor.` }));
     return { ok: false, mode: null, checks };
@@ -396,7 +474,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   checks.push(config.mode === "agent"
     ? { step: 3, id: "mode", status: "pass", message: `Agent mode with ${config.agent!.provider} ${config.agent!.model}. Capture navigation uses the model and is billed to your ${config.agent!.provider} account.` }
     : { step: 3, id: "mode", status: "pass", message: "Deterministic mode: capture replays config.yaml without a model, so it needs no API key and has no AI charges." });
-  if (config.capture.controller === "argent") checks.push(argentCheck(environment));
+  if (runTargets(config, { controller: options.controller }).some(target => target.capture.controller === "argent")) checks.push(argentCheck(environment));
   if (config.capture.launch !== "off") {
     const ffmpeg = run("ffmpeg", ["-version"], project);
     checks.push(ffmpeg.status === 0
@@ -407,7 +485,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   }
   try {
     const eas = JSON.parse(await readFile(join(project, "eas.json"), "utf8")) as Record<string, unknown>;
-    for (const target of configPlatforms(config).map(platform => resolvePlatformConfig(config, platform))) {
+    for (const target of resolvedTargets(config)) {
       const { platform, easProfile } = target.app;
       const requirement = platform === "ios" ? "ios.simulator: true" : "android.buildType: apk";
       if (!simulatorProfiles(eas, platform).includes(easProfile)) throw new CiError({ code: platform === "ios" ? "EAS_PROFILE_NOT_SIMULATOR" : "EAS_PROFILE_NOT_APK", stage: "preflight",
@@ -470,7 +548,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     }
   }
   const secretNames = referencedSecretNames(config, instructions);
-  const files = await ciFileChecks(project, secretNames, run, options.online !== false, configPlatforms(config).length);
+  const files = await ciFileChecks(project, secretNames, run, options.online !== false, configTargets(config).length, !!config.targets);
   checks.push(...files.checks);
   if (files.root) {
     const pending = run("git", ["status", "--porcelain", "--untracked-files=all", "--", DEFAULT_EXPLORE_CONFIG_PATH, ...(config.agent?.instructions ? [config.agent.instructions] : [])], project).stdout
@@ -480,7 +558,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
       message: `Setup files are not committed: ${list(paths)}. CI reads them from the pushed repository.`,
       nextAction: "Commit them, push, and merge them into the default branch." });
   }
-  if (options.online !== false) checks.push(...await easChecks(project, config, run));
+  if (options.online !== false) checks.push(...await easChecks(project, config, run, environment, options.simulator));
   else checks.push({ step: 1, id: "eas", status: "skip", message: "EAS login, project, simulator access and build profile were not checked (--offline)." });
   if (options.github !== false && files.root) checks.push(...githubChecks(files.root, config, secretNames, run));
   else if (files.root) checks.push({ step: 7, id: "github", status: "skip", message: `Repository settings were not checked (${options.online === false ? "--offline" : "--no-github"}).` });
@@ -561,7 +639,7 @@ function argentCheck(environment: NodeJS.ProcessEnv): DoctorCheck {
     nextAction: "Nothing to do unless you need dark-mode screenshots; use agent-device (the default) for those." };
 }
 
-export async function runCaptureCheck(options: { project: string; output: string; platform?: ExplorePlatform; controller?: string | undefined; environment?: NodeJS.ProcessEnv; runner?: CommandRunner; progress?: Progress }): Promise<CaptureCheckResult> {
+export async function runCaptureCheck(options: { project: string; output: string; platform?: ExplorePlatform; controller?: string | undefined; simulator?: string | undefined; repack?: string | undefined; target?: string | undefined; environment?: NodeJS.ProcessEnv; runner?: CommandRunner; progress?: Progress }): Promise<CaptureCheckResult> {
   const project = await realpath(options.project);
   const git = (...args: string[]) => spawnSync("git", ["-C", project, ...args], { encoding: "utf8", timeout: 10_000 });
   const head = git("rev-parse", "HEAD");
@@ -573,7 +651,7 @@ export async function runCaptureCheck(options: { project: string; output: string
     nextAction: "Commit your changes, including .expo-explore (a local commit is enough; nothing is pushed), then rerun. "
       + "To keep unrelated files, run it from a clean checkout instead: git worktree add --detach ../app-capture HEAD, install the app's dependencies there, and run doctor --capture in it." });
   const commit = head.stdout.trim();
-  const config = withRunOverrides(resolvePlatformConfig(await readExploreConfig(project), options.platform), { controller: options.controller });
+  const config = withRunOverrides(resolveTargetConfig(await readExploreConfig(project), { platform: options.platform, target: options.target }), { controller: options.controller, simulator: options.simulator, repack: options.repack });
   // Capture keeps its working directories in the system temporary directory, outside the app.
   await mkdir(options.output, { recursive: true });
   const output = await realpath(options.output);

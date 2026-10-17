@@ -68,6 +68,16 @@
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
     },
     "platform": { "enum": ["ios", "android"] },
+    "runTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "platform", "label"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+        "platform": { "$ref": "#/$defs/platform" },
+        "label": { "type": "string", "minLength": 1 }
+      }
+    },
     "controller": { "enum": ["agent-device", "argent"] },
     "actionKind": {
       "enum": ["press", "fill", "swipe", "back", "dismiss", "deep-link", "key", "other"]
@@ -162,6 +172,8 @@
         "name": { "type": "string", "minLength": 1 },
         "platform": { "$ref": "#/$defs/platform" },
         "platforms": { "type": "array", "items": { "$ref": "#/$defs/platform" }, "minItems": 2, "uniqueItems": true },
+        "target": { "$ref": "#/$defs/runTarget" },
+        "targets": { "type": "array", "items": { "$ref": "#/$defs/runTarget" }, "minItems": 2, "maxItems": 8 },
         "controller": { "$ref": "#/$defs/controller" },
         "bundleId": { "type": "string" },
         "deviceId": { "type": "string" },

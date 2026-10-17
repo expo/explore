@@ -1,3 +1,4 @@
+import type { RunTarget } from "../types.js";
 import { parseUnattributedSetting, type UnattributedSetting } from "../capture/unattributed.js";
 import { parseAppearance, type AppearanceSetting } from "../capture/appearance.js";
 import { parseLaunchSetting, type LaunchSetting } from "../capture/launch-capture.js";
@@ -49,6 +50,25 @@ export type DevicePose = typeof DEVICE_POSES[number];
 
 export type PlatformConfig = { device?: string; bundleId?: string; easProfile?: string };
 
+/**
+ * One named capture target (`targets.<id>`): a platform's device, optionally in a pose, captured as its own report.
+ * Several may share a platform, such as a phone and a foldable, or one foldable closed and open.
+ */
+export type TargetConfig = { platform: ExplorePlatform; device?: string; pose?: DevicePose; bundleId?: string; easProfile?: string; label?: string;
+  /** This target's device controller and simulator, over `capture.controller` and `capture.simulator`. */
+  controller?: "agent-device" | "argent"; simulator?: "eas" | "local" };
+
+/**
+ * A target id names directories, report files, CI artifacts and URL parameters, so it is short and plain. `base` and
+ * `head` name a review's own directories.
+ */
+export const TARGET_ID_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
+const RESERVED_TARGET_IDS = new Set(["base", "head", "report"]);
+
+export function isTargetId(value: unknown): value is string {
+  return typeof value === "string" && TARGET_ID_PATTERN.test(value) && !RESERVED_TARGET_IDS.has(value) && !value.startsWith("install-");
+}
+
 /** Source discovery never consumes a user-authored screen inventory. */
 export type ExploreConfig = {
   mode: "deterministic" | "agent";
@@ -64,11 +84,22 @@ export type ExploreConfig = {
    * flat fields describe. Capture code never reads this map; resolvePlatformConfig flattens it.
    */
   platforms?: Partial<Record<ExplorePlatform, PlatformConfig>>;
+  /**
+   * Named capture targets, each captured and reported on its own, in this order. Instead of `platforms`, which is the
+   * same as one target per platform, named after it. Capture code never reads this map; resolveTargetConfig flattens it.
+   */
+  targets?: Record<string, TargetConfig>;
+  /** Set on a config resolved for one target: the target it captures. */
+  target?: RunTarget;
   /** `exclude` names routes, as `requiresRoute` does, that stay in the map but are never captured. */
   exploration: { scope: "changes" | "all"; exclude?: string[] };
-  capture: { maxMinutes: number; maxActions: number; repack: "eas" | "local"; appearance: AppearanceSetting; launch: LaunchSetting; reset: RouteResetSetting; unattributed: UnattributedSetting; readinessSeconds?: number;
+  capture: { maxMinutes: number; maxActions: number;
+    /** Where the route observer is bundled into the app, when the config chooses; captureRepack gives the default. */
+    repack?: "eas" | "local"; appearance: AppearanceSetting; launch: LaunchSetting; reset: RouteResetSetting; unattributed: UnattributedSetting; readinessSeconds?: number;
     /** The device controller; absent means agent-device, so configs that never chose one keep their cache recipes. */
-    controller?: "argent" };
+    controller?: "argent";
+    /** Where the app runs: EAS Simulator when absent, or `local`, a simulator Explore creates on this Mac for the run. */
+    simulator?: "local" };
   parameters?: Record<string, Record<string, string>>;
   setup?: ExploreSetupAction[];
   agent?: { provider: "openai" | "anthropic"; model: string; instructions?: string };
@@ -243,7 +274,7 @@ function parameters(value: unknown): Record<string, Record<string, string>> {
 /** Validate and normalize plain data; credential validation is a separate execution gate. */
 export function validateExploreConfig(value: unknown): ExploreConfig {
   const root = record(value, "config");
-  exactKeys(root, ["mode", "app", "navigation", "device", "platforms", "exploration", "capture", "parameters", "setup", "agent", "report", "ci"], "config");
+  exactKeys(root, ["mode", "app", "navigation", "device", "platforms", "targets", "exploration", "capture", "parameters", "setup", "agent", "report", "ci"], "config");
   const app = record(root.app, "app");
   exactKeys(app, ["name", "platform", "bundleId", "easProfile", "scheme"], "app");
   const device = record(root.device, "device");
@@ -254,8 +285,9 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
   const exploration = optionalRecord(root.exploration, "exploration");
   exactKeys(exploration, ["scope", "exclude"], "exploration");
   const capture = optionalRecord(root.capture, "capture");
-  exactKeys(capture, ["maxMinutes", "maxActions", "repack", "appearance", "launch", "reset", "unattributed", "readinessSeconds", "controller"], "capture");
+  exactKeys(capture, ["maxMinutes", "maxActions", "repack", "appearance", "launch", "reset", "unattributed", "readinessSeconds", "controller", "simulator"], "capture");
   const controller = literal(capture.controller, ["agent-device", "argent"] as const, "capture.controller", "agent-device");
+  const simulator = literal(capture.simulator, ["eas", "local"] as const, "capture.simulator", "eas");
   const mode = literal(root.mode, ["deterministic", "agent"] as const, "mode", "deterministic");
   const name = optionalText(app.name, "app.name", 128);
   const scheme = app.scheme === undefined ? undefined : customScheme(app.scheme, "app.scheme");
@@ -263,6 +295,8 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
   const bundleId = applicationId(app.bundleId, "app.bundleId");
   const easProfile = profileName(app.easProfile, "app.easProfile");
   const platforms = platformsConfig(root.platforms, platform);
+  const targets = targetsConfig(root.targets, platform);
+  if (platforms && targets) fail("Use targets or platforms, not both", "targets", "Move each platforms entry into targets, with its platform.");
   let agent: ExploreConfig["agent"];
   if (root.agent !== undefined || mode === "agent") {
     const input = record(root.agent, "agent");
@@ -290,6 +324,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
     },
     device: { name: text(device.name, "device.name", 128), ...(pose === undefined ? {} : { pose }) },
     ...(platforms === undefined ? {} : { platforms }),
+    ...(targets === undefined ? {} : { targets }),
     exploration: {
       scope: literal(exploration.scope, ["changes", "all"] as const, "exploration.scope", "changes"),
       ...(exploration.exclude === undefined ? {} : { exclude: excludedRoutes(exploration.exclude) }),
@@ -297,13 +332,14 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
     capture: {
       maxMinutes: positiveInteger(capture.maxMinutes, "capture.maxMinutes", 30),
       maxActions: positiveInteger(capture.maxActions, "capture.maxActions", 500),
-      repack: literal(capture.repack, ["eas", "local"] as const, "capture.repack", "eas"),
+      ...(capture.repack === undefined ? {} : { repack: literal(capture.repack, ["eas", "local"] as const, "capture.repack") }),
       appearance: parseAppearance(capture.appearance, "capture.appearance"),
       launch: parseLaunchSetting(capture.launch, "capture.launch"),
       reset: parseRouteResetSetting(capture.reset, "capture.reset"),
       unattributed: parseUnattributedSetting(capture.unattributed, "capture.unattributed"),
       ...(capture.readinessSeconds !== undefined ? { readinessSeconds: positiveInteger(capture.readinessSeconds, "capture.readinessSeconds") } : {}),
       ...(controller === "argent" ? { controller } : {}),
+      ...(simulator === "local" ? { simulator } : {}),
     },
     ...(root.parameters === undefined ? {} : { parameters: parameters(root.parameters) }),
     ...(root.setup === undefined ? {} : { setup: setupActions(root.setup, scheme) }),
@@ -348,9 +384,95 @@ function platformsConfig(value: unknown, primary: ExplorePlatform): ExploreConfi
   return result;
 }
 
+function targetsConfig(value: unknown, primary: ExplorePlatform): ExploreConfig["targets"] {
+  if (value === undefined) return undefined;
+  const mapping = record(value, "targets");
+  const ids = Object.keys(mapping);
+  if (!ids.length) fail("targets must name at least one target", "targets");
+  if (ids.length > 8) fail("targets can name at most 8 targets", "targets");
+  const result: NonNullable<ExploreConfig["targets"]> = {};
+  for (const id of ids) {
+    const label = `targets.${id}`;
+    if (!isTargetId(id)) fail(`${label}: a target id is lowercase letters, digits and dashes, starts with a letter, and is not base, head or report`, label);
+    const entry = record(mapping[id], label);
+    exactKeys(entry, ["platform", "device", "pose", "bundleId", "easProfile", "label", "controller", "simulator"], label);
+    const platform = literal(entry.platform, EXPLORE_PLATFORMS, `${label}.platform`);
+    const device = optionalText(entry.device, `${label}.device`, 128);
+    const pose = entry.pose === undefined ? undefined : literal(entry.pose, DEVICE_POSES, `${label}.pose`);
+    const bundleId = entry.bundleId === undefined ? undefined : applicationId(entry.bundleId, `${label}.bundleId`);
+    const easProfile = entry.easProfile === undefined ? undefined : profileName(entry.easProfile, `${label}.easProfile`);
+    const name = optionalText(entry.label, `${label}.label`, 64);
+    const controller = entry.controller === undefined ? undefined : literal(entry.controller, ["agent-device", "argent"] as const, `${label}.controller`);
+    const simulator = entry.simulator === undefined ? undefined : literal(entry.simulator, ["eas", "local"] as const, `${label}.simulator`);
+    if (platform !== primary && (bundleId === undefined || easProfile === undefined)) {
+      fail(`${label} needs bundleId and easProfile`, label,
+        `Set ${label}.bundleId to the app's ${platform === "android" ? "android.package" : "ios.bundleIdentifier"} and ${label}.easProfile to an eas.json profile that builds a ${platform === "android" ? "signed APK (android.buildType: apk)" : "simulator app (ios.simulator: true)"}.`);
+    }
+    result[id] = { platform, ...(device === undefined ? {} : { device }), ...(pose === undefined ? {} : { pose }), ...(bundleId === undefined ? {} : { bundleId }),
+      ...(easProfile === undefined ? {} : { easProfile }), ...(name === undefined ? {} : { label: name }),
+      ...(controller === undefined ? {} : { controller }), ...(simulator === undefined ? {} : { simulator }) };
+  }
+  return result;
+}
+
 /** The platforms a configuration captures, iOS first; the flat fields alone describe one. */
 export function configPlatforms(config: ExploreConfig): ExplorePlatform[] {
+  if (config.targets) return EXPLORE_PLATFORMS.filter(platform => Object.values(config.targets!).some(target => target.platform === platform));
   return config.platforms ? EXPLORE_PLATFORMS.filter(platform => config.platforms![platform] !== undefined) : [config.app.platform];
+}
+
+const PLATFORM_LABELS: Record<ExplorePlatform, string> = { ios: "iOS", android: "Android" };
+
+/** The targets a configuration captures, in order: its `targets`, else one per platform, named after it. */
+export function configTargets(config: ExploreConfig): RunTarget[] {
+  if (!config.targets) return configPlatforms(config).map(platform => ({ id: platform, platform, label: PLATFORM_LABELS[platform] }));
+  return Object.entries(config.targets).map(([id, target]) => ({ id, platform: target.platform,
+    label: target.label ?? `${target.device ?? (target.platform === config.app.platform ? config.device.name : DEFAULT_ANDROID_DEVICE)}${target.pose ? ` (${target.pose})` : ""}` }));
+}
+
+/**
+ * The flat configuration capture consumes for one target, with `target` naming it. `--target` names one; `--platform`
+ * names the target of that platform, when only one has it; with neither, the config must have a single target.
+ */
+export function resolveTargetConfig(config: ExploreConfig, selection: { target?: string | undefined; platform?: ExplorePlatform | undefined } = {}): ExploreConfig {
+  const targets = configTargets(config);
+  if (!config.targets) {
+    if (selection.target !== undefined && !targets.some(target => target.id === selection.target)) throw targetNotConfigured(selection.target, targets);
+    const resolved = resolvePlatformConfig(config, (selection.target as ExplorePlatform | undefined) ?? selection.platform);
+    return { ...resolved, target: targets.find(target => target.platform === resolved.app.platform)! };
+  }
+  let chosen: RunTarget | undefined;
+  if (selection.target !== undefined) {
+    chosen = targets.find(target => target.id === selection.target);
+    if (!chosen) throw targetNotConfigured(selection.target, targets);
+  } else {
+    const candidates = selection.platform ? targets.filter(target => target.platform === selection.platform) : targets;
+    if (candidates.length !== 1) throw new CiError({ code: candidates.length ? "TARGET_REQUIRED" : "PLATFORM_NOT_CONFIGURED", stage: "preflight",
+      message: candidates.length ? `${DEFAULT_EXPLORE_CONFIG_PATH} lists ${candidates.map(target => target.id).join(", ")}; pass --target to select one.`
+        : `${DEFAULT_EXPLORE_CONFIG_PATH} has no ${selection.platform} target.`,
+      nextAction: "Run expo-explore setup --workflows to install the matrix workflows, which pass --target per job." });
+    chosen = candidates[0]!;
+  }
+  const entry = config.targets[chosen.id]!;
+  const primary = entry.platform === config.app.platform;
+  const { targets: _targets, platforms: _platforms, ...rest } = config;
+  void _targets; void _platforms;
+  // A target's own controller and simulator; agent-device and EAS Simulator are the defaults, which leave the config as it was.
+  const { controller: _controller, simulator: _simulator, ...capture } = config.capture;
+  void _controller; void _simulator;
+  const controller = entry.controller ?? config.capture.controller ?? "agent-device";
+  const simulator = entry.simulator ?? config.capture.simulator ?? "eas";
+  return { ...rest, target: chosen,
+    capture: { ...capture, ...(controller === "argent" ? { controller } : {}), ...(simulator === "local" ? { simulator } : {}) },
+    app: { ...config.app, platform: entry.platform, bundleId: entry.bundleId ?? config.app.bundleId, easProfile: entry.easProfile ?? config.app.easProfile },
+    device: { name: entry.device ?? (primary ? config.device.name : DEFAULT_ANDROID_DEVICE),
+      // A target's own pose; else the top-level one, which belongs to the primary platform's device.
+      ...(entry.pose ? { pose: entry.pose } : primary && !entry.device && config.device.pose ? { pose: config.device.pose } : {}) } };
+}
+
+function targetNotConfigured(id: string, targets: RunTarget[]): CiError {
+  return new CiError({ code: "TARGET_NOT_CONFIGURED", stage: "preflight", message: `${DEFAULT_EXPLORE_CONFIG_PATH} has no target ${id}.`,
+    nextAction: `Capture one of: ${targets.map(target => target.id).join(", ")}.` });
 }
 
 /**
@@ -358,6 +480,7 @@ export function configPlatforms(config: ExploreConfig): ExplorePlatform[] {
  * `app.easProfile`, and `device.name` describe that platform; everything else is shared.
  */
 export function resolvePlatformConfig(config: ExploreConfig, platform: ExplorePlatform | undefined): ExploreConfig {
+  if (config.targets) return resolveTargetConfig(config, { platform });
   const platforms = configPlatforms(config);
   if (platform === undefined) {
     if (platforms.length > 1) throw new CiError({ code: "PLATFORM_REQUIRED", stage: "preflight",
@@ -385,12 +508,21 @@ export function resolvePlatformConfig(config: ExploreConfig, platform: ExplorePl
  * every screen (`scope: all`) and keep its hosted link (`expiresIn: never`). `expiresIn` changes nothing when the
  * config hosts no report.
  */
-export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined; controller?: string | undefined }): ExploreConfig {
+export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined; controller?: string | undefined; simulator?: string | undefined; repack?: string | undefined }): ExploreConfig {
   let result = config;
+  if (overrides.repack !== undefined) {
+    if (overrides.repack !== "eas" && overrides.repack !== "local") fail("--repack must be eas or local", "--repack");
+    result = { ...result, capture: { ...result.capture, repack: overrides.repack } };
+  }
   if (overrides.controller !== undefined) {
     if (overrides.controller !== "agent-device" && overrides.controller !== "argent") fail("--controller must be agent-device or argent", "--controller");
     const { controller: _previous, ...capture } = result.capture;
     result = { ...result, capture: { ...capture, ...(overrides.controller === "argent" ? { controller: "argent" as const } : {}) } };
+  }
+  if (overrides.simulator !== undefined) {
+    if (overrides.simulator !== "eas" && overrides.simulator !== "local") fail("--simulator must be eas or local", "--simulator");
+    const { simulator: _previous, ...capture } = result.capture;
+    result = { ...result, capture: { ...capture, ...(overrides.simulator === "local" ? { simulator: "local" as const } : {}) } };
   }
   if (overrides.scope !== undefined) {
     if (overrides.scope !== "changes" && overrides.scope !== "all") fail("--scope must be changes or all", "--scope");
@@ -402,6 +534,14 @@ export function withRunOverrides(config: ExploreConfig, overrides: { scope?: str
     if (result.report?.preview) result = { ...result, report: { ...result.report, preview: { ...result.report.preview, expiresAfterDays } } };
   }
   return result;
+}
+
+/**
+ * Where a capture repacks the app with the route observer: the config's choice, else on this machine when the app runs on
+ * a local simulator (which already needs Xcode or the Android SDK), and in a hosted EAS job otherwise.
+ */
+export function captureRepack(config: ExploreConfig): "eas" | "local" {
+  return config.capture.repack ?? (config.capture.simulator === "local" ? "local" : "eas");
 }
 
 /** `expiresAfter` is a whole number of days (`30d`, `30 days`, or `30`), at most PREVIEW_MAX_DAYS, or `never` (null). */

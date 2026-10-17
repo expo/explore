@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import test from 'node:test';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { lstat, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appEnvironment, captureCacheDirectory, defaultBase, installDependencies, keepCapture, localInstallCommand, localReviewConfig, reportRef, reviewHeadSource, runLocalReview, snapshotWorkingTree } from '../../dist/ci/local-review.js';
+import { appEnvironment, captureCacheDirectory, defaultBase, installDependencies, keepCapture, localInstallCommand, localReviewConfig, reportRef, reviewHeadSource, runLocalReview, snapshotWorkingTree, stopRecordedSessions } from '../../dist/ci/local-review.js';
 import { mkdir, readdir } from 'node:fs/promises';
 import { startLocalReportServer } from '../../dist/report/local-report-server.js';
 import { fixture, git } from '../helpers/public-ci-fixture.mjs';
@@ -205,10 +205,28 @@ test('the local Viewer serves the built Viewer and each report the way a hosted 
   assert.equal((await get(server.url)).status, 404, 'an agent fetch of a report the agent API cannot read is a 404, not the Viewer shell');
   assert.deepEqual(new Uint8Array(await (await get(`${server.url}/report.zip?platform=android`)).arrayBuffer()), new Uint8Array([4]));
   assert.deepEqual(new Uint8Array(await (await get(`${server.url}/report.zip`)).arrayBuffer()), new Uint8Array([1, 2]));
-  assert.deepEqual(await (await get(`${server.url}/reports.json`)).json(), [{ platform: 'ios', changes: 3, device: 'iPhone 17' }, { platform: 'android' }]);
+  assert.deepEqual(await (await get(`${server.url}/reports.json`)).json(), [{ target: 'ios', platform: 'ios', label: 'iOS', changes: 3, device: 'iPhone 17' }, { target: 'android', platform: 'android', label: 'Android' }]);
   for (const path of ['/', '/p/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', '/p/abcdefghijklmnopqrstuvwxyz234567/x', '/assets/../index.html', '/assets/missing.js']) {
     assert.equal((await get(path)).status, 404, path);
   }
+});
+
+test('the local Viewer serves each target of a run, by ?target= or, for links from before targets, ?platform=', async t => {
+  const viewerRoot = await scratch(t, 'explore-local-viewer-');
+  await writeFile(join(viewerRoot, 'index.html'), '<!doctype html><title>Viewer</title>');
+  const reports = [{ platform: 'ios', target: { id: 'phone', platform: 'ios', label: 'iPhone 17' }, zip: new Uint8Array([1]) },
+    { platform: 'ios', target: { id: 'duo-open', platform: 'ios', label: 'iPhone Duo (open)' }, zip: new Uint8Array([2]) },
+    { platform: 'android', target: { id: 'android', platform: 'android', label: 'Android' }, zip: new Uint8Array([3]) }];
+  const server = await startLocalReportServer({ reports, viewerRoot });
+  t.after(() => server.close());
+  const zip = async query => new Uint8Array(await (await fetch(`${server.url}/report.zip${query}`)).arrayBuffer());
+  assert.deepEqual(await zip('?target=duo-open'), new Uint8Array([2]));
+  assert.deepEqual(await zip('?platform=ios'), new Uint8Array([1]), 'the first iOS target');
+  assert.deepEqual(await zip('?platform=android'), new Uint8Array([3]), 'the target named for the platform');
+  assert.equal((await fetch(`${server.url}/report.zip?target=tablet`)).status, 404);
+  assert.equal((await fetch(`${server.url}/report.zip?target=phone&platform=ios`)).status, 404);
+  assert.deepEqual((await (await fetch(`${server.url}/reports.json`)).json()).map(entry => [entry.target, entry.label]),
+    [['phone', 'iPhone 17'], ['duo-open', 'iPhone Duo (open)'], ['android', 'Android']]);
 });
 
 test('a local review captures two commits of the repository in its own worktrees and packages a report', async t => {
@@ -302,4 +320,134 @@ test('Ctrl+C stops the review, and the checkouts are removed while its files are
   assert.ok(kept, 'a failed run says where its files are');
   t.after(() => rm(kept, { recursive: true, force: true }));
   assert.equal(process.listenerCount('SIGINT'), listeners, 'its handlers are gone, so a later Ctrl+C behaves normally');
+});
+
+test('an interrupted review deletes the local simulators it recorded and stops its EAS sessions', async t => {
+  const output = await realpath(await mkdtemp(join(tmpdir(), 'explore-recorded-')));
+  t.after(() => rm(output, { recursive: true, force: true }));
+  const udid = '0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D';
+  await writeFile(join(output, 'head-session'), `simctl-${udid}\n`);
+  await writeFile(join(output, 'base-session'), 'session-1\n');
+  const eas = [], simctl = [];
+  const stopped = await stopRecordedSessions([output], {}, args => { eas.push(args); return { status: 0 }; }, true,
+    args => { simctl.push(args); return { status: 0 }; });
+  assert.deepEqual(stopped, [`simctl-${udid}`, 'session-1']);
+  assert.deepEqual(simctl, [['shutdown', udid], ['delete', udid]]);
+  assert.deepEqual(eas, [['simulator:stop', '--id', 'session-1', '--json', '--non-interactive']]);
+  await assert.rejects(lstat(join(output, 'head-session')));
+});
+
+test('a local review captures every target of the config at once, two of them on one platform', async t => {
+  const targets = { phone: { platform: 'ios' }, 'duo-open': { platform: 'ios', device: 'iPhone Duo', pose: 'open' } };
+  const f = await fixture(t, 'expo-router', { targets });
+  t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
+  const environment = { ...f.environment, EXPLORE_CACHE_DIR: await scratch(t, 'explore-local-cache-'), GITHUB_RUN_ID: '', GITHUB_RUN_ATTEMPT: '', GITHUB_TOKEN: '' };
+  const lines = [];
+  const result = await runLocalReview({ project: f.headProject, base: f.baseSha, head: f.headSha, environment, progress: line => lines.push(line),
+    install: async checkout => { await writeCaptureObserverPackages(checkout, { provider: 'expo-router' }); }, runner: f.runner, now: f.now, sleep: f.sleep });
+  t.after(() => rm(result.work, { recursive: true, force: true }));
+  assert.deepEqual(result.reports.map(report => [report.target.id, report.platform]), [['phone', 'ios'], ['duo-open', 'ios']]);
+  assert.deepEqual((await readdir(result.work)).sort(), ['duo-open', 'phone']);
+  const runtimes = await Promise.all(result.reports.map(async report => JSON.parse(await readFile(join(report.directory, 'review.json'), 'utf8')).review.runtime));
+  assert.deepEqual(runtimes.map(runtime => runtime.target.id), ['phone', 'duo-open']);
+  assert.deepEqual(runtimes[0].targets, [{ id: 'phone', platform: 'ios', label: 'iPhone 17 Pro' }, { id: 'duo-open', platform: 'ios', label: 'iPhone Duo (open)' }]);
+  assert.equal(runtimes[1].device.model, 'iPhone Duo');
+  // Both targets capture the same two commits of one platform: one build lookup and one repack per commit, not per target.
+  const eas = command => f.requests.filter(request => request.args[0] === command).length;
+  assert.equal(eas('workflow:run'), 2);
+  assert.equal(eas('fingerprint:generate'), 2);
+  // The Duo target folds before capture; the phone does not.
+  const folds = f.requests.filter(request => request.args[0] === 'fold');
+  assert.equal(folds.length, 2, 'head and base of the Duo target');
+  assert.ok(folds.every(request => request.args[1] === 'open'));
+  // Each target keeps its own captures for later reviews.
+  for (const id of ['phone', 'duo-open']) assert.ok((await lstat(join(captureCacheDirectory(environment, id, f.baseSha), 'bundle.json'))).isFile(), id);
+  assert.ok(lines.some(line => line.startsWith('duo-open: reviewing (iPhone Duo (open))')), lines.join('\n'));
+
+  const one = await runLocalReview({ project: f.headProject, base: f.baseSha, head: f.headSha, environment, target: 'duo-open', cache: false,
+    install: async checkout => { await writeCaptureObserverPackages(checkout, { provider: 'expo-router' }); }, runner: f.runner, now: f.now, sleep: f.sleep });
+  t.after(() => rm(one.work, { recursive: true, force: true }));
+  assert.deepEqual(one.reports.map(report => report.target.id), ['duo-open']);
+  await assert.rejects(runLocalReview({ project: f.headProject, base: f.baseSha, head: f.headSha, environment, target: 'tablet', runner: f.runner }),
+    error => error.code === 'TARGET_NOT_CONFIGURED');
+});
+
+test('a review of some targets names only those in its reports, so the Viewer links to no report the review did not make', async t => {
+  const targets = { phone: { platform: 'ios' }, tablet: { platform: 'ios', device: 'iPad Air' }, pixel: { platform: 'android', bundleId: 'com.example.app', easProfile: 'capture' } };
+  const f = await fixture(t, 'expo-router', { targets });
+  t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
+  const environment = { ...f.environment, EXPLORE_CACHE_DIR: await scratch(t, 'explore-local-cache-'), GITHUB_RUN_ID: '', GITHUB_RUN_ATTEMPT: '', GITHUB_TOKEN: '' };
+  const review = async selection => {
+    const result = await runLocalReview({ project: f.headProject, base: f.baseSha, head: f.headSha, environment, cache: false, ...selection,
+      install: async checkout => { await writeCaptureObserverPackages(checkout, { provider: 'expo-router' }); }, runner: f.runner, now: f.now, sleep: f.sleep });
+    t.after(() => rm(result.work, { recursive: true, force: true }));
+    return Promise.all(result.reports.map(async report => JSON.parse(await readFile(join(report.directory, 'review.json'), 'utf8')).review.runtime));
+  };
+  // --platform ios: the two iOS targets link to each other, and to no Android report.
+  const ios = await review({ platform: 'ios' });
+  assert.deepEqual(ios.map(runtime => runtime.target.id), ['phone', 'tablet']);
+  for (const runtime of ios) {
+    assert.deepEqual(runtime.targets.map(target => target.id), ['phone', 'tablet']);
+    assert.equal(runtime.platforms, undefined);
+  }
+  // --target phone: a report alone, with no other target or platform to switch to.
+  const [phone] = await review({ target: 'phone' });
+  assert.equal(phone.targets, undefined);
+  assert.equal(phone.platforms, undefined);
+});
+
+test('a review runs at most --parallel targets at once, and every target settles even when one fails', async () => {
+  const { settleLimited } = await import('../../dist/ci/local-review.js');
+  let running = 0, peak = 0;
+  const results = await settleLimited([1, 2, 3, 4, 5], 2, async item => {
+    running += 1; peak = Math.max(peak, running);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    running -= 1;
+    if (item === 3) throw new Error('three');
+    return item * 10;
+  });
+  assert.equal(peak, 2);
+  assert.deepEqual(results.map(result => result.status === 'fulfilled' ? result.value : result.reason.message), [10, 20, 'three', 40, 50]);
+});
+
+test('a target that fails outright costs only its own report', async t => {
+  const targets = { phone: { platform: 'ios' }, tablet: { platform: 'ios', device: 'iPad Air' } };
+  const f = await fixture(t, 'expo-router', { targets });
+  t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
+  const environment = { ...f.environment, EXPLORE_CACHE_DIR: await scratch(t, 'explore-local-cache-'), GITHUB_RUN_ID: '', GITHUB_RUN_ATTEMPT: '', GITHUB_TOKEN: '' };
+  // EAS cannot start the tablet's session; the phone's review goes on.
+  const runner = request => {
+    if (request.args[0] === 'simulator:start' && request.args.includes('iPad Air')) throw new Error('No simulator capacity for iPad Air');
+    return f.runner(request);
+  };
+  const result = await runLocalReview({ project: f.headProject, base: f.baseSha, head: f.headSha, environment, cache: false,
+    install: async checkout => { await writeCaptureObserverPackages(checkout, { provider: 'expo-router' }); }, runner, now: f.now, sleep: f.sleep });
+  t.after(() => rm(result.work, { recursive: true, force: true }));
+  assert.deepEqual(result.reports.map(report => report.target.id), ['phone']);
+  assert.deepEqual(result.failures.map(failure => failure.target.id), ['tablet']);
+  assert.match(result.failures[0].error.message, /iPad Air/);
+});
+
+test('a local review first stops what a review stopped hard left running', async t => {
+  const f = await fixture(t, 'expo-router');
+  t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
+  const cache = await scratch(t, 'explore-local-cache-');
+  // An Argent tool-server whose capture's process is gone, and that capture's files.
+  const orphan = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  t.after(() => orphan.kill('SIGKILL'));
+  const stopped = new Promise(resolve => orphan.once('exit', () => resolve(true)));
+  const leftovers = join(cache, 'expo-explore-session-old');
+  await mkdir(leftovers, { recursive: true });
+  await mkdir(join(cache, 'local-captures'), { recursive: true });
+  await writeFile(join(cache, 'local-captures', 'old.json'), JSON.stringify({ owner: 999999999, startedAt: '2026-10-17T00:00:00.000Z', directory: leftovers,
+    argent: { pid: orphan.pid, cli: join(cache, 'missing-cli.js'), home: join(cache, 'argent-home') } }));
+  const lines = [];
+  const environment = { ...f.environment, EXPLORE_CACHE_DIR: cache, GITHUB_RUN_ID: '', GITHUB_RUN_ATTEMPT: '', GITHUB_TOKEN: '' };
+  const result = await runLocalReview({ project: f.headProject, base: f.baseSha, head: f.headSha, environment, progress: line => lines.push(line),
+    install: async checkout => { await writeCaptureObserverPackages(checkout, { provider: 'expo-router' }); }, runner: f.runner, now: f.now, sleep: f.sleep });
+  t.after(() => rm(result.work, { recursive: true, force: true }));
+  assert.equal(await stopped, true, 'the orphaned tool-server is stopped');
+  assert.ok(lines.some(line => line === `stopped what an interrupted review left running: Argent tool-server (pid ${orphan.pid}), agent-device daemon`), lines.join('\n'));
+  assert.deepEqual(await readdir(join(cache, 'local-captures')), []);
+  await assert.rejects(lstat(leftovers), 'its files are gone');
 });

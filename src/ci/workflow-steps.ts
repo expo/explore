@@ -3,7 +3,7 @@ import { appendFile, lstat, mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { parseTrustedAuthors, DEFAULT_EXPLORE_CONFIG_PATH } from "../config/explore-config.js";
+import { isTargetId, parseTrustedAuthors, DEFAULT_EXPLORE_CONFIG_PATH } from "../config/explore-config.js";
 import { compareTitle, compareUrl, projectComparePresentation, projectPullRequestPresentation,
   type CompareReviewPresentation, type PullRequestPresentation } from "../contracts/review.js";
 import { CiError } from "../shared/ci-errors.js";
@@ -109,15 +109,19 @@ type GithubRun = { conclusion: string | null; workflow_id: number; head_sha: str
  * `ci:find-baseline`: the newest successful baseline-workflow artifact of exactly this commit, uploaded from the
  * default branch of this repository. Its id and run go to the step outputs for actions/download-artifact.
  */
-export async function findBaselineArtifact(options: { sha: string; platform?: string; environment?: Environment; transport?: typeof fetch }): Promise<{ id: number; run: number } | undefined> {
+export async function findBaselineArtifact(options: { sha: string; target?: string;
+  /** What callers from before targets pass: a platform is the id of its default target. */ platform?: string; environment?: Environment; transport?: typeof fetch }): Promise<{ id: number; run: number } | undefined> {
   const environment = options.environment ?? process.env; const transport = options.transport ?? fetch;
   const context = githubContext(environment);
   if (!SHA.test(options.sha)) throw new CiError({ code: "SHA_INVALID", stage: "preflight", message: "The base commit must be a full SHA.", nextAction: "Pass --sha with a 40-character commit SHA." });
+  const target = options.target ?? options.platform ?? "ios";
+  if (!isTargetId(target)) throw new CiError({ code: "TARGET_INVALID", stage: "preflight", message: `${target} is not a target id.`,
+    nextAction: "Pass --target with an id from targets: in .expo-explore/config.yaml (ios or android without targets:)." });
   const repository = await githubGet<{ default_branch: string }>(`repos/${context.repository}`, context, transport);
   const workflow = await githubGet<{ id: number }>(`repos/${context.repository}/actions/workflows/explore-baseline.yml`, context, transport);
   if (!repository || !workflow) return undefined;
-  // Baselines carry the platform suffix; iOS also accepts the unsuffixed name older baseline workflows uploaded.
-  const names = [`explore-baseline-${options.sha}-${options.platform ?? "ios"}`, ...(options.platform === "android" ? [] : [`explore-baseline-${options.sha}`])];
+  // Baselines carry the target suffix; target ios also accepts the unsuffixed name older single-platform baseline workflows uploaded.
+  const names = [`explore-baseline-${options.sha}-${target}`, ...(target === "ios" ? [`explore-baseline-${options.sha}`] : [])];
   const artifacts: GithubArtifact[] = [];
   for (const name of names) for (let page = 1; page <= 10; page++) {
     const listed = await githubGet<{ artifacts: GithubArtifact[] }>(`repos/${context.repository}/actions/artifacts?name=${encodeURIComponent(name)}&per_page=100&page=${page}`, context, transport);
@@ -138,7 +142,7 @@ export async function findBaselineArtifact(options: { sha: string; platform?: st
 /**
  * `ci:find-baseline` as the workflow runs it: a baseline is optional, so a lookup that fails (a GitHub 5xx, a rate
  * limit) is a warning and no baseline, never an error. A `ci:*` error would write explore-diagnostics/error.json,
- * which the failure comment would then report as the cause of an unrelated failure, possibly on another platform.
+ * which the failure comment would then report as the cause of an unrelated failure, possibly on another target.
  */
 export async function findOptionalBaseline(options: Parameters<typeof findBaselineArtifact>[0]):
   Promise<{ baseline?: { id: number; run: number }; warning?: { code: string; message: string } }> {

@@ -96,6 +96,9 @@ async function main(): Promise<number> {
   const result = await runBridgeCommand(argv, {
     state, platform, version: ARGENT_VERSION,
     ...(environment.EXPLORE_ARGENT_BUNDLE_ID ? { bundleId: environment.EXPLORE_ARGENT_BUNDLE_ID } : {}),
+    ...(environment.EXPLORE_ARGENT_DEVICE ? { device: environment.EXPLORE_ARGENT_DEVICE } : {}),
+    // An opened foldable's inner panel shows its UI in landscape (Argent's fold: "Unfolded, the UI is landscape").
+    ...(platform === "ios" && ["open", "half-open"].includes(environment.EXPLORE_ARGENT_POSE ?? "") ? { landscape: true } : {}),
     call: async (tool, args, options) => {
       const started = Date.now();
       try {
@@ -120,6 +123,16 @@ async function main(): Promise<number> {
       return ok;
     },
     sleep: milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
+    orientVideo: async path => {
+      // Turned with ffmpeg, which observing a launch needs anyway; without it the recording is left as it is.
+      const probed = spawnSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path], { encoding: "utf8", timeout: 30_000 });
+      const [width, height] = (probed.stdout ?? "").trim().split("x").map(Number);
+      if (probed.status !== 0 || !width || !height || width >= height) return;
+      const turned = `${path}.upright.mp4`;
+      const ffmpeg = spawnSync("ffmpeg", ["-nostdin", "-y", "-loglevel", "error", "-i", path, "-vf", "transpose=clock", "-an", turned], { encoding: "utf8", timeout: 120_000 });
+      if (ffmpeg.status === 0) await rename(turned, path);
+      else await rm(turned, { force: true });
+    },
     scratchImage: { path: join(dirname(statePath), "argent-scratch.png"), read: async path => {
       const { PNG } = createRequire(import.meta.url)("pngjs") as { PNG: { sync: { read(bytes: Buffer, options: { checkCRC: boolean }): DecodedFrame } } };
       return PNG.sync.read(await readFile(path), { checkCRC: false });
@@ -141,3 +154,4 @@ async function main(): Promise<number> {
 }
 
 process.exitCode = await main();
+

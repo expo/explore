@@ -140,11 +140,11 @@ function ScreenCell(props: {
         ariaPressed={props.selected}
         loading="lazy"
         onClick={props.onSelect}
+        {...(props.via || props.elsewhere?.length ? { note: <>
+          {props.via ? <span className="screens-cell-via">via “{props.via}”</span> : null}
+          {props.elsewhere?.length ? <span className="screens-cell-elsewhere">Changed in {props.elsewhere.join(" and ")}</span> : null}
+        </> } : {})}
       />
-      {props.via ? <span className="screens-cell-via">via “{props.via}”</span> : null}
-      {props.elsewhere?.length ? (
-        <span className="screens-cell-elsewhere">Changed in {props.elsewhere.join(" and ")}</span>
-      ) : null}
     </div>
   );
 }

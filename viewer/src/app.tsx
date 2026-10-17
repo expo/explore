@@ -1360,7 +1360,8 @@ function ViewerApp() {
       icon?.setAttribute("href", fallback);
       return;
     }
-    const platform = PLATFORM_NAMES[map.run.platform] ?? map.run.platform;
+    // A run of several targets names the one it shows; one platform's run names its platform.
+    const platform = (map.run.targets ? map.run.target?.label : undefined) ?? PLATFORM_NAMES[map.run.platform] ?? map.run.platform;
     const screen = selectedScreenId ? index.screens.get(selectedScreenId) : undefined;
     document.title = [screen ? screenLabel(screen, index) : undefined, map.run.name, platform, "Explore"].filter(Boolean).join(" · ");
     const appIcon = artifactUrl(map.run.appIcon);
@@ -1495,7 +1496,7 @@ function ViewerApp() {
   } : undefined;
   const handoffView = {
     view: CANVAS_LABELS[route.canvas],
-    platform: PLATFORM_NAMES[map.run.platform] ?? map.run.platform,
+    platform: (map.run.targets ? map.run.target?.label : undefined) ?? PLATFORM_NAMES[map.run.platform] ?? map.run.platform,
     ...(appearances.length > 1 && appearance ? { appearance: appearanceLabel(appearance) } : {}),
     ...(selectedScreen ? { screen: screenLabel(selectedScreen, index) } : {}),
   };

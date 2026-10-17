@@ -6,6 +6,7 @@ import type {
   BuildWorkspacePayload,
   Coverage,
   ExploreMap,
+  RunTarget,
 } from "../../../src/types";
 import {
   captureNotes,
@@ -258,6 +259,10 @@ function sidePayload(review: PublicReview, side: Side): { map: ExploreMap; cover
       // Reports published before Android support carry no platform: they are iOS.
       platform: review.runtime.platform ?? "ios",
       ...(review.runtime.platforms && review.runtime.platforms.length > 1 ? { platforms: [...review.runtime.platforms] } : {}),
+      // Reports from before targets name neither: their target is their platform.
+      ...(runTarget(review.runtime.target) ? { target: runTarget(review.runtime.target)! } : {}),
+      ...(review.runtime.targets && review.runtime.targets.length > 1 && review.runtime.targets.every(target => runTarget(target))
+        ? { targets: review.runtime.targets.map(target => runTarget(target)!) } : {}),
       // Reviews name the controller only when it is not agent-device.
       controller: review.runtime.controller ?? "agent-device",
       status: "complete",
@@ -647,4 +652,12 @@ export function publicReviewProjection(review: PublicReview): ViewerReviewProjec
     surfaces,
     runtimeEvidence: evidence,
   };
+}
+
+/** A review's target as the map carries it: id, platform and label, nothing else, or undefined when it is not one. */
+function runTarget(value: unknown): RunTarget | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { id, platform, label } = value as Record<string, unknown>;
+  if (typeof id !== "string" || !/^[a-z][a-z0-9-]{0,31}$/.test(id) || (platform !== "ios" && platform !== "android")) return undefined;
+  return { id, platform, label: typeof label === "string" && label.trim() ? label.trim().slice(0, 120) : platform === "ios" ? "iOS" : "Android" };
 }

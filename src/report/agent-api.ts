@@ -60,18 +60,51 @@ export type AgentContext = {
   pageUrl: string;
   /** This report's platform when the deployment serves several, so links keep `?platform=`. */
   platform?: string | undefined;
+  /** The distinct platforms the deployment serves. */
   platforms: string[];
+  /** This report's target id when the deployment serves several targets, so links keep selecting it. */
+  target?: string | undefined;
+  /** Every target the deployment serves, in config order; absent from contexts that predate targets. */
+  targets?: AgentTarget[] | undefined;
   expiresAt: string | null;
 };
+export type AgentTarget = { id: string; platform: string; label?: string | undefined };
+
+/**
+ * The query parameter that keeps a link on this report: `target=<id>`, or `platform=<id>` for a target named after its
+ * platform (as links were before targets), or the platform alone in contexts that predate targets.
+ */
+function selection(context: AgentContext): [string, string] | undefined {
+  if (context.target && (context.targets?.length ?? 0) > 1) return [context.target === "ios" || context.target === "android" ? "platform" : "target", context.target];
+  return context.platform && context.platforms.length > 1 ? ["platform", context.platform] : undefined;
+}
+/** The same page for another target of the deployment. */
+function targetPageUrl(context: AgentContext, id: string): string {
+  return viewerUrl({ ...context, target: id }, {});
+}
 
 const apiUrl = (context: AgentContext, path = "") => `${context.pageUrl}/api/${AGENT_API_VERSION}${path}`;
 function viewerUrl(context: AgentContext, params: Record<string, string> = {}): string {
   const url = new URL(context.pageUrl);
-  if (context.platform && context.platforms.length > 1) url.searchParams.set("platform", context.platform);
+  const selected = selection(context);
+  if (selected) url.searchParams.set(...selected);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
   return url.href;
 }
-const withPlatform = (context: AgentContext, url: string) => (context.platform && context.platforms.length > 1 ? `${url}${url.includes("?") ? "&" : "?"}platform=${context.platform}` : url);
+const withPlatform = (context: AgentContext, url: string) => {
+  const selected = selection(context);
+  return selected ? `${url}${url.includes("?") ? "&" : "?"}${selected[0]}=${selected[1]}` : url;
+};
+/** The targets as the summary lists them: each with its label and Viewer link, this one marked. */
+function targetList(context: AgentContext): Json[] | undefined {
+  if (!context.targets || context.targets.length < 2) return undefined;
+  return context.targets.map(target => defined({ id: target.id, platform: target.platform, label: target.label, current: target.id === context.target ? true : undefined,
+    viewer: targetPageUrl(context, target.id), summary: `${apiUrl(context)}?${new URLSearchParams([selection({ ...context, target: target.id })!]).toString()}` }));
+}
+/** What the index title names this report by: the target's label when the deployment serves several. */
+function targetLabel(context: AgentContext): string | undefined {
+  return (context.targets?.length ?? 0) > 1 ? context.targets!.find(target => target.id === context.target)?.label ?? context.target : undefined;
+}
 
 type Page<T> = { items: T[]; total: number; count: number; hasMore: boolean; nextCursor?: string };
 function page<T>(items: T[], params: URLSearchParams): Page<T> | undefined {
@@ -177,7 +210,7 @@ function reviewSummary(context: AgentContext, review: Json): Json {
     kind: "pr-review", api: AGENT_API_VERSION, contract: str(review.contract),
     pullRequest: defined({ origin: str(pr.origin), repository: str(pr.repository), number: num(pr.number), title: str(pr.title), url: str(pr.url), head: str(rec(pr.head).sha), base: str(rec(pr.base).sha) }),
     app: defined({ name: str(runtime.appName), version: str(runtime.appVersion), build: str(runtime.appBuildNumber), platform: str(runtime.platform) ?? context.platform, device: rec(runtime.device).model === undefined ? undefined : `${str(rec(runtime.device).model)} ${str(rec(runtime.device).osVersion) ?? ""}`.trim() }),
-    createdAt: str(review.createdAt), mode: str(review.mode), platforms: context.platforms, expiresAt: context.expiresAt,
+    createdAt: str(review.createdAt), mode: str(review.mode), platforms: context.platforms, target: context.target, targets: targetList(context), expiresAt: context.expiresAt,
     screens: { total: surfaces.length, ...counts },
     links: {
       screens: withPlatform(context, apiUrl(context, "/screens")), changed: withPlatform(context, apiUrl(context, "/screens?status=modified,accessibility-only,added,removed")),
@@ -237,7 +270,7 @@ function explorationSummary(context: AgentContext, report: Json): Json {
     kind: "exploration", api: AGENT_API_VERSION, contract: str(map.contract),
     app: defined({ name: str(app.name), bundleId: str(app.bundleId), platform: str(app.platform) ?? context.platform, version: str(app.version), build: str(app.buildNumber), device: device.model === undefined ? undefined : `${str(device.model)} ${str(device.osVersion) ?? ""}`.trim() }),
     startedAt: str(exploration.startedAt), completedAt: str(exploration.completedAt), stopReason: str(exploration.stopReason), summary: str(exploration.summary),
-    model: str(rec(exploration.model).model), platforms: context.platforms, expiresAt: context.expiresAt,
+    model: str(rec(exploration.model).model), platforms: context.platforms, target: context.target, targets: targetList(context), expiresAt: context.expiresAt,
     screens: { total: screens.length, coverage: Object.keys(coverage).length ? coverage : undefined },
     counts: { transitions: arr(map.transitions).length, elements: arr(map.elements).length, journeys: arr(map.journeys).length, gaps: arr(map.gaps).length, frontier: arr(map.frontier).length },
     links: {
@@ -258,12 +291,14 @@ export function agentIndexMarkdown(context: AgentContext, loaded: LoadedReport):
   const links = rec(summary.links) as Record<string, string>;
   const app = rec(summary.app), screens = rec(summary.screens);
   const lines: string[] = [];
+  const label = targetLabel(context);
+  const titled = (platform: unknown) => (label ? ` (${escapeMd(label)})` : platform ? ` (${escapeMd(platform)})` : "");
   if (loaded.kind === "pr-review") {
     const pr = rec(summary.pullRequest);
     // A comparison of two commits has a title ("v1.4.0 vs v1.3.0") where a pull request has a number.
     // A comparison of two commits, or a local review on someone's machine, has no pull request: its title names both refs.
     const compared = pr.origin === "compare" || pr.origin === "local";
-    lines.push(`# Expo Explore report: ${escapeMd(app.name ?? pr.repository)} ${compared ? escapeMd(pr.title) : `PR #${escapeMd(pr.number)}`}${app.platform ? ` (${escapeMd(app.platform)})` : ""}`, "",
+    lines.push(`# Expo Explore report: ${escapeMd(app.name ?? pr.repository)} ${compared ? escapeMd(pr.title) : `PR #${escapeMd(pr.number)}`}${titled(app.platform)}`, "",
       `> Visual review of ${compared ? `${escapeMd(pr.repository)} ${escapeMd(pr.title)}` : `pull request ${escapeMd(pr.repository)}#${escapeMd(pr.number)}`} by Expo Explore. ${screens.total} screens: ${screenCounts(screens)}.${context.expiresAt ? ` This link stops serving the report after ${context.expiresAt}.` : ""}`, "",
       "This URL is the human Viewer. The same report is available as read-only JSON (no credentials beyond this URL):", "",
       `- [Summary](${links.summary ?? withPlatform(context, apiUrl(context))}): kind, counts by status, app and PR identity, links`,
@@ -275,7 +310,7 @@ export function agentIndexMarkdown(context: AgentContext, loaded: LoadedReport):
       `Start with the changed screens. Every item carries a \`viewerUrl\` that opens that screen in the Viewer for a human; [${escapeMd(links.viewerChanges)}](${links.viewerChanges}) opens the list of changes.`);
   } else {
     const counts = rec(summary.counts);
-    lines.push(`# Expo Explore exploration: ${escapeMd(app.name)}${app.platform ? ` (${escapeMd(app.platform)})` : ""}`, "",
+    lines.push(`# Expo Explore exploration: ${escapeMd(app.name)}${titled(app.platform)}`, "",
       `> An agent explored ${escapeMd(app.name)} ${escapeMd(app.version ?? "")} on ${escapeMd(app.device ?? app.platform)} and mapped ${screens.total} screens, ${counts.transitions} transitions, ${counts.elements} elements; ${counts.gaps} coverage gaps. Stopped: ${escapeMd(summary.stopReason)}.${summary.summary ? ` ${escapeMd(summary.summary)}` : ""}${context.expiresAt ? ` This link stops serving the report after ${context.expiresAt}.` : ""}`, "",
       "This URL is the human Viewer. The same map is available as read-only JSON (no credentials beyond this URL):", "",
       `- [Summary](${withPlatform(context, apiUrl(context))}): app, device, model, stop reason, counts, links`,
@@ -286,6 +321,11 @@ export function agentIndexMarkdown(context: AgentContext, loaded: LoadedReport):
       `- [Frontier](${links.frontier}): actions not yet tried`,
       `- [Raw exploration.json](${links.raw}): the full map contract`, "",
       "Start with the screens list, then open the screens you care about. Every item carries a `viewerUrl` that opens it in the Viewer for a human.");
+  }
+  const others = (context.targets ?? []).filter(target => target.id !== context.target);
+  if (label && others.length) {
+    lines.push("", `This link also serves the same run's other targets; each has its own index and JSON API:`, "",
+      ...others.map(target => `- [${escapeMd(target.label ?? target.id).replace(/[[\]]/g, "")}](${targetPageUrl(context, target.id)}) (${escapeMd(target.platform)})`));
   }
   return lines.join("\n") + "\n";
 }

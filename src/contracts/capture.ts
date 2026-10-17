@@ -1,3 +1,4 @@
+import type { RunTarget } from "../types.js";
 import { validateSourceRoutes, type SourceRoute } from "./source-route.js";
 import type { SourceCapturePlan, SurfaceSourceScope } from "../source/capture-plan.js";
 import type { ReviewPresentation } from "./review.js";
@@ -249,6 +250,10 @@ export type PublicReview = {
     homeIndicatorBandPercent?: number;
     /** Every platform the config captures, so the Viewer can offer the sibling platform's report of the same run. */
     platforms?: Array<"ios" | "android">;
+    /** The target this report captured; absent in reports from before targets, whose target is their platform. */
+    target?: RunTarget;
+    /** Every target the config captures, in config order, when more than one: the sibling reports of the same run. */
+    targets?: RunTarget[];
     /** Every appearance the capture rendered, primary first, when it rendered several; surfaces then carry their `colorScheme`. */
     colorSchemes?: Array<"light" | "dark">;
   };

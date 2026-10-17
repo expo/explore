@@ -8,7 +8,7 @@ import { parseRuntimeExecutionContext } from "../review/runtime-adapter.js";
 import { AGENT_ACCEPTANCE_POLICY, assertAgentAcceptance, type CaptureBundle } from "../contracts/capture.js";
 import { assertDecodedPng } from "../shared/png-evidence.js";
 import { canonicalJson } from "../shared/canonical-json.js";
-import type { ExploreConfig } from "../config/explore-config.js";
+import { captureRepack, type ExploreConfig } from "../config/explore-config.js";
 import { hasVerifiedCapture } from "../capture/health.js";
 import { CAPTURE_OBSERVER_HASH } from "../capture/observer.js";
 import { ARGENT_VERSION } from "../shared/argent-version.js";
@@ -34,7 +34,9 @@ export function captureRecipeConfig(config: ExploreConfig, instructionsSha256?: 
     ...(config.mode === "agent" ? { agent: { ...config.agent, instructionsSha256, acceptancePolicy: AGENT_ACCEPTANCE_POLICY } } : {}),
     app: { platform: config.app.platform, bundleId: config.app.bundleId, easProfile: config.app.easProfile,
       ...(config.app.scheme === undefined ? {} : { scheme: config.app.scheme }) },
-    device: config.device, parameters: config.parameters, setup: config.setup ?? [], capture: config.capture,
+    device: config.device, parameters: config.parameters, setup: config.setup ?? [],
+    // The repack as it resolves, so a config that leaves it to the default keeps the recipe it had when the default was written out.
+    capture: { ...config.capture, repack: captureRepack(config) },
     // agent-device recipes stay as they were; an Argent capture is keyed to the Argent release that drove it.
     ...(config.capture.controller === "argent" ? { controllerVersion: ARGENT_VERSION } : {}),
   });

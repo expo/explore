@@ -15,10 +15,10 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
   doctor [--project DIRECTORY] [--offline] [--no-github] [--check-model] [--json]
        (checks every setup step and prints the next action for each problem; exits 1 until ready)
        (--offline skips EAS and GitHub; --check-model sends one small request with the local provider key)
-  doctor --capture [--project DIRECTORY] [--output DIRECTORY] [--platform ios|android] [--controller agent-device|argent] [--yes]
+  doctor --capture [--project DIRECTORY] [--output DIRECTORY] [--target ID | --platform ios|android] [--controller agent-device|argent] [--simulator eas|local] [--repack eas|local] [--yes]
        (captures the committed HEAD like the baseline workflow, with your eas login, and reports each route)
-  capture [--base REF] [--head REF | --committed] [--platform ios|android] [--scope all|changes]
-       [--controller agent-device|argent] [--upload [--expires-in 7d|30d|never]] [--no-open] [--no-cache] [--output DIRECTORY] [--project DIRECTORY]
+  capture [--base REF] [--head REF | --committed] [--target ID | --platform ios|android] [--parallel N] [--scope all|changes]
+       [--controller agent-device|argent] [--simulator eas|local] [--repack eas|local] [--upload [--expires-in 7d|30d|never]] [--no-open] [--no-cache] [--output DIRECTORY] [--project DIRECTORY]
        (on this machine: checks out both commits in temporary worktrees, captures them with your eas login and your
         local claude or codex login, and opens the report; the head is HEAD with your uncommitted changes, as eas build
         uploads them (--committed, or cli.requireCommit in eas.json, leaves them out); the base defaults to where HEAD
@@ -26,7 +26,13 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
         without .expo-explore/config.yaml it uses the defaults setup would write;
         it runs both commits' code as you, so review only commits you would run; capture:review is the same command;
         --controller argent drives the simulator with Argent instead of agent-device, the default (or set
-        capture.controller in config.yaml); Argent cannot switch appearance yet, so it captures one appearance)
+        capture.controller in config.yaml); on EAS Simulator Argent captures one appearance, since it cannot switch it yet;
+        --simulator local runs each commit on a simulator (Xcode) or emulator (Android SDK) Explore starts on this
+        machine, instead of EAS Simulator, and removes it afterwards (or set capture.simulator in config.yaml); builds
+        still run on EAS, and the host switches appearance for either controller; the app is repacked with the route
+        observer on this machine too (--repack eas, or capture.repack, keeps the hosted EAS job);
+        with targets in config.yaml it reviews them at once (--parallel N at most N at a time; the targets of a platform
+        share each commit's build), --target ID one of them, --platform those of a platform)
   view [--catalog FILE] [--port N] [--no-open]
        (opens a report in the Viewer)
   reports [list | open ID | add REPORT... | upload ID | rm ID | prune] [--all] [--json]
@@ -62,27 +68,29 @@ const BINARY = `Prebuilt apps (no source needed; runs on EAS Simulator with your
        Afterwards: view --dir DIRECTORY, screen:list --dir DIRECTORY, gap:list --dir DIRECTORY`;
 
 const CI = `CI (the installed workflows run these; they manage remote EAS Simulator sessions):
+  config:targets [--project DIRECTORY] [--config FILE]
+       (lists the targets config.yaml captures, with their platforms and labels; the review workflow's matrix)
   config:platforms [--project DIRECTORY] [--config FILE]
        (lists the platforms config.yaml captures; the review workflow's matrix)
   capture:review --base-project DIRECTORY --head-project DIRECTORY (--pull-request FILE | --compare FILE)
-       --output TEMP_DIRECTORY [--config .expo-explore/config.yaml] [--platform ios|android] [--controller agent-device|argent]
+       --output TEMP_DIRECTORY [--config .expo-explore/config.yaml] [--target ID | --platform ios|android] [--controller agent-device|argent] [--simulator eas|local] [--repack eas|local]
        (--compare reviews any two commits without a PR: {"origin":"compare","repositoryId","repository","base":{ref,sha},"head":{ref,sha}})
-  capture:baseline --project DIRECTORY --sha COMMIT --output TEMP_DIRECTORY [--config FILE] [--platform ios|android] [--controller agent-device|argent]
+  capture:baseline --project DIRECTORY --sha COMMIT --output TEMP_DIRECTORY [--config FILE] [--target ID | --platform ios|android] [--controller agent-device|argent] [--simulator eas|local] [--repack eas|local]
   source:verify --base-project DIRECTORY --head-project DIRECTORY
-       --base-sha COMMIT --head-sha COMMIT --output DIRECTORY [--config FILE] [--scope all|changes] [--platform ios|android]
+       --base-sha COMMIT --head-sha COMMIT --output DIRECTORY [--config FILE] [--scope all|changes] [--target ID | --platform ios|android]
   compare --baseline DIRECTORY --current DIRECTORY --output FILE
        [--review-output FILE] [--catalog-output FILE] [--catalog-name NAME]
        [--base-surface-coverage FILE] [--head-surface-coverage FILE]
   export:web --catalog FILE --output DIRECTORY
-  ci:report --input REPORT_INPUT --output DIRECTORY [--platform ios|android]
-  ci:publish --input REPORT_INPUT --artifact-url GITHUB_ARTIFACT_URL [--platform ios|android]
+  ci:report --input REPORT_INPUT --output DIRECTORY [--target ID | --platform ios|android]
+  ci:publish --input REPORT_INPUT --artifact-url GITHUB_ARTIFACT_URL [--target ID | --platform ios|android]
   ci:publish --inputs DIRECTORY        (one <platform>/ subdirectory per captured platform)
-  ci:deploy --input REPORT_INPUT --report REPORT_DIR --artifact-url GITHUB_ARTIFACT_URL [--platform ios|android]
+  ci:deploy --input REPORT_INPUT --report REPORT_DIR --artifact-url GITHUB_ARTIFACT_URL [--target ID | --platform ios|android]
   ci:deploy --inputs DIRECTORY --reports DIRECTORY
   ci:pr --pr N [--output FILE] [--app-dir DIRECTORY]
        (resolves the live PR and refuses it unless it is open, from this repository, and by a trusted author)
   ci:compare-refs --project DIRECTORY --base REF --head REF [--output FILE]
-  ci:find-baseline --sha COMMIT [--platform ios|android]
+  ci:find-baseline --sha COMMIT [--target ID | --platform ios|android]
   ci:after-capture --output TEMP_DIRECTORY --checkout DIRECTORY...
        (stops the capture's EAS Simulator sessions and checks capture left each checkout unchanged)
        (the ci:* commands write their results to $GITHUB_OUTPUT for the next steps)`;

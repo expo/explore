@@ -24,6 +24,7 @@ const aliases: Record<string, string> = {
   "ci failure": "ci:failure",
   "ci deploy": "ci:deploy",
   "config platforms": "config:platforms",
+  "config targets": "config:targets",
 };
 
 /** One-word names for commands people type: `capture` is the local review, `capture:review` without its CI flags. */
@@ -32,7 +33,7 @@ const shortNames: Record<string, string> = { capture: "capture:review" };
 const first = argv[0] ?? "help";
 const pair = `${first} ${argv[1] ?? ""}`.trim();
 export const command = aliases[pair] ?? shortNames[first] ?? first;
-export const resultContract = ["source:verify", "capture:review", "capture:baseline", "ci:report", "ci:publish", "ci:failure", "ci:deploy", "ci:pr", "ci:find-baseline", "ci:compare-refs", "ci:after-capture", "config:platforms", "explore:binary", "explore:session", "report:upload", "reports"].includes(command)
+export const resultContract = ["source:verify", "capture:review", "capture:baseline", "ci:report", "ci:publish", "ci:failure", "ci:deploy", "ci:pr", "ci:find-baseline", "ci:compare-refs", "ci:after-capture", "config:platforms", "config:targets", "explore:binary", "explore:session", "report:upload", "reports"].includes(command)
   ? "explore.result" : QUERY_CONTRACT;
 const commandArgCount = aliases[pair] ? 2 : 1;
 const args = argv.slice(commandArgCount);
@@ -50,10 +51,11 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
   setup: { project: "value", platform: "value", device: "value", scope: "value", profile: "value", "bundle-id": "value", scheme: "value", navigation: "value",
     mode: "value", provider: "value", model: "value", param: "value", "app-state": "value", workflows: "boolean", "no-workflows": "boolean",
     "non-interactive": "boolean", check: "boolean", force: "boolean", help: "boolean" },
-  doctor: { project: "value", offline: "boolean", "no-github": "boolean", "check-model": "boolean", capture: "boolean", output: "value", platform: "value", controller: "value", yes: "boolean", help: "boolean" },
-  "capture:baseline": { project:"value", sha:"value", output:"value", config:"value", platform:"value", controller:"value" },
-  "source:verify": { "base-project":"value", "head-project":"value", "base-sha":"value", "head-sha":"value", output:"value", config:"value", scope:"value", platform:"value" },
+  doctor: { project: "value", offline: "boolean", "no-github": "boolean", "check-model": "boolean", capture: "boolean", output: "value", target: "value", platform: "value", controller: "value", simulator: "value", repack: "value", yes: "boolean", help: "boolean" },
+  "capture:baseline": { project:"value", sha:"value", output:"value", config:"value", target:"value", platform:"value", controller:"value", simulator:"value", repack:"value" },
+  "source:verify": { "base-project":"value", "head-project":"value", "base-sha":"value", "head-sha":"value", output:"value", config:"value", scope:"value", target:"value", platform:"value" },
   "config:platforms": { project:"value", config:"value" },
+  "config:targets": { project:"value", config:"value" },
   "screen:list": { limit: "value", cursor: "value", unexplored: "boolean" },
   "screen:get": { id: "value" },
   "element:list": {
@@ -83,7 +85,7 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
   validate: {},
   export: { output: "value" },
   "export:web": {catalog:"value",output:"value"},
-  "capture:review": { "base-project":"value", "head-project":"value", "pull-request":"value", compare:"value", output:"value", config:"value", platform:"value", controller:"value", scope:"value", "expires-in":"value",
+  "capture:review": { "base-project":"value", "head-project":"value", "pull-request":"value", compare:"value", output:"value", config:"value", parallel:"value", target:"value", platform:"value", controller:"value", simulator:"value", repack:"value", scope:"value", "expires-in":"value",
     base:"value", head:"value", project:"value", committed:"boolean", uncommitted:"boolean", "include-untracked":"boolean", upload:"boolean", "no-open":"boolean", "no-cache":"boolean", port:"value" },
 
 
@@ -94,12 +96,12 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
   "explore:session": { session:"value", "env-file":"value", "bundle-id":"value", "app-name":"value", "app-version":"value", output:"value", platform:"value", controller:"value", device:"value", "launch-url":"value", hints:"value",
     "allow-destructive":"value", "max-duration-minutes":"value", "max-screens":"value", "max-actions":"value", provider:"value", model:"value", owner:"value", project:"value",
     upload:"boolean", "expires-in":"value", alias:"value", "no-open":"boolean", port:"value" },
-  "ci:report": { input:"value", output:"value", platform:"value" },
-  "ci:publish": { input:"value", "artifact-url":"value", platform:"value", inputs:"value" },
-  "ci:failure": { pr:"value", head:"value", base:"value", diagnostics:"value", platform:"value" },
-  "ci:deploy": { input:"value", report:"value", "artifact-url":"value", platform:"value", inputs:"value", reports:"value" },
+  "ci:report": { input:"value", output:"value", target:"value", platform:"value" },
+  "ci:publish": { input:"value", "artifact-url":"value", target:"value", platform:"value", inputs:"value" },
+  "ci:failure": { pr:"value", head:"value", base:"value", diagnostics:"value", target:"value", platform:"value" },
+  "ci:deploy": { input:"value", report:"value", "artifact-url":"value", target:"value", platform:"value", inputs:"value", reports:"value" },
   "ci:pr": { pr:"value", output:"value", "app-dir":"value", config:"value" },
-  "ci:find-baseline": { sha:"value", platform:"value" },
+  "ci:find-baseline": { sha:"value", target:"value", platform:"value" },
   "ci:compare-refs": { project:"value", base:"value", head:"value", title:"value", output:"value" },
   "ci:after-capture": { output:"value", checkout:"value" },
   compare: {

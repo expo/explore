@@ -105,10 +105,11 @@ device:
 exploration:
   scope: changes # changes | all
 capture:
-  # controller: agent-device # agent-device (default) | argent (one appearance per capture until Argent can switch it; --controller overrides it for one run)
+  # controller: agent-device # agent-device (default) | argent (one appearance per capture on EAS Simulator until Argent can switch it; --controller overrides it for one run)
+  # simulator: eas # eas (EAS Simulator, default) | local (a simulator or emulator Explore starts on this machine with Xcode or the Android SDK; --simulator overrides it for one run)
   maxMinutes: 30
   maxActions: 500
-  repack: eas # eas (hosted EAS workflow job, default) | local (repack-app + eas upload on the runner)
+  repack: eas # eas (hosted EAS workflow job, the default on EAS Simulator) | local (repack-app on the runner, the default with simulator: local; --repack overrides it for one run)
   appearance: auto # auto (follow the app's userInterfaceStyle: automatic captures light and dark) | dark | light | [dark, light]
   launch: screenshot # screenshot (relaunch the app per appearance and keep its splash and first settled frame, default) | video (also keep a launch recording in the report) | off
   reset: root-link # root-link (open the app's root link and let it settle before every route link, default) | none (each link opens from whatever the previous route left on screen)
@@ -130,6 +131,20 @@ platforms:
 ```
 
 Commands that capture or publish (`source:verify`, `capture:review`, `capture:baseline`, `ci:report`, `ci:publish`) take `--platform ios|android`; with one configured platform it is optional, with two it is required (`PLATFORM_REQUIRED`). `expo-explore config:platforms` prints the configured list as JSON, which the workflows use as their matrix. Artifacts carry the platform (`explore-capture-<run>-<attempt>-android`, `explore-baseline-<sha>-ios`); an iOS job still reuses an older unsuffixed baseline. The PR comment has one section per platform, and a hosted preview serves both reports from one link.
+
+### Several devices (targets)
+
+`targets` names each capture instead of `platforms`, so one platform can have several devices or poses. Each target is captured, published and commented on as its own report, in config order:
+
+```yaml
+targets:
+  iphone: { platform: ios, device: iPhone 17 }
+  duo-closed: { platform: ios, device: iPhone Duo, pose: closed }
+  duo-open: { platform: ios, device: iPhone Duo, pose: open, label: "iPhone Duo (open)" }
+  android: { platform: android, device: pixel_7, bundleId: com.example.myapp, easProfile: explore-android }
+```
+
+A target's id (lowercase letters, digits and dashes; not `base`, `head` or `report`) takes the place of the platform everywhere a capture is named: `--target duo-open`, `explore-capture-<run>-<attempt>-duo-open`, `explore-baseline-<sha>-duo-open`. `expo-explore config:targets` prints the list the workflows use as their matrix. Fields a target leaves out come from `app` and `device`; a target of another platform than `app.platform` sets its own `bundleId` and `easProfile`. A config with `platforms` has one target per platform, named `ios` and `android`, so its names do not change. `--platform` still selects a target when only one has that platform.
 
 Use the actual bundle identifier, scheme, profile, and available simulator device name. `scheme` is optional when static app configuration supplies it. `navigation.entry` resolves ambiguous entry modules; it does not list screens.
 
@@ -271,7 +286,7 @@ The provider selects the runtime that owns the navigation loop:
 | `anthropic` | Claude Code through `@anthropic-ai/claude-agent-sdk` 0.3.285 and its platform-native package | `ANTHROPIC_API_KEY` |
 | `openai` | Codex app-server from `@openai/codex` 0.159.2 and its platform-native package | `OPENAI_API_KEY` |
 
-Both runtimes use Explore's device tools to operate the existing EAS Simulator through official `agent-device` 0.21.15. The runtime and native binaries come from the pinned tools installation. CI does not use the development-only `node_modules/.bin/claude` executable or an interactive subscription login.
+Both runtimes use Explore's device tools to operate the existing EAS Simulator through official `agent-device` 0.21.28. The runtime and native binaries come from the pinned tools installation. CI does not use the development-only `node_modules/.bin/claude` executable or an interactive subscription login.
 
 Create and commit the nonempty English prose file named by `agent.instructions`. The shared setup skill authors it from source and asks for missing test data or environment inputs. Describe how to reach the app's screens, necessary prerequisites, the representative state to use on both revisions, readiness signals, and actions to avoid. This file guides the runtime agent; it is not a list of mandatory YAML steps or a second screen inventory.
 

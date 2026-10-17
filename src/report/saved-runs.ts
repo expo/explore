@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ExplorePlatform } from "../config/explore-config.js";
+import { isTargetId, type ExplorePlatform } from "../config/explore-config.js";
+import type { RunTarget } from "../types.js";
 import type { ArtifactReport } from "../contracts/artifact-report.js";
 import { EXPLORATION_REPORT_KIND, type ExplorationReport } from "../contracts/standalone-report.js";
 import { exploreCacheRoot } from "../shared/cache-root.js";
@@ -12,7 +13,7 @@ import { strongerGroup, type ChangeGroup } from "./pr-comment-record.js";
 import { readZipDirectory, readZipEntry } from "./zip-reader.js";
 
 /**
- * Every report a run produces on this machine is kept under `<cache>/reports/<id>/`: one `<platform>.zip` per platform
+ * Every report a run produces on this machine is kept under `<cache>/reports/<id>/`: one `<target>.zip` per target
  * (the same ZIP a hosted or local Viewer serves) and `run.json`, what `expo-explore reports` lists. Local reviews,
  * explorations and uploaded reports land here, so a past run can be reopened or hosted without capturing it again.
  * Runs older than 30 days, and the oldest beyond 2 GB, are pruned whenever a run is saved.
@@ -30,6 +31,8 @@ export type SavedRun = {
   /** A local review of uncommitted changes: how many files differed from HEAD. */
   uncommittedFiles?: number;
   platforms: ExplorePlatform[];
+  /** The run's targets, in order; their ids name its ZIPs. Absent in runs saved before targets, whose ZIPs are named for `platforms`. */
+  targets?: RunTarget[];
   device?: string;
   /** Changed surfaces by group across the platforms, as the PR comment counts them. */
   changes?: Partial<Record<ChangeGroup, number>>;
@@ -40,7 +43,15 @@ export type SavedRun = {
   savedAt: string;
   bytes: number;
 };
-export type SavedReport = { platform: ExplorePlatform; zip: Uint8Array; changes?: number; device?: string };
+/** One report of a run. Without a target, it is the target named for its platform, as runs saved before targets were. */
+export type SavedReport = { platform: ExplorePlatform; target?: RunTarget; zip: Uint8Array; changes?: number; device?: string };
+
+const PLATFORM_LABELS: Record<ExplorePlatform, string> = { ios: "iOS", android: "Android" };
+
+/** A report's target: its own, else the one named for its platform. */
+export function reportTarget(report: Pick<SavedReport, "platform" | "target">): RunTarget {
+  return report.target ?? { id: report.platform, platform: report.platform, label: PLATFORM_LABELS[report.platform] };
+}
 
 export const SAVED_RUN_LIMITS = { maxAgeDays: 30, maxBytes: 2 * 1024 * 1024 * 1024 } as const;
 const ID = /^[a-z0-9][a-z0-9._-]{0,119}$/;
@@ -84,14 +95,17 @@ export async function describeReports(reports: SavedReport[], extra: { subjects?
   const first = parsed[0]?.content;
   if (!first) throw new Error("Not an Explore report ZIP");
   const createdAt = extra.createdAt ?? new Date().toISOString();
-  const platforms = parsed.map(entry => entry.report.platform);
+  const platforms = [...new Set(parsed.map(entry => entry.report.platform))];
+  // Targets named for their platforms describe a run saved the old way, which older versions can still read.
+  const targets = reports.map(reportTarget);
+  const named = targets.some(target => target.id !== target.platform) ? { targets } : {};
   if (first.file === "exploration.json") {
     const report = first.json as Partial<ExplorationReport>;
     if (report.kind !== EXPLORATION_REPORT_KIND || !report.exploration || !report.map) throw new Error("Not an Explore exploration report");
     const { app, device } = report.exploration;
     const zipHash = createHash("sha256").update(reports[0]!.zip).digest("hex").slice(0, 10);
     return { id: `explore-${slug(app.name, 40)}-${zipHash}`, kind: "exploration", title: `${app.name}${app.version ? ` ${app.version}` : ""}${app.buildNumber ? ` (${app.buildNumber})` : ""} on ${device.model}`,
-      platforms, device: `${device.model} ${device.osVersion}`.trim(),
+      platforms, ...named, device: `${device.model} ${device.osVersion}`.trim(),
       explored: { app: app.name, ...(app.version ? { version: app.version } : {}), ...(app.buildNumber ? { buildNumber: app.buildNumber } : {}),
         screens: report.map.screens.length, unexplored: report.coverage?.frontier.pending ?? 0 },
       createdAt: report.exploration.completedAt ?? createdAt };
@@ -117,7 +131,7 @@ export async function describeReports(reports: SavedReport[], extra: { subjects?
     : `${kind === "compare" ? "compare" : `pr-${number}`}-${slug(pr.repository.split("/").at(-1) ?? "", 40)}-${slug(review.runId, 40)}-${slug(String(review.runAttempt), 8)}`;
   const commit = (side: "head" | "base"): SavedCommit => ({ ref: pr[side].ref, sha: pr[side].sha, ...(extra.subjects?.[side] ? { subject: extra.subjects[side] } : {}) });
   return { id, kind, title: pr.title, repository: pr.repository, ...(number === undefined ? {} : { number }), head: commit("head"), base: commit("base"),
-    ...(extra.uncommittedFiles ? { uncommittedFiles: extra.uncommittedFiles } : {}), platforms, ...(devices.length ? { device: devices.join(", ") } : {}),
+    ...(extra.uncommittedFiles ? { uncommittedFiles: extra.uncommittedFiles } : {}), platforms, ...named, ...(devices.length ? { device: devices.join(", ") } : {}),
     changes, createdAt: review.createdAt ?? createdAt };
 }
 
@@ -135,10 +149,13 @@ export async function saveRun(reports: SavedReport[], extra: Parameters<typeof d
   const kept = await findSavedRun(described.id, environment);
   if (kept && described.kind !== "exploration" && kept.kind === described.kind && kept.repository === described.repository
     && kept.head?.sha === described.head?.sha && kept.base?.sha === described.base?.sha) {
-    const others = (await readSavedReports(kept, environment).catch(() => [] as SavedReport[])).filter(report => !reports.some(each => each.platform === report.platform));
+    const others = (await readSavedReports(kept, environment).catch(() => [] as SavedReport[])).filter(report => !reports.some(each => reportTarget(each).id === reportTarget(report).id));
     if (others.length) {
-      const order: ExplorePlatform[] = ["ios", "android"];
-      reports = [...reports, ...others].sort((a, b) => order.indexOf(a.platform) - order.indexOf(b.platform));
+      // The targets' own order when the reports name it; iOS before Android for reports from before targets.
+      const order = (await Promise.all([...reports, ...others].map(async report => ((await reportJson(report.zip))?.json as Partial<ArtifactReport> | undefined)?.review?.runtime?.targets)))
+        .find(list => Array.isArray(list))?.map(target => target.id) ?? ["ios", "android"];
+      const rank = (report: SavedReport) => { const index = order.indexOf(reportTarget(report).id); return index < 0 ? order.length : index; };
+      reports = [...reports, ...others].sort((a, b) => rank(a) - rank(b));
       const subjects = { ...(kept.head?.subject ? { head: kept.head.subject } : {}), ...(kept.base?.subject ? { base: kept.base.subject } : {}), ...extra.subjects };
       described = await describeReports(reports, { ...extra, subjects, ...(kept.uncommittedFiles && !extra.uncommittedFiles ? { uncommittedFiles: kept.uncommittedFiles } : {}) });
     }
@@ -147,7 +164,7 @@ export async function saveRun(reports: SavedReport[], extra: Parameters<typeof d
   const run = cleanRun({ version: 1, ...described, savedAt: new Date(now).toISOString(), bytes: reports.reduce((total, report) => total + report.zip.byteLength, 0) });
   try {
     await mkdir(staged);
-    for (const report of reports) await writeFile(join(staged, `${report.platform}.zip`), report.zip);
+    for (const report of reports) await writeFile(join(staged, `${reportTarget(report).id}.zip`), report.zip);
     await writeFile(join(staged, "run.json"), `${JSON.stringify(run, null, 2)}\n`);
     await rm(target, { recursive: true, force: true });
     await rename(staged, target);
@@ -161,8 +178,11 @@ export async function saveRun(reports: SavedReport[], extra: Parameters<typeof d
 function validRun(value: unknown, id: string): SavedRun | undefined {
   const run = value as Partial<SavedRun> | undefined;
   if (!run || run.version !== 1 || run.id !== id || typeof run.title !== "string" || typeof run.bytes !== "number") return undefined;
-  // Platforms name the ZIP files read back, so only the two there are.
+  // Targets (else platforms) name the ZIP files read back, so only valid ids.
   if (!Array.isArray(run.platforms) || !run.platforms.length || run.platforms.some(platform => platform !== "ios" && platform !== "android")) return undefined;
+  if (run.targets !== undefined && (!Array.isArray(run.targets) || !run.targets.length || run.targets.some(target => !target || !isTargetId(target.id)
+    || (target.platform !== "ios" && target.platform !== "android") || typeof target.label !== "string")
+    || new Set(run.targets.map(target => target.id)).size !== run.targets.length)) return undefined;
   if (!["local", "pull-request", "compare", "exploration"].includes(run.kind ?? "") || Number.isNaN(Date.parse(run.createdAt ?? "")) || Number.isNaN(Date.parse(run.savedAt ?? ""))) return undefined;
   return run as SavedRun;
 }
@@ -188,10 +208,11 @@ export async function findSavedRun(idOrLatest: string, environment: NodeJS.Proce
   return idOrLatest === "latest" ? runs[0] : runs.find(run => run.id === idOrLatest);
 }
 
-/** A saved run's reports, in the order the run lists its platforms, labelled for a Viewer's platform switch. */
+/** A saved run's reports, in the order the run lists its targets, labelled for a Viewer's target switch. */
 export async function readSavedReports(run: SavedRun, environment: NodeJS.ProcessEnv = process.env): Promise<SavedReport[]> {
   const root = join(savedRunsDirectory(environment), run.id);
-  return Promise.all(run.platforms.map(async platform => ({ platform, zip: new Uint8Array(await readFile(join(root, `${platform}.zip`))) })));
+  const targets = run.targets ?? run.platforms.map(platform => reportTarget({ platform }));
+  return Promise.all(targets.map(async target => ({ platform: target.platform, target, zip: new Uint8Array(await readFile(join(root, `${target.id}.zip`))) })));
 }
 
 export async function removeSavedRun(id: string, environment: NodeJS.ProcessEnv = process.env): Promise<boolean> {
