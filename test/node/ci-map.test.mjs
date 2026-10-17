@@ -109,7 +109,7 @@ async function fixture(t, settings = {}) {
   const planPath = join(root, 'plan.json'); await writeFile(planPath, JSON.stringify(plan));
   const requests = [];
   let current = '/'; let snapshots = 0; let sessionName; let screenshotAttempts = 0; let splashLeft = 0; let recordingPath = ''; let alert = null; let appearance = 'light'; let alertReads = 0;
-  let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false;
+  let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let relaunchedAfterForeign = false;
   const deviceName = settings.android ? 'Pixel 7' : 'iPhone 17 Pro';
   const platform = settings.android ? 'android' : 'ios';
   // A local simulator is the one the capture created, named for Explore.
@@ -234,7 +234,7 @@ async function fixture(t, settings = {}) {
     if (request.command === 'fake-controller' || (settings.argent && request.command.endsWith('/argent-controller'))) {
       if (command === '--version') return { stdout: settings.argent ? '0.29.0' : AGENT_DEVICE_VERSION, stderr: '' };
       if (command === 'open') {
-        if (request.args.includes('--relaunch')) { splashLeft = settings.splashFrames ?? 0; if (settings.wedgeAt === current) { wedgeCleared = true; current = '/'; } }
+        if (request.args.includes('--relaunch')) { splashLeft = settings.splashFrames ?? 0; relaunchedAfterForeign = true; if (settings.wedgeAt === current) { wedgeCleared = true; current = '/'; } }
         if (request.args[2]?.startsWith('sample://')) {
           const previous = current;
           current = '/' + request.args[2].slice('sample://'.length);
@@ -247,6 +247,8 @@ async function fixture(t, settings = {}) {
         return ok(identity());
       }
       if (command === 'appstate') {
+        // foreignUntilRelaunch: a setup tap brought another app to the front; starting the app again brings it back.
+        if (settings.foreignUntilRelaunch && !relaunchedAfterForeign) return ok({ appBundleId: 'com.apple.springboard' });
         if (settings.android) return ok({ platform: 'android', package: settings.wrongForeground ? 'com.foreign.app' : 'com.example.app', activity: 'com.example.app.MainActivity' });
         return ok(settings.wrongForeground ? { appBundleId: 'com.foreign.app' } : identity());
       }
@@ -645,9 +647,18 @@ test('a controller that wedges during setup does not fail every route: setup sto
   const result = await runCiMap({ ...f.options, setup: [{ action: 'open', url: 'sample://setup' }], progress: line => lines.push(line) });
   assert.equal(result.outcomes[f.ids.home].status, 'captured');
   assert.equal(result.outcomes[f.ids.settings].status, 'captured');
-  assert.ok(lines.some(line => /setup stopped by the device controller/.test(line)), lines.join('\n'));
+  assert.ok(lines.some(line => /setup stopped \(/.test(line)), lines.join('\n'));
   const recoveries = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics', 'controller-recoveries.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   assert.deepEqual(recoveries.map(entry => [entry.where, entry.recovered]), [['a setup step', true]]);
+});
+
+test('a setup step that leaves another app in front costs that step: the app restarts and the routes are captured', async t => {
+  const f = await fixture(t, { routes: [route('home'), route('settings')], foreignUntilRelaunch: true, stableLabels: true });
+  const lines = [];
+  const result = await runCiMap({ ...f.options, setup: [{ action: 'tap', label: 'Get Started' }], progress: line => lines.push(line) });
+  assert.equal(result.outcomes[f.ids.home].status, 'captured');
+  assert.equal(result.outcomes[f.ids.settings].status, 'captured');
+  assert.ok(lines.some(line => /the app was no longer in front on a setup step \(CONTROLLER_IDENTITY_MISMATCH\)/.test(line)), lines.join('\n'));
 });
 
 test('a local simulator capture deletes its simulator when the capture fails', async t => {
@@ -2242,7 +2253,11 @@ test('a recycled helper with an unknown observer or different app cannot proceed
       return f.options.runner(request);
     } });
     assert.notEqual(result.runStatus, 'complete');
-    assert.equal(f.operations().includes('screenshot'), false);
+    // Another app in front is contained like a stuck controller: the app restarts and the route is tried, and while
+    // the wrong app stays in front its frame is never published.
+    const bundle = JSON.parse(await readFile(join(f.options.outputDirectory, 'bundle.json'), 'utf8'));
+    assert.deepEqual(Object.keys(bundle.images), []);
+    if (badState === 'invalidObserver') assert.equal(f.operations().includes('screenshot'), false);
     assert.equal(result.outcomes[f.ids.home].error.code,
       badState === 'invalidObserver' ? 'CONTROLLER_RECOVERY_UNVERIFIED' : 'CONTROLLER_IDENTITY_MISMATCH');
   }

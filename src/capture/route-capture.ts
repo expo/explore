@@ -972,6 +972,11 @@ export async function capturePlannedRoutes(options: {
     return ["CONTROLLER_READ_BUSY", "RUNNER_WEDGED", "CONTROLLER_RUNNER_WEDGED", "INVALID_ACCESSIBILITY_EVIDENCE", "SETUP_SYSTEM_SURFACE_BLOCKING"].includes(failure.code)
       || /execution watchdog|accessibility responsiveness|requires a valid viewport/.test(failure.message);
   };
+  /**
+   * A setup step that left another app in front (a tap that landed on a system control drawn over the app, as iPhone
+   * Duo's status pill over a sheet's Done button) is recovered the same way: the app is started again.
+   */
+  const appLeft = (error: unknown): boolean => toCiError(error).code === "CONTROLLER_IDENTITY_MISMATCH";
   let recoveries = 0;
   const recoverController = (where: string, error: unknown): boolean => {
     const reported = serializeCiError(toCiError(error), { secrets });
@@ -983,7 +988,7 @@ export async function capturePlannedRoutes(options: {
     };
     if (recoveries >= 3 || deadline - clock() < 60_000) { record(false); return false; }
     recoveries += 1;
-    say(`the device controller stopped answering on ${where} (${reported.code}); restarting the app before going on`);
+    say(`${appLeft(error) ? "the app was no longer in front" : "the device controller stopped answering"} on ${where} (${reported.code}); restarting the app before going on`);
     try {
       if (runtime.provider === "local-simulator") runner(runtime.platform === "ios"
         ? { command: "xcrun", args: ["simctl", "terminate", runtime.controllerDeviceId, capture.bundleId], cwd: store.root, environment: options.environment, timeoutMs: 60_000, allowFailure: true }
@@ -1047,9 +1052,9 @@ export async function capturePlannedRoutes(options: {
     if (setupAttempt === 0 && recoverFromControllerFault(error)) continue;
     // A wedged controller says nothing about the app's state: the steps before it ran, and the routes they prepared
     // are captured or failed on their own. Once the controller answers again, the routes go on from app links.
-    if (controllerWedged(error) && recoverController("a setup step", error)) {
+    if ((controllerWedged(error) || appLeft(error)) && recoverController("a setup step", error)) {
       const reported = serializeCiError(toCiError(error), { secrets });
-      say(`setup stopped by the device controller (${reported.code}); the routes it had not reached go on by app link`);
+      say(`setup stopped (${reported.code}); the routes it had not reached go on by app link`);
       break;
     }
     const failure = toCiError(error, { code: "SETUP_FAILED", stage: "setup" });
