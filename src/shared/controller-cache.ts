@@ -21,7 +21,7 @@ export type ControllerName = "agent-device" | "argent";
 /** Each controller's npm release, the file Explore runs from it, and the integrity npm publishes for it. */
 export const CONTROLLER_PACKAGES: Record<ControllerName, { name: string; version: string; bin: string; integrity: string }> = {
   "agent-device": { name: "agent-device", version: AGENT_DEVICE_VERSION, bin: "bin/agent-device.mjs",
-    integrity: "sha512-Om1j6oNJkeKlkk8lBM+0V9bKwpxUXLMf/PDDSvAt3RFquBRqAiM58J81E0rvPQNxs6GCjhABYpwVvIAXptxjjA==" },
+    integrity: "sha512-uGEENVhPzSpIACrVlt16O1mloODWJyAemTCT0boDb4L006JXN2rG747u1TRoQJudOpdP/Pm2urxNRHeECLMLfg==" },
   argent: { name: "@swmansion/argent", version: ARGENT_VERSION, bin: "dist/cli.js",
     integrity: "sha512-XXWlWZJlHKqnAvNx3RDhuiVFQOPqh5EDB76+mFAyqC2mutC6irzw03+M/6S/WQ+Dzz2IYOkEfOzQnOOdhrGgJg==" },
 };
