@@ -72,7 +72,7 @@ export type BinaryExploreResult = {
 type ControllerInvocation = { command: string; environment: NodeJS.ProcessEnv };
 
 async function argentInvocation(connection: SimulatorConnection, work: string, platform: Platform, environment: NodeJS.ProcessEnv, bundleId?: string): Promise<ControllerInvocation> {
-  return argentControllerInvocation({ directory: work, connection, platform, environment: baseEnvironment(environment), ...(bundleId ? { bundleId } : {}) });
+  return argentControllerInvocation({ directory: work, connection, platform, environment: baseEnvironment(environment), sourceEnvironment: environment, ...(bundleId ? { bundleId } : {}) });
 }
 
 /** The daemon refuses a second session on a busy device; the caller's own `agent-device` session (from install/open) is reused instead. */
@@ -313,7 +313,7 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
     deviceModel: openedDevice.deviceModel, osVersion: observed("osVersion"), locale: observed("locale"), orientation: observed("orientation") === "landscape" ? "landscape" : "portrait",
     colorScheme: observed("colorScheme") === "dark" ? "dark" : "light" } as ActiveSimulatorRuntime;
   // Argent's `open` reports the OS version itself (list-devices); agent-device's comes from the session's preview.
-  if (runtime.osVersion === "unknown") try { runtime.osVersion = await simulatorOsVersion(sessionJson(), runtime.controllerDeviceId, fetch, platform); } catch { /* descriptive only */ }
+  if (runtime.osVersion === "unknown" || controllerKind !== "argent") try { runtime.osVersion = await simulatorOsVersion(sessionJson(), runtime.controllerDeviceId, fetch, platform); } catch { /* descriptive only */ }
   map.run.deviceId = runtime.controllerDeviceId;
   map.run.environment = { deviceModel: runtime.deviceModel, osVersion: runtime.osVersion, locale: runtime.locale, orientation: runtime.orientation, colorScheme: runtime.colorScheme };
   map.run.status = "exploring";
@@ -500,6 +500,7 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
       "Start one with `eas simulator:start --type agent-device --out-config-type dotenv` (or `--type argent`) and run explore:session in that directory (or pass --env-file / set EAS_SIMULATOR_SESSION_ID with AGENT_DEVICE_DAEMON_BASE_URL and AGENT_DEVICE_DAEMON_AUTH_TOKEN, or ARGENT_TOOLS_URL).");
   }
   const sessionController = connectionController(connection);
+  if (!options.runner) await ensureController(sessionController, { environment, progress: say });
   if (options.controller && options.controller !== sessionController) {
     throw binaryError("CONTROLLER_MISMATCH", `--controller ${options.controller} was passed, but the session is driven by ${sessionController}.`,
       `Drop --controller, or start a session with \`eas simulator:start --type ${options.controller}\`.`, { sessionId: connection.sessionId });
@@ -613,7 +614,7 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
   const project = options.project ?? DEFAULT_BINARY_PROJECT;
   const controller = options.controller ?? "agent-device";
   // Fetched before the paid session starts, so a blocked download costs nothing.
-  if (controller === "argent") await ensureController("argent", { environment, progress: say });
+  if (!options.runner) await ensureController(controller, { environment, progress: say });
   const map: ExploreMap = { contract: CONTRACT, revision: 0, run: { id: randomUUID(), name: archive.appName, platform, controller, exploration: "black-box", bundleId, status: "draft",
     createdAt: new Date(now()).toISOString(), updatedAt: new Date(now()).toISOString(),
     build: { ...(archive.version ? { version: archive.version } : {}), ...(archive.buildNumber ? { number: archive.buildNumber } : {}), hash: archive.sha256, source: "local" },

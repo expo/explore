@@ -5,7 +5,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { chmod, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,15 +63,31 @@ export function controllerTarballUrl(controller: ControllerName, environment: No
  */
 export function agentDeviceLauncher(environment: NodeJS.ProcessEnv = process.env): string {
   const root = controllerCacheRoot(environment);
-  const command = join(root, "bin", "agent-device");
   const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-  const script = `#!/bin/sh\nEXPLORE_CONTROLLER_CACHE=${quote(root)} exec ${quote(process.execPath)} ${quote(LAUNCHER)} agent-device "$@"\n`;
+  // The registry is part of the command too: controller calls run with a narrowed environment that drops it.
+  const registry = environment.EXPLORE_NPM_REGISTRY ? ` EXPLORE_NPM_REGISTRY=${quote(environment.EXPLORE_NPM_REGISTRY)}` : "";
+  const script = `#!/bin/sh\nEXPLORE_CONTROLLER_CACHE=${quote(root)}${registry} exec ${quote(process.execPath)} ${quote(LAUNCHER)} agent-device "$@"\n`;
+  // One command per pinned release and installation, so two Explore installs on a machine never swap each other's
+  // controller in the middle of a capture.
+  const digest = createHash("sha256").update(script).digest("hex").slice(0, 12);
+  const command = join(root, "bin", `agent-device-${CONTROLLER_PACKAGES["agent-device"].version}-${digest}`);
   if (existsSync(command) && readFileSync(command, "utf8") === script) return command;
   mkdirSync(dirname(command), { recursive: true, mode: 0o700 });
   const temporary = `${command}.${process.pid}.${randomUUID()}`;
   writeFileSync(temporary, script, { mode: 0o755 });
   renameSync(temporary, command);
   return command;
+}
+
+/** A fetch killed mid-download (a timed-out controller call) leaves its staging files; clear any over an hour old. */
+async function removeAbandonedStaging(root: string): Promise<void> {
+  const cutoff = Date.now() - 60 * 60_000;
+  for (const name of await readdir(root).catch(() => [] as string[])) {
+    if (!name.startsWith(".staging-")) continue;
+    const path = join(root, name);
+    const info = await stat(path).catch(() => undefined);
+    if (info && info.mtimeMs < cutoff) await rm(path, { recursive: true, force: true });
+  }
 }
 
 function downloadFailed(controller: ControllerName, message: string): CiError {
@@ -97,6 +113,7 @@ export async function ensureController(controller: ControllerName, options: {
   if (controllerCached(controller, environment)) return bin;
   const root = controllerCacheRoot(environment);
   await mkdir(root, { recursive: true, mode: 0o700 });
+  await removeAbandonedStaging(root);
   const staging = join(root, `.staging-${process.pid}-${randomUUID()}`);
   const tarball = `${staging}.tgz`;
   try {

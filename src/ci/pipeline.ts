@@ -74,6 +74,12 @@ function captureOptions(config: ExploreConfig, environment: NodeJS.ProcessEnv, r
  * Head and base run in parallel worker threads when nothing ties them together: an agent session is
  * shared, an injected runner belongs to this thread, and a plausible baseline needs head's runtime profile.
  */
+/** The controllers a capture of this config runs: agent-device always (it also compares screenshots), Argent when chosen. */
+async function prefetchControllers(config: ExploreConfig, environment: NodeJS.ProcessEnv, progress: Progress): Promise<void> {
+  await ensureController("agent-device", { environment, progress });
+  if (config.capture.controller === "argent") await ensureController("argent", { environment, progress });
+}
+
 export function captureSidesConcurrently(input: { plan: SourceCapturePlan; agent: boolean; injectedRunner: boolean; baselineMayExist: boolean }): boolean {
   return !input.agent && !input.injectedRunner && !input.baselineMayExist
     && input.plan.headCaptureSurfaceIds.length > 0 && input.plan.baseCaptureSurfaceIds.length > 0;
@@ -247,8 +253,9 @@ export async function runCiReview(options: {
 }) {
   const { projects, output, config, environment, state, assertCurrentHead, postComment } = options;
   const progress = options.progress ?? silentProgress;
-  // Argent is fetched before any EAS work, so a slow or blocked download is not charged to a controller call.
-  if (config.capture.controller === "argent") await ensureController("argent", { environment, progress });
+  // The controllers are fetched before any EAS work, so a blocked download fails before a session is paid for. agent-device
+  // also compares the screenshots. An injected runner (tests) runs no real controller.
+  if (!options.runner) await prefetchControllers(config, environment, progress);
   const pr = options.presentation;
   const now = options.now ?? Date.now;
   const secretValues = Object.entries(environment).filter(([key]) => /(?:TOKEN|SECRET|PASSWORD|API_KEY)/i.test(key)).flatMap(([, value]) => value ? [value] : []);
@@ -447,7 +454,7 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
   subscription?: boolean }) {
   const environment = options.environment ?? process.env;
   assertCheckout(options.project, options.sha);
-  if (options.config.capture.controller === "argent") await ensureController("argent", { environment, ...(options.progress ? { progress: options.progress } : {}) });
+  if (!options.runner) await prefetchControllers(options.config, environment, options.progress ?? silentProgress);
   const output = resolve(options.output);
   const relativeOutput = relative(await realpath(options.project), output);
   if (!relativeOutput.startsWith("..") || isAbsolute(relativeOutput)) throw new Error("Baseline output must be outside the source checkout");

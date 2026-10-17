@@ -113,6 +113,10 @@ test("the agent-device command runs the cached release with the caller's argumen
   await writeFile(join(directory, ".explore-controller.json"), "{}\n");
   const command = agentDeviceLauncher(environment);
   assert.equal(agentDeviceLauncher(environment), command, "the command is stable");
+  assert.match(command, new RegExp(`/bin/agent-device-${AGENT_DEVICE_VERSION}-[0-9a-f]{12}$`), "the command names its release");
+  const mirrored = agentDeviceLauncher({ ...environment, EXPLORE_NPM_REGISTRY: "https://npm.example.com" });
+  assert.notEqual(mirrored, command, "another setup gets a command of its own instead of rewriting this one");
+  assert.match(await readFile(mirrored, "utf8"), /EXPLORE_NPM_REGISTRY='https:\/\/npm\.example\.com'/, "the mirror reaches the narrowed controller environment");
   // The command names its cache, so a caller that narrows the environment still reaches it.
   const run = spawnSync(command, ["snapshot", "--json", "--", "-h"], { encoding: "utf8", env: { PATH: process.env.PATH } });
   assert.equal(run.status, 0, run.stderr);

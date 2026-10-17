@@ -158,7 +158,9 @@ test("a session with no single booted device is refused", async () => {
 });
 
 test("the first iOS deep link accepts the Open prompt once; later links open directly", async () => {
-  const prompt = { ...IOS_HOME, alertVisible: true, foregroundApp: "com.apple.springboard" };
+  // iOS 26.5 flags the prompt as an alert; its text is what identifies it as the link prompt.
+  const prompt = { ...IOS_HOME, alertVisible: true, foregroundApp: "com.apple.springboard",
+    roots: [...IOS_HOME.roots, { type: "Alert", label: "Open in “euxy”?", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.2 }, children: [] }] };
   const { run, calls, context } = harness("ios", { "list-devices": IOS_DEVICES, "open-url": {}, "gesture-tap": {}, "ui-tree": [prompt, IOS_HOME] });
   const first = await run(["open", BUNDLE, "euxy://settings", ...flags("ios")]);
   assert.equal(first.exitCode, 0);
@@ -216,8 +218,11 @@ test("keyboard dismiss matches agent-device: Android presses back; iOS taps a di
   assert.deepEqual(dismissed.json.data, { platform: "android", action: "dismiss", wasVisible: true, dismissed: true, visible: false });
   assert.deepEqual(android.calls.find(call => call.tool === "button").args, { udid: "emulator-5554", button: "back" });
 
+  // agent-device fails with this message when the keyboard has no dismiss key, and callers fall back to the return key.
   const noKey = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": { ...IOS_HOME, keyboardVisible: true } });
-  assert.deepEqual((await noKey.run(["keyboard", "dismiss", ...flags("ios")])).json.data, { platform: "ios", action: "dismiss", wasVisible: true, dismissed: false, visible: true });
+  const failed = await noKey.run(["keyboard", "dismiss", ...flags("ios")]);
+  assert.equal(failed.exitCode, 1);
+  assert.match(failed.json.error.message, /^Unable to dismiss the iOS keyboard/);
 
   const hidden = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": IOS_HOME });
   assert.equal((await hidden.run(["keyboard", "dismiss", ...flags("ios")])).json.data.wasVisible, false);
@@ -399,4 +404,93 @@ test("fold moves a foldable to a pose and forgets the old panel's geometry", asy
   assert.equal(context.state.refs, undefined);
   assert.equal(context.state.generation, generation + 1);
   assert.equal((await run(["fold", "sideways", ...flags("ios")])).json.error.code, "INVALID_ARGS");
+});
+
+test("an alert that is not the link prompt is left for capture to answer", async () => {
+  const other = { ...IOS_HOME, alertVisible: true, foregroundApp: "com.apple.springboard",
+    roots: [{ type: "Alert", label: "Delete all data?", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.2 }, children: [
+      { type: "Button", label: "Delete", frame: { x: 0.5, y: 0.55, width: 0.4, height: 0.05 } }] }] };
+  const { run, calls, context } = harness("ios", { "list-devices": IOS_DEVICES, "open-url": {}, "gesture-tap": {}, describe: { description: "" }, "ui-tree": other });
+  assert.equal((await run(["open", BUNDLE, "euxy://settings", ...flags("ios")])).exitCode, 0);
+  assert.equal(calls.some(call => call.tool === "gesture-tap"), false, "nothing is pressed");
+  assert.equal(context.state.deepLinkPromptAccepted, undefined);
+});
+
+test("a failed read with no roots is not taken for the blind link prompt", async () => {
+  const { run, calls, context } = harness("ios", { "list-devices": IOS_DEVICES, "open-url": {}, "gesture-tap": {}, screenshot: {}, "ui-tree": [{ ...IOS_HOME, roots: [], foregroundApp: undefined }] });
+  context.scratchImage = { path: "/work/argent-scratch.png", read: async () => image("screenshot-ios27-duo-open-prompt.png") };
+  await run(["open", BUNDLE, "euxy://", ...flags("ios")]);
+  assert.equal(calls.some(call => call.tool === "screenshot" || call.tool === "gesture-tap"), false);
+});
+
+test("describe's Open is read only from a line Argent printed, not from app text that spells one out", () => {
+  const spoof = `ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n  AXStaticText "x AXButton "Open" (0.010, 0.010, 0.050, 0.050)"  (0.1, 0.1, 0.5, 0.05)\n  AXButton "Open"  (0.418, 0.473, 0.300, 0.071)`;
+  assert.deepEqual(describedButton(spoof, "Open"), { x: 0.418, y: 0.473, width: 0.3, height: 0.071 });
+});
+
+test("an app's own Done above the keyboard is never pressed to dismiss it", async () => {
+  const withDone = { ...IOS_HOME, keyboardVisible: true, roots: [{ type: "Other", frame: { x: 0, y: 0, width: 1, height: 1 }, children: [
+    { type: "Button", label: "Done", frame: { x: 0.8, y: 0.06, width: 0.15, height: 0.05 } }] }] };
+  const { run, calls } = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": withDone, "gesture-tap": {} });
+  assert.equal((await run(["keyboard", "dismiss", ...flags("ios")])).exitCode, 1);
+  assert.equal(calls.some(call => call.tool === "gesture-tap"), false);
+});
+
+test("iOS fill stops when erasing the field stops partway, and types nothing", async () => {
+  const filled = structuredClone(IOS_RENAME);
+  flatten(filled).find(node => node.type === "TextField" && node.frame).value = "Old";
+  const { run, calls } = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": filled, "gesture-tap": {}, "run-sequence": { completed: 1, total: 3, steps: [] }, keyboard: {} });
+  const snapshot = await run(["snapshot", ...flags("ios")]);
+  const field = snapshot.json.data.nodes.find(node => node.type === "TextField");
+  const result = await run(["fill", field.ref, ...flags("ios"), "--", "New"]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.json.error.message, /after 1 of 3 keys/);
+  assert.equal(calls.some(call => call.tool === "keyboard"), false);
+});
+
+test("a truncated tree is reported as truncated", async () => {
+  const { run } = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": { ...IOS_HOME, truncated: true } });
+  assert.equal((await run(["snapshot", ...flags("ios")])).json.data.truncated, true);
+});
+
+test("Android disabled controls are reported disabled (the recorded rename screen has four)", () => {
+  const { nodes } = snapshotFromTree(ANDROID_RENAME, "android", 1, BUNDLE);
+  const rename = nodes.find(node => node.label === "Rename" && node.type === "Button");
+  assert.ok(rename, "the rename fixture has its Rename button");
+  assert.equal(rename.enabled, false);
+  assert.equal(rename.hittable, false);
+});
+
+test("an Android permission dialog from another package stays in the snapshot as an alert", async () => {
+  const dialog = { ...ANDROID_HOME, roots: [...ANDROID_HOME.roots, { type: "android.widget.FrameLayout", bundleId: "com.google.android.permissioncontroller",
+    frame: { x: 0.1, y: 0.35, width: 0.8, height: 0.3 }, children: [
+      { type: "android.widget.TextView", label: "Allow euxy to send you notifications?", frame: { x: 0.15, y: 0.4, width: 0.7, height: 0.05 } },
+      { type: "android.widget.Button", label: "Allow", frame: { x: 0.15, y: 0.55, width: 0.7, height: 0.05 } }] }] };
+  const { run } = harness("android", { "list-devices": ANDROID_DEVICES, "ui-tree": dialog });
+  const snapshot = (await run(["snapshot", ...flags("android")])).json.data;
+  assert.ok(snapshot.nodes.some(node => node.type === "Button" && node.label === "Allow"), "the dialog's buttons can be found");
+  assert.ok(snapshot.nodes.some(node => node.type === "Alert"), "capture sees an alert covering the app");
+  assert.ok(!snapshot.nodes.some(node => /systemui/.test(JSON.stringify(node))), "the system UI is still left out");
+  assert.deepEqual((await run(["alert", "get", ...flags("android")])).json.data.alert.buttons, ["Allow"]);
+});
+
+test("system back swipes from the iOS edge; Android prefers an in-app back control", async () => {
+  const ios = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": IOS_HOME, "gesture-swipe": {} });
+  assert.equal((await ios.run(["back", "--system", ...flags("ios")])).exitCode, 0);
+  assert.deepEqual(ios.calls.at(-1).args, { udid: UDID, fromX: 0.05, fromY: 0.5, toX: 0.8, toY: 0.5, momentum: false });
+
+  const up = { ...ANDROID_HOME, roots: [...ANDROID_HOME.roots.filter(root => root.bundleId !== BUNDLE), { type: "android.widget.FrameLayout", bundleId: BUNDLE,
+    frame: { x: 0, y: 0, width: 1, height: 1 }, children: [{ type: "android.widget.ImageButton", contentDescription: "Navigate up", frame: { x: 0, y: 0.05, width: 0.1, height: 0.05 } }] }] };
+  const android = harness("android", { "list-devices": ANDROID_DEVICES, "ui-tree": up, "gesture-tap": {}, button: {} });
+  assert.deepEqual((await android.run(["back", "--in-app", ...flags("android")])).json.data, { action: "back", mode: "in-app" });
+  assert.equal(android.calls.some(call => call.tool === "button"), false);
+  const none = harness("android", { "list-devices": ANDROID_DEVICES, "ui-tree": ANDROID_HOME, button: {} });
+  assert.equal((await none.run(["back", "--in-app", ...flags("android")])).json.error.message, "in-app back control is not available");
+  assert.deepEqual((await none.run(["back", ...flags("android")])).json.data, { action: "back", mode: "system" });
+});
+
+test("open without --relaunch keeps a running app as it is", async () => {
+  const { run, calls } = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": IOS_HOME, "restart-app": {} });
+  assert.equal((await run(["open", BUNDLE, ...flags("ios")])).exitCode, 0);
+  assert.equal(calls.some(call => call.tool === "restart-app"), false);
 });

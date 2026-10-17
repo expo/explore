@@ -77,7 +77,7 @@ export function parseCommand(argv: readonly string[]): { positional: string[]; f
   return { positional, flags };
 }
 
-type ArgentNode = { role?: string; type?: string; label?: string; identifier?: string; value?: string; contentDescription?: string;
+type ArgentNode = { role?: string; type?: string; label?: string; identifier?: string; value?: string; contentDescription?: string; disabled?: boolean;
   frame?: Rect; traits?: string[]; hidden?: boolean; selected?: boolean; password?: boolean; bundleId?: string; children?: ArgentNode[] };
 export type ArgentTree = { schemaVersion?: number; source?: string; screen?: { width: number; height: number }; roots?: ArgentNode[];
   truncated?: boolean; alertVisible?: boolean; keyboardVisible?: boolean; foregroundApp?: string };
@@ -110,7 +110,9 @@ export function snapshotFromTree(tree: ArgentTree, platform: ArgentPlatform, gen
     throw new Error("ui-tree did not report the screen size");
   }
   const app = bundleId ?? tree.foregroundApp;
-  const roots = (tree.roots ?? []).filter(root => platform === "ios" || !app || root.bundleId === undefined || root.bundleId === app);
+  // Android's status bar and navigation (com.android.systemui) are not part of the app; a dialog another package draws
+  // over it (a runtime permission prompt) is, because it covers the app and setup has to answer it.
+  const roots = (tree.roots ?? []).filter(root => platform === "ios" || root.bundleId !== ANDROID_SYSTEM_UI);
   const nodes: Record<string, unknown>[] = [];
   const refs: NonNullable<ArgentBridgeState["refs"]> = {};
   const seen = new Set<string>();
@@ -129,7 +131,8 @@ export function snapshotFromTree(tree: ArgentTree, platform: ArgentPlatform, gen
       index = nodes.length;
       const ref = `e${index + 1}`;
       const traits = node.traits ?? [];
-      const enabled = !traits.includes("notEnabled");
+      // iOS marks a disabled element with the notEnabled trait, Android with disabled.
+      const enabled = !traits.includes("notEnabled") && node.disabled !== true;
       const visible = node.hidden !== true;
       nodes.push({ depth, index, ...(parentIndex === undefined ? {} : { parentIndex }), type, ref,
         rect: appRoot ? { x: 0, y: 0, width: screen.width, height: screen.height } : rect,
@@ -151,10 +154,13 @@ export function snapshotFromTree(tree: ArgentTree, platform: ArgentPlatform, gen
 const centre = (rect: Rect, screen: { width: number; height: number }) =>
   ({ x: (rect.x + rect.width / 2) / screen.width, y: (rect.y + rect.height / 2) / screen.height });
 
-/** Argent read nothing: one bare root and no foreground app. On iOS 27.1 this persists while the link prompt is up. */
+/**
+ * Argent read nothing: exactly one bare root and no foreground app, which is what iOS 27.1 gives while the link prompt
+ * is up. A read that returned no roots at all is a failed read, not this state.
+ */
 function blindTree(tree: ArgentTree): boolean {
   const roots = tree.roots ?? [];
-  return !tree.foregroundApp && roots.every(root => (root.children ?? []).length === 0 && !root.label && !root.type);
+  return !tree.foregroundApp && roots.length === 1 && (roots[0]!.children ?? []).length === 0 && !roots[0]!.label && !roots[0]!.type;
 }
 
 /** A tree with the app's root and something in it: what a relaunch must reach before the app is usable. */
@@ -179,18 +185,26 @@ export function iosRuntimeVersion(runtime: unknown): string | undefined {
 
 const DEEP_LINK_PROMPT_CONFIRM = { dxPoints: 74, dyPoints: 37 };
 const KEYBOARD_DISMISS_LABELS = ["Hide keyboard", "Dismiss keyboard", "Done"];
+// A keyboard covers the lower part of the screen; its keys start below this share of the height.
+const KEYBOARD_TOP = 0.4;
 const ALERT_PREFERRED_BUTTONS = ["Open", "OK", "Allow", "Allow While Using App", "Continue"];
 const READ_TOOLS = new Set(["ui-tree", "list-devices", "screenshot", "foreground-app", "await-screen-idle", "describe"]);
 const SPRINGBOARD = "com.apple.springboard";
+const ANDROID_SYSTEM_UI = "com.android.systemui";
 const OPEN_IN_APP_PROMPT = /^Open in “.+”\?$/;
 
 /**
- * iOS's "Open in “<app>”?" link prompt. Argent 0.29 does not always flag it as an alert: on iOS 27.1 (iPhone Duo)
- * `alertVisible` stays false while SpringBoard shows it, so the prompt is also recognized by its text.
+ * iOS's "Open in “<app>”?" link prompt, recognized by its own text. Argent 0.29 does not always flag it as an alert
+ * (on iOS 27.1, iPhone Duo, `alertVisible` stays false while SpringBoard shows it), and another alert must never be
+ * taken for it: the bridge presses this prompt's Open on its own.
  */
 export function openInAppPromptShowing(tree: ArgentTree): boolean {
-  if (tree.alertVisible) return true;
-  return tree.foregroundApp === SPRINGBOARD && flatten(tree).some(node => OPEN_IN_APP_PROMPT.test(node.label ?? ""));
+  return flatten(tree).some(node => OPEN_IN_APP_PROMPT.test(node.label ?? ""));
+}
+
+/** Any system alert in front of the app: one Argent flags, or the link prompt it does not. */
+function alertShowing(tree: ArgentTree): boolean {
+  return tree.alertVisible === true || (tree.foregroundApp === SPRINGBOARD && openInAppPromptShowing(tree));
 }
 
 /**
@@ -228,7 +242,8 @@ export function findOpenButton(frame: DecodedFrame): { x: number; y: number } | 
       }
     }
     const width = shape.right - shape.left + 1, height = shape.bottom - shape.top + 1;
-    if (width < columns * 0.15 || width < height * 1.5) continue;
+    // A dialog button: wide, a few percent of the screen tall, and well under its full width.
+    if (width < columns * 0.15 || width > columns * 0.6 || width < height * 1.5 || height < rows * 0.03 || height > rows * 0.12) continue;
     if (!best || shape.cells > best.cells) best = shape;
   }
   if (!best) return undefined;
@@ -242,7 +257,8 @@ export function findOpenButton(frame: DecodedFrame): { x: number; y: number } | 
 export function describedButton(description: unknown, label: string): Rect | undefined {
   if (typeof description !== "string") return undefined;
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`AXButton "${escaped}"\\s+\\(([\\d.]+), ([\\d.]+), ([\\d.]+), ([\\d.]+)\\)`).exec(description);
+  // Only a whole line Argent printed counts, so an app label that spells out a button line cannot be picked.
+  const match = new RegExp(`^\\s*AXButton "${escaped}"\\s+\\(([\\d.]+), ([\\d.]+), ([\\d.]+), ([\\d.]+)\\)\\s*$`, "m").exec(description);
   if (!match) return undefined;
   const [x, y, width, height] = match.slice(1).map(Number) as [number, number, number, number];
   return [x, y, width, height].every(finite) && width > 0 && height > 0 ? { x, y, width, height } : undefined;
@@ -343,6 +359,8 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         }
         const bundleId = target.bundleId ?? bundleFlag;
         if (!bundleId) throw new BridgeFailure("INVALID_ARGS", "open needs a bundle identifier or a URL.");
+        // agent-device's plain open brings a running app forward and keeps its state; only --relaunch restarts it.
+        if (flags.relaunch !== true && appReady(await tree(), bundleId)) return success({ ...deviceEnvelope(bundleId), appName: bundleId });
         await beforeAction();
         await relaunch(bundleId);
         return success({ ...deviceEnvelope(bundleId), appName: bundleId });
@@ -354,13 +372,18 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         const converted = snapshotFromTree(current, platform, state.generation, bundleFlag);
         state.refs = converted.refs;
         state.screen = converted.screen;
-        if (openInAppPromptShowing(current) && !converted.nodes.some(node => node.type === "Alert")
+        const dialog = platform === "android" ? readAlert(current) : undefined;
+        if (dialog && !converted.nodes.some(node => node.type === "Alert")) {
+          // An Android dialog from another package covers the app: report it as agent-device does, as an Alert.
+          converted.nodes.push({ depth: 1, index: converted.nodes.length, parentIndex: 0, type: "Alert", ref: `e${converted.nodes.length + 1}`,
+            rect: { x: 0, y: 0, width: converted.screen.width, height: converted.screen.height }, label: dialog.message || "System dialog", enabled: true, hittable: false });
+        } else if (platform === "ios" && alertShowing(current) && !converted.nodes.some(node => node.type === "Alert")
           && !(bundleFlag && appReady(current, bundleFlag))) {
           // A system alert (SpringBoard's) hides the app's tree; report it the way agent-device does, as an Alert node.
           converted.nodes.push({ depth: 1, index: converted.nodes.length, parentIndex: 0, type: "Alert", ref: `e${converted.nodes.length + 1}`,
             rect: { x: 0, y: 0, width: converted.screen.width, height: converted.screen.height }, label: "System alert", enabled: true, hittable: false });
         }
-        return success({ nodes: converted.nodes, truncated: false, refsGeneration: state.generation,
+        return success({ nodes: converted.nodes, truncated: current.truncated === true, refsGeneration: state.generation,
           ...(current.foregroundApp ? { appBundleId: current.foregroundApp, appName: current.foregroundApp } : {}),
           snapshotQuality: { state: "healthy", backend: "argent" } });
       }
@@ -428,7 +451,11 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         }
         // Argent's iOS `fill` cannot see React Native's focused field, so the old text is erased and the new one typed.
         const erase = target.secure ? 64 : (target.value ?? "").length;
-        if (erase > 0) await call("run-sequence", { steps: Array.from({ length: erase }, () => ({ tool: "keyboard", args: { udid: state.udid, key: "backspace" } })) });
+        if (erase > 0) {
+          const erased = await call("run-sequence", { steps: Array.from({ length: erase }, () => ({ tool: "keyboard", args: { udid: state.udid, key: "backspace" } })) });
+          // run-sequence answers normally when it stops partway; typing over half-erased text would leave a wrong value.
+          if (erased.completed !== erased.total) return failure("COMMAND_FAILED", `Erasing the field stopped after ${String(erased.completed)} of ${String(erased.total)} keys; nothing was typed.`);
+        }
         if (text) await call("keyboard", { text });
         if (!target.secure) {
           const after = flatten(await tree()).find(node => node.frame && Math.abs(node.frame.x * size.width - target.rect.x) < 2
@@ -453,15 +480,17 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         await beforeAction();
         if (platform === "android") await call("button", { button: "back" });
         else {
-          // agent-device taps the keyboard's own dismiss control and reports failure when there is none.
-          const key = flatten(current).find(node => KEYBOARD_DISMISS_LABELS.includes(node.label ?? "") && node.frame);
-          if (!key) return success({ platform, action: "dismiss", wasVisible: true, dismissed: false, visible: true });
+          // agent-device taps the keyboard's own dismiss control, and fails with this message when there is none, which
+          // callers answer with the return key. Only a key in the keyboard's area counts: an app's "Done" above it is not one.
+          const key = flatten(current).find(node => KEYBOARD_DISMISS_LABELS.includes(node.label ?? "") && node.frame && node.frame.y >= KEYBOARD_TOP);
+          if (!key) return failure("COMMAND_FAILED", "Unable to dismiss the iOS keyboard: the keyboard exposes no dismiss control.");
           const size = current.screen ?? await screen();
           await tap(...Object.values(centre({ x: key.frame!.x * size.width, y: key.frame!.y * size.height,
             width: key.frame!.width * size.width, height: key.frame!.height * size.height }, size)) as [number, number]);
         }
         await context.sleep(500);
         const visible = (await tree()).keyboardVisible === true;
+        if (visible && platform === "ios") return failure("COMMAND_FAILED", "Unable to dismiss the iOS keyboard: it is still showing after its dismiss key was pressed.");
         return success({ platform, action: "dismiss", wasVisible: true, dismissed: !visible, visible });
       }
       case "scroll": {
@@ -485,16 +514,28 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
       case "back": {
         await ensureDevice();
         await beforeAction();
-        if (platform === "android") { await call("button", { button: "back" }); return success({ action: "back" }); }
+        if (flags.system === true) {
+          // agent-device's system back: the hardware button on Android, the edge swipe on iOS.
+          if (platform === "android") await call("button", { button: "back" });
+          else await call("gesture-swipe", { fromX: 0.05, fromY: 0.5, toX: 0.8, toY: 0.5, momentum: false });
+          return success({ action: "back", mode: "system" });
+        }
         const current = await tree();
-        const size = current.screen ?? await screen();
         const nodes = flatten(current);
-        const bar = nodes.find(node => node.type === "NavigationBar" && node.frame);
-        const button = bar && (bar.children ?? []).flatMap(function all(node: ArgentNode): ArgentNode[] { return [node, ...(node.children ?? []).flatMap(all)]; })
-          .find(node => node.type === "Button" && node.frame && node.frame.x * size.width < size.width / 3);
-        if (!button?.frame || flags.system === true) return failure("COMMAND_FAILED", "in-app back control is not available");
-        await tap((button.frame.x + button.frame.width / 2), (button.frame.y + button.frame.height / 2));
-        return success({ action: "back" });
+        const button = platform === "android"
+          ? nodes.find(node => /^(Navigate up|Back)$/i.test(node.contentDescription ?? node.label ?? "") && node.frame)
+          : (() => {
+            const bar = nodes.find(node => node.type === "NavigationBar" && node.frame);
+            return bar && (bar.children ?? []).flatMap(function all(node: ArgentNode): ArgentNode[] { return [node, ...(node.children ?? []).flatMap(all)]; })
+              .find(node => node.type === "Button" && node.frame && node.frame.x < 1 / 3);
+          })();
+        if (button?.frame) {
+          await tap(button.frame.x + button.frame.width / 2, button.frame.y + button.frame.height / 2);
+          return success({ action: "back", mode: "in-app" });
+        }
+        if (flags["in-app"] === true || platform === "ios") return failure("COMMAND_FAILED", "in-app back control is not available");
+        await call("button", { button: "back" });
+        return success({ action: "back", mode: "system" });
       }
       case "wait": {
         if (positional[0] === "stable") {
@@ -582,6 +623,8 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
       }
       if (!openInAppPromptShowing(current)) {
         if (bundleId && appReady(current, bundleId)) { state.deepLinkPromptAccepted = true; return; }
+        // Another alert is the app's or the system's own business; capture answers it, the bridge does not.
+        if (current.alertVisible) return;
         continue;
       }
       const size = current.screen;
@@ -610,12 +653,14 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
   }
 
   function readAlert(current: ArgentTree) {
-    if (!openInAppPromptShowing(current)) return undefined;
+    const androidDialog = platform === "android"
+      ? (current.roots ?? []).find(root => root.bundleId && root.bundleId !== ANDROID_SYSTEM_UI && root.bundleId !== (bundleFlag ?? current.foregroundApp))
+      : undefined;
+    if (!androidDialog && !alertShowing(current)) return undefined;
     const size = current.screen ?? state.screen ?? { width: 1, height: 1 };
     const nodes = flatten(current);
     const container = nodes.find(node => node.type === "Alert")
-      ?? nodes.find(node => (node.children ?? []).length > 0 && OPEN_IN_APP_PROMPT.test(node.label ?? "")) ?? (platform === "android"
-      ? (current.roots ?? []).find(root => root.bundleId && root.bundleId !== (bundleFlag ?? current.foregroundApp)) : undefined);
+      ?? nodes.find(node => (node.children ?? []).length > 0 && OPEN_IN_APP_PROMPT.test(node.label ?? "")) ?? androidDialog;
     if (!container) return undefined;
     const inside = flatten({ roots: [container] });
     const buttons = inside.filter(node => /Button/.test(node.type ?? node.role ?? "") && node.label && node.frame)

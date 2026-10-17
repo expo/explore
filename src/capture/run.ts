@@ -492,7 +492,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     const controllerConfig = join(simulatorProject, "agent-device.json");
     await writeFile(controllerConfig, "{}\n", { flag: "wx", mode: 0o400 });
     const argent = controller === "argent"
-      ? await argentControllerInvocation({ directory: simulatorProject, connection: handoff.connection, platform: options.platform, environment: restrictedEnvironment, bundleId: options.bundleId })
+      ? await argentControllerInvocation({ directory: simulatorProject, connection: handoff.connection, platform: options.platform, environment: restrictedEnvironment, sourceEnvironment, bundleId: options.bundleId })
       : undefined;
     const controllerEnvironment = argent?.environment ?? { ...restrictedEnvironment, AGENT_DEVICE_CONFIG: controllerConfig,
       AGENT_DEVICE_DAEMON_BASE_URL: handoff.connection.daemonBaseUrl, AGENT_DEVICE_DAEMON_AUTH_TOKEN: handoff.connection.daemonAuthToken,
@@ -503,8 +503,9 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     setStage(runtimeStage);
     runtime = collectRuntime({ ...options, agentDeviceCommand: controllerCommand }, controllerEnvironment);
     runtime.colorScheme = colorSchemes[0]!;
-    // The version is descriptive; a capture proceeds without it and records "unknown". Argent names it with the device.
-    if (runtime.osVersion === "unknown") try {
+    // The version is descriptive; a capture proceeds without it and records "unknown". Argent names it with the device;
+    // agent-device's is always taken from the session, as before.
+    if (runtime.osVersion === "unknown" || controller !== "argent") try {
       runtime.osVersion = await simulatorOsVersion(eas(["simulator:get", "--id", sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout,
         runtime.controllerDeviceId, options.fetch ?? fetch, options.platform);
     } catch (error) {
