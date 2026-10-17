@@ -765,16 +765,40 @@ async function verifyDeployment(check: { origin: string; token: string; reports:
         "Check EAS Hosting availability and rerun the deploy job.", { retryable: true, cause: error });
     }
   };
+  // What the token serves differs from what was deployed: a listing or report that does not match, or undefined.
+  const mismatch = async (): Promise<CiError | undefined> => {
+    for (const expected of check.reports) {
+      const report = await get(`/p/${check.token}/report.zip${expected.query}`);
+      const bytes = report.status === 200 ? new Uint8Array(await report.arrayBuffer()) : new Uint8Array();
+      if (report.status !== 200 || bytes.byteLength !== expected.bytes || createHash("sha256").update(bytes).digest("hex") !== expected.sha256) {
+        return deployError("PREVIEW_VERIFY_FAILED", "The hosted preview did not serve the exact report that was deployed.",
+          "Rerun the deploy job; the deployment's sealed key or ciphertext did not match.", { details: { status: report.status, report: expected.query } });
+      }
+    }
+    if (check.listing !== undefined) {
+      const list = await get(`/p/${check.token}/reports.json`);
+      const body = list.status === 200 ? await list.text() : "";
+      if (list.status !== 200 || body !== check.listing) return deployError("PREVIEW_VERIFY_FAILED", "The hosted preview did not list the targets that were deployed.",
+        "Rerun the deploy job; the deployment's report listing did not match.", { details: { status: list.status } });
+    }
+    return undefined;
+  };
   const started = check.now();
   let liveAfterMs = 0;
   for (;;) {
     // A browser's request: the token page negotiates, and anything that does not ask for HTML gets the Markdown index.
     const shell = await get(`/p/${check.token}`, "text/html");
-    if (shell.status === 200 && (shell.headers.get("content-type") ?? "").startsWith("text/html")) { liveAfterMs = check.now() - started; break; }
+    const serving = shell.status === 200 && (shell.headers.get("content-type") ?? "").startsWith("text/html");
+    // An alias with a fixed token (the example report) serves the token page from the deployment it still points at, so
+    // it has moved only once it serves this deployment's listing and reports as well.
+    const stale = serving && check.alias ? await mismatch() : undefined;
+    if (serving && !stale) { liveAfterMs = check.now() - started; break; }
     const waitedMs = check.now() - started;
     if (waitedMs > check.timeoutMs) {
       // An alias that does not serve the token page yet still points at an earlier deployment; the deployment itself not serving is a failed deployment.
-      if (check.alias) throw deployError("PREVIEW_ALIAS_BEHIND", `The alias ${check.origin} still answers HTTP ${shell.status} ${Math.round(waitedMs / 1000)} s after eas deploy returned.`,
+      if (check.alias) throw deployError("PREVIEW_ALIAS_BEHIND", stale
+        ? `The alias ${check.origin} still serves an earlier deployment ${Math.round(waitedMs / 1000)} s after eas deploy returned.`
+        : `The alias ${check.origin} still answers HTTP ${shell.status} ${Math.round(waitedMs / 1000)} s after eas deploy returned.`,
         "Nothing to do: the alias catches up on its own, and the next push verifies it again.", { retryable: true, details: { origin: check.origin, status: shell.status, waitedMs } });
       throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview did not become available (HTTP ${shell.status}).`,
         "Rerun the deploy job; if the deployment keeps failing verification, inspect it in the EAS Hosting dashboard.", { retryable: true, details: { origin: check.origin, status: shell.status, waitedMs } });
@@ -785,20 +809,8 @@ async function verifyDeployment(check: { origin: string; token: string; reports:
   if (api.status !== 200 || !(api.headers.get("content-type") ?? "").startsWith("application/json")) {
     throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview did not answer the agent API (HTTP ${api.status}).`, "Rerun the deploy job; if the deployment keeps failing verification, inspect it in the EAS Hosting dashboard.", { retryable: true });
   }
-  for (const expected of check.reports) {
-    const report = await get(`/p/${check.token}/report.zip${expected.query}`);
-    const bytes = report.status === 200 ? new Uint8Array(await report.arrayBuffer()) : new Uint8Array();
-    if (report.status !== 200 || bytes.byteLength !== expected.bytes || createHash("sha256").update(bytes).digest("hex") !== expected.sha256) {
-      throw deployError("PREVIEW_VERIFY_FAILED", "The hosted preview did not serve the exact report that was deployed.",
-        "Rerun the deploy job; the deployment's sealed key or ciphertext did not match.", { details: { status: report.status, report: expected.query } });
-    }
-  }
-  if (check.listing !== undefined) {
-    const list = await get(`/p/${check.token}/reports.json`);
-    const body = list.status === 200 ? await list.text() : "";
-    if (list.status !== 200 || body !== check.listing) throw deployError("PREVIEW_VERIFY_FAILED", "The hosted preview did not list the targets that were deployed.",
-      "Rerun the deploy job; the deployment's report listing did not match.", { details: { status: list.status } });
-  }
+  // The deployment itself serves exactly what was deployed or it failed; the alias was checked while it was polled.
+  if (!check.alias) { const failure = await mismatch(); if (failure) throw failure; }
   const other = check.token.endsWith("a") ? `${check.token.slice(0, -1)}b` : `${check.token.slice(0, -1)}a`;
   // Errors name each probe by its shape: the near-miss token differs from the real one in its last character only.
   for (const [path, shape] of [["/", "/"], [`/p/${other}`, "/p/<wrong token>"], [`/p/${other}/report.zip`, "/p/<wrong token>/report.zip"],

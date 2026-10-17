@@ -66,7 +66,7 @@ async function exportFixture(t, options) {
 }
 
 /** A fake EAS CLI plus a fake deployment: `deploy` captures the sealed report and .env, then serves them like the Worker would. */
-function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", aliasOrigin = "https://acme-explore--bluesky.expo.app", accounts = ["brent-org"], failDeploy = false, aliasServes = true, existingComment } = {}) {
+function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", aliasOrigin = "https://acme-explore--bluesky.expo.app", accounts = ["brent-org"], failDeploy = false, aliasServes = true, aliasListing, existingComment } = {}) {
   let deploys = 0;
   let latestComment = existingComment;
   const calls = []; const captured = {};
@@ -107,6 +107,8 @@ function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", alia
         ? new Response("<!doctype html>", { status: 200, headers: { "content-type": "text/html; charset=utf-8" } })
         : new Response("# Expo Explore report", { status: 200, headers: { "content-type": "text/markdown; charset=utf-8" } });
       if (match[2] === "api/v1") return new Response(JSON.stringify({ kind: "pr-review" }), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+      // aliasListing: the alias still points at an earlier deployment of the same token and reports, listed the old way.
+      if (match[2] === "reports.json" && aliasListing && url.origin === aliasOrigin) return new Response(aliasListing, { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
       if (match[2] === "reports.json") return new Response(JSON.stringify(captured.listing.map(({ path: _path, ...rest }) => rest)), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
       // Selection as the Worker does it: ?target= by id, ?platform= by id and then by platform, else the first.
       const target = url.searchParams.get("target"), platform = url.searchParams.get("platform");
@@ -473,6 +475,18 @@ test("a fixture preview seals each platform's ZIP as is behind one alias and lis
   assert.equal(logged.filter(line => /^Deployment https:\/\/acme-explore--1lcbdcpwn3\.expo\.app serves this run's report \(\d+ s after eas deploy returned\)\./.test(line)).length, 1);
   assert.equal(logged.filter(line => /^::warning::The alias https:\/\/explore-viewer-pr--pr-12\.expo\.app still answers HTTP 404 \d+ s after eas deploy returned\. The pull request links the deployment https:\/\/acme-explore--1lcbdcpwn3\.expo\.app instead\./.test(line)).length, 1);
   assert.ok(behind.requests.some(request => request.url.origin === "https://explore-viewer-pr--pr-12.expo.app"), "the alias was polled");
+
+  // The example report keeps one token and the same fixtures, so an alias still on the previous deployment serves the
+  // token page and the same report: only its listing (an older Viewer's) gives it away. That is an alias behind too.
+  const stale = easFixture({ aliasOrigin: "https://explore-viewer-pr--pr-12.expo.app", aliasListing: JSON.stringify([{ platform: "ios" }]) });
+  clock = now; logged.length = 0;
+  process.stderr.write = chunk => { logged.push(String(chunk)); return true; };
+  try {
+    linked = await deployFixturePreview({ reports: [{ platform: "ios", zipPath: join(root, "ios.zip") }], project: "explore-viewer-pr", owner: "brent-org", alias: "pr-12", token,
+      exportPath, environment: deployEnvironment, transport: stale.transport, run: stale.run, now: ticking, verifyTimeoutMs: 60_000 });
+  } finally { process.stderr.write = quiet; }
+  assert.equal(linked.previewUrl, `https://acme-explore--1lcbdcpwn3.expo.app/p/${token}`);
+  assert.equal(logged.filter(line => /^::warning::The alias https:\/\/explore-viewer-pr--pr-12\.expo\.app still serves an earlier deployment \d+ s after eas deploy returned\./.test(line)).length, 1);
 
   await assert.rejects(deployFixturePreview({ reports: [{ platform: "ios", zipPath: join(root, "ios.zip") }, { platform: "ios", zipPath: join(root, "ios.zip") }],
     project: "explore-viewer-pr", alias: "pr-12", exportPath, environment: deployEnvironment, transport: eas.transport, run: eas.run, verifyTimeoutMs: 1 }),

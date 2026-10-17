@@ -85,6 +85,8 @@ You need Node.js 24.12+. Reviewing a change needs an Expo account and an Expo SD
 <details>
 <summary><strong>Run it yourself</strong></summary>
 
+There are two ways to use Explore: review a change to your Expo app, which needs an Expo account, or explore an iOS or Android build of any app directly, which needs no Expo account when it runs on your Mac.
+
 **Review a change**, from your app's directory:
 
 1. Make the app buildable on EAS, if it is not yet:
