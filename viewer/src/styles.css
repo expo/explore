@@ -1065,7 +1065,11 @@ code {
     filter 170ms ease-in-out calc(var(--toolbar-motion) * 0.35);
 }
 /* Compare's count of changed screens rides on its button's corner. */
-.toolbar-button:has(> .toolbar-badge), .toolbar-button:has(> .key-hint) { position: relative; }
+.toolbar-button:has(> .toolbar-corner) { position: relative; }
+/* The button's top-right corner: the held-modifier key hint, then Compare's changed-count badge,
+   side by side so neither covers the neighbouring button's hint. */
+.toolbar-corner { position: absolute; top: -6px; right: -6px; display: flex; align-items: center; gap: 3px; pointer-events: none; }
+.toolbar-corner > .key-hint, .toolbar-corner > .toolbar-badge { position: static; }
 .camera-action-button:has(> .key-hint), .collapsed-platform:has(> .key-hint), .compare-nav-picker:has(> .key-hint) { position: relative; }
 
 /* The key that completes a chord, on a button's corner while its modifier is held: hold ⌃ and
@@ -1092,7 +1096,6 @@ code {
   pointer-events: none;
   animation: key-hint-in 100ms ease-out;
 }
-.toolbar-button:has(> .toolbar-badge) > .key-hint { right: auto; left: -6px; }
 @keyframes key-hint-in {
   from { opacity: 0; transform: translateY(2px); }
   to { opacity: 1; transform: none; }

@@ -90,10 +90,12 @@ export function CanvasToolbar(props: CanvasToolbarProps) {
                 onClick={() => props.onSelectCanvas(id)}>
                 {VIEW_ICONS[id]}
                 <span className="toolbar-view-label" aria-hidden="true"><span>{CANVAS_LABELS[id]}</span></span>
-                {id === "compare" && props.compareCount ? (
-                  <span className="toolbar-badge" aria-hidden="true">{props.compareCount}</span>
-                ) : null}
-                {CANVAS_NUMBER_KEYS ? <KeyHint shortcut={SHORTCUTS.canvasByNumber[id]} /> : null}
+                <span className="toolbar-corner">
+                  {CANVAS_NUMBER_KEYS ? <KeyHint shortcut={SHORTCUTS.canvasByNumber[id]} /> : null}
+                  {id === "compare" && props.compareCount ? (
+                    <span className="toolbar-badge" aria-hidden="true">{props.compareCount}</span>
+                  ) : null}
+                </span>
               </button>
             </Tooltip>
           );
