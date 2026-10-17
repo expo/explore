@@ -85,7 +85,7 @@ export function shortcutGroups(context: ShortcutContext): Group[][] {
   const mapGroup: Group = {
     title: "Map",
     rows: [
-      { label: "Walk the map; with nothing selected, enter it at the edge", keys: ["↑", "↓", "←", "→", "H J K L"] },
+      { label: "Walk the map, or enter it at an edge", keys: ["↑", "↓", "←", "→", "H J K L"] },
       { label: "Undo or redo moving a card", keys: [SHORTCUTS.edit.undo, SHORTCUTS.edit.redo] },
       { label: "Close the inspector, then deselect", keys: ["Esc"] },
     ],
