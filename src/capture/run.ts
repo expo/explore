@@ -663,7 +663,29 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     runtimeStage = "runtime";
     setStage(runtimeStage);
     const localId = localDevice();
-    runtime = collectRuntime({ ...options, agentDeviceCommand: controllerCommand }, controllerEnvironment, localId ? { id: localId } : undefined);
+    const collect = () => collectRuntime({ ...options, agentDeviceCommand: controllerCommand }, controllerEnvironment, localId ? { id: localId } : undefined);
+    // Argent's accessibility reader can stay on a foldable's dark outer panel after a fold and never read the app
+    // (APP_NOT_READY). On this machine the capture runs that reader, so it recovers in two steps, each followed by one more
+    // open: a fresh tool-server, whose reader starts on the lit panel; then, as XcodeBuildMCP#537 found for this panel,
+    // SpringBoard restarted as well. The bridge's cached view of the device goes with the old server.
+    for (let recovery = 0; ; recovery += 1) try { runtime = collect(); break; }
+    catch (error) {
+      if (!localArgent || recovery === 2 || toCiError(error).code !== "APP_NOT_READY") throw error;
+      say(recovery === 0 ? "Argent did not read the app after starting it; restarting Argent's tool-server and opening the app again"
+        : "Argent still did not read the app; restarting SpringBoard and Argent's tool-server and opening the app again");
+      stopLocalArgentServer(localArgent);
+      if (recovery === 1 && localSimulator) {
+        runner({ command: "xcrun", args: ["simctl", "spawn", localSimulator, "launchctl", "kickstart", "-k", "system/com.apple.SpringBoard"],
+          cwd: simulatorProject, environment: restrictedEnvironment, timeoutMs: 60_000, allowFailure: true });
+        // SpringBoard takes a moment to come back before an app can be opened over it.
+        (options.sleep ?? (milliseconds => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }))(5_000);
+      }
+      localArgent = await startLocalArgentServer({ runner, cli: localArgent.cli, directory: simulatorProject, cwd: simulatorProject, environment: restrictedEnvironment,
+        ...(options.now ? { now: options.now } : {}), ...(options.sleep ? { sleep: options.sleep } : {}) });
+      Object.assign(controllerEnvironment, { ARGENT_TOOLS_URL: localArgent.url, ARGENT_AUTH_TOKEN: localArgent.token });
+      if (connection) Object.assign(connection, { daemonBaseUrl: localArgent.url, daemonAuthToken: localArgent.token });
+      await rm(join(simulatorProject, "argent-state.json"), { force: true });
+    }
     runtime.colorScheme = colorSchemes[0]!;
     // The version is descriptive; a capture proceeds without it and records "unknown". Argent names it with the device;
     // agent-device's is always taken from the session, as before.

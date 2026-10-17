@@ -109,7 +109,7 @@ async function fixture(t, settings = {}) {
   const planPath = join(root, 'plan.json'); await writeFile(planPath, JSON.stringify(plan));
   const requests = [];
   let current = '/'; let snapshots = 0; let sessionName; let screenshotAttempts = 0; let splashLeft = 0; let recordingPath = ''; let alert = null; let appearance = 'light'; let alertReads = 0;
-  let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let relaunchedAfterForeign = false;
+  let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let relaunchedAfterForeign = false; let serverStarts = 0; let unreadableLeft = settings.unreadableAfterFold ?? 0;
   const deviceName = settings.android ? 'Pixel 7' : 'iPhone 17 Pro';
   const platform = settings.android ? 'android' : 'ios';
   // A local simulator is the one the capture created, named for Explore.
@@ -136,7 +136,11 @@ async function fixture(t, settings = {}) {
     }
     if (request.command === '/bin/sh') {
       // A local Argent tool-server says where it listens, as `argent server start` does.
-      if (request.args[1]?.includes('server start')) { writeFileSync(request.environment.EXPLORE_ARGENT_SERVER_LOG, '      (or: argent link --host 127.0.0.1 --port 4100 --token abc123)\n[t] Tools server listening on http://127.0.0.1:4100\n'); return { stdout: '4242\n', stderr: '' }; }
+      if (request.args[1]?.includes('server start')) {
+        const port = 4100 + serverStarts++;
+        writeFileSync(request.environment.EXPLORE_ARGENT_SERVER_LOG, `      (or: argent link --host 127.0.0.1 --port ${port} --token abc123)\n[t] Tools server listening on http://127.0.0.1:${port}\n`);
+        return { stdout: `${4242 + serverStarts}\n`, stderr: '' };
+      }
       return { stdout: '', stderr: '' };
     }
     if (request.command.endsWith('/adb')) {
@@ -234,6 +238,9 @@ async function fixture(t, settings = {}) {
     if (request.command === 'fake-controller' || (settings.argent && request.command.endsWith('/argent-controller'))) {
       if (command === '--version') return { stdout: settings.argent ? '0.29.0' : AGENT_DEVICE_VERSION, stderr: '' };
       if (command === 'open') {
+        // unreadableAfterFold: Argent's reader stayed on the outer panel, so the first app opens find no readable app.
+        if (unreadableLeft > 0 && !request.args[2]?.startsWith('sample://')) { unreadableLeft -= 1;
+          return json({ success: false, error: { code: 'APP_NOT_READY', message: 'open: com.example.app did not come up with a readable accessibility tree after relaunching.' } }); }
         if (request.args.includes('--relaunch')) { splashLeft = settings.splashFrames ?? 0; relaunchedAfterForeign = true; if (settings.wedgeAt === current) { wedgeCleared = true; current = '/'; } }
         if (request.args[2]?.startsWith('sample://')) {
           const previous = current;
@@ -612,6 +619,33 @@ test('a failed repack deletes the local device it started', async t => {
   const f = await fixture(t, { local: true, repack: 'local', repackFails: true });
   await assert.rejects(runCiMap(f.options));
   assert.deepEqual(f.requests.filter(request => request.command === 'xcrun').map(request => request.args[1]).slice(-2), ['shutdown', 'delete']);
+});
+
+test('when Argent cannot read the app after a fold, the capture restarts its local tool-server and opens the app again', async t => {
+  const f = await fixture(t, { local: true, argent: true, repack: 'local', devicePose: 'open', unreadableAfterFold: 1 });
+  const cache = join(f.root, 'controllers');
+  mkdirSync(join(cache, 'argent-tool-server@0.29.0'), { recursive: true });
+  writeFileSync(join(cache, 'argent-tool-server@0.29.0', '.explore-controller.json'), '{}');
+  const lines = [];
+  const result = await runCiMap({ ...f.options, environment: { ...f.options.environment, EXPLORE_CONTROLLER_CACHE: cache }, progress: line => lines.push(line) });
+  assert.equal(result.runStatus, 'complete', JSON.stringify(result.outcomes));
+  assert.equal(f.requests.filter(request => request.command === '/bin/sh' && request.args[1]?.includes('server start')).length, 2);
+  assert.ok(lines.some(line => /restarting Argent's tool-server/.test(line)), lines.join('\n'));
+  // Every call after the restart goes to the new server.
+  const bridge = f.requests.filter(request => request.command.endsWith('/argent-controller'));
+  assert.equal(bridge.at(-1).environment.ARGENT_TOOLS_URL, 'http://127.0.0.1:4101');
+
+  // A second failure restarts SpringBoard as well; a third is reported.
+  for (const [unreadable, completes] of [[2, true], [3, false]]) {
+    const again = await fixture(t, { local: true, argent: true, repack: 'local', devicePose: 'open', unreadableAfterFold: unreadable });
+    mkdirSync(join(again.root, 'controllers', 'argent-tool-server@0.29.0'), { recursive: true });
+    writeFileSync(join(again.root, 'controllers', 'argent-tool-server@0.29.0', '.explore-controller.json'), '{}');
+    const run = runCiMap({ ...again.options, environment: { ...again.options.environment, EXPLORE_CONTROLLER_CACHE: join(again.root, 'controllers') } });
+    if (completes) assert.equal((await run).runStatus, 'complete');
+    else await assert.rejects(run, error => JSON.stringify(error).includes('APP_NOT_READY'));
+    assert.deepEqual(again.requests.filter(request => request.command === 'xcrun' && request.args[3] === 'launchctl').map(request => request.args.slice(3)),
+      [['launchctl', 'kickstart', '-k', 'system/com.apple.SpringBoard']]);
+  }
 });
 
 test('a local foldable opens the app, folds, and is checked by the shape of its lit display', async t => {
