@@ -189,6 +189,7 @@ async function fixture(t, settings = {}) {
         return ok(settings.wrongForeground ? { appBundleId: 'com.foreign.app' } : identity());
       }
       if (command === 'wait') return ok({});
+      if (command === 'fold') return ok({ action: 'fold', pose: request.args[1] });
       if (command === 'record' && settings.recording) {
         if (request.args[1] === 'start') { recordingPath = request.args[2]; return ok({ path: recordingPath }); }
         writeFileSync(recordingPath, 'mp4-bytes'); return ok({ path: recordingPath });
@@ -287,7 +288,7 @@ async function fixture(t, settings = {}) {
     buildId: 'source-capture', buildVersion: '1', gitCommit: SHA, bundleId: 'com.example.app',
     ...(settings.noScheme ? {} : { scheme: 'sample' }), device: deviceName, easProfile: 'capture', expoToken: 'expo-private', ...(settings.android ? { platform: 'android' } : {}),
     planPath, maxScreens: 120, maxActions: 500, maxDurationMinutes: 30, forceFreshBuild: false,
-    confirmExternalRun: true, confirmTrustedSource: true, easCommand: 'fake-eas', repackCommand: 'fake-repack', agentDeviceCommand: 'fake-controller', ...(settings.argent ? { controller: 'argent' } : {}), ...(settings.launch ? { launch: settings.launch, recordingTools: settings.recordingTools ?? null } : {}), ...(settings.repack ? { repack: settings.repack } : {}),
+    confirmExternalRun: true, confirmTrustedSource: true, easCommand: 'fake-eas', repackCommand: 'fake-repack', agentDeviceCommand: 'fake-controller', ...(settings.argent ? { controller: 'argent' } : {}), ...(settings.devicePose ? { devicePose: settings.devicePose } : {}), ...(settings.launch ? { launch: settings.launch, recordingTools: settings.recordingTools ?? null } : {}), ...(settings.repack ? { repack: settings.repack } : {}),
     environment: { PATH: process.env.PATH, HOME: root, GITHUB_TOKEN: 'github-private', ANTHROPIC_API_KEY: 'must-not-be-used', AGENT_DEVICE_DAEMON_AUTH_TOKEN: 'wrong-token', ...settings.environment },
     // Every controller round trip advances the fixture clock by one poll interval, as a device snapshot would.
     runner: request => { clockMs += 600; return runner(request); }, now: () => clockMs, sleep: milliseconds => { clockMs += milliseconds; }, fetch: catalog };
@@ -396,6 +397,19 @@ test('an Argent capture of an app pinned to dark is labelled dark and is not war
   assert.equal(lines.some(line => /Argent cannot switch appearance/.test(line)), false);
   const execution = parseRuntimeExecutionContext(JSON.parse(await readFile(join(f.options.outputDirectory, 'execution.json'), 'utf8')));
   assert.equal(execution.colorScheme, 'dark');
+});
+
+test('device.pose folds the device once, before anything is read or captured', async t => {
+  for (const argent of [false, true]) {
+    const f = await fixture(t, { devicePose: 'open', argent });
+    assert.equal((await runCiMap(f.options)).runStatus, 'complete');
+    const controller = f.requests.filter(request => request.command === 'fake-controller' || request.command.endsWith('/argent-controller'));
+    const folds = controller.filter(request => request.args[0] === 'fold');
+    assert.equal(folds.length, 1);
+    assert.deepEqual(folds[0].args.slice(0, 2), ['fold', 'open']);
+    const foldAt = controller.indexOf(folds[0]);
+    assert.ok(controller.findIndex(request => request.args[0] === 'screenshot' || request.args[0] === 'snapshot') > foldAt, 'nothing is captured before the fold');
+  }
 });
 
 test('an agent-device capture writes no controller into its bundle', async t => {

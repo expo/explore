@@ -14,7 +14,7 @@ import type { SourceCapturePlan } from "../source/capture-plan.js";
 import { CONTRACT, type ExploreMap, type Platform, type RunStatus } from "../types.js";
 import { ExploreStore, validateMap } from "../map/store.js";
 import { CiError, serializeCiError, toCiError } from "../shared/ci-errors.js";
-import type { CaptureSetupAction } from "../config/explore-config.js";
+import type { CaptureSetupAction, DevicePose } from "../config/explore-config.js";
 import { type CiAgentRuntimeOptions } from "./agent/runtime.js";
 import { EAS_CLI_VERSION, CONTROLLER_SESSION, isRecord, parseJson, baseEnvironment, nonEmpty } from "./common.js";
 import { lstatIfExists, isWithin, temporaryCaptureDirectory, absoluteContractFile, readContractJson, assertNoSymlinkAncestors } from "./fs-safety.js";
@@ -54,6 +54,8 @@ export type CiMapOptions = {
   easCommand: string; repackCommand: string; agentDeviceCommand: string;
   /** The device controller EAS starts on the session; agent-device unless the config chose Argent. */
   controller?: "agent-device" | "argent";
+  /** A foldable's pose (device.pose), set with the controller's `fold` before anything is captured. */
+  devicePose?: DevicePose;
   /** Where the route observer is bundled into the app: a hosted EAS repack job (default) or repack-app on this machine. */
   repack?: RepackMode;
   /** Which appearances to capture; `auto` (default) follows the app's `userInterfaceStyle`. */
@@ -507,6 +509,12 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         runtime.controllerDeviceId, options.fetch ?? fetch, options.platform);
     } catch (error) {
       process.stderr.write(`The EAS Simulator OS version is unavailable (${(error as Error).message}); the review records it as unknown.\n`);
+    }
+    if (options.devicePose) {
+      // A fold relights the other panel and resizes the window, so it happens before any snapshot or screenshot.
+      say(`folding ${runtime.deviceModel} ${options.devicePose}`);
+      runner({ command: controllerCommand, args: ["fold", options.devicePose, "--session", CONTROLLER_SESSION, ...deviceArgs(runtime), "--platform", options.platform, "--json"],
+        cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000 });
     }
     if (await store.exists()) { map.run = newCaptureMap(options, runtime, fingerprint).run; await store.write(map); }
     else { map = newCaptureMap(options, runtime, fingerprint); await store.initialize(map, false); }

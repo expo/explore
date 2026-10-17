@@ -64,7 +64,7 @@ type CaptureClock = { now?: (() => number) | undefined; sleep?: ((milliseconds: 
 
 function captureOptions(config: ExploreConfig, environment: NodeJS.ProcessEnv, runner?: CommandRunner, clock: CaptureClock = {}) {
   return { ...(runner && clock.now ? { now: clock.now } : {}), ...(runner && clock.sleep ? { sleep: clock.sleep } : {}), platform: config.app.platform, bundleId: config.app.bundleId,
-    ...(config.app.scheme ? { scheme: config.app.scheme } : {}), device: config.device.name,
+    ...(config.app.scheme ? { scheme: config.app.scheme } : {}), device: config.device.name, ...(config.device.pose ? { devicePose: config.device.pose } : {}),
     easProfile: config.app.easProfile, expoToken: environment.EXPO_TOKEN ?? "",
     maxScreens: 5000, maxActions: config.capture.maxActions, maxDurationMinutes: config.capture.maxMinutes,
     setup: config.setup ?? [], forceFreshBuild: false, confirmExternalRun: true, confirmTrustedSource: true, repack: config.capture.repack, appearance: config.capture.appearance, launch: config.capture.launch, reset: config.capture.reset, unattributed: config.capture.unattributed, ...(config.capture.readinessSeconds !== undefined ? { readinessSeconds: config.capture.readinessSeconds } : {}), ...(config.capture.controller ? { controller: config.capture.controller } : {}),

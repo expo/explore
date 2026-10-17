@@ -258,3 +258,14 @@ test("--controller overrides the config's controller for one run and is validate
   assert.deepEqual(withRunOverrides(plain, {}), plain);
   assert.throws(() => withRunOverrides(plain, { controller: "appium" }), /--controller must be agent-device or argent/);
 });
+
+test("device.pose folds the primary platform's device and is validated", () => {
+  const open = validateExploreConfig({ ...base(), device: { name: "iPhone Duo", pose: "open" } });
+  assert.deepEqual(open.device, { name: "iPhone Duo", pose: "open" });
+  assert.equal("pose" in validateExploreConfig(base()).device, false);
+  assert.throws(() => validateExploreConfig({ ...base(), device: { name: "iPhone Duo", pose: "flat" } }), error => error.code === "CONFIG_INVALID");
+  const both = validateExploreConfig({ ...base(), app: { ...base().app, platform: "ios" }, device: { name: "iPhone Duo", pose: "open" },
+    platforms: { ios: {}, android: { device: "pixel_7", bundleId: "com.example.app", easProfile: "explore" } } });
+  assert.deepEqual(resolvePlatformConfig(both, "ios").device, { name: "iPhone Duo", pose: "open" });
+  assert.deepEqual(resolvePlatformConfig(both, "android").device, { name: "pixel_7" });
+});

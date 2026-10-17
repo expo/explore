@@ -101,6 +101,7 @@ navigation:
   # entry: src/navigation/RootNavigator.tsx
 device:
   name: iPhone 17 # Android: an AVD profile id such as pixel_7
+  # pose: open # a foldable (iPhone Duo): closed (the outer display, how a session starts) | half-open | open (the inner display)
 exploration:
   scope: changes # changes | all
 capture:

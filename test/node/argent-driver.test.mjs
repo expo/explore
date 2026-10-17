@@ -387,3 +387,16 @@ test("when Argent reads nothing while the prompt is up, Open is tapped from a sc
   assert.deepEqual(calls.filter(call => call.tool === "screenshot").map(call => call.options), [{ out: "/work/argent-scratch.png" }, { out: "/work/argent-scratch.png" }]);
   assert.equal(context.state.deepLinkPromptAccepted, true);
 });
+
+test("fold moves a foldable to a pose and forgets the old panel's geometry", async () => {
+  const { run, calls, context } = harness("ios", { "list-devices": DUO_DEVICES, "ui-tree": DUO_HOME, fold: { panel: "inner" } });
+  await run(["snapshot", ...flags("ios")]);
+  const generation = context.state.generation;
+  const folded = await run(["fold", "open", ...flags("ios")]);
+  assert.deepEqual(folded.json.data, { action: "fold", pose: "open", panel: "inner" });
+  assert.deepEqual(calls.at(-1).args, { udid: "74195B53-4DBC-4EAA-9991-F98E5BB86BA8", posture: "open" });
+  assert.equal(context.state.screen, undefined);
+  assert.equal(context.state.refs, undefined);
+  assert.equal(context.state.generation, generation + 1);
+  assert.equal((await run(["fold", "sideways", ...flags("ios")])).json.error.code, "INVALID_ARGS");
+});

@@ -43,6 +43,10 @@ export const DEFAULT_ANDROID_DEVICE = "pixel_7";
  * One platform's capture target. `platforms.ios` fields default to the flat `app`/`device` fields;
  * `platforms.android` needs its own package and EAS profile (an `android.buildType: apk` profile).
  */
+/** The poses a foldable device can be captured in (`fold` in agent-device and Argent). */
+export const DEVICE_POSES = ["closed", "half-open", "open"] as const;
+export type DevicePose = typeof DEVICE_POSES[number];
+
 export type PlatformConfig = { device?: string; bundleId?: string; easProfile?: string };
 
 /** Source discovery never consumes a user-authored screen inventory. */
@@ -50,7 +54,11 @@ export type ExploreConfig = {
   mode: "deterministic" | "agent";
   app: { name?: string; platform: ExplorePlatform; bundleId: string; easProfile: string; scheme?: string };
   navigation: { provider: "auto" | "expo-router" | "react-navigation"; entry?: string };
-  device: { name: string };
+  /**
+   * `pose` folds a foldable (iPhone Duo) before capture: closed lights the outer display, open the inner one.
+   * Absent leaves the device as it starts (closed). It applies to the primary platform's device.
+   */
+  device: { name: string; pose?: DevicePose };
   /**
    * Each platform Explore captures, in CI as one matrix job each. Absent: the single platform the
    * flat fields describe. Capture code never reads this map; resolvePlatformConfig flattens it.
@@ -239,7 +247,8 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
   const app = record(root.app, "app");
   exactKeys(app, ["name", "platform", "bundleId", "easProfile", "scheme"], "app");
   const device = record(root.device, "device");
-  exactKeys(device, ["name"], "device");
+  exactKeys(device, ["name", "pose"], "device");
+  const pose = device.pose === undefined ? undefined : literal(device.pose, DEVICE_POSES, "device.pose", "closed");
   const navigation = optionalRecord(root.navigation, "navigation");
   exactKeys(navigation, ["provider", "entry"], "navigation");
   const exploration = optionalRecord(root.exploration, "exploration");
@@ -279,7 +288,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
       provider: literal(navigation.provider, ["auto", "expo-router", "react-navigation"] as const, "navigation.provider", "auto"),
       ...(navigation.entry === undefined ? {} : { entry: repoPath(navigation.entry, "navigation.entry") }),
     },
-    device: { name: text(device.name, "device.name", 128) },
+    device: { name: text(device.name, "device.name", 128), ...(pose === undefined ? {} : { pose }) },
     ...(platforms === undefined ? {} : { platforms }),
     exploration: {
       scope: literal(exploration.scope, ["changes", "all"] as const, "exploration.scope", "changes"),
@@ -366,7 +375,9 @@ export function resolvePlatformConfig(config: ExploreConfig, platform: ExplorePl
   return { ...rest,
     app: { ...config.app, platform, bundleId: entry.bundleId ?? (primary ? config.app.bundleId : fail(`platforms.${platform}.bundleId is required`)),
       easProfile: entry.easProfile ?? (primary ? config.app.easProfile : fail(`platforms.${platform}.easProfile is required`)) },
-    device: { name: entry.device ?? (primary ? config.device.name : platform === "android" ? DEFAULT_ANDROID_DEVICE : config.device.name) } };
+    device: { name: entry.device ?? (primary ? config.device.name : platform === "android" ? DEFAULT_ANDROID_DEVICE : config.device.name),
+      // A pose belongs to the primary platform's device; the other platform's device starts as it is.
+      ...(primary && config.device.pose ? { pose: config.device.pose } : {}) } };
 }
 
 /**

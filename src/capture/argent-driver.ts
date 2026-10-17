@@ -541,6 +541,18 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         await call("reinstall-app", { bundleId: bundleFlag, appPath: path });
         return success({ installed: true, appBundleId: bundleFlag });
       }
+      case "fold": {
+        await ensureDevice();
+        const posture = positional[0];
+        if (posture !== "closed" && posture !== "half-open" && posture !== "open") throw new BridgeFailure("INVALID_ARGS", "fold needs closed, half-open or open.");
+        await beforeAction();
+        const folded = await call("fold", { posture });
+        // The other panel lights at another size: every stored coordinate and element reference is stale.
+        delete state.screen;
+        delete state.refs;
+        state.generation += 1;
+        return success({ action: "fold", pose: posture, ...(folded.panel !== undefined ? { panel: folded.panel } : {}) });
+      }
       case "apps": return success({ apps: [] });
       case "session": return success({ sessions: [] });
       // TODO(argent#1509): map `settings appearance <scheme>` to Argent's `set-appearance` once a release with it is pinned.
