@@ -556,3 +556,15 @@ test("an opened iPhone Duo's portrait frame is turned a quarter clockwise to its
   const portrait = PNG.sync.write(source);
   assert.equal(rotateToScreen(portrait, { width: 466, height: 678 }), portrait);
 });
+
+test("screenshots and recordings are handed to be turned upright for the screen Argent reads", async () => {
+  const { run, context } = harness("android", { "list-devices": ANDROID_DEVICES, screenshot: {}, "screen-recording-start": {},
+    "screen-recording-stop": { video: "/home/.argent/recordings/r.mp4" } }, { state: { generation: 0, screen: { width: 951, height: 669 } } });
+  const oriented = [];
+  context.orientImage = async (path, screen) => { oriented.push(["image", path, screen]); };
+  context.orientVideo = async (path, screen) => { oriented.push(["video", path, screen]); };
+  assert.equal((await run(["screenshot", "/work/screen.png", ...flags("android")])).exitCode, 0);
+  await run(["record", "start", "/work/launch.mp4", ...flags("android")]);
+  await run(["record", "stop", ...flags("android")]);
+  assert.deepEqual(oriented, [["image", "/work/screen.png", { width: 951, height: 669 }], ["video", "/work/launch.mp4", { width: 951, height: 669 }]]);
+});

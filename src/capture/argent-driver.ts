@@ -51,6 +51,8 @@ export type ArgentBridgeContext = {
   scratchImage?: { path: string; read: (path: string) => Promise<DecodedFrame> };
   /** Turns a saved screenshot upright for a screen of this shape, when the image has the other one (rotateToScreen). */
   orientImage?: (path: string, screen: { width: number; height: number }) => Promise<void>;
+  /** The same for a screen recording, which Argent saves in the same orientation as its screenshots. */
+  orientVideo?: (path: string, screen: { width: number; height: number }) => Promise<void>;
 };
 
 export type BridgeResult = { exitCode: number; stdout: string };
@@ -597,6 +599,7 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
           delete state.recording;
           if (typeof stopped.video !== "string") return failure("COMMAND_FAILED", "Argent did not return the recording.");
           if (target) await context.moveFile(stopped.video, target);
+          if (target && context.orientVideo) await context.orientVideo(target, await screen());
           return success({ outPath: target ?? stopped.video, ...(finite(stopped.durationMs) ? { durationMs: stopped.durationMs } : {}) });
         }
         return failure("INVALID_ARGS", `Unsupported record command: ${positional[0] ?? ""}`);

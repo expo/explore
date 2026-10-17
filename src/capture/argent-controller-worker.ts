@@ -122,6 +122,16 @@ async function main(): Promise<number> {
     },
     sleep: milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
     orientImage: async (path, screen) => { await writeFile(path, rotateToScreen(await readFile(path), screen)); },
+    orientVideo: async (path, screen) => {
+      // Turned with ffmpeg, which observing a launch needs anyway; without it the recording is left as it is.
+      const probed = spawnSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path], { encoding: "utf8", timeout: 30_000 });
+      const [width, height] = (probed.stdout ?? "").trim().split("x").map(Number);
+      if (probed.status !== 0 || !width || !height || width === height || (width > height) === (screen.width > screen.height)) return;
+      const turned = `${path}.upright.mp4`;
+      const ffmpeg = spawnSync("ffmpeg", ["-nostdin", "-y", "-loglevel", "error", "-i", path, "-vf", "transpose=clock", "-an", turned], { encoding: "utf8", timeout: 120_000 });
+      if (ffmpeg.status === 0) await rename(turned, path);
+      else await rm(turned, { force: true });
+    },
     scratchImage: { path: join(dirname(statePath), "argent-scratch.png"), read: async path => {
       const { PNG } = createRequire(import.meta.url)("pngjs") as { PNG: { sync: { read(bytes: Buffer, options: { checkCRC: boolean }): DecodedFrame } } };
       return PNG.sync.read(await readFile(path), { checkCRC: false });
