@@ -109,7 +109,7 @@ capture:
   # simulator: eas # eas (EAS Simulator, default) | local (a simulator or emulator Explore starts on this machine with Xcode or the Android SDK; --simulator overrides it for one run)
   maxMinutes: 30
   maxActions: 500
-  repack: eas # eas (hosted EAS workflow job, default) | local (repack-app + eas upload on the runner)
+  repack: eas # eas (hosted EAS workflow job, the default on EAS Simulator) | local (repack-app on the runner, the default with simulator: local; --repack overrides it for one run)
   appearance: auto # auto (follow the app's userInterfaceStyle: automatic captures light and dark) | dark | light | [dark, light]
   launch: screenshot # screenshot (relaunch the app per appearance and keep its splash and first settled frame, default) | video (also keep a launch recording in the report) | off
   reset: root-link # root-link (open the app's root link and let it settle before every route link, default) | none (each link opens from whatever the previous route left on screen)

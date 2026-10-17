@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { apkAbis } from "../binary/archive.js";
@@ -252,20 +252,35 @@ function portLock(port: number, environment: NodeJS.ProcessEnv): string {
   return join(environment.TMPDIR || tmpdir(), `expo-explore-emulator-${port}.lock`);
 }
 
-/** Reserves a console port for this process; a reservation whose process has exited is taken over. */
-async function reservePort(port: number, environment: NodeJS.ProcessEnv): Promise<boolean> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { await writeFile(portLock(port, environment), String(process.pid), { flag: "wx" }); return true; }
+/**
+ * Reserves a console port for this process; a reservation whose process has exited is taken over. Head and base start
+ * their emulators at once on worker threads of one process, and other reviews may too: each reservation runs alone,
+ * under a mutex directory, since taking over a stale lock is a read, a removal and a write that two captures would
+ * otherwise both complete.
+ */
+export async function reservePort(port: number, environment: NodeJS.ProcessEnv): Promise<boolean> {
+  const mutex = join(environment.TMPDIR || tmpdir(), "expo-explore-emulator-ports.lock");
+  for (;;) {
+    try { await mkdir(mutex); break; }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const holder = Number(await readFile(portLock(port, environment), "utf8").catch(() => ""));
-      let alive = Number.isInteger(holder) && holder > 0;
-      if (alive) try { process.kill(holder, 0); } catch (signal) { alive = (signal as NodeJS.ErrnoException).code === "EPERM"; }
-      if (alive) return false;
-      await rm(portLock(port, environment), { force: true });
+      // A holder keeps it for a few file operations; one that died holding it leaves it behind, which is broken after 10 s.
+      const held = await stat(mutex).then(info => Date.now() - info.mtimeMs, () => 0);
+      if (held > 10_000) await rm(mutex, { recursive: true, force: true });
+      else await new Promise(resolve => setTimeout(resolve, 20));
     }
   }
-  return false;
+  try {
+    const lock = portLock(port, environment);
+    const holder = Number(await readFile(lock, "utf8").catch(() => ""));
+    let alive = Number.isInteger(holder) && holder > 0;
+    if (alive) try { process.kill(holder, 0); } catch (signal) { alive = (signal as NodeJS.ErrnoException).code === "EPERM"; }
+    if (alive) return false;
+    await writeFile(lock, String(process.pid));
+    return true;
+  } finally {
+    await rm(mutex, { recursive: true, force: true });
+  }
 }
 
 /** Stops the emulator and frees its console port; its AVD goes with the capture's directory. */

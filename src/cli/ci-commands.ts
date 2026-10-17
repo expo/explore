@@ -26,7 +26,7 @@ export async function doctor(): Promise<void> {
   if (has("help")) return help();
   const project = flag("project") ?? process.cwd();
   const report = await runDoctor({ project, online: !has("offline"), github: !has("no-github") && !has("offline"),
-    checkModel: has("check-model"), controller: flag("controller"), simulator: flag("simulator") });
+    checkModel: has("check-model"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") });
   if (!has("capture")) {
     if (has("json")) output({ ...report });
     else console.log(formatDoctorReport(report));
@@ -53,7 +53,7 @@ Fix the problems in steps 1–5 before a capture check.`);
   let result: Awaited<ReturnType<typeof runCaptureCheck>>;
   try {
     const platform = platformFlag();
-    result = await runCaptureCheck({ project, ...(platform ? { platform } : {}), target: targetFlag(), controller: flag("controller"), simulator: flag("simulator"), output: resolve(flag("output") ?? await mkdtemp(join(tmpdir(), "expo-explore-capture-"))), progress: stderrProgress() });
+    result = await runCaptureCheck({ project, ...(platform ? { platform } : {}), target: targetFlag(), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack"), output: resolve(flag("output") ?? await mkdtemp(join(tmpdir(), "expo-explore-capture-"))), progress: stderrProgress() });
   } catch (error) {
     // A refusal before any EAS work: show it with its next action next to the static report.
     if (!(error instanceof CiError)) throw error;
@@ -222,7 +222,7 @@ export async function captureReview(): Promise<void> {
   const configPath = flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH;
   const selection = targetSelection();
   const rawConfig = await readExploreConfig(headProject, configPath);
-  const config = withRunOverrides(resolveTargetConfig(rawConfig, selection), { scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator") });
+  const config = withRunOverrides(resolveTargetConfig(rawConfig, selection), { scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") });
   if (has("pull-request") === has("compare")) argumentError("Pass --pull-request FILE for a pull request, or --compare FILE for any two commits.", has("compare") ? "compare" : "pull-request");
   // A matrix job names its target; its artifacts, report and comment section carry the target's id.
   const named = selection.target !== undefined || selection.platform !== undefined;
@@ -238,7 +238,7 @@ export async function captureReview(): Promise<void> {
 
 export async function captureBaseline(): Promise<void> {
   const project = required("project");
-  const config = withRunOverrides(resolveTargetConfig(await readExploreConfig(project, flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH), targetSelection()), { controller: flag("controller"), simulator: flag("simulator") });
+  const config = withRunOverrides(resolveTargetConfig(await readExploreConfig(project, flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH), targetSelection()), { controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") });
   output({ ok: true, ...await runBaselineCi({ platform: config.app.platform, project, sha: required("sha"), output: required("output"), config, progress: stderrProgress() }) });
 }
 
@@ -250,7 +250,7 @@ async function localReview(): Promise<void> {
     ...(parallel ? { parallel } : {}),
     // --include-untracked is accepted from before untracked files were included by default.
     committed: has("committed"), uncommitted: has("uncommitted"), ...(platform ? { platform } : {}),
-    scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator"), cache: !has("no-cache"), configPath: flag("config"), progress: stderrProgress() });
+    scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack"), cache: !has("no-cache"), configPath: flag("config"), progress: stderrProgress() });
   if (has("output")) {
     for (const report of result.reports) {
       const destination = resolve(required("output"), report.target.id);

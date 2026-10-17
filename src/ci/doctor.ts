@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { CiError, toCiError } from "../shared/ci-errors.js";
@@ -8,7 +8,7 @@ import type { CaptureBundle } from "../contracts/capture.js";
 import type { SourceCapturePlan } from "../source/capture-plan.js";
 import type { CommandRunner } from "../capture/run.js";
 import { runBaselineCi } from "./pipeline.js";
-import { DEFAULT_EXPLORE_CONFIG_PATH, configTargets, readExploreConfig, readExploreInstructions, resolveTargetConfig, withRunOverrides, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
+import { DEFAULT_EXPLORE_CONFIG_PATH, captureRepack, configTargets, readExploreConfig, readExploreInstructions, resolveTargetConfig, withRunOverrides, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { explorationSecretNames } from "../config/exploration-inputs.js";
 import { controllerCached } from "../shared/controller-cache.js";
 import { androidTools, hostEmulatorAbi, localSimulatorTarget, localSystemImage } from "../capture/local-simulator.js";
@@ -53,6 +53,8 @@ export type DoctorOptions = {
   controller?: string | undefined;
   /** `--simulator`: where the app runs, over the config's `capture.simulator`. */
   simulator?: string | undefined;
+  /** `--repack`: where the app is repacked, over the config's `capture.repack`. */
+  repack?: string | undefined;
   run?: DoctorRun;
   environment?: NodeJS.ProcessEnv;
   nodeVersion?: string;
@@ -194,6 +196,18 @@ async function localSimulatorChecks(project: string, config: ExploreConfig, run:
     } catch (error) {
       checks.push(fromError(1, "local-emulator", error, { code: "LOCAL_EMULATOR_UNAVAILABLE",
         nextAction: "Install the Android SDK's emulator, platform-tools, cmdline-tools and a system image with sdkmanager, export ANDROID_HOME, then rerun doctor." }));
+    }
+    // A local simulator repacks on this machine too, unless capture.repack says eas: repack-app signs the APK with the
+    // SDK's build-tools and runs apktool and apksigner with Java.
+    if (captureRepack(target) === "local") {
+      const java = run("java", ["-version"], project);
+      let buildTools: string[] = [];
+      try { buildTools = await readdir(join(androidTools(environment).sdk, "build-tools")); } catch { /* no SDK or no build-tools */ }
+      checks.push(buildTools.length && java.status === 0
+        ? { step: 1, id: "local-repack", status: "pass", message: `This machine can repack the APK (build-tools ${buildTools.sort().at(-1)}, ${(java.stderr || java.stdout).trim().split("\n")[0] || "Java"}).` }
+        : { step: 1, id: "local-repack", status: "fail", code: "LOCAL_REPACK_UNAVAILABLE",
+          message: buildTools.length ? "Repacking the APK on this machine needs Java, and java -version did not run." : "Repacking the APK on this machine needs the Android SDK build-tools, and none are installed.",
+          nextAction: "Install the build-tools (sdkmanager \"build-tools;35.0.0\") and a JDK 17, or set capture.repack: eas to repack in a hosted EAS job, then rerun doctor." });
     }
   }
   return checks;
@@ -439,7 +453,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     return { ok: false, mode: null, checks, ...(routes ? { routes } : {}) };
   }
   let config: ExploreConfig;
-  try { config = withRunOverrides(await readExploreConfig(project), { controller: options.controller, simulator: options.simulator }); }
+  try { config = withRunOverrides(await readExploreConfig(project), { controller: options.controller, simulator: options.simulator, repack: options.repack }); }
   catch (error) {
     checks.push(fromError(4, "config", error, { code: "CONFIG_INVALID", nextAction: `Correct ${DEFAULT_EXPLORE_CONFIG_PATH} and rerun doctor.` }));
     return { ok: false, mode: null, checks };
@@ -613,7 +627,7 @@ function argentCheck(environment: NodeJS.ProcessEnv): DoctorCheck {
     nextAction: "Nothing to do unless you need dark-mode screenshots; use agent-device (the default) for those." };
 }
 
-export async function runCaptureCheck(options: { project: string; output: string; platform?: ExplorePlatform; controller?: string | undefined; simulator?: string | undefined; target?: string | undefined; environment?: NodeJS.ProcessEnv; runner?: CommandRunner; progress?: Progress }): Promise<CaptureCheckResult> {
+export async function runCaptureCheck(options: { project: string; output: string; platform?: ExplorePlatform; controller?: string | undefined; simulator?: string | undefined; repack?: string | undefined; target?: string | undefined; environment?: NodeJS.ProcessEnv; runner?: CommandRunner; progress?: Progress }): Promise<CaptureCheckResult> {
   const project = await realpath(options.project);
   const git = (...args: string[]) => spawnSync("git", ["-C", project, ...args], { encoding: "utf8", timeout: 10_000 });
   const head = git("rev-parse", "HEAD");
@@ -625,7 +639,7 @@ export async function runCaptureCheck(options: { project: string; output: string
     nextAction: "Commit your changes, including .expo-explore (a local commit is enough; nothing is pushed), then rerun. "
       + "To keep unrelated files, run it from a clean checkout instead: git worktree add --detach ../app-capture HEAD, install the app's dependencies there, and run doctor --capture in it." });
   const commit = head.stdout.trim();
-  const config = withRunOverrides(resolveTargetConfig(await readExploreConfig(project), { platform: options.platform, target: options.target }), { controller: options.controller, simulator: options.simulator });
+  const config = withRunOverrides(resolveTargetConfig(await readExploreConfig(project), { platform: options.platform, target: options.target }), { controller: options.controller, simulator: options.simulator, repack: options.repack });
   // Capture keeps its working directories in the system temporary directory, outside the app.
   await mkdir(options.output, { recursive: true });
   const output = await realpath(options.output);

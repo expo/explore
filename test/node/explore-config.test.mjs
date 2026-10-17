@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tsImport } from "tsx/esm/api";
 
-const { DEFAULT_EXPLORE_CONFIG_PATH, assertExecutionMode, parseExploreConfig, readExploreConfig, validateExploreConfig, configPlatforms, configTargets, resolvePlatformConfig, resolveTargetConfig, withRunOverrides } =
+const { DEFAULT_EXPLORE_CONFIG_PATH, assertExecutionMode, parseExploreConfig, readExploreConfig, validateExploreConfig, configPlatforms, configTargets, resolvePlatformConfig, resolveTargetConfig, withRunOverrides, captureRepack } =
   await tsImport("../../src/config/explore-config.ts", import.meta.url);
 
 const SOURCE = `app:
@@ -24,7 +24,7 @@ test("normalizes current configuration with deterministic defaults and no versio
     mode: "deterministic",
     app: { name: "Example", platform: "ios", bundleId: "com.example.app", easProfile: "explore", scheme: "example-app" },
     device: { name: "iPhone 17 Pro" }, navigation: { provider: "auto" },
-    exploration: { scope: "changes" }, capture: { maxMinutes: 30, maxActions: 500, repack: "eas", appearance: "auto", launch: "screenshot", reset: "root-link", unattributed: "publish" },
+    exploration: { scope: "changes" }, capture: { maxMinutes: 30, maxActions: 500, appearance: "auto", launch: "screenshot", reset: "root-link", unattributed: "publish" },
   });
   assert.deepEqual(validateExploreConfig({ ...base(), navigation: { provider: "react-navigation", entry: "src/navigation/Root.tsx" }, exploration: { scope: "all" } }).navigation,
     { provider: "react-navigation", entry: "src/navigation/Root.tsx" });
@@ -267,6 +267,21 @@ test("capture.simulator: local runs on a simulator on this Mac; eas, the default
   assert.throws(() => validateExploreConfig({ ...base(), capture: { simulator: "device-farm" } }), error => error.code === "CONFIG_INVALID");
 });
 
+test("the repack runs on this machine with a local simulator and in EAS otherwise, unless the config or --repack chooses", () => {
+  const plain = validateExploreConfig(base());
+  assert.equal("repack" in plain.capture, false, "an unset repack is resolved where it is used");
+  assert.equal(captureRepack(plain), "eas");
+  assert.equal(captureRepack(validateExploreConfig({ ...base(), capture: { simulator: "local" } })), "local");
+  assert.equal(captureRepack(validateExploreConfig({ ...base(), capture: { simulator: "local", repack: "eas" } })), "eas");
+  assert.equal(captureRepack(validateExploreConfig({ ...base(), capture: { repack: "local" } })), "local");
+  // --simulator local brings the local repack with it; --repack wins over both.
+  assert.equal(captureRepack(withRunOverrides(plain, { simulator: "local" })), "local");
+  assert.equal(captureRepack(withRunOverrides(plain, { simulator: "local", repack: "eas" })), "eas");
+  assert.equal(captureRepack(withRunOverrides(plain, { repack: "local" })), "local");
+  assert.throws(() => withRunOverrides(plain, { repack: "remote" }), /--repack must be eas or local/);
+  assert.throws(() => validateExploreConfig({ ...base(), capture: { repack: "remote" } }), error => error.code === "CONFIG_INVALID");
+});
+
 test("--simulator overrides the config's simulator for one run and is validated", () => {
   const plain = validateExploreConfig(base());
   const local = withRunOverrides(plain, { simulator: "local" });
@@ -335,5 +350,7 @@ test("a target can choose its own controller and simulator over capture's", () =
   assert.deepEqual([capture("duo").controller, capture("duo").simulator], ["argent", "local"]);
   assert.deepEqual([capture("android").controller, capture("android").simulator], [undefined, "local"], "agent-device is the default, so it is absent");
   assert.deepEqual([capture("cloud").controller, capture("cloud").simulator], ["argent", undefined]);
+  // The repack follows each target's simulator.
+  assert.deepEqual(["duo", "android", "cloud"].map(id => captureRepack(resolveTargetConfig(config, { target: id }))), ["local", "local", "eas"]);
   assert.throws(() => validateExploreConfig({ ...base(), targets: { duo: { platform: "ios", controller: "maestro" } } }), error => error.code === "CONFIG_INVALID");
 });

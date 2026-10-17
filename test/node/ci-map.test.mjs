@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { tmpdir } from 'node:os';
+import { Worker } from 'node:worker_threads';
 import { PNG } from 'pngjs';
 import { BlobReader, Uint8ArrayWriter, ZipWriter } from '@zip.js/zip.js';
 import { AGENT_DEVICE_VERSION, captureDeepLink, controllerCommandFailure, revisionSetup, runCiMap, runControllerRead, runControllerReadAsync, runAgentControllerCommand } from '../../dist/capture/run.js';
@@ -508,6 +509,13 @@ test('a local simulator capture creates its own iOS simulator, installs the repa
     // A local repack's app stays on this machine; a hosted one is downloaded back.
     assert.equal(eas.includes('upload'), false);
     if (repack === 'eas') assert.ok(eas.includes('workflow:run') && eas.includes('build:download'));
+    // Every captured route exports its frame. A local repack is never uploaded, so its frames name the native build it repacked.
+    const bundle = JSON.parse(await readFile(join(f.options.outputDirectory, 'bundle.json'), 'utf8'));
+    const captured = Object.keys(bundle.outcomes).filter(id => bundle.outcomes[id].status === 'captured');
+    assert.ok(captured.length > 0);
+    assert.deepEqual(captured.filter(id => !bundle.images[id]), [], 'no captured route is missing its image');
+    for (const id of captured) assert.equal(bundle.images[id].buildId, repack === 'local' ? 'built-app' : result.easBuildId);
+    assert.equal(bundle.easBuildId, bundle.images[captured[0]].buildId, 'the review names the build its frames came from');
     const simctl = f.requests.filter(request => request.command === 'xcrun').map(request => request.args.slice(1));
     assert.deepEqual(simctl.find(args => args[0] === 'create'),
       ['create', `Explore iPhone 17 Pro (base ${SHA.slice(0, 8)})`, 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro', 'com.apple.CoreSimulator.SimRuntime.iOS-27-0'],
@@ -596,7 +604,7 @@ test('a local emulator adb has lost is stopped by its process', async t => {
   assert.equal(existsSync(join(f.root, 'expo-explore-emulator-5556.lock')), false);
 });
 
-test('two local Android captures starting at once take different console ports', async t => {
+test('a local emulator skips a console port another capture holds and takes over one an exited run left', async t => {
   const f = await fixture(t, { local: true, android: true, repack: 'local', serial: 'emulator-5558' });
   // Another capture of this process has reserved 5556, and one that exited left 5558's reservation behind.
   await writeFile(join(f.root, 'expo-explore-emulator-5556.lock'), String(process.pid));
@@ -605,6 +613,25 @@ test('two local Android captures starting at once take different console ports',
   const start = f.requests.find(request => request.command === '/bin/sh');
   assert.equal(start.args[start.args.indexOf('-port') + 1], '5558');
   assert.equal(existsSync(join(f.root, 'expo-explore-emulator-5556.lock')), true, 'the other capture keeps its port');
+});
+
+test('of captures reserving one console port at the same moment, exactly one gets it', async t => {
+  const module = new URL('../../dist/capture/local-simulator.js', import.meta.url).href;
+  const root = await mkdtemp(join(tmpdir(), 'explore-port-race-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  // Head and base of one review start their emulators together, each on its own worker thread of one process.
+  const reserveOnThread = () => new Promise((resolve, reject) => {
+    const worker = new Worker(`import(${JSON.stringify(module)}).then(m => m.reservePort(5554, { TMPDIR: ${JSON.stringify(root)} })).then(r => require('node:worker_threads').parentPort.postMessage(r));`, { eval: true });
+    worker.once('message', resolve); worker.once('error', reject);
+  });
+  for (let round = 0; round < 30; round++) {
+    // Free, or left behind by a run that exited (its process is gone), which any capture may take over.
+    await rm(join(root, 'expo-explore-emulator-5554.lock'), { force: true });
+    if (round % 2) await writeFile(join(root, 'expo-explore-emulator-5554.lock'), '999999999');
+    const reserved = await Promise.all(Array.from({ length: 4 }, reserveOnThread));
+    assert.equal(reserved.filter(Boolean).length, 1, `round ${round}: ${reserved}`);
+    assert.equal(await readFile(join(root, 'expo-explore-emulator-5554.lock'), 'utf8'), String(process.pid));
+  }
 });
 
 test('a local emulator skips a port whose serial agent-device still claims for an interrupted run', async t => {

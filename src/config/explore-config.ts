@@ -93,7 +93,9 @@ export type ExploreConfig = {
   target?: RunTarget;
   /** `exclude` names routes, as `requiresRoute` does, that stay in the map but are never captured. */
   exploration: { scope: "changes" | "all"; exclude?: string[] };
-  capture: { maxMinutes: number; maxActions: number; repack: "eas" | "local"; appearance: AppearanceSetting; launch: LaunchSetting; reset: RouteResetSetting; unattributed: UnattributedSetting; readinessSeconds?: number;
+  capture: { maxMinutes: number; maxActions: number;
+    /** Where the route observer is bundled into the app, when the config chooses; captureRepack gives the default. */
+    repack?: "eas" | "local"; appearance: AppearanceSetting; launch: LaunchSetting; reset: RouteResetSetting; unattributed: UnattributedSetting; readinessSeconds?: number;
     /** The device controller; absent means agent-device, so configs that never chose one keep their cache recipes. */
     controller?: "argent";
     /** Where the app runs: EAS Simulator when absent, or `local`, a simulator Explore creates on this Mac for the run. */
@@ -330,7 +332,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
     capture: {
       maxMinutes: positiveInteger(capture.maxMinutes, "capture.maxMinutes", 30),
       maxActions: positiveInteger(capture.maxActions, "capture.maxActions", 500),
-      repack: literal(capture.repack, ["eas", "local"] as const, "capture.repack", "eas"),
+      ...(capture.repack === undefined ? {} : { repack: literal(capture.repack, ["eas", "local"] as const, "capture.repack") }),
       appearance: parseAppearance(capture.appearance, "capture.appearance"),
       launch: parseLaunchSetting(capture.launch, "capture.launch"),
       reset: parseRouteResetSetting(capture.reset, "capture.reset"),
@@ -506,8 +508,12 @@ export function resolvePlatformConfig(config: ExploreConfig, platform: ExplorePl
  * every screen (`scope: all`) and keep its hosted link (`expiresIn: never`). `expiresIn` changes nothing when the
  * config hosts no report.
  */
-export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined; controller?: string | undefined; simulator?: string | undefined }): ExploreConfig {
+export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined; controller?: string | undefined; simulator?: string | undefined; repack?: string | undefined }): ExploreConfig {
   let result = config;
+  if (overrides.repack !== undefined) {
+    if (overrides.repack !== "eas" && overrides.repack !== "local") fail("--repack must be eas or local", "--repack");
+    result = { ...result, capture: { ...result.capture, repack: overrides.repack } };
+  }
   if (overrides.controller !== undefined) {
     if (overrides.controller !== "agent-device" && overrides.controller !== "argent") fail("--controller must be agent-device or argent", "--controller");
     const { controller: _previous, ...capture } = result.capture;
@@ -528,6 +534,14 @@ export function withRunOverrides(config: ExploreConfig, overrides: { scope?: str
     if (result.report?.preview) result = { ...result, report: { ...result.report, preview: { ...result.report.preview, expiresAfterDays } } };
   }
   return result;
+}
+
+/**
+ * Where a capture repacks the app with the route observer: the config's choice, else on this machine when the app runs on
+ * a local simulator (which already needs Xcode or the Android SDK), and in a hosted EAS job otherwise.
+ */
+export function captureRepack(config: ExploreConfig): "eas" | "local" {
+  return config.capture.repack ?? (config.capture.simulator === "local" ? "local" : "eas");
 }
 
 /** `expiresAfter` is a whole number of days (`30d`, `30 days`, or `30`), at most PREVIEW_MAX_DAYS, or `never` (null). */

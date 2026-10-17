@@ -572,6 +572,35 @@ test("doctor warns when an installed workflow drifts from this version's templat
   assert.match(edited[0].nextAction, /--force/);
 });
 
+test("with a local Android emulator, doctor checks the device profile and that the APK can be repacked on this machine", async (t) => {
+  const root = await app(t, { ...baseConfig, app: { ...baseConfig.app, platform: "android" }, device: { name: "pixel_7" } });
+  const sdk = await mkdtemp(join(tmpdir(), "explore-doctor-sdk-"));
+  t.after(() => rm(sdk, { recursive: true, force: true }));
+  for (const abi of ["arm64-v8a", "x86_64"]) {
+    await mkdir(join(sdk, "system-images", "android-35", "google_apis", abi), { recursive: true });
+    await writeFile(join(sdk, "system-images", "android-35", "google_apis", abi, "system.img"), "");
+  }
+  const eas = easRun({ available: false });
+  const run = ({ java = true } = {}) => (command, args, cwd) => {
+    if (command.endsWith("/avdmanager")) return { status: 0, stderr: "", stdout: "pixel_7\npixel_8\n" };
+    if (command === "java") return java ? { status: 0, stdout: "", stderr: "openjdk version \"17.0.20.1\" 2026-08-18 LTS\nOpenJDK Runtime Environment\n" } : { status: 127, stdout: "", stderr: "java: not found" };
+    return eas.run(command, args, cwd);
+  };
+  const doctor = (options = {}) => runDoctor({ project: root, github: false, simulator: "local", environment: { ...process.env, ANDROID_HOME: sdk }, run: run(options), ...options.extra });
+  // Without build-tools the local repack, now the default with a local emulator, cannot run.
+  const noTools = await doctor();
+  assert.equal(check(noTools, "local-emulator")[0].status, "pass");
+  assert.equal(check(noTools, "local-repack")[0].code, "LOCAL_REPACK_UNAVAILABLE");
+  assert.match(check(noTools, "local-repack")[0].message, /build-tools/);
+  await mkdir(join(sdk, "build-tools", "35.0.0"), { recursive: true });
+  const ready = await doctor();
+  assert.equal(check(ready, "local-repack")[0].status, "pass");
+  assert.match(check(ready, "local-repack")[0].message, /build-tools 35\.0\.0, openjdk version "17\.0\.20\.1"/);
+  assert.match(check(await doctor({ java: false }), "local-repack")[0].message, /needs Java/);
+  // A hosted EAS repack needs neither.
+  assert.deepEqual(check(await doctor({ extra: { repack: "eas" } }), "local-repack"), []);
+});
+
 test("with a local simulator, doctor checks that this Mac can create the device instead of EAS Simulator access", async (t) => {
   const root = await app(t);
   const eas = easRun({ available: false });

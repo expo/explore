@@ -333,6 +333,9 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       await copyFile(source, join(outputDirectory, "capture-diagnostics", name));
     }
     const images: CaptureBundle["images"] = {};
+    // The build a frame came from: the repacked app's EAS build, or for a repack on this machine, which is never
+    // uploaded, the native EAS build it repacked. The bundle names it too, as the review's build.
+    const frameBuildId = easBuildId ?? nativeEasBuildId;
     for (const observation of map.observations) {
       // A secondary-appearance screen (`<route>@<scheme>`) exports under its route's outcome, with its own frame, or
       // under its own outcome when the primary pass lost the route and this pass captured it.
@@ -340,13 +343,13 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       const owner = (scheme && outcomes[observation.screenId]) || outcomes[routeId];
       if (!selected.has(routeId) || owner?.status !== "captured") continue;
       const artifact = map.artifacts.find(value => value.id === observation.screenshotArtifactId);
-      if (!artifact || (!easBuildId && !cachedImages[observation.screenId])) continue;
+      if (!artifact || (!frameBuildId && !cachedImages[observation.screenId])) continue;
       const png = await readFile(join(outputDirectory, artifact.path));
       assertDecodedPng(png, "Exported capture image");
       const expectedSha256 = scheme ? artifact.sha256 : outcomes[routeId]?.screenshotSha256;
       if (createHash("sha256").update(png).digest("hex") !== expectedSha256) throw new Error("Exported screenshot does not match the captured frame");
       images[observation.screenId] = cachedImages[observation.screenId] ?? { path: artifact.path, sha256: artifact.sha256, width: png.readUInt32BE(16), height: png.readUInt32BE(20),
-        capturedAt: observation.capturedAt, sourceCommit: options.gitCommit, buildId: easBuildId! };
+        capturedAt: observation.capturedAt, sourceCommit: options.gitCommit, buildId: frameBuildId! };
     }
     const metadata: SimulatorRuntimeMetadata | null = runtime ? { provider: runtime.provider, controller: runtime.controller,
       controllerPackageVersion: runtime.controllerPackageVersion, easCliVersion: runtime.easCliVersion, platform: runtime.platform,
@@ -368,7 +371,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     }
     await rm(launchWorkDirectory, { recursive: true, force: true });
     const storedIcon = appIcon ? await storeAppIcon(outputDirectory, appIcon) : undefined;
-    const bundle: CaptureBundle = { contract: "explore.bundle", side, gitCommit: options.gitCommit, easBuildId, completedAt: map.run.completedAt,
+    const bundle: CaptureBundle = { contract: "explore.bundle", side, gitCommit: options.gitCommit, easBuildId: frameBuildId, completedAt: map.run.completedAt,
       easProjectId: projectId, platform: options.platform, profile: options.easProfile, appName: app.name, ...(controller === "argent" ? { controller } : {}), ...(storedIcon ? { appIcon: storedIcon } : {}),
       selectedSurfaceIds: selectedIds,
       runtimeProfile: metadata ? { deviceModel: metadata.deviceModel, osVersion: metadata.osVersion, locale: metadata.locale,

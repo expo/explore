@@ -360,7 +360,7 @@ For each commit, Explore starts a device of its own and removes it afterwards; h
 - **iOS:** a simulator of the configured device with Xcode's newest runtime that runs it. `DEVELOPER_DIR` picks another Xcode, such as one that adds iPhone Duo. Explore approves the app's URL scheme on it, so links open without iOS asking "Open in …?", and checks a foldable's pose by the shape of its lit display.
 - **Android:** an emulator of the configured device profile (such as `pixel_7`), from the newest Google APIs system image installed for this machine (`arm64-v8a` on Apple silicon), in a private AVD folder. The APK must ship native libraries for that ABI; a universal build does.
 
-Builds still run on EAS, and the repacked app is installed from your machine (with `repack: local` it is never uploaded). `doctor --simulator local` checks that Xcode and the Android SDK can start each device.
+Builds still run on EAS. The app is repacked with the route observer on your machine as well, so it is never uploaded; on Android that needs the SDK's build-tools and a JDK. `capture.repack: eas` (or `--repack eas`) keeps the repack in a hosted EAS job. `doctor --simulator local` checks that Xcode and the Android SDK can start each device, and that Android can be repacked locally.
 
 With `--controller argent`, Explore installs Argent's tool-server on first use (with its dependencies, about 165 MB, in the controller cache) and starts one per device. The host switches the appearance, so a local Argent capture records light and dark. Reports record where they were captured, and a baseline is reused only by a review captured the same way.
 

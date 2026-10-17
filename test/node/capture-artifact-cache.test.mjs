@@ -135,6 +135,10 @@ test("capture recipes exclude display settings but bind agent instructions and c
   assert.equal(JSON.parse(key).observer, CAPTURE_OBSERVER_HASH);
   assert.match(JSON.parse(key).observer, /^[a-f0-9]{64}$/);
   assert.equal(key,captureRecipeConfig({...config,app:{...config.app,name:"Renamed display"}}));
+  // An unset repack is keyed as it resolves, so configs that never chose one keep the recipe of the old written-out default.
+  assert.equal(key,captureRecipeConfig({...config,capture:{...config.capture,repack:"eas"}}));
+  assert.equal(JSON.parse(key).capture.repack, "eas");
+  assert.equal(JSON.parse(captureRecipeConfig({...config,capture:{...config.capture,simulator:"local"}})).capture.repack, "local");
   // agent-device recipes are unchanged by Argent support; an Argent capture is keyed to Argent and its version.
   assert.equal(JSON.parse(key).controllerVersion, undefined);
   const argent = JSON.parse(captureRecipeConfig({...config,capture:{...config.capture,controller:"argent"}}));

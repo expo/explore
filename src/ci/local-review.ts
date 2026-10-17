@@ -49,6 +49,8 @@ export type LocalReviewOptions = {
   controller?: string | undefined;
   /** `--simulator`: `local` runs both sides on simulators this Mac creates, over the config's `capture.simulator`. */
   simulator?: string | undefined;
+  /** `--repack`: where the app is repacked with the route observer, over the config's `capture.repack`. */
+  repack?: string | undefined;
   /** Reuse and keep captures in the local capture cache (default true). */
   cache?: boolean | undefined;
   configPath?: string | undefined;
@@ -451,7 +453,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     });
     // The targets run at once, as CI runs them in parallel jobs: each on its own simulators, with its own output.
     const captureTarget = async (target: RunTarget): Promise<LocalReviewReport> => {
-      const config = withRunOverrides(resolveTargetConfig(rawConfig, { target: target.id }), { scope: options.scope, expiresIn: options.expiresIn, controller: options.controller, simulator: options.simulator });
+      const config = withRunOverrides(resolveTargetConfig(rawConfig, { target: target.id }), { scope: options.scope, expiresIn: options.expiresIn, controller: options.controller, simulator: options.simulator, repack: options.repack });
       const platform = target.platform;
       const output = join(work, target.id); await mkdir(output);
       outputs.push(output);

@@ -51,8 +51,8 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
   setup: { project: "value", platform: "value", device: "value", scope: "value", profile: "value", "bundle-id": "value", scheme: "value", navigation: "value",
     mode: "value", provider: "value", model: "value", param: "value", "app-state": "value", workflows: "boolean", "no-workflows": "boolean",
     "non-interactive": "boolean", check: "boolean", force: "boolean", help: "boolean" },
-  doctor: { project: "value", offline: "boolean", "no-github": "boolean", "check-model": "boolean", capture: "boolean", output: "value", target: "value", platform: "value", controller: "value", simulator: "value", yes: "boolean", help: "boolean" },
-  "capture:baseline": { project:"value", sha:"value", output:"value", config:"value", target:"value", platform:"value", controller:"value", simulator:"value" },
+  doctor: { project: "value", offline: "boolean", "no-github": "boolean", "check-model": "boolean", capture: "boolean", output: "value", target: "value", platform: "value", controller: "value", simulator: "value", repack: "value", yes: "boolean", help: "boolean" },
+  "capture:baseline": { project:"value", sha:"value", output:"value", config:"value", target:"value", platform:"value", controller:"value", simulator:"value", repack:"value" },
   "source:verify": { "base-project":"value", "head-project":"value", "base-sha":"value", "head-sha":"value", output:"value", config:"value", scope:"value", target:"value", platform:"value" },
   "config:platforms": { project:"value", config:"value" },
   "config:targets": { project:"value", config:"value" },
@@ -85,7 +85,7 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
   validate: {},
   export: { output: "value" },
   "export:web": {catalog:"value",output:"value"},
-  "capture:review": { "base-project":"value", "head-project":"value", "pull-request":"value", compare:"value", output:"value", config:"value", parallel:"value", target:"value", platform:"value", controller:"value", simulator:"value", scope:"value", "expires-in":"value",
+  "capture:review": { "base-project":"value", "head-project":"value", "pull-request":"value", compare:"value", output:"value", config:"value", parallel:"value", target:"value", platform:"value", controller:"value", simulator:"value", repack:"value", scope:"value", "expires-in":"value",
     base:"value", head:"value", project:"value", committed:"boolean", uncommitted:"boolean", "include-untracked":"boolean", upload:"boolean", "no-open":"boolean", "no-cache":"boolean", port:"value" },
 
 

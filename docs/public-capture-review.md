@@ -73,7 +73,7 @@ Every selected target on both revisions must have a screenshot of its verified d
 
 ### Automatic destination verification
 
-CI repacks both Base and Head with the same read-only navigation observer, including when EAS creates a fresh native build. By default the repack is a hosted EAS `repack` workflow job: the tracked files of the clean checkout are staged in a temporary copy together with the generated observer, Metro override and a one-job workflow, uploaded with `eas workflow:run --wait`, and the job's build ID starts the simulator session. `capture.repack: local` runs `@expo/repack-app` on the runner and uploads the result with `eas upload` instead. Generated files never land in the source checkout. The application does not need to import a marker or maintain a screen manifest.
+CI repacks both Base and Head with the same read-only navigation observer, including when EAS creates a fresh native build. By default the repack is a hosted EAS `repack` workflow job: the tracked files of the clean checkout are staged in a temporary copy together with the generated observer, Metro override and a one-job workflow, and run with `eas workflow:run --wait`; the repacked app is downloaded and installed into the simulator session, which started while the job ran. `capture.repack: local` runs `@expo/repack-app` on the runner instead, and its app is installed without being uploaded. With `capture.simulator: local` the repack runs on that machine unless `capture.repack: eas` says otherwise. Generated files never land in the source checkout. The application does not need to import a marker or maintain a screen manifest.
 
 The observer adapter requires **Expo SDK 57 or newer** and an installed Expo CLI with Metro configuration override support. It accepts **Expo Router 57 or newer**, or **React Navigation core 6 or newer**. Older packages fail instrumentation explicitly.
 
@@ -103,7 +103,7 @@ exploration:
 capture:
   maxMinutes: 30
   maxActions: 500
-  repack: eas # eas (hosted workflow job) | local (repack-app on the runner)
+  repack: eas # eas (hosted workflow job; the default on EAS Simulator) | local (repack-app on the runner; the default with simulator: local)
   appearance: auto # auto (follow the app's userInterfaceStyle: automatic captures light and dark) | dark | light | [dark, light]
   launch: screenshot # screenshot (relaunch the app per appearance and keep its splash and first settled frame, default) | video (also keep a launch recording in the report) | off
   reset: root-link # root-link (open the app's root link and let it settle before every route link, default) | none (each link opens from whatever the previous route left on screen)
