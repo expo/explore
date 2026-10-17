@@ -499,6 +499,14 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       AGENT_DEVICE_SESSION: CONTROLLER_SESSION, AGENT_DEVICE_SESSION_LOCK: "reject", AGENT_DEVICE_PLATFORM: options.platform };
     // Every controller call below goes to the session's controller; for Argent that is the bridge.
     const controllerCommand = argent?.command ?? options.agentDeviceCommand;
+    if (options.devicePose) {
+      // A fold relights the other panel and resizes the window. It comes before the app is first opened or read, so the
+      // controller's accessibility reader starts on the lit panel: Argent's, started on the outer panel, can stay there.
+      say(`folding ${options.device} ${options.devicePose}`);
+      runner({ command: controllerCommand, args: ["fold", options.devicePose, "--session", CONTROLLER_SESSION,
+        ...deviceArgs({ platform: options.platform, deviceModel: options.device }), "--platform", options.platform, "--json"],
+        cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000 });
+    }
     runtimeStage = "runtime";
     setStage(runtimeStage);
     runtime = collectRuntime({ ...options, agentDeviceCommand: controllerCommand }, controllerEnvironment);
@@ -510,12 +518,6 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         runtime.controllerDeviceId, options.fetch ?? fetch, options.platform);
     } catch (error) {
       process.stderr.write(`The EAS Simulator OS version is unavailable (${(error as Error).message}); the review records it as unknown.\n`);
-    }
-    if (options.devicePose) {
-      // A fold relights the other panel and resizes the window, so it happens before any snapshot or screenshot.
-      say(`folding ${runtime.deviceModel} ${options.devicePose}`);
-      runner({ command: controllerCommand, args: ["fold", options.devicePose, "--session", CONTROLLER_SESSION, ...deviceArgs(runtime), "--platform", options.platform, "--json"],
-        cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000 });
     }
     if (await store.exists()) { map.run = newCaptureMap(options, runtime, fingerprint).run; await store.write(map); }
     else { map = newCaptureMap(options, runtime, fingerprint); await store.initialize(map, false); }

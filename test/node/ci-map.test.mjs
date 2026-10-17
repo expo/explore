@@ -399,7 +399,7 @@ test('an Argent capture of an app pinned to dark is labelled dark and is not war
   assert.equal(execution.colorScheme, 'dark');
 });
 
-test('device.pose folds the device once, before anything is read or captured', async t => {
+test('device.pose folds the device first, before the app is opened, read or captured', async t => {
   for (const argent of [false, true]) {
     const f = await fixture(t, { devicePose: 'open', argent });
     assert.equal((await runCiMap(f.options)).runStatus, 'complete');
@@ -408,7 +408,8 @@ test('device.pose folds the device once, before anything is read or captured', a
     assert.equal(folds.length, 1);
     assert.deepEqual(folds[0].args.slice(0, 2), ['fold', 'open']);
     const foldAt = controller.indexOf(folds[0]);
-    assert.ok(controller.findIndex(request => request.args[0] === 'screenshot' || request.args[0] === 'snapshot') > foldAt, 'nothing is captured before the fold');
+    // The fold comes first: the app is not opened, read or captured before it, so the controller starts on the lit panel.
+    assert.deepEqual(controller.slice(0, foldAt).map(request => request.args[0]).filter(command => command !== '--version'), []);
   }
 });
 

@@ -291,7 +291,7 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
 
   /** Reads are resent after a transport failure (they change nothing); a UI action is sent once, after a health check. */
   const call = async (tool: string, args: Record<string, unknown> = {}, options?: { out?: string }): Promise<Record<string, unknown>> => {
-    const withDevice = tool === "list-devices" || tool === "stop-all-simulator-servers" ? args : { udid: state.udid, ...args };
+    const withDevice = tool === "list-devices" ? args : { udid: state.udid, ...args };
     for (let attempt = 0; ; attempt++) {
       try { return record(await context.call(tool, withDevice, options)); }
       catch (error) {
@@ -603,35 +603,25 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         await ensureDevice();
         const posture = positional[0];
         if (posture !== "closed" && posture !== "half-open" && posture !== "open") throw new BridgeFailure("INVALID_ARGS", "fold needs closed, half-open or open.");
-        const before = (await tree()).screen;
         await beforeAction();
-        let folded = await call("fold", { posture });
+        const folded = await call("fold", { posture });
         // The other panel lights at another size: every stored coordinate and element reference is stale.
         delete state.screen;
         delete state.refs;
         state.generation += 1;
-        // Argent's accessibility reader sometimes keeps reading the panel that went dark (observed on iPhone Duo): its
-        // tree keeps the old screen size and comes back bare. Wait for the new size, and fold back and forth once to
-        // make Argent pick up the lit panel; a capture must not run against the dark one.
-        const followed = async () => {
-          for (let poll = 0; poll < 10; poll++) {
-            const current = await tree();
-            if (!before || !current.screen || current.screen.width !== before.width || current.screen.height !== before.height) return true;
-            await context.sleep(1_000);
+        // Argent's accessibility reader can keep reading the panel that went dark (seen on iPhone Duo when it had read
+        // the outer panel before the fold): its tree keeps the old panel's shape and comes back bare. Nothing is read
+        // before the fold, and the tree must take the shape of the panel the fold lit before the bridge answers.
+        const lit = record(folded.screen);
+        if (finite(lit.width) && finite(lit.height) && lit.height > 0) {
+          const litRatio = lit.width / lit.height;
+          let followed = false;
+          for (let poll = 0; poll < 10 && !followed; poll++) {
+            const shape = (await tree()).screen;
+            followed = !!shape && shape.height > 0 && Math.abs(shape.width / shape.height - litRatio) < 0.004;
+            if (!followed) await context.sleep(1_000);
           }
-          return false;
-        };
-        if (posture !== "closed" || before) {
-          if (!await followed()) {
-            // Folding again does not free a reader stuck on the dark panel; draining this device's Argent services
-            // (accessibility included) makes the next read start one on the lit panel.
-            await call("stop-all-simulator-servers", { devices: [state.udid] });
-            if (!await followed()) {
-              await call("fold", { posture: posture === "closed" ? "open" : "closed" });
-              folded = await call("fold", { posture });
-              if (!await followed()) throw new BridgeFailure("CONTROLLER_FOLD_UNVERIFIED", `Argent kept reading the other panel after folding the device ${posture}.`);
-            }
-          }
+          if (!followed) throw new BridgeFailure("CONTROLLER_FOLD_UNVERIFIED", `Argent kept reading the other panel after folding the device ${posture}.`);
         }
         return success({ action: "fold", pose: posture, ...(folded.panel !== undefined ? { panel: folded.panel } : {}) });
       }
