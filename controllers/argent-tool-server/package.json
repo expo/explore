@@ -1,0 +1,8 @@
+{
+  "name": "expo-explore-argent-tool-server",
+  "private": true,
+  "description": "Argent's tool-server at the release Explore pins, with every dependency locked: installed with npm ci for local simulators.",
+  "dependencies": {
+    "@swmansion/argent": "0.29.0"
+  }
+}

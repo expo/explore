@@ -171,36 +171,54 @@ export async function ensureController(controller: ControllerName, options: {
   }
 }
 
+/** The tool-server's package and its lockfile, shipped with Explore: every dependency is the version and tarball locked there. */
+const ARGENT_TOOL_SERVER_LOCK = fileURLToPath(new URL("../../controllers/argent-tool-server/", import.meta.url));
+
+/**
+ * Where the tool-server is installed in the controller cache: by Argent's version and the lockfile's hash, so a changed
+ * lock (or an install from before there was one) is installed afresh.
+ */
+export function argentToolServerDirectory(root: string): string {
+  const lock = createHash("sha256").update(readFileSync(join(ARGENT_TOOL_SERVER_LOCK, "package-lock.json"))).digest("hex").slice(0, 12);
+  return join(root, `argent-tool-server@${CONTROLLER_PACKAGES.argent.version}-${lock}`);
+}
+
+/** npm gets what it needs to reach the registry, never the tokens and keys a capture's environment carries. */
+export function npmEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => /^(PATH|HOME|USER|LOGNAME|SHELL|TMPDIR|TEMP|TMP|LANG|LC_ALL|LC_CTYPE|SystemRoot|WINDIR|APPDATA|LOCALAPPDATA|NODE_EXTRA_CA_CERTS|(HTTPS?|NO|ALL)_PROXY|(https?|no|all)_proxy|npm_config_\w+|NPM_CONFIG_\w+)$/.test(name)));
+}
+
 /**
  * Argent's tool-server, for driving simulators on this machine (`capture.simulator: local`): unlike the client, it
- * needs Argent's dependencies, some native (sharp, tree-sitter). They are installed once, on first use, with npm and
- * without running any package's install scripts; Argent itself must be the release Explore pins. Returns its CLI.
+ * needs Argent's dependencies, some with native prebuilds (tree-sitter). They are installed once, on first use, with
+ * `npm ci` from the lockfile Explore ships, so each package is the exact tarball locked there, and without running any
+ * package's install scripts. Returns its CLI.
  */
 export async function ensureArgentToolServer(options: { environment?: NodeJS.ProcessEnv; progress?: (message: string) => void;
-  /** Tests: stands in for `npm install`, given the folder to install into. */
+  /** Tests: stands in for `npm ci`, given the folder to install into (its package.json and lockfile are there). */
   install?: (directory: string) => Promise<void> } = {}): Promise<string> {
   const environment = options.environment ?? process.env;
   const pinned = CONTROLLER_PACKAGES.argent;
   const root = controllerCacheRoot(environment);
-  const directory = join(root, `argent-tool-server@${pinned.version}`);
+  const directory = argentToolServerDirectory(root);
   const cli = join(directory, "node_modules", "@swmansion", "argent", pinned.bin);
   if (existsSync(join(directory, COMPLETE))) return cli;
   await mkdir(root, { recursive: true, mode: 0o700 });
   await removeAbandonedStaging(root);
   const staging = join(root, `.staging-${process.pid}-${randomUUID()}`);
   try {
-    options.progress?.(`installing Argent's tool-server (${pinned.name}@${pinned.version} and its dependencies)`);
+    options.progress?.(`installing Argent's tool-server (${pinned.name}@${pinned.version} and its locked dependencies)`);
     await mkdir(staging, { mode: 0o700 });
-    await writeFile(join(staging, "package.json"), `${JSON.stringify({ private: true })}\n`);
+    for (const file of ["package.json", "package-lock.json"]) await writeFile(join(staging, file), readFileSync(join(ARGENT_TOOL_SERVER_LOCK, file)));
     await (options.install ?? (async target => {
       const registry = environment.EXPLORE_NPM_REGISTRY ? ["--registry", environment.EXPLORE_NPM_REGISTRY] : [];
-      const npm = spawnSync("npm", ["install", `${pinned.name}@${pinned.version}`, "--omit=optional", "--ignore-scripts", "--no-audit", "--no-fund", ...registry],
-        { cwd: target, env: environment, encoding: "utf8", timeout: 10 * 60_000 });
+      const npm = spawnSync("npm", ["ci", "--omit=optional", "--ignore-scripts", "--no-audit", "--no-fund", ...registry],
+        { cwd: target, env: npmEnvironment(environment), encoding: "utf8", timeout: 10 * 60_000 });
       if (npm.error || npm.status !== 0) throw new CiError({ code: "CONTROLLER_DOWNLOAD_FAILED", stage: "preflight",
         message: `Argent's tool-server could not be installed: ${(npm.error?.message ?? npm.stderr ?? "").trim().split("\n").at(-1) ?? "npm failed"}`,
         nextAction: "Check that npm is on PATH and can reach the registry (or set EXPLORE_NPM_REGISTRY), then rerun." });
     }))(staging);
-    // npm checked every package against the registry; Argent itself must also be the exact release Explore pins.
+    // npm ci checked every package against the lockfile; Argent itself must also be the exact release Explore pins.
     const lock = JSON.parse(readFileSync(join(staging, "package-lock.json"), "utf8")) as { packages?: Record<string, { version?: string; integrity?: string }> };
     const installed = lock.packages?.[`node_modules/${pinned.name}`];
     if (installed?.version !== pinned.version || installed.integrity !== pinned.integrity) throw new CiError({ code: "CONTROLLER_INTEGRITY_MISMATCH", stage: "preflight",

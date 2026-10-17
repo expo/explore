@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import test from 'node:test';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { lstat, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -372,6 +372,30 @@ test('a local review captures every target of the config at once, two of them on
     error => error.code === 'TARGET_NOT_CONFIGURED');
 });
 
+test('a review of some targets names only those in its reports, so the Viewer links to no report the review did not make', async t => {
+  const targets = { phone: { platform: 'ios' }, tablet: { platform: 'ios', device: 'iPad Air' }, pixel: { platform: 'android', bundleId: 'com.example.app', easProfile: 'capture' } };
+  const f = await fixture(t, 'expo-router', { targets });
+  t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
+  const environment = { ...f.environment, EXPLORE_CACHE_DIR: await scratch(t, 'explore-local-cache-'), GITHUB_RUN_ID: '', GITHUB_RUN_ATTEMPT: '', GITHUB_TOKEN: '' };
+  const review = async selection => {
+    const result = await runLocalReview({ project: f.headProject, base: f.baseSha, head: f.headSha, environment, cache: false, ...selection,
+      install: async checkout => { await writeCaptureObserverPackages(checkout, { provider: 'expo-router' }); }, runner: f.runner, now: f.now, sleep: f.sleep });
+    t.after(() => rm(result.work, { recursive: true, force: true }));
+    return Promise.all(result.reports.map(async report => JSON.parse(await readFile(join(report.directory, 'review.json'), 'utf8')).review.runtime));
+  };
+  // --platform ios: the two iOS targets link to each other, and to no Android report.
+  const ios = await review({ platform: 'ios' });
+  assert.deepEqual(ios.map(runtime => runtime.target.id), ['phone', 'tablet']);
+  for (const runtime of ios) {
+    assert.deepEqual(runtime.targets.map(target => target.id), ['phone', 'tablet']);
+    assert.equal(runtime.platforms, undefined);
+  }
+  // --target phone: a report alone, with no other target or platform to switch to.
+  const [phone] = await review({ target: 'phone' });
+  assert.equal(phone.targets, undefined);
+  assert.equal(phone.platforms, undefined);
+});
+
 test('a review runs at most --parallel targets at once, and every target settles even when one fails', async () => {
   const { settleLimited } = await import('../../dist/ci/local-review.js');
   let running = 0, peak = 0;
@@ -402,4 +426,28 @@ test('a target that fails outright costs only its own report', async t => {
   assert.deepEqual(result.reports.map(report => report.target.id), ['phone']);
   assert.deepEqual(result.failures.map(failure => failure.target.id), ['tablet']);
   assert.match(result.failures[0].error.message, /iPad Air/);
+});
+
+test('a local review first stops what a review stopped hard left running', async t => {
+  const f = await fixture(t, 'expo-router');
+  t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
+  const cache = await scratch(t, 'explore-local-cache-');
+  // An Argent tool-server whose capture's process is gone, and that capture's files.
+  const orphan = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  t.after(() => orphan.kill('SIGKILL'));
+  const stopped = new Promise(resolve => orphan.once('exit', () => resolve(true)));
+  const leftovers = join(cache, 'expo-explore-session-old');
+  await mkdir(leftovers, { recursive: true });
+  await mkdir(join(cache, 'local-captures'), { recursive: true });
+  await writeFile(join(cache, 'local-captures', 'old.json'), JSON.stringify({ owner: 999999999, startedAt: '2026-10-17T00:00:00.000Z', directory: leftovers,
+    argent: { pid: orphan.pid, cli: join(cache, 'missing-cli.js'), home: join(cache, 'argent-home') } }));
+  const lines = [];
+  const environment = { ...f.environment, EXPLORE_CACHE_DIR: cache, GITHUB_RUN_ID: '', GITHUB_RUN_ATTEMPT: '', GITHUB_TOKEN: '' };
+  const result = await runLocalReview({ project: f.headProject, base: f.baseSha, head: f.headSha, environment, progress: line => lines.push(line),
+    install: async checkout => { await writeCaptureObserverPackages(checkout, { provider: 'expo-router' }); }, runner: f.runner, now: f.now, sleep: f.sleep });
+  t.after(() => rm(result.work, { recursive: true, force: true }));
+  assert.equal(await stopped, true, 'the orphaned tool-server is stopped');
+  assert.ok(lines.some(line => line === `stopped what an interrupted review left running: Argent tool-server (pid ${orphan.pid}), agent-device daemon`), lines.join('\n'));
+  assert.deepEqual(await readdir(join(cache, 'local-captures')), []);
+  await assert.rejects(lstat(leftovers), 'its files are gone');
 });

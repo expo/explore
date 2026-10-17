@@ -19,7 +19,10 @@ import { isSafeBranchRef, type LocalReviewPresentation, type PullRequestSidePres
 import { exportCiReport, readCiReportInput } from "../report/artifact.js";
 import { reviewChangeCount, reviewDevice, type PublicCommentState } from "../report/pr-comment-body.js";
 import { zipReportDirectory } from "../report/preview-deploy.js";
-import { CiError, serializeCiError, type CiErrorData } from "../shared/ci-errors.js";
+import { CiError, serializeCiError, toCiError, type CiErrorData } from "../shared/ci-errors.js";
+import { defaultRunner } from "../capture/controller.js";
+import { sweepLocalCaptures } from "../capture/local-registry.js";
+import { abandonSharedBuilds } from "../capture/shared-build.js";
 import { exploreCacheRoot } from "../shared/cache-root.js";
 import { packageBin } from "../shared/package-paths.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
@@ -432,7 +435,9 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     const targets = allTargets.filter(target => (options.target === undefined || target.id === options.target) && (options.platform === undefined || target.platform === options.platform));
     if (!targets.length) throw new CiError({ code: "PLATFORM_NOT_CONFIGURED", stage: "preflight", message: `The config has no ${options.platform} target.`,
       nextAction: `Pass one of: ${allTargets.map(target => target.id).join(", ")}.` });
-    const platforms = configPlatforms(rawConfig);
+    // The reports link to each other's targets (the Viewer's target switch), so they name only the targets this review
+    // captures: `--target phone` or `--platform ios` makes no report for the others, and a link to one would find nothing.
+    const platforms = configPlatforms(rawConfig).filter(platform => targets.some(target => target.platform === platform));
     const repository = repositoryName(root, rawConfig);
 
     // Credentials: tokens and keys when set, otherwise your own logins.
@@ -471,10 +476,10 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
         configPath: appDirectory === "." ? configPath : `${appDirectory}/${configPath}`,
         links: { viewer: null, download: null, run: "", config: "", artifacts: "" }, startedAt: Date.now(), updatedAt: Date.now(),
         build: { platform: config.app.platform, easProfile: config.app.easProfile }, artifactOnly: true,
-        target, ...(allTargets.length > 1 ? { targets: allTargets } : {}) };
+        target, ...(targets.length > 1 ? { targets } : {}) };
       progress(`${target.id}: reviewing${target.id === platform ? "" : ` (${target.label})`}`);
       const result = await runCiReview({ projects, output, config, presentation, runId, runAttempt: "1", state, environment: platformEnvironment,
-        ...(platforms.length > 1 ? { platforms } : {}), ...(allTargets.length > 1 ? { targets: allTargets } : {}),
+        ...(platforms.length > 1 ? { platforms } : {}), ...(targets.length > 1 ? { targets } : {}),
         // Targets of one platform capture the same commits from the same build; it is built and repacked once.
         ...(targets.length > 1 ? { buildShare: join(work, ".builds") } : {}),
         subscription, useLocalEasSession, progress: message => progress(`${target.id}: ${message}`),
@@ -519,7 +524,21 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
       return report;
     };
     // Every target finishes or fails on its own, so each stops the simulators it started; then the first failure is the review's.
-    const settled = await settleLimited(targets, options.parallel ?? targets.length, captureTarget);
+    // Whatever an earlier review stopped hard left running on this machine (simulators, emulators, daemons,
+    // tool-servers) is stopped first; only what Explore recorded is touched.
+    const swept = await sweepLocalCaptures({ environment, runner: options.runner ?? defaultRunner, cwd: work }).catch(() => [] as string[]);
+    if (swept.length) progress(`stopped what an interrupted review left running: ${swept.join(", ")}`);
+    // A capture worker that exited before its shared build said how it ended would leave the targets waiting on that build
+    // polling until the review is stopped: its builds are failed instead.
+    const releaseBuilds = async (target: RunTarget, error: unknown) => {
+      const failure = toCiError(error);
+      const side = /^capture-(head|base)$/.exec(failure.stage)?.[1];
+      if (targets.length > 1 && failure.code === "CAPTURE_WORKER_EXITED" && side) {
+        await abandonSharedBuilds(join(work, ".builds"), owner => owner === join(work, target.id, `${side}-export`), failure.code);
+      }
+    };
+    const settled = await settleLimited(targets, options.parallel ?? targets.length,
+      target => captureTarget(target).catch(async (error: unknown) => { await releaseBuilds(target, error).catch(() => undefined); throw error; }));
     // One target that fails costs that target's report, not the others': they are kept, and the failure is named.
     // Only an interrupted review, or one where every target failed, fails as a whole.
     const reports = settled.flatMap(outcome => outcome.status === "fulfilled" ? [outcome.value] : []);

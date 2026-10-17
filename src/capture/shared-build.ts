@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CiError, serializeCiError, toCiError } from "../shared/ci-errors.js";
 
@@ -21,13 +22,16 @@ const POLL_MS = 2_000;
  * (`keepApp`), which outlives each capture. A waiter is told so it can say whose build it uses.
  */
 export async function sharedBuild<T extends object>(options: { directory: string; key: SharedBuildKey; appName: string; signal?: AbortSignal;
-  build: (keepApp: string) => Promise<T>; waiting?: () => void }): Promise<T> {
+  build: (keepApp: string) => Promise<T>; waiting?: () => void;
+  /** Who builds it (the capture's output directory), so a review can fail its waiters if that capture dies (abandonSharedBuilds). */
+  owner?: string }): Promise<T> {
   const folder = join(options.directory, sharedBuildId(options.key));
   const result = join(folder, "result.json"), failure = join(folder, "failure.json");
   await mkdir(options.directory, { recursive: true });
   let owner = true;
   try { await mkdir(folder); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; owner = false; }
   if (owner) {
+    if (options.owner) await writeFile(join(folder, "owner"), options.owner);
     try {
       const built = await options.build(join(folder, options.appName));
       await writeFile(`${result}.tmp`, JSON.stringify(built));
@@ -50,5 +54,19 @@ export async function sharedBuild<T extends object>(options: { directory: string
       throw new CiError({ code: error.code, stage: error.stage, message: `The shared build failed: ${error.message}`, nextAction: error.nextAction });
     }
     await new Promise(resolve => setTimeout(resolve, POLL_MS));
+  }
+}
+
+/**
+ * Fails the unfinished builds a capture owned, for one that ended without saying (a worker thread that exited before
+ * its build wrote failure.json): the captures waiting on them stop instead of polling until the review is stopped.
+ */
+export async function abandonSharedBuilds(directory: string, ownedBy: (owner: string) => boolean, reason: string): Promise<void> {
+  for (const folder of await readdir(directory).catch(() => [] as string[])) {
+    const path = join(directory, folder);
+    const owner = await readFile(join(path, "owner"), "utf8").catch(() => undefined);
+    if (owner === undefined || !ownedBy(owner) || existsSync(join(path, "result.json")) || existsSync(join(path, "failure.json"))) continue;
+    await writeFile(join(path, "failure.json"), JSON.stringify(serializeCiError(new CiError({ code: "CAPTURE_BUILD_FAILED", stage: "build",
+      message: `the capture building it stopped (${reason})`, nextAction: "Inspect that target's failure above, correct it, and rerun Explore." }))));
   }
 }

@@ -88,3 +88,13 @@ test("a route the primary pass lost keeps its verified secondary frame under <id
   assert.equal(merged["q@dark"], undefined, "two failures stay one failure");
   assert.equal(Object.keys(mergeSchemeOutcomes([{ p: failed }, { p: captured }]))["p@dark"], undefined, "no scheme list, no secondary slot");
 });
+
+test("a note on a verified frame of another appearance stays with the route its primary frame is published under", () => {
+  const captured = { status: "captured", attempts: 1, landing: "verified", screenshotSha256: "a".repeat(64) };
+  const incomplete = "Setup did not complete: a setup step stopped twice (RUNNER_WEDGED), so this route was opened by app link without the state the remaining setup steps prepare.";
+  const merged = mergeSchemeOutcomes([{ p: captured, q: { ...captured, reason: "Already noted." } }, { p: { ...captured, reason: incomplete }, q: captured }], ["light", "dark"]);
+  assert.equal(merged.p.reason, `In dark: ${incomplete}`);
+  assert.equal(merged.p.status, "captured");
+  assert.equal(merged.q.reason, "Already noted.", "a pass without a note adds none");
+  assert.equal(merged["p@dark"], undefined, "the dark frame is still published under the route, as before");
+});

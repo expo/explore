@@ -9,6 +9,7 @@
   },
   "files": [
     "action.yml",
+    "controllers/argent-tool-server",
     "npm-shrinkwrap.json",
     "dist",
     "docs",

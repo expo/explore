@@ -93,12 +93,16 @@ function snapshotNodes(raw: string): Record<string, unknown>[] {
 }
 
 /** The visible element each required label matched, so an image assessor can find icon-only controls. */
-export function verifiedCaptureLabels(nodes: readonly Record<string, unknown>[], requiredLabels: readonly string[]) {
+export function verifiedCaptureLabels(nodes: readonly Record<string, unknown>[], requiredLabels: readonly string[],
+  /** The screen's portrait height, when the screenshot is that screen turned a quarter clockwise (an opened iPhone Duo). */
+  turned?: { height: number }) {
   return requiredLabels.flatMap(value => nodes.filter(node => node.visible !== false && (node.label === value || node.identifier === value)).slice(0, 3).map(node => {
     const rect = isRecord(node.rect) && ["x", "y", "width", "height"].every(key => Number.isFinite((node.rect as Record<string, unknown>)[key]))
       ? node.rect as { x: number; y: number; width: number; height: number } : undefined;
+    // The bounds are given on the image's axes: turned a quarter clockwise, the portrait point (x, y) is at (H - y, x).
+    const shown = rect && turned ? { x: turned.height - rect.y - rect.height, y: rect.x, width: rect.height, height: rect.width } : rect;
     return { value, matchedField: node.label === value ? "label" as const : "identifier" as const,
-      ...(typeof node.type === "string" ? { type: node.type } : {}), ...(rect ? { rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } } : {}) };
+      ...(typeof node.type === "string" ? { type: node.type } : {}), ...(shown ? { rect: { x: shown.x, y: shown.y, width: shown.width, height: shown.height } } : {}) };
   }));
 }
 
@@ -682,17 +686,39 @@ export async function capturePlannedRoutes(options: {
       rect: isRecord(node.rect) ? Object.fromEntries(Object.entries(node.rect).sort(([left], [right]) => left.localeCompare(right))) : node.rect,
       parentIndex: node.parentIndex,
     })));
+    /**
+     * The logical coordinate space a frame's normalized taps map into. On a panel whose native axes are portrait but
+     * whose UI is landscape (an opened iPhone Duo under Argent), the screenshot is taken upright: the portrait screen
+     * turned a quarter clockwise, while the accessibility tree and taps stay on the panel's portrait axes. Its root is
+     * then the transpose of the frame, and a tap is turned back (see `toLogical`).
+     */
     const bounds = (frame: Candidate) => {
-      const roots = frame.snapshot.nodes.filter(node => node.type === "Application" && isRecord(node.rect)
+      const roots = (transposed: boolean) => frame.snapshot.nodes.filter(node => node.type === "Application" && isRecord(node.rect)
         && node.rect.x === 0 && node.rect.y === 0 && typeof node.rect.width === "number" && typeof node.rect.height === "number"
         && Number.isFinite(node.rect.width) && Number.isFinite(node.rect.height) && node.rect.width > 0 && node.rect.height > 0
-        && node.rect.width * frame.height === node.rect.height * frame.width);
-      if (roots.length !== 1) throw captureError("AGENT_COORDINATE_BOUNDS_UNVERIFIED", "The screenshot does not identify one matching full-screen logical coordinate space.");
+        && (transposed ? node.rect.width * frame.width === node.rect.height * frame.height : node.rect.width * frame.height === node.rect.height * frame.width));
+      // A square screen matches both ways; it is read upright, as before rotated frames existed.
+      const upright = roots(false), turned = upright.length ? [] : roots(true);
+      const matched = upright.length ? upright : turned;
+      if (matched.length !== 1) throw captureError("AGENT_COORDINATE_BOUNDS_UNVERIFIED", "The screenshot does not identify one matching full-screen logical coordinate space.");
       // The official iOS screenshot is full-screen. Its default is 1x, but a proven
       // uniform pixel density must still map to XCTest points rather than raw pixels.
-      const rect = roots[0]!.rect as { width: number; height: number };
-      return { width: rect.width, height: rect.height };
+      const rect = matched[0]!.rect as { width: number; height: number };
+      return { width: rect.width, height: rect.height, transposed: turned.length === 1 };
     };
+    /**
+     * A normalized point (x, y) in the screenshot, in the tree's logical points. Upright, it scales by the root. Turned:
+     * a portrait screen W wide and H tall, turned a quarter clockwise, is an image H wide and W tall in which the portrait
+     * point (px, py) lands at (u, v) = (H - py, px); so the image point (u, v) is the portrait point (v, H - u). With
+     * u = x * H and v = y * W, that is (y * W, (1 - x) * H). (A 2x3 portrait pixel at (0, 0), centre (0.5, 0.5), sits at
+     * column 2 of the turned 3x2 image, centre (2.5, 0.5), which maps back to (0.5, 3 - 2.5).)
+     */
+    /** The portrait screen a turned (upright landscape) frame shows, or undefined for a frame on the screen's own axes. */
+    const turnedSpace = (frame: Candidate): { height: number } | undefined => {
+      try { const space = bounds(frame); return space.transposed ? { height: space.height } : undefined; } catch { return undefined; }
+    };
+    const toLogical = (space: { width: number; height: number; transposed: boolean }, x: number, y: number): [number, number] =>
+      space.transposed ? [y * space.width, (1 - x) * space.height] : [x * space.width, y * space.height];
     /**
      * agent-device's in-app back taps a navigation control and cannot leave a sheet without one.
      * Swipe such a sheet down, then require the observed destination to change.
@@ -835,7 +861,7 @@ export async function capturePlannedRoutes(options: {
                   retryable: true, details: changes });
               }
               await discard();
-              await command(["press", String(action.x * oldBounds.width), String(action.y * oldBounds.height), "--level", "full", "--json"], signal);
+              await command(["press", ...toLogical(oldBounds, action.x, action.y).map(String), "--level", "full", "--json"], signal);
             } finally { await discard(); await rm(previous.directory, { recursive: true, force: true }); }
             return;
           }
@@ -871,7 +897,7 @@ export async function capturePlannedRoutes(options: {
               let assessment;
               try {
                 assessment = rejectedReadiness.get(key) ?? await agent.assessCapture({ image: frame.png, route: route.route, context,
-                  instructions: agent.instructions, verifiedLabels: verifiedCaptureLabels(frame.snapshot.nodes, context.requiredLabels),
+                  instructions: agent.instructions, verifiedLabels: verifiedCaptureLabels(frame.snapshot.nodes, context.requiredLabels, turnedSpace(frame)),
                   deadlineMs: deadline, signal: liveSignal(signal) });
                 if (assessment.imageSha256 !== frame.imageSha256) throw new Error("Readiness assessment belongs to another frame");
                 await writeFile(join(diagnostics, `${stem}.json`), JSON.stringify(redactValue({ route: route.route, context, ...assessment })), { mode: 0o600 });
@@ -978,13 +1004,14 @@ export async function capturePlannedRoutes(options: {
    */
   const appLeft = (error: unknown): boolean => toCiError(error).code === "CONTROLLER_IDENTITY_MISMATCH";
   let recoveries = 0;
-  const recoverController = (where: string, error: unknown): boolean => {
+  /** `next` records what the capture did once the app restarted: `setup-rerun` or `setup-incomplete` after a setup step. */
+  const recoverController = (where: string, error: unknown, next?: "setup-rerun" | "setup-incomplete"): boolean => {
     const reported = serializeCiError(toCiError(error), { secrets });
     const record = (recovered: boolean) => {
       const diagnostics = join(store.root, "capture-diagnostics");
       mkdirSync(diagnostics, { recursive: true, mode: 0o700 });
       appendFileSync(join(diagnostics, "controller-recoveries.jsonl"), `${JSON.stringify({ where, code: reported.code, message: reported.message, recovered,
-        at: new Date(clock()).toISOString() })}\n`, { mode: 0o600 });
+        ...(recovered && next ? { next } : {}), at: new Date(clock()).toISOString() })}\n`, { mode: 0o600 });
     };
     if (recoveries >= 3 || deadline - clock() < 60_000) { record(false); return false; }
     recoveries += 1;
@@ -1019,6 +1046,14 @@ export async function capturePlannedRoutes(options: {
       fault: reported.message, at: new Date(clock()).toISOString() })}\n`, { mode: 0o600 });
     return true;
   };
+  /**
+   * A setup step that wedged the controller or left the app has not run, nor have the steps after it (a login, seeded
+   * data, a permission), so routes opened by app link may show the wrong state. Once the app is restarted, setup runs
+   * again from the start, once. When it stops the same way again, the routes go on by app link (so one covered control
+   * does not fail the whole capture), and each route captured afterwards says in its outcome that setup did not complete.
+   */
+  let setupRerunAfterRecovery = false;
+  let setupIncomplete: string | undefined;
   for (let setupAttempt = 0; ; setupAttempt += 1) try {
     await executeCaptureSetup((capture.setup ?? []).map(action => action.action === "fill" || action.action === "type" ? { ...action, text: inputs.resolve(action.text) } : action), {
       command: args => { controllerApp(); return controller(args); },
@@ -1050,11 +1085,17 @@ export async function capturePlannedRoutes(options: {
     break;
   } catch (error) {
     if (setupAttempt === 0 && recoverFromControllerFault(error)) continue;
-    // A wedged controller says nothing about the app's state: the steps before it ran, and the routes they prepared
-    // are captured or failed on their own. Once the controller answers again, the routes go on from app links.
-    if ((controllerWedged(error) || appLeft(error)) && recoverController("a setup step", error)) {
+    // A wedged controller says nothing about the app's state: the routes the steps before it prepared are captured or
+    // failed on their own. Once the controller answers again, setup runs again from the start, once.
+    if ((controllerWedged(error) || appLeft(error)) && recoverController("a setup step", error, setupRerunAfterRecovery ? "setup-incomplete" : "setup-rerun")) {
       const reported = serializeCiError(toCiError(error), { secrets });
-      say(`setup stopped (${reported.code}); the routes it had not reached go on by app link`);
+      if (!setupRerunAfterRecovery) {
+        setupRerunAfterRecovery = true;
+        say(`setup stopped (${reported.code}); running setup again from the start`);
+        continue;
+      }
+      setupIncomplete = `Setup did not complete: a setup step stopped twice (${reported.code}), so this route was opened by app link without the state the remaining setup steps prepare.`;
+      say(`setup stopped again (${reported.code}); setup did not complete, and the routes it had not reached go on by app link marked as such`);
       break;
     }
     const failure = toCiError(error, { code: "SETUP_FAILED", stage: "setup" });
@@ -1198,6 +1239,8 @@ export async function capturePlannedRoutes(options: {
         }
       }
     }
+    const outcome = outcomes[route.id];
+    if (setupIncomplete && outcome?.status === "captured") outcomes[route.id] = { ...outcome, reason: outcome.reason ? `${outcome.reason} ${setupIncomplete}` : setupIncomplete };
     reportOutcome(route, "by app link");
   }
   return outcomes;

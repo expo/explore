@@ -29,6 +29,7 @@ import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, assertLocalE
   deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, approveLinkScheme, localPoseShown,
   setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
 import { ensureArgentToolServer } from "../shared/controller-cache.js";
+import { openLocalCaptureRecord } from "./local-registry.js";
 import { type UnattributedSetting } from "./unattributed.js";
 import { appScheme, hasConcreteRoutePath, unavailableRoute, capturePlannedRoutes, deviceArgs } from "./route-capture.js";
 
@@ -99,6 +100,21 @@ export type CiMapResult = {
 
 function parseJsonOrUndefined(text: string): unknown {
   try { return JSON.parse(text); } catch { return undefined; }
+}
+
+/**
+ * Minutes an EAS session is asked for beyond the capture's own budget. The session starts beside the repack, and the
+ * capture deadline only starts once the app is installed, so the session also has to outlast a slow or queued hosted
+ * repack, the app's upload and its install; 20 minutes covers a typical repack with room for a queue.
+ */
+const SESSION_PREPARATION_MINUTES = 20;
+/**
+ * EAS refuses (before allocating anything) a session longer than the plan allows, naming that maximum. Only that exact
+ * rejection is recognized; any other start failure is kept as it is.
+ */
+function sessionDurationLimit(error: unknown): number | undefined {
+  const match = /max duration must not exceed (\d+(?:\.\d+)?) minutes/i.exec(error instanceof Error ? error.message : String(error));
+  return match ? Math.floor(Number(match[1])) : undefined;
 }
 
 function positiveInteger(value: number, name: string): number {
@@ -450,7 +466,10 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     if (localEmulator) await deleteLocalEmulator({ runner, serial: localEmulator, cwd: simulatorProject, environment: restrictedEnvironment });
     if (statePath) await rm(statePath, { force: true });
     await rm(simulatorProject, { recursive: true, force: true });
+    await localRecord?.close();
   };
+  // What this side starts on this machine, so a later review cleans up after it if this process is stopped hard.
+  const localRecord = local ? await openLocalCaptureRecord(sourceEnvironment, simulatorProject) : undefined;
   if (local) try {
     if (options.platform === "android") {
       say(`starting a local ${options.device} emulator`);
@@ -466,6 +485,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         // Recorded as soon as it starts, so an interrupted review stops it too.
         started: async serial => {
           localEmulator = serial;
+          await localRecord?.update({ serial, avd: `explore-${side}-${options.gitCommit.slice(0, 8)}` });
           if (statePath) await writeFile(statePath, `${LOCAL_EMULATOR_STATE_PREFIX}${serial}\n`, { flag: "wx", mode: 0o600 });
         } });
     } else {
@@ -474,6 +494,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         // Recorded before it boots, so an interrupted review deletes it too.
         created: async udid => {
           localSimulator = udid;
+          await localRecord?.update({ udid });
           if (statePath) await writeFile(statePath, `${LOCAL_SIMULATOR_STATE_PREFIX}${udid}\n`, { flag: "wx", mode: 0o600 });
         } });
       localOsVersion = created.osVersion;
@@ -490,12 +511,19 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const startSession = () => {
     if (local || sessionStart) return;
     say(`starting an EAS Simulator session (${options.device}) while the app is repacked`);
-    const request = { command: options.easCommand, args: ["simulator:start", "--name", sessionName, "--platform", options.platform, "--device", options.device,
+    const request = (minutes: number) => ({ command: options.easCommand, args: ["simulator:start", "--name", sessionName, "--platform", options.platform, "--device", options.device,
       "--type", controller, "--package-version", controllerVersion(controller), "--public-link",
-      "--max-duration-minutes", String(options.maxDurationMinutes), "--out-config-type", "dotenv", "--non-interactive"], cwd: simulatorProject, environment: easEnvironment, timeoutMs: 20 * 60_000 };
+      "--max-duration-minutes", String(minutes), "--out-config-type", "dotenv", "--non-interactive"], cwd: simulatorProject, environment: easEnvironment, timeoutMs: 20 * 60_000 });
+    // An injected runner (tests) answers synchronously; a real start runs beside the repack.
+    const start = async (minutes: number) => options.runner ? options.runner(request(minutes)) : runAgentControllerCommand(request(minutes), options.signal ?? new AbortController().signal);
     sessionStart = writeFile(dotenvPath, SIMULATOR_DOTENV_HEADER, { flag: "wx", mode: 0o600 })
-      // An injected runner (tests) answers synchronously; a real start runs beside the repack.
-      .then(() => options.runner ? options.runner(request) : runAgentControllerCommand(request, options.signal ?? new AbortController().signal))
+      .then(() => start(options.maxDurationMinutes + SESSION_PREPARATION_MINUTES).catch(async (error: unknown) => {
+        // A plan that cannot give the allowance gets as much of it as the plan allows, and never less than the capture's own minutes.
+        const limit = sessionDurationLimit(error);
+        if (limit === undefined) throw error;
+        say(`EAS allows ${limit}-minute sessions on this plan; starting the session again without the full repack allowance`);
+        return start(Math.max(options.maxDurationMinutes, limit));
+      }))
       .then(() => undefined, (error: unknown) => error);
   };
   setStage("build");
@@ -542,7 +570,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     // Historical frames do not replace the fresh build needed for missing targets.
     easBuildId = null;
     const built = options.buildShare
-      ? await sharedBuild({ directory: options.buildShare, appName, ...(options.signal ? { signal: options.signal } : {}), build: buildApp,
+      ? await sharedBuild({ directory: options.buildShare, appName, ...(options.signal ? { signal: options.signal } : {}), build: buildApp, owner: options.outputDirectory,
         key: { platform: options.platform, easProfile: options.easProfile, bundleId: options.bundleId, gitCommit: options.gitCommit, repack: options.repack ?? "eas", local,
           routes: inventory.map(route => route.id) },
         waiting: () => say("using the build another target of this review is preparing for this commit") })
@@ -618,6 +646,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       const cli = await ensureArgentToolServer({ environment: sourceEnvironment, progress: say });
       localArgent = await startLocalArgentServer({ runner, cli, directory: simulatorProject, cwd: simulatorProject, environment: restrictedEnvironment,
         ...(options.now ? { now: options.now } : {}), ...(options.sleep ? { sleep: options.sleep } : {}) });
+      await localRecord?.update({ argent: { pid: localArgent.pid, cli: localArgent.cli, home: localArgent.home } });
       connection = { sessionId: `local-${localDevice()}`, daemonBaseUrl: localArgent.url, daemonAuthToken: localArgent.token, controller: "argent" };
     }
     const argent = controller === "argent" && connection
@@ -685,6 +714,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       }
       localArgent = await startLocalArgentServer({ runner, cli: localArgent.cli, directory: simulatorProject, cwd: simulatorProject, environment: restrictedEnvironment,
         ...(options.now ? { now: options.now } : {}), ...(options.sleep ? { sleep: options.sleep } : {}) });
+      await localRecord?.update({ argent: { pid: localArgent.pid, cli: localArgent.cli, home: localArgent.home } });
       Object.assign(controllerEnvironment, { ARGENT_TOOLS_URL: localArgent.url, ARGENT_AUTH_TOKEN: localArgent.token });
       if (connection) Object.assign(connection, { daemonBaseUrl: localArgent.url, daemonAuthToken: localArgent.token });
       await rm(join(simulatorProject, "argent-state.json"), { force: true });
@@ -778,6 +808,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         message: "The local simulator Explore created could not be deleted.", nextAction: `Delete it with: xcrun simctl delete ${localSimulator}`,
         details: { udid: localSimulator, ...(primaryError ? { originalFailure: serializeCiError(primaryError, { secrets: [options.expoToken] }) } : {}) }, cause: error }); }
     }
+    // Everything this side started on this machine is stopped; a cleanup that threw above leaves the record for a sweep.
+    await localRecord?.close();
     if (sessionId) {
       try {
         setStage("cleanup");

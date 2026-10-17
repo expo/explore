@@ -619,3 +619,31 @@ test("with a local simulator, doctor checks that this Mac can create the device 
   const missing = await runDoctor({ project: root, github: false, simulator: "local", run: simctl({ devicetypes: [] }, runtimes) });
   assert.equal(check(missing, "local-simulator")[0].code, "LOCAL_SIMULATOR_DEVICE_UNAVAILABLE");
 });
+
+test("doctor checks each target where it runs: local tools for local targets, EAS Simulator access when any target uses it", async (t) => {
+  const eas = easRun();
+  const run = (command, args, cwd) => {
+    if (command !== "xcrun") return eas.run(command, args, cwd);
+    return { status: 0, stderr: "", stdout: JSON.stringify(args[2] === "devicetypes"
+      ? { devicetypes: [{ name: "iPhone 17", identifier: "type.iPhone-17" }, { name: "iPhone 17 Pro", identifier: "type.iPhone-17-Pro" }] }
+      : { runtimes: [{ identifier: "runtime.iOS-27-0", version: "27.0", platform: "iOS", isAvailable: true, supportedDeviceTypes: [{ identifier: "type.iPhone-17" }, { identifier: "type.iPhone-17-Pro" }] }] }) };
+  };
+  const doctor = async (config, options = {}) => runDoctor({ project: await app(t, config), github: false, run, ...options });
+  const devices = report => check(report, "local-simulator").map(item => item.message.match(/create an (.+) simulator/)[1]);
+  // Every target runs locally on its own say, with nothing at the top level: no EAS Simulator access is needed.
+  const local = await doctor({ ...baseConfig, targets: { phone: { platform: "ios", simulator: "local" }, pro: { platform: "ios", device: "iPhone 17 Pro", simulator: "local" } } });
+  assert.deepEqual(devices(local), ["iPhone 17", "iPhone 17 Pro"]);
+  assert.deepEqual(check(local, "eas-simulator"), []);
+  // A local config with one target on EAS: that target needs EAS Simulator access, and the local one this Mac's tools.
+  const mixed = await doctor({ ...baseConfig, capture: { ...baseConfig.capture, simulator: "local" },
+    targets: { phone: { platform: "ios" }, cloud: { platform: "ios", device: "iPhone 17 Pro", simulator: "eas", controller: "argent" } } });
+  assert.deepEqual(devices(mixed), ["iPhone 17"]);
+  assert.equal(check(mixed, "eas-simulator")[0].status, "pass");
+  // The target's Argent is reported as a top-level one would be.
+  assert.equal(check(mixed, "controller")[0].code, "CONTROLLER_APPEARANCE_FIXED");
+  // --simulator and --controller decide for every target, as they do in a capture.
+  const forced = await doctor({ ...baseConfig, targets: { phone: { platform: "ios", simulator: "local", controller: "argent" } } }, { simulator: "eas", controller: "agent-device" });
+  assert.deepEqual(devices(forced), []);
+  assert.equal(check(forced, "eas-simulator")[0].status, "pass");
+  assert.deepEqual(check(forced, "controller"), []);
+});

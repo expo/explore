@@ -165,12 +165,21 @@ function resolvedTargets(config: ExploreConfig, by: (target: ExploreConfig) => s
 }
 
 /**
- * `capture.simulator: local`, in place of EAS Simulator access: this Mac's Xcode can create each iOS target's device,
- * and the Android SDK can start each Android target's device profile with a system image this machine runs.
+ * Every target as a capture of it runs: its own controller and simulator (else the config's), with the run's
+ * --controller and --simulator over both.
  */
-async function localSimulatorChecks(project: string, config: ExploreConfig, run: DoctorRun, environment: NodeJS.ProcessEnv): Promise<DoctorCheck[]> {
+function runTargets(config: ExploreConfig, overrides: { controller?: string | undefined; simulator?: string | undefined }): ExploreConfig[] {
+  return configTargets(config).map(target => withRunOverrides(resolveTargetConfig(config, { target: target.id }), overrides));
+}
+
+/**
+ * The targets that run on a local simulator, in place of EAS Simulator access: this Mac's Xcode can create each iOS
+ * target's device, and the Android SDK can start each Android target's device profile with a system image this machine runs.
+ */
+async function localSimulatorChecks(project: string, targets: readonly ExploreConfig[], run: DoctorRun, environment: NodeJS.ProcessEnv): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
-  for (const target of resolvedTargets(config, each => `${each.app.platform}:${each.device.name}`)) {
+  const seen = new Set<string>();
+  for (const target of targets.filter(each => !seen.has(`${each.app.platform}:${each.device.name}`) && !!seen.add(`${each.app.platform}:${each.device.name}`))) {
     const device = target.device.name;
     if (target.app.platform === "ios") {
       const types = run("xcrun", ["simctl", "list", "devicetypes", "-j"], project);
@@ -213,7 +222,7 @@ async function localSimulatorChecks(project: string, config: ExploreConfig, run:
   return checks;
 }
 
-async function easChecks(project: string, config: ExploreConfig, run: DoctorRun, environment: NodeJS.ProcessEnv): Promise<DoctorCheck[]> {
+async function easChecks(project: string, config: ExploreConfig, run: DoctorRun, environment: NodeJS.ProcessEnv, simulator?: string): Promise<DoctorCheck[]> {
   let eas: string;
   try { eas = packageBin("eas-cli", "eas"); if (!await exists(eas)) throw new Error(); }
   catch { return [{ step: 1, id: "eas-cli", status: "fail", code: "EXPLORE_TOOLS_MISSING",
@@ -232,8 +241,11 @@ async function easChecks(project: string, config: ExploreConfig, run: DoctorRun,
     ? { step: 1, id: "eas-project", status: "pass", message: "The app is linked to an EAS project this account can access." }
     : { step: 1, id: "eas-project", status: "fail", code: "EAS_PROJECT_UNAVAILABLE", message: `EAS project check failed: ${lastLine(info.stderr || info.stdout)}`,
       nextAction: "Run eas init in the app directory to link it, or ask the project's owner for access. The CI EXPO_TOKEN must belong to an account with the same access." });
-  if (config.capture.simulator === "local") checks.push(...await localSimulatorChecks(project, config, run, environment));
-  else {
+  // The targets on a local simulator need this machine's tools, and EAS Simulator access is checked when any target uses it.
+  const targets = runTargets(config, { simulator });
+  const local = targets.filter(target => target.capture.simulator === "local");
+  if (local.length) checks.push(...await localSimulatorChecks(project, local, run, environment));
+  if (local.length < targets.length) {
     const availability = run(eas, ["simulator:availability", "--json", "--non-interactive"], project);
     try {
       if (availability.status !== 0) throw new Error(lastLine(availability.stderr || availability.stdout));
@@ -462,7 +474,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   checks.push(config.mode === "agent"
     ? { step: 3, id: "mode", status: "pass", message: `Agent mode with ${config.agent!.provider} ${config.agent!.model}. Capture navigation uses the model and is billed to your ${config.agent!.provider} account.` }
     : { step: 3, id: "mode", status: "pass", message: "Deterministic mode: capture replays config.yaml without a model, so it needs no API key and has no AI charges." });
-  if (config.capture.controller === "argent") checks.push(argentCheck(environment));
+  if (runTargets(config, { controller: options.controller }).some(target => target.capture.controller === "argent")) checks.push(argentCheck(environment));
   if (config.capture.launch !== "off") {
     const ffmpeg = run("ffmpeg", ["-version"], project);
     checks.push(ffmpeg.status === 0
@@ -546,7 +558,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
       message: `Setup files are not committed: ${list(paths)}. CI reads them from the pushed repository.`,
       nextAction: "Commit them, push, and merge them into the default branch." });
   }
-  if (options.online !== false) checks.push(...await easChecks(project, config, run, environment));
+  if (options.online !== false) checks.push(...await easChecks(project, config, run, environment, options.simulator));
   else checks.push({ step: 1, id: "eas", status: "skip", message: "EAS login, project, simulator access and build profile were not checked (--offline)." });
   if (options.github !== false && files.root) checks.push(...githubChecks(files.root, config, secretNames, run));
   else if (files.root) checks.push({ step: 7, id: "github", status: "skip", message: `Repository settings were not checked (${options.online === false ? "--offline" : "--no-github"}).` });

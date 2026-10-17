@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { apkAbis } from "../binary/archive.js";
+import { exploreCacheRoot } from "../shared/cache-root.js";
 import { CiError } from "../shared/ci-errors.js";
 import { isRecord, parseJson } from "./common.js";
 import type { CommandRunner } from "./run.js";
@@ -247,35 +248,63 @@ export function installOnLocalEmulator(options: { runner: CommandRunner; serial:
   options.runner({ command: adb, args: ["-s", options.serial, "install", "-r", options.apk], cwd: options.cwd, environment: options.environment, timeoutMs: 5 * 60_000 });
 }
 
-/** Where a capture reserves an emulator console port, in the machine's temporary directory; it names the process holding it. */
+/**
+ * Where captures reserve emulator console ports: a directory of this user's Explore cache, not the machine's temporary
+ * directory, which on Linux is shared with other users who could plant a lock (or a symlink in its place).
+ */
+export function emulatorPortsDirectory(environment: NodeJS.ProcessEnv): string {
+  return join(exploreCacheRoot(environment), "emulator-ports");
+}
+
+/** The reservation of one console port; it names the process holding it. */
 function portLock(port: number, environment: NodeJS.ProcessEnv): string {
-  return join(environment.TMPDIR || tmpdir(), `expo-explore-emulator-${port}.lock`);
+  return join(emulatorPortsDirectory(environment), `${port}.lock`);
+}
+
+/** Whether a process this user can see is running; a pid that is not a positive integer names none. */
+function processAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 }
 
 /**
  * Reserves a console port for this process; a reservation whose process has exited is taken over. Head and base start
  * their emulators at once on worker threads of one process, and other reviews may too: each reservation runs alone,
  * under a mutex directory, since taking over a stale lock is a read, a removal and a write that two captures would
- * otherwise both complete.
+ * otherwise both complete. The mutex names its holder; one left by a process that died holding it is broken by a
+ * single capture at a time (a breaker directory), which checks again that it is still the dead holder's.
  */
 export async function reservePort(port: number, environment: NodeJS.ProcessEnv): Promise<boolean> {
-  const mutex = join(environment.TMPDIR || tmpdir(), "expo-explore-emulator-ports.lock");
+  const directory = emulatorPortsDirectory(environment);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const mutex = join(directory, "mutex"), breaker = join(directory, "mutex-breaker");
+  // A holder writes its pid right after creating the mutex; a mutex without one is a holder between the two, unless old.
+  const abandoned = async (path: string) => {
+    const info = await stat(path).catch(() => undefined);
+    if (!info) return false;
+    const owner = await readFile(join(path, "owner"), "utf8").catch(() => undefined);
+    return owner === undefined ? Date.now() - info.mtimeMs > 10_000 : !processAlive(Number(owner));
+  };
   for (;;) {
-    try { await mkdir(mutex); break; }
+    try { await mkdir(mutex); await writeFile(join(mutex, "owner"), String(process.pid)); break; }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      // A holder keeps it for a few file operations; one that died holding it leaves it behind, which is broken after 10 s.
-      const held = await stat(mutex).then(info => Date.now() - info.mtimeMs, () => 0);
-      if (held > 10_000) await rm(mutex, { recursive: true, force: true });
-      else await new Promise(resolve => setTimeout(resolve, 20));
+      if (await abandoned(mutex)) {
+        let breaking = false;
+        try { await mkdir(breaker); breaking = true; }
+        catch (failure) { if ((failure as NodeJS.ErrnoException).code !== "EEXIST") throw failure; if (await abandoned(breaker)) await rm(breaker, { recursive: true, force: true }); }
+        if (breaking) {
+          try { await writeFile(join(breaker, "owner"), String(process.pid)); if (await abandoned(mutex)) await rm(mutex, { recursive: true, force: true }); }
+          finally { await rm(breaker, { recursive: true, force: true }); }
+          continue;
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 20));
     }
   }
   try {
     const lock = portLock(port, environment);
-    const holder = Number(await readFile(lock, "utf8").catch(() => ""));
-    let alive = Number.isInteger(holder) && holder > 0;
-    if (alive) try { process.kill(holder, 0); } catch (signal) { alive = (signal as NodeJS.ErrnoException).code === "EPERM"; }
-    if (alive) return false;
+    if (processAlive(Number(await readFile(lock, "utf8").catch(() => "")))) return false;
     await writeFile(lock, String(process.pid));
     return true;
   } finally {
@@ -316,7 +345,8 @@ export function localEmulatorFromState(state: string): string | undefined {
 }
 
 /** Argent's tool-server for one capture on this machine: where it listens, its token, and its process. */
-export type LocalArgentServer = { url: string; token: string; pid: number; cli: string; home: string };
+/** A capture's own tool-server; `environment` is the narrowed one it was started with, which stopping it uses too. */
+export type LocalArgentServer = { url: string; token: string; pid: number; cli: string; home: string; environment: NodeJS.ProcessEnv };
 
 /**
  * Starts Argent's tool-server for one capture, on a free port, with a HOME of its own so captures running side by
@@ -335,8 +365,9 @@ export async function startLocalArgentServer(options: { runner: CommandRunner; c
   for (const path of [join("Library", "Developer", "CoreSimulator"), ".android", running]) {
     if (existsSync(join(realHome, path))) await symlink(join(realHome, path), join(home, path)).catch(error => { if (error.code !== "EEXIST") throw error; });
   }
+  const environment = { ...options.environment, HOME: home, DO_NOT_TRACK: "1" };
   const started = options.runner({ command: "/bin/sh", args: ["-c", 'nohup "$0" "$1" server start --port 0 > "$EXPLORE_ARGENT_SERVER_LOG" 2>&1 & echo $!', process.execPath, options.cli],
-    cwd: options.cwd, environment: { ...options.environment, HOME: home, DO_NOT_TRACK: "1", EXPLORE_ARGENT_SERVER_LOG: log }, timeoutMs: 30_000 });
+    cwd: options.cwd, environment: { ...environment, EXPLORE_ARGENT_SERVER_LOG: log }, timeoutMs: 30_000 });
   const pid = Number(started.stdout.trim());
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? (milliseconds => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); });
@@ -345,9 +376,9 @@ export async function startLocalArgentServer(options: { runner: CommandRunner; c
     const text = await readFile(log, "utf8").catch(() => "");
     const url = /Tools server listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(text)?.[1];
     const token = /--token ([0-9a-f]+)/.exec(text)?.[1];
-    if (url && token && Number.isInteger(pid) && pid > 0) return { url, token, pid, cli: options.cli, home };
+    if (url && token && Number.isInteger(pid) && pid > 0) return { url, token, pid, cli: options.cli, home, environment };
     if (now() > deadline) {
-      if (Number.isInteger(pid) && pid > 0) stopLocalArgentServer({ pid, cli: options.cli, home });
+      if (Number.isInteger(pid) && pid > 0) stopLocalArgentServer({ pid, cli: options.cli, home, environment });
       throw new CiError({ code: "LOCAL_ARGENT_UNAVAILABLE", stage: "session", message: `Argent's tool-server did not start: ${text.trim().split("\n").at(-1) ?? "no output"}`,
         nextAction: `Inspect ${log}, then rerun.` });
     }
@@ -356,8 +387,9 @@ export async function startLocalArgentServer(options: { runner: CommandRunner; c
 }
 
 /** Stops the tool-server the way Argent does (its own `server stop`, which ends the server it spawned), then its process. */
-export function stopLocalArgentServer(server: Pick<LocalArgentServer, "pid" | "cli" | "home">): void {
-  spawnSync(process.execPath, [server.cli, "server", "stop"], { env: { ...process.env, HOME: server.home }, timeout: 30_000, stdio: "ignore" });
+export function stopLocalArgentServer(server: Pick<LocalArgentServer, "pid" | "cli" | "home" | "environment">): void {
+  // The capture's narrowed environment, as at start: never the tokens and keys in this process's own.
+  spawnSync(process.execPath, [server.cli, "server", "stop"], { env: { ...server.environment, HOME: server.home }, timeout: 30_000, stdio: "ignore" });
   try { process.kill(server.pid, "SIGTERM"); } catch { /* it has already exited */ }
 }
 

@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { Worker } from 'node:worker_threads';
 import { PNG } from 'pngjs';
 import { BlobReader, Uint8ArrayWriter, ZipWriter } from '@zip.js/zip.js';
+import { argentToolServerDirectory } from '../../dist/shared/controller-cache.js';
 import { AGENT_DEVICE_VERSION, captureDeepLink, controllerCommandFailure, revisionSetup, runCiMap, runControllerRead, runControllerReadAsync, runAgentControllerCommand } from '../../dist/capture/run.js';
 import { CiError, serializeCiError } from '../../dist/shared/ci-errors.js';
 import { createSourceCapturePlan } from '../../dist/source/capture-plan.js';
@@ -244,7 +245,7 @@ async function fixture(t, settings = {}) {
         // unreadableAfterFold: Argent's reader stayed on the outer panel, so the first app opens find no readable app.
         if (unreadableLeft > 0 && !request.args[2]?.startsWith('sample://')) { unreadableLeft -= 1;
           return json({ success: false, error: { code: 'APP_NOT_READY', message: 'open: com.example.app did not come up with a readable accessibility tree after relaunching.' } }); }
-        if (request.args.includes('--relaunch')) { splashLeft = settings.splashFrames ?? 0; relaunchedAfterForeign = true; if (settings.wedgeAt === current) { wedgeCleared = true; current = '/'; } }
+        if (request.args.includes('--relaunch')) { splashLeft = settings.splashFrames ?? 0; relaunchedAfterForeign = true; if (settings.wedgeAt === current) { wedgeCleared = !settings.wedgeRecurs; current = '/'; } }
         if (request.args[2]?.startsWith('sample://')) {
           const previous = current;
           current = '/' + request.args[2].slice('sample://'.length);
@@ -309,7 +310,8 @@ async function fixture(t, settings = {}) {
         return ok({ message: 'accepted' });
       }
       if (command === 'snapshot') {
-        // wedgeAt: the runner wedges on this screen until the app is restarted, as agent-device's did on iPhone Duo's covered Done.
+        // wedgeAt: the runner wedges on this screen until the app is restarted, as agent-device's did on iPhone Duo's covered Done
+        // (with wedgeRecurs, every time the screen is shown again).
         if (settings.wedgeAt === current && !wedgeCleared) return json({ success: false, error: { code: 'COMMAND_FAILED',
           message: 'The iOS runner is still finishing a previous command that exceeded its execution watchdog (usually an accessibility capture on a heavy or animating screen).' } });
         snapshots += 1;
@@ -529,6 +531,7 @@ test('a local simulator capture creates its own iOS simulator, installs the repa
     assert.deepEqual(simctl.find(args => args[0] === 'spawn'), ['spawn', LOCAL_UDID, 'defaults', 'write', 'com.apple.launchservices.schemeapproval',
       'com.apple.CoreSimulator.CoreSimulatorBridge-->sample', '-string', 'com.example.app']);
     assert.equal(existsSync(join(f.root, `session-${repack}`)), false, 'the recorded simulator is cleared once it is deleted');
+    assert.deepEqual(await readdir(join(f.root, '.cache', 'expo-explore', 'local-captures')), [], 'a clean stop leaves nothing for a later sweep');
     const controller = f.requests.filter(request => request.command === 'fake-controller' && request.args[0] !== '--version' && request.args[0] !== 'close');
     assert.ok(controller.length > 0);
     for (const request of controller) {
@@ -551,8 +554,8 @@ test('Argent drives a local simulator through a tool-server of the capture\'s ow
   const f = await fixture(t, { local: true, argent: true, repack: 'local', userInterfaceStyle: 'automatic' });
   // The tool-server is installed already, as the pipeline's prefetch leaves it.
   const cache = join(f.root, 'controllers');
-  mkdirSync(join(cache, 'argent-tool-server@0.29.0'), { recursive: true });
-  writeFileSync(join(cache, 'argent-tool-server@0.29.0', '.explore-controller.json'), '{}');
+  mkdirSync(argentToolServerDirectory(cache), { recursive: true });
+  writeFileSync(join(argentToolServerDirectory(cache), '.explore-controller.json'), '{}');
   const result = await runCiMap({ ...f.options, environment: { ...f.options.environment, EXPLORE_CONTROLLER_CACHE: cache } });
   assert.equal(result.runStatus, 'complete', JSON.stringify(result.outcomes));
   const bridge = f.requests.filter(request => request.command.endsWith('/argent-controller'));
@@ -591,7 +594,8 @@ test('a local Android capture starts its own emulator in a private AVD home, ins
   assert.equal(result.simulatorRuntime.provider, 'local-simulator');
   assert.equal(result.simulatorRuntime.osVersion, '15');
   assert.equal(existsSync(join(f.root, 'session')), false);
-  assert.equal(existsSync(join(f.root, 'expo-explore-emulator-5556.lock')), false, 'its console port is free again');
+  assert.equal(existsSync(join(f.root, '.cache', 'expo-explore', 'emulator-ports', '5556.lock')), false, 'its console port is free again');
+  assert.deepEqual(await readdir(join(f.root, '.cache', 'expo-explore', 'local-captures')), [], 'a clean stop leaves nothing for a later sweep');
 });
 
 test('a local emulator adb has lost is stopped by its process', async t => {
@@ -605,36 +609,42 @@ test('a local emulator adb has lost is stopped by its process', async t => {
   assert.equal(await exited, null, 'the emulator process was signalled');
   const pgrep = f.requests.find(request => request.command === 'pgrep');
   assert.equal(pgrep.args[1], 'qemu-system.* -avd explore-[a-z]+-[0-9a-f]{8} -port 5556 ', 'only an Explore emulator on this capture\'s port');
-  assert.equal(existsSync(join(f.root, 'expo-explore-emulator-5556.lock')), false);
+  assert.equal(existsSync(join(f.root, '.cache', 'expo-explore', 'emulator-ports', '5556.lock')), false);
 });
 
 test('a local emulator skips a console port another capture holds and takes over one an exited run left', async t => {
   const f = await fixture(t, { local: true, android: true, repack: 'local', serial: 'emulator-5558' });
   // Another capture of this process has reserved 5556, and one that exited left 5558's reservation behind.
-  await writeFile(join(f.root, 'expo-explore-emulator-5556.lock'), String(process.pid));
-  await writeFile(join(f.root, 'expo-explore-emulator-5558.lock'), '999999999');
+  // Reservations live in this user's Explore cache (HOME is the fixture's root), not the shared temporary directory.
+  await mkdir(join(f.root, '.cache', 'expo-explore', 'emulator-ports'), { recursive: true });
+  await writeFile(join(f.root, '.cache', 'expo-explore', 'emulator-ports', '5556.lock'), String(process.pid));
+  await writeFile(join(f.root, '.cache', 'expo-explore', 'emulator-ports', '5558.lock'), '999999999');
   assert.equal((await runCiMap(f.options)).runStatus, 'complete');
   const start = f.requests.find(request => request.command === '/bin/sh');
   assert.equal(start.args[start.args.indexOf('-port') + 1], '5558');
-  assert.equal(existsSync(join(f.root, 'expo-explore-emulator-5556.lock')), true, 'the other capture keeps its port');
+  assert.equal(existsSync(join(f.root, '.cache', 'expo-explore', 'emulator-ports', '5556.lock')), true, 'the other capture keeps its port');
 });
 
 test('of captures reserving one console port at the same moment, exactly one gets it', async t => {
   const module = new URL('../../dist/capture/local-simulator.js', import.meta.url).href;
   const root = await mkdtemp(join(tmpdir(), 'explore-port-race-'));
   t.after(() => rm(root, { recursive: true, force: true }));
+  const ports = join(root, 'emulator-ports');
   // Head and base of one review start their emulators together, each on its own worker thread of one process.
   const reserveOnThread = () => new Promise((resolve, reject) => {
-    const worker = new Worker(`import(${JSON.stringify(module)}).then(m => m.reservePort(5554, { TMPDIR: ${JSON.stringify(root)} })).then(r => require('node:worker_threads').parentPort.postMessage(r));`, { eval: true });
+    const worker = new Worker(`import(${JSON.stringify(module)}).then(m => m.reservePort(5554, { EXPLORE_CACHE_DIR: ${JSON.stringify(root)} })).then(r => require('node:worker_threads').parentPort.postMessage(r));`, { eval: true });
     worker.once('message', resolve); worker.once('error', reject);
   });
   for (let round = 0; round < 30; round++) {
-    // Free, or left behind by a run that exited (its process is gone), which any capture may take over.
-    await rm(join(root, 'expo-explore-emulator-5554.lock'), { force: true });
-    if (round % 2) await writeFile(join(root, 'expo-explore-emulator-5554.lock'), '999999999');
+    await rm(ports, { recursive: true, force: true });
+    await mkdir(ports, { recursive: true });
+    // Free; left behind by a run that exited (its process is gone); or that, with the mutex too, which that run died holding.
+    if (round % 3) await writeFile(join(ports, '5554.lock'), '999999999');
+    if (round % 3 === 2) { await mkdir(join(ports, 'mutex')); await writeFile(join(ports, 'mutex', 'owner'), '999999999'); }
     const reserved = await Promise.all(Array.from({ length: 4 }, reserveOnThread));
     assert.equal(reserved.filter(Boolean).length, 1, `round ${round}: ${reserved}`);
-    assert.equal(await readFile(join(root, 'expo-explore-emulator-5554.lock'), 'utf8'), String(process.pid));
+    assert.equal(await readFile(join(ports, '5554.lock'), 'utf8'), String(process.pid));
+    assert.equal(existsSync(join(ports, 'mutex')), false, 'the mutex is released');
   }
 });
 
@@ -674,8 +684,8 @@ test('a failed repack deletes the local device it started', async t => {
 test('when Argent cannot read the app after a fold, the capture restarts its local tool-server and opens the app again', async t => {
   const f = await fixture(t, { local: true, argent: true, repack: 'local', devicePose: 'open', unreadableAfterFold: 1 });
   const cache = join(f.root, 'controllers');
-  mkdirSync(join(cache, 'argent-tool-server@0.29.0'), { recursive: true });
-  writeFileSync(join(cache, 'argent-tool-server@0.29.0', '.explore-controller.json'), '{}');
+  mkdirSync(argentToolServerDirectory(cache), { recursive: true });
+  writeFileSync(join(argentToolServerDirectory(cache), '.explore-controller.json'), '{}');
   const lines = [];
   const result = await runCiMap({ ...f.options, environment: { ...f.options.environment, EXPLORE_CONTROLLER_CACHE: cache }, progress: line => lines.push(line) });
   assert.equal(result.runStatus, 'complete', JSON.stringify(result.outcomes));
@@ -688,8 +698,8 @@ test('when Argent cannot read the app after a fold, the capture restarts its loc
   // A second failure restarts SpringBoard as well; a third is reported.
   for (const [unreadable, completes] of [[2, true], [3, false]]) {
     const again = await fixture(t, { local: true, argent: true, repack: 'local', devicePose: 'open', unreadableAfterFold: unreadable });
-    mkdirSync(join(again.root, 'controllers', 'argent-tool-server@0.29.0'), { recursive: true });
-    writeFileSync(join(again.root, 'controllers', 'argent-tool-server@0.29.0', '.explore-controller.json'), '{}');
+    mkdirSync(argentToolServerDirectory(join(again.root, 'controllers')), { recursive: true });
+    writeFileSync(join(argentToolServerDirectory(join(again.root, 'controllers')), '.explore-controller.json'), '{}');
     const run = runCiMap({ ...again.options, environment: { ...again.options.environment, EXPLORE_CONTROLLER_CACHE: join(again.root, 'controllers') } });
     if (completes) assert.equal((await run).runStatus, 'complete');
     else await assert.rejects(run, error => JSON.stringify(error).includes('APP_NOT_READY'));
@@ -736,6 +746,35 @@ test('a controller that wedges during setup does not fail every route: setup sto
   assert.deepEqual(recoveries.map(entry => [entry.where, entry.recovered]), [['a setup step', true]]);
 });
 
+test('a setup step that wedges the controller once runs setup again from the start, and the routes are captured as usual', async t => {
+  const f = await fixture(t, { routes: [route('home'), route('settings')], wedgeAt: '/setup', stableLabels: true });
+  const lines = [];
+  const result = await runCiMap({ ...f.options, setup: [{ action: 'open', url: 'sample://setup' }, { action: 'open', url: 'sample://ready' }], progress: line => lines.push(line) });
+  assert.ok(lines.some(line => /setup stopped \(.*\); running setup again from the start/.test(line)), lines.join('\n'));
+  assert.ok(lines.some(line => /setup 2\/2:/.test(line)), 'every setup step ran on the rerun');
+  for (const id of [f.ids.home, f.ids.settings]) {
+    assert.equal(result.outcomes[id].status, 'captured');
+    assert.equal(result.outcomes[id].landing, 'verified');
+    assert.equal(result.outcomes[id].reason, undefined, 'setup completed, so the outcome carries no setup note');
+  }
+  const recoveries = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics', 'controller-recoveries.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(recoveries.map(entry => [entry.where, entry.recovered, entry.next]), [['a setup step', true, 'setup-rerun']]);
+});
+
+test('a setup step that wedges again on the rerun lets routes go on by app link, each marked as captured without complete setup', async t => {
+  const f = await fixture(t, { routes: [route('home'), route('settings')], wedgeAt: '/setup', wedgeRecurs: true, stableLabels: true });
+  const lines = [];
+  const result = await runCiMap({ ...f.options, setup: [{ action: 'open', url: 'sample://setup' }, { action: 'open', url: 'sample://ready' }], progress: line => lines.push(line) });
+  assert.ok(lines.some(line => /setup stopped again \(/.test(line)), lines.join('\n'));
+  assert.ok(!lines.some(line => /setup 2\/2:/.test(line)), 'the steps after the wedge never ran');
+  for (const id of [f.ids.home, f.ids.settings]) {
+    assert.equal(result.outcomes[id].status, 'captured', 'the routes are not failed');
+    assert.match(result.outcomes[id].reason, /Setup did not complete/);
+  }
+  const recoveries = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics', 'controller-recoveries.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(recoveries.map(entry => [entry.where, entry.recovered, entry.next]), [['a setup step', true, 'setup-rerun'], ['a setup step', true, 'setup-incomplete']]);
+});
+
 test('a setup step that leaves another app in front costs that step: the app restarts and the routes are captured', async t => {
   const f = await fixture(t, { routes: [route('home'), route('settings')], foreignUntilRelaunch: true, stableLabels: true });
   const lines = [];
@@ -751,6 +790,33 @@ test('a local simulator capture deletes its simulator when the capture fails', a
   assert.ok(result instanceof Error || result.runStatus === 'partial');
   const simctl = f.requests.filter(request => request.command === 'xcrun').map(request => request.args[1]);
   assert.deepEqual(simctl.slice(-2), ['shutdown', 'delete']);
+});
+
+test('an EAS session asks for the capture minutes plus a repack allowance, and a plan that refuses them gets its own maximum', async t => {
+  const minutes = request => Number(value(request, '--max-duration-minutes'));
+  const f = await fixture(t);
+  await runCiMap(f.options);
+  assert.deepEqual(f.requests.filter(request => request.args[0] === 'simulator:start').map(minutes), [50]);
+  // EAS names the plan's maximum when it refuses; the start is retried once, never with less than the capture's own 30.
+  for (const [limit, retried] of [[40, 40], [20, 30]]) {
+    const f = await fixture(t);
+    const starts = [];
+    const result = await runCiMap({ ...f.options, runner: request => {
+      if (request.command === 'fake-eas' && request.args[0] === 'simulator:start' && (starts.push(minutes(request)), starts.length === 1))
+        throw new Error(`Controller simulator:start exited with status 1: Failed to create simulator session | Device run session max duration must not exceed ${limit} minutes for this account; received 50 minutes.`);
+      return f.options.runner(request);
+    } });
+    assert.equal(result.runStatus, 'complete');
+    assert.deepEqual(starts, [50, retried]);
+  }
+  // Any other start failure is not retried.
+  const g = await fixture(t);
+  let other = 0;
+  await assert.rejects(runCiMap({ ...g.options, runner: request => {
+    if (request.command === 'fake-eas' && request.args[0] === 'simulator:start') { other += 1; throw new Error('Controller simulator:start exited with status 1: quota exhausted'); }
+    return g.options.runner(request);
+  } }), error => error.code === 'SIMULATOR_START_FAILED');
+  assert.equal(other, 1);
 });
 
 test('an agent-device capture writes no controller into its bundle', async t => {
@@ -2419,6 +2485,22 @@ test('agent coordinate fallback uses logical bounds and presses only the unchang
   assert.deepEqual(press[0].args.slice(0, 3), ['press', '2', '3']);
 });
 
+test('agent coordinate fallback turns a tap on an upright frame back onto the portrait axes of a panel showing a landscape UI', async t => {
+  // An opened iPhone Duo under Argent: the 4x6 screenshot is the panel's 6x4 tree turned a quarter clockwise, so the image
+  // point (u, v) is the tree point (v, H - u). The tap at (0.5, 0.25) of the image is pixel (2, 1.5), the tree point (1.5, 4 - 2).
+  const f = await fixture(t, { routes: [route('home')], stableLabels: true, logicalBounds: { x: 0, y: 0, width: 6, height: 4 } });
+  const agent = agentFixture([
+    state => ({ action: 'tap', frameId: state.frameId, x: 0.5, y: 0.25 }),
+    { action: 'capture', targetId: f.ids.home, description: 'Loaded screen after tapping the observed control.', requiredLabels: ['screen-title'] },
+    { action: 'done' },
+  ]);
+  const result = await runCiMap({ ...f.options, agent, setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.equal(result.runStatus, 'complete');
+  const press = f.requests.filter(request => request.command === 'fake-controller' && request.args[0] === 'press');
+  assert.equal(press.length, 1);
+  assert.deepEqual(press[0].args.slice(0, 3), ['press', '1.5', '2']);
+});
+
 test('coordinate freshness compares rectangle values independently of native JSON property order', async t => {
   const f = await fixture(t, { routes: [route('home')], stableLabels: true, logicalBounds: { x: 0, y: 0, width: 4, height: 6 } });
   let snapshots = 0;
@@ -3260,4 +3342,13 @@ test('controller recovery time is not charged to the app\'s readiness budget', a
   const [first] = await readinessLog(f, f.ids.home);
   assert.ok(first.recoveryMs > 0, 'the busy backoff was waited for');
   assert.ok(first.elapsedMs >= first.budgetMs && first.elapsedMs < first.budgetMs * 2, `the app still got its ${first.budgetMs} ms: ${JSON.stringify(first)}`);
+});
+
+test('a verified label is located on the image\'s axes when the screenshot is the portrait screen turned a quarter clockwise', async () => {
+  const { verifiedCaptureLabels } = await import('../../dist/capture/route-capture.js');
+  const nodes = [{ type: 'Button', label: 'Done', rect: { x: 10, y: 900, width: 100, height: 40 } }];
+  // On the screen's own axes the bounds are as the tree gives them.
+  assert.deepEqual(verifiedCaptureLabels(nodes, ['Done'])[0].rect, { x: 10, y: 900, width: 100, height: 40 });
+  // A 669 x 951 portrait panel captured upright as a 951 x 669 image: the button near its bottom-left is near the image's top-left.
+  assert.deepEqual(verifiedCaptureLabels(nodes, ['Done'], { height: 951 })[0].rect, { x: 11, y: 10, width: 40, height: 100 });
 });
