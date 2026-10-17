@@ -26,7 +26,7 @@ export async function doctor(): Promise<void> {
   if (has("help")) return help();
   const project = flag("project") ?? process.cwd();
   const report = await runDoctor({ project, online: !has("offline"), github: !has("no-github") && !has("offline"),
-    checkModel: has("check-model") });
+    checkModel: has("check-model"), controller: flag("controller") });
   if (!has("capture")) {
     if (has("json")) output({ ...report });
     else console.log(formatDoctorReport(report));
@@ -53,7 +53,7 @@ Fix the problems in steps 1–5 before a capture check.`);
   let result: Awaited<ReturnType<typeof runCaptureCheck>>;
   try {
     const platform = platformFlag();
-    result = await runCaptureCheck({ project, ...(platform ? { platform } : {}), output: resolve(flag("output") ?? await mkdtemp(join(tmpdir(), "expo-explore-capture-"))), progress: stderrProgress() });
+    result = await runCaptureCheck({ project, ...(platform ? { platform } : {}), controller: flag("controller"), output: resolve(flag("output") ?? await mkdtemp(join(tmpdir(), "expo-explore-capture-"))), progress: stderrProgress() });
   } catch (error) {
     // A refusal before any EAS work: show it with its next action next to the static report.
     if (!(error instanceof CiError)) throw error;
@@ -203,7 +203,7 @@ export async function captureReview(): Promise<void> {
   const configPath = flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH;
   const platform = platformFlag();
   const rawConfig = await readExploreConfig(headProject, configPath);
-  const config = withRunOverrides(resolvePlatformConfig(rawConfig, platform), { scope: flag("scope"), expiresIn: flag("expires-in") });
+  const config = withRunOverrides(resolvePlatformConfig(rawConfig, platform), { scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller") });
   if (has("pull-request") === has("compare")) argumentError("Pass --pull-request FILE for a pull request, or --compare FILE for any two commits.", has("compare") ? "compare" : "pull-request");
   const common = { ...(platform ? { platform } : {}), platforms: listPlatforms(rawConfig), baseProject: required("base-project"), headProject,
     output: required("output"), config, configPath, progress: stderrProgress() };
@@ -217,7 +217,7 @@ export async function captureReview(): Promise<void> {
 export async function captureBaseline(): Promise<void> {
   const project = required("project");
   const platform = platformFlag();
-  const config = resolvePlatformConfig(await readExploreConfig(project, flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH), platform);
+  const config = withRunOverrides(resolvePlatformConfig(await readExploreConfig(project, flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH), platform), { controller: flag("controller") });
   output({ ok: true, ...await runBaselineCi({ ...(platform ? { platform } : {}), project, sha: required("sha"), output: required("output"), config, progress: stderrProgress() }) });
 }
 
@@ -227,7 +227,7 @@ async function localReview(): Promise<void> {
   const result = await runLocalReview({ project: flag("project") ?? process.cwd(), base: flag("base"), head: flag("head"),
     // --include-untracked is accepted from before untracked files were included by default.
     committed: has("committed"), uncommitted: has("uncommitted"), ...(platform ? { platform } : {}),
-    scope: flag("scope"), expiresIn: flag("expires-in"), cache: !has("no-cache"), configPath: flag("config"), progress: stderrProgress() });
+    scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), cache: !has("no-cache"), configPath: flag("config"), progress: stderrProgress() });
   if (has("output")) {
     for (const report of result.reports) {
       const target = resolve(required("output"), report.platform);

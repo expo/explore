@@ -173,7 +173,7 @@ Explore starts an EAS Simulator, installs the build, taps through the app with y
 <details>
 <summary><strong>Explore a simulator session you already started</strong></summary>
 
-If the app is already running on an `agent-device` EAS Simulator session, Explore can start from there. It leaves your session running.
+If the app is already running on an EAS Simulator session (`--type agent-device` or `--type argent`), Explore can start from there, with the session's controller. It leaves your session running.
 
 ```sh
 eas simulator:start --type agent-device --out-config-type dotenv   # then agent-device install / open
@@ -295,6 +295,29 @@ platforms:
 - The workflows run one capture job per platform, and the PR gets one comment with a section per platform.
 - A failed platform fails the check; the other platform's report still publishes.
 - An Android-only app sets `app.platform: android` with no `platforms` map.
+
+</details>
+
+<details>
+<summary id="controller"><strong>Device controller: agent-device or Argent</strong></summary>
+
+Explore drives EAS Simulator with [agent-device](https://github.com/callstackincubator/agent-device) by default. To use [Argent](https://github.com/software-mansion/argent) instead, set it in the config or pass it for one run:
+
+```yaml
+capture:
+  controller: argent # agent-device (default) | argent
+```
+
+```sh
+npx @expo/explore capture --controller argent
+npx @expo/explore explore:binary ./app.apk --controller argent
+```
+
+Explore pins each controller's version and starts the EAS session with it. Reports and baselines record the controller, and a review compares captures made with the same one.
+
+Neither controller is installed with Explore. The first run that needs one downloads its pinned npm release (agent-device 1.4 MB, Argent 27 MB), checks it against the integrity hash Explore pins, and keeps it in `~/.cache/expo-explore/controllers` (`EXPLORE_CONTROLLER_CACHE` moves it). Behind a private registry, set `EXPLORE_NPM_REGISTRY` to a mirror of it.
+
+Argent cannot switch the simulator's appearance yet ([software-mansion/argent#1509](https://github.com/software-mansion/argent/pull/1509)), so an Argent capture records one appearance: the one the app forces, else light. Explore warns when it skips one.
 
 </details>
 
@@ -453,6 +476,7 @@ Reports and baselines are kept for 30 days and diagnostics for 7. Hosted deploym
 - The launch is captured once per appearance and compared like any screen. The comment says how long the splash stayed as it first appeared, when it first changed (a native launch screen handing over to an app-drawn one, an animation starting on it), and when the first screen settled. `capture.launch: video` adds a recording; a launch too fast to observe is reported as "no splash observed".
 - On Android the splash usually shows only in the recording, which needs `ffmpeg`. The generated workflows install it.
 - Hosted acceptance of agent mode with an API key is incomplete.
+- With `capture.controller: argent`, each capture records one appearance (see [device controller](#controller)).
 
 </details>
 

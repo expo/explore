@@ -58,7 +58,9 @@ export type ExploreConfig = {
   platforms?: Partial<Record<ExplorePlatform, PlatformConfig>>;
   /** `exclude` names routes, as `requiresRoute` does, that stay in the map but are never captured. */
   exploration: { scope: "changes" | "all"; exclude?: string[] };
-  capture: { maxMinutes: number; maxActions: number; repack: "eas" | "local"; appearance: AppearanceSetting; launch: LaunchSetting; reset: RouteResetSetting; unattributed: UnattributedSetting; readinessSeconds?: number };
+  capture: { maxMinutes: number; maxActions: number; repack: "eas" | "local"; appearance: AppearanceSetting; launch: LaunchSetting; reset: RouteResetSetting; unattributed: UnattributedSetting; readinessSeconds?: number;
+    /** The device controller; absent means agent-device, so configs that never chose one keep their cache recipes. */
+    controller?: "argent" };
   parameters?: Record<string, Record<string, string>>;
   setup?: ExploreSetupAction[];
   agent?: { provider: "openai" | "anthropic"; model: string; instructions?: string };
@@ -243,7 +245,8 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
   const exploration = optionalRecord(root.exploration, "exploration");
   exactKeys(exploration, ["scope", "exclude"], "exploration");
   const capture = optionalRecord(root.capture, "capture");
-  exactKeys(capture, ["maxMinutes", "maxActions", "repack", "appearance", "launch", "reset", "unattributed", "readinessSeconds"], "capture");
+  exactKeys(capture, ["maxMinutes", "maxActions", "repack", "appearance", "launch", "reset", "unattributed", "readinessSeconds", "controller"], "capture");
+  const controller = literal(capture.controller, ["agent-device", "argent"] as const, "capture.controller", "agent-device");
   const mode = literal(root.mode, ["deterministic", "agent"] as const, "mode", "deterministic");
   const name = optionalText(app.name, "app.name", 128);
   const scheme = app.scheme === undefined ? undefined : customScheme(app.scheme, "app.scheme");
@@ -291,6 +294,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
       reset: parseRouteResetSetting(capture.reset, "capture.reset"),
       unattributed: parseUnattributedSetting(capture.unattributed, "capture.unattributed"),
       ...(capture.readinessSeconds !== undefined ? { readinessSeconds: positiveInteger(capture.readinessSeconds, "capture.readinessSeconds") } : {}),
+      ...(controller === "argent" ? { controller } : {}),
     },
     ...(root.parameters === undefined ? {} : { parameters: parameters(root.parameters) }),
     ...(root.setup === undefined ? {} : { setup: setupActions(root.setup, scheme) }),
@@ -370,8 +374,13 @@ export function resolvePlatformConfig(config: ExploreConfig, platform: ExplorePl
  * every screen (`scope: all`) and keep its hosted link (`expiresIn: never`). `expiresIn` changes nothing when the
  * config hosts no report.
  */
-export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined }): ExploreConfig {
+export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined; controller?: string | undefined }): ExploreConfig {
   let result = config;
+  if (overrides.controller !== undefined) {
+    if (overrides.controller !== "agent-device" && overrides.controller !== "argent") fail("--controller must be agent-device or argent", "--controller");
+    const { controller: _previous, ...capture } = result.capture;
+    result = { ...result, capture: { ...capture, ...(overrides.controller === "argent" ? { controller: "argent" as const } : {}) } };
+  }
   if (overrides.scope !== undefined) {
     if (overrides.scope !== "changes" && overrides.scope !== "all") fail("--scope must be changes or all", "--scope");
     result = { ...result, exploration: { ...result.exploration, scope: overrides.scope } };

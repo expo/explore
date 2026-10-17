@@ -18,6 +18,19 @@ export function resolveColorSchemes(appearance: AppearanceSetting, appConfig: Re
   return ["light"];
 }
 
+/**
+ * What an Argent capture renders: one pass, since Argent cannot switch the device's appearance yet
+ * (software-mansion/argent#1509). An app that forces a style renders it on any device; any other app renders as the
+ * fresh simulator starts, light. Requested schemes that pass cannot show are reported as skipped.
+ */
+export function argentColorSchemes(requested: readonly ColorScheme[], appConfig: Record<string, unknown> | undefined, platform: string): { schemes: ColorScheme[]; skipped: ColorScheme[] } {
+  const platformConfig = appConfig?.[platform];
+  const declared = (platformConfig && typeof platformConfig === "object" ? (platformConfig as Record<string, unknown>).userInterfaceStyle : undefined)
+    ?? appConfig?.userInterfaceStyle;
+  const scheme: ColorScheme = declared === "dark" ? "dark" : "light";
+  return { schemes: [scheme], skipped: requested.filter(item => item !== scheme) };
+}
+
 export function parseAppearance(value: unknown, path: string): AppearanceSetting {
   if (value === undefined || value === "auto") return "auto";
   const list = Array.isArray(value) ? value : [value];

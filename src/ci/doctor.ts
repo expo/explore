@@ -8,8 +8,10 @@ import type { CaptureBundle } from "../contracts/capture.js";
 import type { SourceCapturePlan } from "../source/capture-plan.js";
 import type { CommandRunner } from "../capture/run.js";
 import { runBaselineCi } from "./pipeline.js";
-import { DEFAULT_EXPLORE_CONFIG_PATH, configPlatforms, readExploreConfig, readExploreInstructions, resolvePlatformConfig, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
+import { DEFAULT_EXPLORE_CONFIG_PATH, configPlatforms, readExploreConfig, readExploreInstructions, resolvePlatformConfig, withRunOverrides, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { explorationSecretNames } from "../config/exploration-inputs.js";
+import { controllerCached } from "../shared/controller-cache.js";
+import { ARGENT_VERSION } from "../shared/argent-version.js";
 import { AGENT_PROVIDERS as PROVIDERS, DRAFT_INSTRUCTIONS_MARKER, EXPO_TOKENS_URL as TOKENS, appConfig, simulatorProfiles } from "../config/setup.js";
 import { captureCompatibility } from "../capture/observer.js";
 import { assertCaptureEasProfile, assertSimulatorAvailable, repackProfileFrom, unreproducibleEasVariables } from "../capture/eas-build.js";
@@ -46,6 +48,8 @@ export type DoctorOptions = {
   github?: boolean;
   /** One small model request with the local provider key. */
   checkModel?: boolean;
+  /** `--controller`: the device controller to check, over the config's `capture.controller`. */
+  controller?: string | undefined;
   run?: DoctorRun;
   environment?: NodeJS.ProcessEnv;
   nodeVersion?: string;
@@ -383,7 +387,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     return { ok: false, mode: null, checks, ...(routes ? { routes } : {}) };
   }
   let config: ExploreConfig;
-  try { config = await readExploreConfig(project); }
+  try { config = withRunOverrides(await readExploreConfig(project), { controller: options.controller }); }
   catch (error) {
     checks.push(fromError(4, "config", error, { code: "CONFIG_INVALID", nextAction: `Correct ${DEFAULT_EXPLORE_CONFIG_PATH} and rerun doctor.` }));
     return { ok: false, mode: null, checks };
@@ -392,6 +396,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   checks.push(config.mode === "agent"
     ? { step: 3, id: "mode", status: "pass", message: `Agent mode with ${config.agent!.provider} ${config.agent!.model}. Capture navigation uses the model and is billed to your ${config.agent!.provider} account.` }
     : { step: 3, id: "mode", status: "pass", message: "Deterministic mode: capture replays config.yaml without a model, so it needs no API key and has no AI charges." });
+  if (config.capture.controller === "argent") checks.push(argentCheck(environment));
   if (config.capture.launch !== "off") {
     const ffmpeg = run("ffmpeg", ["-version"], project);
     checks.push(ffmpeg.status === 0
@@ -547,7 +552,16 @@ export function summarizeCaptureCheck(plan: SourceCapturePlan, bundle: CaptureBu
  * Capture the committed HEAD the way the baseline workflow does, with the local EAS login. This is
  * the only doctor step that starts an EAS build and a simulator session.
  */
-export async function runCaptureCheck(options: { project: string; output: string; platform?: ExplorePlatform; environment?: NodeJS.ProcessEnv; runner?: CommandRunner; progress?: Progress }): Promise<CaptureCheckResult> {
+/** An Argent capture records one appearance, and fetches the pinned Argent release on first use. agent-device, the default, is not reported. */
+function argentCheck(environment: NodeJS.ProcessEnv): DoctorCheck {
+  const cached = controllerCached("argent", environment);
+  return { step: 3, id: "controller", status: "warn", code: "CONTROLLER_APPEARANCE_FIXED",
+    message: `Device controller: Argent ${ARGENT_VERSION} (${cached ? "cached on this machine" : "fetched from npm on the first capture, about 27 MB"}). `
+      + "Argent cannot switch the simulator's appearance yet (software-mansion/argent#1509), so each capture records one appearance: the app's forced one, else light.",
+    nextAction: "Nothing to do unless you need dark-mode screenshots; use agent-device (the default) for those." };
+}
+
+export async function runCaptureCheck(options: { project: string; output: string; platform?: ExplorePlatform; controller?: string | undefined; environment?: NodeJS.ProcessEnv; runner?: CommandRunner; progress?: Progress }): Promise<CaptureCheckResult> {
   const project = await realpath(options.project);
   const git = (...args: string[]) => spawnSync("git", ["-C", project, ...args], { encoding: "utf8", timeout: 10_000 });
   const head = git("rev-parse", "HEAD");
@@ -559,7 +573,7 @@ export async function runCaptureCheck(options: { project: string; output: string
     nextAction: "Commit your changes, including .expo-explore (a local commit is enough; nothing is pushed), then rerun. "
       + "To keep unrelated files, run it from a clean checkout instead: git worktree add --detach ../app-capture HEAD, install the app's dependencies there, and run doctor --capture in it." });
   const commit = head.stdout.trim();
-  const config = resolvePlatformConfig(await readExploreConfig(project), options.platform);
+  const config = withRunOverrides(resolvePlatformConfig(await readExploreConfig(project), options.platform), { controller: options.controller });
   // Capture keeps its working directories in the system temporary directory, outside the app.
   await mkdir(options.output, { recursive: true });
   const output = await realpath(options.output);

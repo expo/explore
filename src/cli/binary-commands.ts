@@ -38,13 +38,14 @@ export async function exploreBinary(): Promise<void> {
   const expiresAfterDays = expiresInDays(flag("expires-in") ?? "7d");
   const platform = flag("platform") === undefined ? undefined : oneOf("platform", ["ios", "android"] as const);
   const provider = flag("provider") === undefined ? undefined : oneOf("provider", ["anthropic", "openai"] as const);
+  const controller = flag("controller") === undefined ? undefined : oneOf("controller", ["agent-device", "argent"] as const);
   const started = Date.now();
   const say = (message: string) => { process.stderr.write(`[explore ${Math.round((Date.now() - started) / 1000)}s] ${message}\n`); };
   const allowDestructive = flags("allow-destructive").flatMap(value => value.split(",")).map(value => value.trim()).filter(Boolean);
   if (!has("no-upload")) await assertHostingExport();
   const result = await runBinaryExploration({
     archive: resolve(process.cwd(), archive), output: outputDirectory, progress: say,
-    ...(platform ? { platform } : {}), ...(provider ? { provider } : {}),
+    ...(platform ? { platform } : {}), ...(provider ? { provider } : {}), ...(controller ? { controller } : {}),
     ...(flag("device") ? { device: flag("device")! } : {}), ...(flag("bundle-id") ? { bundleId: flag("bundle-id")! } : {}),
     ...(flag("launch-url") ? { launchUrl: flag("launch-url")! } : {}), ...(flag("hints") ? { hints: flag("hints")! } : {}),
     ...(allowDestructive.length ? { allowDestructive } : {}), ...(flag("model") ? { model: flag("model")! } : {}),
@@ -93,6 +94,7 @@ export async function exploreSession(): Promise<void> {
   const expiresAfterDays = expiresInDays(flag("expires-in") ?? "7d");
   const platform = flag("platform") === undefined ? undefined : oneOf("platform", ["ios", "android"] as const);
   const provider = flag("provider") === undefined ? undefined : oneOf("provider", ["anthropic", "openai"] as const);
+  const controller = flag("controller") === undefined ? undefined : oneOf("controller", ["agent-device", "argent"] as const);
   const port = flag("port") === undefined ? undefined : nonNegativeInteger("port");
   const started = Date.now();
   const say = (message: string) => { process.stderr.write(`[explore ${Math.round((Date.now() - started) / 1000)}s] ${message}\n`); };
@@ -103,7 +105,7 @@ export async function exploreSession(): Promise<void> {
     output: outputDirectory, progress: say,
     ...(bundleId ? { bundleId } : {}), ...(session ? { session } : {}), ...(envFile ? { envFile } : {}),
     ...(flag("app-name") ? { appName: flag("app-name")! } : {}), ...(flag("app-version") ? { version: flag("app-version")! } : {}),
-    ...(platform ? { platform } : {}), ...(provider ? { provider } : {}),
+    ...(platform ? { platform } : {}), ...(provider ? { provider } : {}), ...(controller ? { controller } : {}),
     ...(flag("device") ? { device: flag("device")! } : {}),
     ...(flag("launch-url") ? { launchUrl: flag("launch-url")! } : {}), ...(flag("hints") ? { hints: flag("hints")! } : {}),
     ...(allowDestructive.length ? { allowDestructive } : {}), ...(flag("model") ? { model: flag("model")! } : {}),

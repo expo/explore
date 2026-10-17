@@ -11,6 +11,7 @@ import { canonicalJson } from "../shared/canonical-json.js";
 import type { ExploreConfig } from "../config/explore-config.js";
 import { hasVerifiedCapture } from "../capture/health.js";
 import { CAPTURE_OBSERVER_HASH } from "../capture/observer.js";
+import { ARGENT_VERSION } from "../shared/argent-version.js";
 
 const METADATA = "cache-metadata.json";
 const CONTRACT = "explore.capture-cache";
@@ -34,6 +35,8 @@ export function captureRecipeConfig(config: ExploreConfig, instructionsSha256?: 
     app: { platform: config.app.platform, bundleId: config.app.bundleId, easProfile: config.app.easProfile,
       ...(config.app.scheme === undefined ? {} : { scheme: config.app.scheme }) },
     device: config.device, parameters: config.parameters, setup: config.setup ?? [], capture: config.capture,
+    // agent-device recipes stay as they were; an Argent capture is keyed to the Argent release that drove it.
+    ...(config.capture.controller === "argent" ? { controllerVersion: ARGENT_VERSION } : {}),
   });
 }
 

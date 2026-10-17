@@ -104,6 +104,7 @@ device:
 exploration:
   scope: changes # changes | all
 capture:
+  # controller: agent-device # agent-device (default) | argent (one appearance per capture until Argent can switch it; --controller overrides it for one run)
   maxMinutes: 30
   maxActions: 500
   repack: eas # eas (hosted EAS workflow job, default) | local (repack-app + eas upload on the runner)

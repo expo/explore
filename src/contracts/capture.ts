@@ -73,6 +73,8 @@ export type CaptureBundle = {
   /** Execution completion time, recorded even when no routes require screenshots. */
   completedAt?: string;
   appName?: string;
+  /** The device controller that drove the capture; absent for agent-device, the default. */
+  controller?: "argent";
   /** The icon the app config declares, shrunk to at most 128 pixels; absent when unavailable. */
   appIcon?: Omit<AppIconImage, "url"> & { path: string };
   profile: string; selectedSurfaceIds: string[];
@@ -238,6 +240,8 @@ export type PublicReview = {
     appIcon?: AppIconImage;
     /** Absent in reports published before Android support: iOS. */
     platform?: "ios" | "android";
+    /** The device controller that drove the head capture; absent for agent-device, the default. */
+    controller?: "argent";
     device?: { model: string; osVersion: string };
     /** The share of each screenshot's height the verdict ignored as the status bar. */
     statusBarBandPercent?: number;

@@ -233,7 +233,7 @@ async function hashDirectory(root: string, maxBytes: number): Promise<{ sha256: 
 type TarVisitor = (entry: { name: string; type: string; size: number; mode: number }, contents: () => Promise<Buffer>, skip: () => Promise<void>) => Promise<boolean | void>;
 
 /** Walk a gzip tarball once; `visit` returns true to stop. Long GNU names are honoured; nothing is written. */
-async function walkTar(path: string, visit: TarVisitor): Promise<void> {
+export async function walkTar(path: string, visit: TarVisitor): Promise<void> {
   const stream = createReadStream(path).pipe(createGunzip());
   const iterator = stream[Symbol.asyncIterator]();
   let buffer = Buffer.alloc(0);
@@ -296,7 +296,7 @@ async function tarEntry(path: string, match: (name: string) => boolean): Promise
   return found;
 }
 
-function safeRelativePath(name: string): string | undefined {
+export function safeRelativePath(name: string): string | undefined {
   const parts = name.replace(/^\.\//, "").split("/").filter(part => part.length);
   if (!parts.length || parts.some(part => part === "." || part === ".." || part.includes("\\") || part.includes("\0"))) return undefined;
   return parts.join("/");

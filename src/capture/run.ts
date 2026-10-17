@@ -1,4 +1,4 @@
-import { appearanceArgs, bundleColorSchemes, mergeSchemeOutcomes, resolveColorSchemes, routeIdOfScreen, type AppearanceSetting, type ColorScheme } from "./appearance.js";
+import { appearanceArgs, argentColorSchemes, bundleColorSchemes, mergeSchemeOutcomes, resolveColorSchemes, routeIdOfScreen, type AppearanceSetting, type ColorScheme } from "./appearance.js";
 import { assertNoCaptureHealthIssues, captureHealthIssues, partitionCaptureHealthIssues } from "./health.js";
 import { type RouteResetSetting } from "./route-reset.js";
 import { defaultReadinessSeconds } from "./readiness.js";
@@ -16,13 +16,14 @@ import { ExploreStore, validateMap } from "../map/store.js";
 import { CiError, serializeCiError, toCiError } from "../shared/ci-errors.js";
 import type { CaptureSetupAction } from "../config/explore-config.js";
 import { type CiAgentRuntimeOptions } from "./agent/runtime.js";
-import { EAS_CLI_VERSION, AGENT_DEVICE_VERSION, CONTROLLER_SESSION, isRecord, parseJson, baseEnvironment, nonEmpty } from "./common.js";
+import { EAS_CLI_VERSION, CONTROLLER_SESSION, isRecord, parseJson, baseEnvironment, nonEmpty } from "./common.js";
 import { lstatIfExists, isWithin, temporaryCaptureDirectory, absoluteContractFile, readContractJson, assertNoSymlinkAncestors } from "./fs-safety.js";
 import { loadAppIcon, loadCachedAppIcon, storeAppIcon } from "./app-icon.js";
 import { defaultRunner } from "./controller.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
 import { assertCaptureEasProfile, assertSimulatorAvailable, fingerprintFrom, hasEasEnvironmentFetchFailure, nativeBuildFrom, existingBuild, repackProfileFrom, prepareExactSourceBuild, type RepackMode } from "./eas-build.js";
-import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, simulatorOsVersion, type ActiveSimulatorRuntime } from "./simulator.js";
+import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, controllerVersion, simulatorOsVersion, type ActiveSimulatorRuntime } from "./simulator.js";
+import { argentControllerInvocation } from "./controller-invocation.js";
 import { type UnattributedSetting } from "./unattributed.js";
 import { appScheme, hasConcreteRoutePath, unavailableRoute, capturePlannedRoutes, deviceArgs } from "./route-capture.js";
 
@@ -51,6 +52,8 @@ export type CiMapOptions = {
   /** Host-side pause used while a controller read is resent; tests pair it with `now` so recovery waits are not real time. */
   sleep?: (milliseconds: number) => void;
   easCommand: string; repackCommand: string; agentDeviceCommand: string;
+  /** The device controller EAS starts on the session; agent-device unless the config chose Argent. */
+  controller?: "agent-device" | "argent";
   /** Where the route observer is bundled into the app: a hosted EAS repack job (default) or repack-app on this machine. */
   repack?: RepackMode;
   /** Which appearances to capture; `auto` (default) follows the app's `userInterfaceStyle`. */
@@ -69,7 +72,7 @@ export type CiMapOptions = {
   signal?: AbortSignal;
 };
 export type SimulatorRuntimeMetadata = {
-  provider: "eas-simulator"; controller: "agent-device"; controllerPackageVersion: string;
+  provider: "eas-simulator"; controller: "agent-device" | "argent"; controllerPackageVersion: string;
   easCliVersion: string; platform: Platform; deviceModel: string; osVersion: string; locale: string;
   orientation: "portrait" | "landscape"; colorScheme: "light" | "dark" | "system"; colorSchemes?: ColorScheme[];
   sessionLifecycle: "stopped";
@@ -94,7 +97,7 @@ function newCaptureMap(options: CiMapOptions, runtime?: ActiveSimulatorRuntime, 
   const timestamp = new Date((options.now ?? Date.now)()).toISOString();
   return {
     contract: CONTRACT, revision: 0,
-    run: { id: options.buildId, name: options.name, platform: options.platform, controller: "agent-device", status: "draft",
+    run: { id: options.buildId, name: options.name, platform: options.platform, controller: options.controller ?? "agent-device", status: "draft",
       bundleId: options.bundleId, ...(runtime ? { deviceId: runtime.controllerDeviceId } : {}),
       createdAt: timestamp, updatedAt: timestamp,
       build: { id: options.buildId, version: options.buildVersion, gitCommit: options.gitCommit, source: "eas", ...(fingerprint ? { hash: fingerprint } : {}) },
@@ -163,6 +166,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const setup = revisionSetup(options.setup ?? [], plan, side);
   const runner = options.runner ?? defaultRunner;
   const sourceEnvironment = options.environment ?? process.env;
+  const controller = options.controller ?? "agent-device";
   const restrictedEnvironment = baseEnvironment(sourceEnvironment);
   const easEnvironment = { ...restrictedEnvironment, ...(options.expoToken ? { EXPO_TOKEN: options.expoToken } : {}) };
   const assertCheckout = () => {
@@ -279,7 +283,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       app = { name: cachedBundle.appName ?? options.name };
       appIcon = await loadCachedAppIcon(cacheRoot, cachedBundle.appIcon);
       const cachedProfile = cachedBundle.runtimeProfile!;
-      runtime = { provider: "eas-simulator", controller: "agent-device", controllerPackageVersion: AGENT_DEVICE_VERSION,
+      runtime = { provider: "eas-simulator", controller, controllerPackageVersion: controllerVersion(controller),
         easCliVersion: EAS_CLI_VERSION, platform: options.platform, controllerDeviceId: cachedDeviceId ?? "cached",
         deviceModel: cachedProfile.deviceModel, osVersion: cachedProfile.osVersion, locale: cachedProfile.locale,
         orientation: cachedProfile.orientation === "landscape" ? "landscape" : "portrait",
@@ -349,7 +353,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     await rm(launchWorkDirectory, { recursive: true, force: true });
     const storedIcon = appIcon ? await storeAppIcon(outputDirectory, appIcon) : undefined;
     const bundle: CaptureBundle = { contract: "explore.bundle", side, gitCommit: options.gitCommit, easBuildId, completedAt: map.run.completedAt,
-      easProjectId: projectId, platform: options.platform, profile: options.easProfile, appName: app.name, ...(storedIcon ? { appIcon: storedIcon } : {}),
+      easProjectId: projectId, platform: options.platform, profile: options.easProfile, appName: app.name, ...(controller === "argent" ? { controller } : {}), ...(storedIcon ? { appIcon: storedIcon } : {}),
       selectedSurfaceIds: selectedIds,
       runtimeProfile: metadata ? { deviceModel: metadata.deviceModel, osVersion: metadata.osVersion, locale: metadata.locale,
         orientation: metadata.orientation, colorScheme: metadata.colorScheme, ...(metadata.colorSchemes ? { colorSchemes: metadata.colorSchemes.join(",") } : {}) } : null, images, outcomes, procedure: { reset: options.reset ?? "root-link", readinessSeconds: options.readinessSeconds ?? defaultReadinessSeconds(options.platform) },
@@ -381,6 +385,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const configValue = parseJson(configResult.stdout, "eas config") as { appConfig: Record<string, unknown>; buildProfile: Record<string, unknown> };
   scheme ??= appScheme(configValue.appConfig.scheme);
   colorSchemes = resolveColorSchemes(options.appearance ?? "auto", configValue.appConfig, options.platform);
+  if (controller === "argent") {
+    const single = argentColorSchemes(colorSchemes, configValue.appConfig, options.platform);
+    if (single.skipped.length) say(`Argent cannot switch appearance yet (software-mansion/argent#1509); capturing ${single.schemes[0]} only, skipped ${single.skipped.join(", ")}`);
+    colorSchemes = single.schemes;
+  }
   app = { name: profile.projectIdentity.name, ...(profile.projectIdentity.version ? { version: profile.projectIdentity.version } : {}),
     ...(profile.projectIdentity.buildNumber ? { buildNumber: profile.projectIdentity.buildNumber } : {}) };
   projectId = profile.projectIdentity.projectId;
@@ -446,7 +455,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     await writeFile(dotenvPath, SIMULATOR_DOTENV_HEADER, { flag: "wx", mode: 0o600 });
     let startError: unknown;
     try { eas(["simulator:start", "--name", sessionName, "--platform", options.platform, "--device", options.device,
-      "--type", "agent-device", "--package-version", AGENT_DEVICE_VERSION, "--build-id", easBuildId, "--public-link",
+      "--type", controller, "--package-version", controllerVersion(controller), "--build-id", easBuildId, "--public-link",
       "--max-duration-minutes", String(options.maxDurationMinutes), "--out-config-type", "dotenv", "--non-interactive"], 20 * 60_000, simulatorProject); }
     catch (error) { startError = error; }
     const handoff = await readSimulatorDotenvHandoff(dotenvPath);
@@ -480,15 +489,20 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     await rm(dotenvPath, { force: true });
     const controllerConfig = join(simulatorProject, "agent-device.json");
     await writeFile(controllerConfig, "{}\n", { flag: "wx", mode: 0o400 });
-    const controllerEnvironment = { ...restrictedEnvironment, AGENT_DEVICE_CONFIG: controllerConfig,
+    const argent = controller === "argent"
+      ? await argentControllerInvocation({ directory: simulatorProject, connection: handoff.connection, platform: options.platform, environment: restrictedEnvironment, bundleId: options.bundleId })
+      : undefined;
+    const controllerEnvironment = argent?.environment ?? { ...restrictedEnvironment, AGENT_DEVICE_CONFIG: controllerConfig,
       AGENT_DEVICE_DAEMON_BASE_URL: handoff.connection.daemonBaseUrl, AGENT_DEVICE_DAEMON_AUTH_TOKEN: handoff.connection.daemonAuthToken,
       AGENT_DEVICE_SESSION: CONTROLLER_SESSION, AGENT_DEVICE_SESSION_LOCK: "reject", AGENT_DEVICE_PLATFORM: options.platform };
+    // Every controller call below goes to the session's controller; for Argent that is the bridge.
+    const controllerCommand = argent?.command ?? options.agentDeviceCommand;
     runtimeStage = "runtime";
     setStage(runtimeStage);
-    runtime = collectRuntime(options, controllerEnvironment);
+    runtime = collectRuntime({ ...options, agentDeviceCommand: controllerCommand }, controllerEnvironment);
     runtime.colorScheme = colorSchemes[0]!;
-    // The version is descriptive; a capture proceeds without it and records "unknown".
-    try {
+    // The version is descriptive; a capture proceeds without it and records "unknown". Argent names it with the device.
+    if (runtime.osVersion === "unknown") try {
       runtime.osVersion = await simulatorOsVersion(eas(["simulator:get", "--id", sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout,
         runtime.controllerDeviceId, options.fetch ?? fetch, options.platform);
     } catch (error) {
@@ -504,7 +518,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     const passes: CaptureBundle["outcomes"][] = [];
     const recordingTools = launchSetting === "off" ? undefined : options.recordingTools === undefined ? ffmpegRecordingTools() : options.recordingTools ?? undefined;
     for (const [index, colorScheme] of colorSchemes.entries()) {
-      runner({ command: options.agentDeviceCommand, args: [...appearanceArgs(colorScheme), "--session", CONTROLLER_SESSION, ...deviceArgs(runtime), "--platform", options.platform],
+      // Argent cannot switch the appearance yet (software-mansion/argent#1509); its single pass runs as the device starts.
+      if (controller !== "argent") runner({ command: controllerCommand, args: [...appearanceArgs(colorScheme), "--session", CONTROLLER_SESSION, ...deviceArgs(runtime), "--platform", options.platform],
         cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
       // A scheme change recreates the Android activity in place, and the sheets it re-presents lose their inset; a
       // relaunch starts the app in the new scheme, the same way the first pass did.
@@ -516,7 +531,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           const record = await captureLaunch({ bundleId: options.bundleId, keepVideo: launchSetting === "video", platform: options.platform,
             directory: join(launchWorkDirectory, launchDirectory(colorScheme)), relativeDirectory: launchDirectory(colorScheme), ...(options.now ? { now: options.now } : {}),
             ...(recordingTools ? { recordingTools } : {}),
-            controller: (args, controllerOptions) => runner({ command: options.agentDeviceCommand, args: [...args, "--session", CONTROLLER_SESSION, ...deviceArgs(runtime!), "--platform", options.platform],
+            controller: (args, controllerOptions) => runner({ command: controllerCommand, args: [...args, "--session", CONTROLLER_SESSION, ...deviceArgs(runtime!), "--platform", options.platform],
               cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: controllerOptions?.timeoutMs ?? 60_000, ...(controllerOptions?.allowFailure ? { allowFailure: true } : {}) }) });
           launch[colorScheme] = { root: launchWorkDirectory, record };
         } catch (error) {
@@ -524,11 +539,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           say(`the app launch could not be observed (${(error as Error).message}); the report has no launch evidence for ${colorScheme}`);
           await rm(join(launchWorkDirectory, launchDirectory(colorScheme)), { recursive: true, force: true });
         }
-      } else if (index > 0) runner({ command: options.agentDeviceCommand, args: ["open", options.bundleId, "--relaunch", "--session", CONTROLLER_SESSION,
+      } else if (index > 0) runner({ command: controllerCommand, args: ["open", options.bundleId, "--relaunch", "--session", CONTROLLER_SESSION,
         ...deviceArgs(runtime), "--platform", options.platform, "--level", "full", "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
       runtime.colorScheme = colorScheme;
       if (colorSchemes.length > 1) say(`appearance ${colorScheme} (${index + 1}/${colorSchemes.length})`);
-      passes.push(await capturePlannedRoutes({ capture: { ...options, setup, progress: say }, routes: missingRoutes, inventory, scheme, appName: app.name, runtime,
+      passes.push(await capturePlannedRoutes({ capture: { ...options, agentDeviceCommand: controllerCommand, setup, progress: say }, routes: missingRoutes, inventory, scheme, appName: app.name, runtime,
         connection: handoff.connection, environment: controllerEnvironment, store, map, acceptedFrames, outcomes: index === 0 ? outcomes : {},
         ...(colorSchemes.length > 1 ? { appearance: { scheme: colorScheme, primary: index === 0 } } : {}) }));
     }

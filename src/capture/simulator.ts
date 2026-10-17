@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { toCiError, serializeCiError, CiError } from "../shared/ci-errors.js";
 import { isRecord, parseJson, baseEnvironment, AGENT_DEVICE_VERSION, CONTROLLER_SESSION, EAS_CLI_VERSION } from "./common.js";
+import { ARGENT_VERSION } from "../shared/argent-version.js";
 import { SIMULATOR_PREVIEW_HOST, framedSimulatorPreviewServer } from "../shared/simulator-preview.js";
 import { lstatIfExists } from "./fs-safety.js";
 import { defaultRunner, openedSimulatorDevice, controllerData } from "./controller.js";
@@ -9,7 +10,21 @@ import type { RepackProfile } from "./eas-build.js";
 import type { SimulatorRuntimeMetadata, CiMapOptions } from "./run.js";
 import type { Platform } from "../types.js";
 
-export type SimulatorConnection = { sessionId: string; daemonBaseUrl: string; daemonAuthToken: string };
+/**
+ * How Explore reaches a session's device controller. For agent-device (no `controller`) these are the daemon's URL and
+ * token; for Argent they are the tool-server's `ARGENT_TOOLS_URL` and `ARGENT_AUTH_TOKEN`, whose token may be empty.
+ */
+export type SimulatorConnection = { sessionId: string; daemonBaseUrl: string; daemonAuthToken: string; controller?: "argent" };
+
+/** The controller a connection reaches: the session `--type` EAS started. */
+export function connectionController(connection: Pick<SimulatorConnection, "controller">): "agent-device" | "argent" {
+  return connection.controller ?? "agent-device";
+}
+
+/** The controller's pinned version: what EAS installs on the session (`--package-version`) and what runs here. */
+export function controllerVersion(controller: "agent-device" | "argent"): string {
+  return controller === "argent" ? ARGENT_VERSION : AGENT_DEVICE_VERSION;
+}
 export type ActiveSimulatorRuntime = Omit<SimulatorRuntimeMetadata, "sessionLifecycle"> & { controllerDeviceId: string };
 const SIMULATOR_SESSION_NAME_MAX_CHARACTERS = 50;
 const SIMULATOR_SESSION_DIGEST_CHARACTERS = 20;
@@ -64,24 +79,28 @@ function simulatorConnection(
   sessionId: string,
   daemonBaseUrl: unknown,
   daemonAuthToken: unknown,
+  controller: "agent-device" | "argent" = "agent-device",
 ): SimulatorConnection {
+  // An Argent tool-server may run without a token (ARGENT_AUTH_TOKEN is only set when it needs one).
+  if (controller === "argent" && daemonAuthToken === undefined) daemonAuthToken = "";
   if (
     typeof daemonBaseUrl !== "string"
     || typeof daemonAuthToken !== "string"
     || !daemonBaseUrl
-    || !daemonAuthToken
+    || (!daemonAuthToken && controller !== "argent")
     || daemonBaseUrl.length > 2_048
     || daemonAuthToken.length > 8_192
     || /[\u0000-\u001f\u007f]/.test(daemonBaseUrl)
     || /[\u0000-\u001f\u007f]/.test(daemonAuthToken)
   ) {
-    throw new Error("eas simulator:start returned an unsafe agent-device connection");
+    throw new Error(`eas simulator:start returned an unsafe ${controller} connection`);
   }
-  remoteDaemonDomain(daemonBaseUrl);
+  remoteDaemonDomain(daemonBaseUrl, controller);
   return {
     sessionId,
     daemonBaseUrl,
     daemonAuthToken,
+    ...(controller === "argent" ? { controller } : {}),
   };
 }
 
@@ -100,7 +119,7 @@ export function simulatorStartFailure(error: unknown, secrets: readonly string[]
     message: source.message.replace(/\\+(["'/])/g, "$1"),
     nextAction: "Inspect the EAS simulator start failure." }), { secrets });
   const message = failure.message
-    .replace(/\b(?:AGENT_DEVICE_[A-Z_]+|EAS_SIMULATOR_[A-Z_]+|EXPO_TOKEN|agentDeviceRemoteSession(?:Token|Url)|webPreviewUrl|previewApiUrl)["']?\s*[:=][^\r\n]*/g, "[REDACTED_HANDOFF]")
+    .replace(/\b(?:AGENT_DEVICE_[A-Z_]+|ARGENT_[A-Z_]+|EAS_SIMULATOR_[A-Z_]+|EXPO_TOKEN|agentDeviceRemoteSession(?:Token|Url)|toolsUrl|toolsAuthToken|webPreviewUrl|previewApiUrl)["']?\s*[:=][^\r\n]*/g, "[REDACTED_HANDOFF]")
     .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>"']+/g, "[REDACTED_URL]")
     .slice(0, 1600);
   return { code: failure.code, stage: "session", message,
@@ -149,6 +168,8 @@ export async function readSimulatorDotenvHandoff(path: string): Promise<Simulato
       "EAS_SIMULATOR_SESSION_ID",
       "AGENT_DEVICE_DAEMON_BASE_URL",
       "AGENT_DEVICE_DAEMON_AUTH_TOKEN",
+      "ARGENT_TOOLS_URL",
+      "ARGENT_AUTH_TOKEN",
     ].includes(name)) {
       validationError ??= new Error("EAS Simulator dotenv handoff contains an unexpected assignment");
       continue;
@@ -177,11 +198,14 @@ export async function readSimulatorDotenvHandoff(path: string): Promise<Simulato
   let connection: SimulatorConnection | undefined;
   if (sessionId) {
     try {
-      connection = simulatorConnection(
-        sessionId,
-        assignments.AGENT_DEVICE_DAEMON_BASE_URL,
-        assignments.AGENT_DEVICE_DAEMON_AUTH_TOKEN,
-      );
+      // An `argent` session writes the Argent tool-server's variables instead of agent-device's.
+      connection = assignments.ARGENT_TOOLS_URL !== undefined
+        ? simulatorConnection(sessionId, assignments.ARGENT_TOOLS_URL, assignments.ARGENT_AUTH_TOKEN, "argent")
+        : simulatorConnection(
+          sessionId,
+          assignments.AGENT_DEVICE_DAEMON_BASE_URL,
+          assignments.AGENT_DEVICE_DAEMON_AUTH_TOKEN,
+        );
     } catch (error) {
       validationError ??= error instanceof Error ? error : new Error(String(error));
     }
@@ -207,7 +231,7 @@ export function assertSimulatorSessionIdentity(
     sessionId !== expectedSessionId
     || !isRecord(value)
     || value.name !== expectedSessionName
-    || value.type !== "agent-device"
+    || value.type !== (expectedConnection ? connectionController(expectedConnection) : "agent-device")
     || value.platform !== expectedPlatform.toUpperCase()
     || value.status !== "IN_PROGRESS"
   ) {
@@ -226,15 +250,17 @@ export function assertSimulatorSessionIdentity(
   if (!projectProven) {
     throw new Error("eas simulator:get did not prove the exact expected simulator session");
   }
-  if (expectedConnection) {
-    if (
-      !isRecord(value.remoteConfig)
-      || value.remoteConfig.agentDeviceRemoteSessionUrl !== expectedConnection.daemonBaseUrl
-      || value.remoteConfig.agentDeviceRemoteSessionToken !== expectedConnection.daemonAuthToken
-    ) {
-      throw new Error("eas simulator:get returned a different agent-device connection");
-    }
+  if (expectedConnection && !remoteConfigMatches(value.remoteConfig, expectedConnection)) {
+    throw new Error(`eas simulator:get returned a different ${connectionController(expectedConnection)} connection`);
   }
+}
+
+/** The session's published controller endpoint is the one Explore holds: agent-device's daemon, or Argent's tool-server. */
+function remoteConfigMatches(remoteConfig: unknown, connection: SimulatorConnection): boolean {
+  if (!isRecord(remoteConfig)) return false;
+  return connectionController(connection) === "argent"
+    ? remoteConfig.toolsUrl === connection.daemonBaseUrl && (remoteConfig.toolsAuthToken ?? "") === connection.daemonAuthToken
+    : remoteConfig.agentDeviceRemoteSessionUrl === connection.daemonBaseUrl && remoteConfig.agentDeviceRemoteSessionToken === connection.daemonAuthToken;
 }
 
 /**
@@ -263,7 +289,9 @@ export async function resolveAttachedSimulatorSession(
   if (requestedSessionId && environment.EAS_SIMULATOR_SESSION_ID && environment.EAS_SIMULATOR_SESSION_ID !== requestedSessionId) {
     throw new Error(`EAS_SIMULATOR_SESSION_ID is ${environment.EAS_SIMULATOR_SESSION_ID}, not ${requestedSessionId}`);
   }
-  return simulatorConnection(sessionId, environment.AGENT_DEVICE_DAEMON_BASE_URL, environment.AGENT_DEVICE_DAEMON_AUTH_TOKEN);
+  return environment.ARGENT_TOOLS_URL !== undefined && environment.AGENT_DEVICE_DAEMON_BASE_URL === undefined
+    ? simulatorConnection(sessionId, environment.ARGENT_TOOLS_URL, environment.ARGENT_AUTH_TOKEN, "argent")
+    : simulatorConnection(sessionId, environment.AGENT_DEVICE_DAEMON_BASE_URL, environment.AGENT_DEVICE_DAEMON_AUTH_TOKEN);
 }
 
 /** Proves an attached session is live, agent-device typed, and served by the connection we hold; returns its platform. */
@@ -274,8 +302,8 @@ export function assertAttachedSimulatorSession(
 ): { platform: Platform; name: string; deviceRunSessionUrl?: string } {
   const value = parseJson(stdout, "eas simulator:get");
   const sessionId = simulatorSessionId(value, "eas simulator:get");
-  if (sessionId !== connection.sessionId || !isRecord(value) || value.type !== "agent-device") {
-    throw new Error("eas simulator:get did not describe the attached agent-device session");
+  if (sessionId !== connection.sessionId || !isRecord(value) || value.type !== connectionController(connection)) {
+    throw new Error(`eas simulator:get did not describe the attached ${connectionController(connection)} session`);
   }
   if (value.status !== "IN_PROGRESS") {
     throw new Error(`EAS Simulator session ${sessionId} is ${String(value.status).toLowerCase()}, not in progress`);
@@ -284,12 +312,8 @@ export function assertAttachedSimulatorSession(
   if (!platform || (expectedPlatform && platform !== expectedPlatform)) {
     throw new Error(`EAS Simulator session ${sessionId} is ${String(value.platform).toLowerCase()}${expectedPlatform ? `, not ${expectedPlatform}` : ""}`);
   }
-  if (
-    !isRecord(value.remoteConfig)
-    || value.remoteConfig.agentDeviceRemoteSessionUrl !== connection.daemonBaseUrl
-    || value.remoteConfig.agentDeviceRemoteSessionToken !== connection.daemonAuthToken
-  ) {
-    throw new Error("eas simulator:get returned a different agent-device connection than the one provided");
+  if (!remoteConfigMatches(value.remoteConfig, connection)) {
+    throw new Error(`eas simulator:get returned a different ${connectionController(connection)} connection than the one provided`);
   }
   return {
     platform,
@@ -309,12 +333,12 @@ export function assertSimulatorStopped(stdout: string, expectedSessionId: string
   }
 }
 
-function remoteDaemonDomain(value: string): string {
+function remoteDaemonDomain(value: string, controller: "agent-device" | "argent" = "agent-device"): string {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    throw new Error("eas simulator returned an invalid agent-device URL");
+    throw new Error(`eas simulator returned an invalid ${controller} URL`);
   }
   if (
     url.protocol !== "https:"
@@ -322,19 +346,22 @@ function remoteDaemonDomain(value: string): string {
     || url.password
     || !url.hostname
   ) {
-    throw new Error("eas simulator returned an unsafe agent-device URL");
+    throw new Error(`eas simulator returned an unsafe ${controller} URL`);
   }
   return url.hostname;
 }
 
 export function collectRuntime(options: CiMapOptions & { platform: NonNullable<CiMapOptions["platform"]> }, environment: NodeJS.ProcessEnv): ActiveSimulatorRuntime {
   const runner = options.runner ?? defaultRunner;
+  const controller = options.controller ?? "agent-device";
   const version = runner({ command: options.agentDeviceCommand, args: ["--version"], cwd: options.project,
-    environment: baseEnvironment(options.environment ?? process.env), timeoutMs: 30_000 }).stdout.trim();
-  if (version !== AGENT_DEVICE_VERSION) throw new Error(`agent-device version must be ${AGENT_DEVICE_VERSION}`);
+    environment: controller === "argent" ? environment : baseEnvironment(options.environment ?? process.env), timeoutMs: 30_000 }).stdout.trim();
+  if (version !== controllerVersion(controller)) throw new Error(`${controller} version must be ${controllerVersion(controller)}`);
   const opened = runner({ command: options.agentDeviceCommand,
     args: ["open", options.bundleId, "--session", CONTROLLER_SESSION, ...(options.platform === "ios" ? ["--device", options.device] : []),
-      "--platform", options.platform, "--level", "full", "--json"], cwd: options.project, environment, timeoutMs: 60_000 });
+      "--platform", options.platform, "--level", "full", "--json"], cwd: options.project, environment,
+    // Argent's first call can wait for a tool-server that is still starting, then relaunch the app until it is readable.
+    timeoutMs: controller === "argent" ? 180_000 : 60_000 });
   const device = openedSimulatorDevice(opened.stdout, options.bundleId, "initial app open", options.platform);
   if (options.platform === "ios" && device.deviceModel !== options.device) throw new CiError({ code: "DEVICE_MISMATCH", stage: "runtime",
     message: `EAS opened ${device.deviceModel} instead of the configured ${options.device}.`,
@@ -345,7 +372,7 @@ export function collectRuntime(options: CiMapOptions & { platform: NonNullable<C
     const value = deviceData[key] ?? data[key];
     return typeof value === "string" && value.trim() ? value : "unknown";
   };
-  return { provider: "eas-simulator", controller: "agent-device", controllerPackageVersion: AGENT_DEVICE_VERSION,
+  return { provider: "eas-simulator", controller, controllerPackageVersion: controllerVersion(controller),
     easCliVersion: EAS_CLI_VERSION, platform: options.platform, controllerDeviceId: device.deviceId, deviceModel: device.deviceModel,
     osVersion: observed("osVersion"), locale: observed("locale"),
     orientation: observed("orientation") === "landscape" ? "landscape" : "portrait",

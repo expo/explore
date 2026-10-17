@@ -11,12 +11,14 @@ import type {
 } from "./runtime-evidence.js";
 import type { ExploreMap, Observation, Screen } from "../types.js";
 import { CAPTURE_OBSERVER_IDENTIFIER } from "../capture/observer.js";
+import { ARGENT_VERSION } from "../shared/argent-version.js";
 
 /** Strict, non-secret subset written after a successful EAS Simulator cleanup. */
 export type RuntimeExecutionContext = {
   provider: "eas-simulator";
-  controller: "agent-device";
-  controllerPackageVersion: typeof AGENT_DEVICE_VERSION;
+  controller: "agent-device" | "argent";
+  /** The pinned package of the controller that drove the session. */
+  controllerPackageVersion: typeof AGENT_DEVICE_VERSION | typeof ARGENT_VERSION;
   easCliVersion: typeof EAS_CLI_VERSION;
   platform: "ios" | "android";
   deviceModel: string;
@@ -107,12 +109,13 @@ export function parseRuntimeExecutionContext(value: unknown): RuntimeExecutionCo
     }
     return context.colorSchemes.map((entry) => literal(entry, ["light", "dark"], "Runtime color schemes"));
   })();
+  const controller = literal(context.controller, ["agent-device", "argent"], "Runtime controller");
   return {
     provider: literal(context.provider, ["eas-simulator"], "Runtime provider"),
-    controller: literal(context.controller, ["agent-device"], "Runtime controller"),
+    controller,
     controllerPackageVersion: literal(
       context.controllerPackageVersion,
-      [AGENT_DEVICE_VERSION],
+      [controller === "argent" ? ARGENT_VERSION : AGENT_DEVICE_VERSION],
       "Controller package version",
     ),
     easCliVersion: literal(context.easCliVersion, [EAS_CLI_VERSION], "EAS CLI version"),

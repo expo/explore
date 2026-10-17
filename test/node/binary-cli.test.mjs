@@ -101,3 +101,27 @@ test("attached sessions are proven live, agent-device typed, and served by the g
   await assert.rejects(resolveAttachedSimulatorSession({}, undefined), /EAS_SIMULATOR_SESSION_ID did not return a session id/);
   await assert.rejects(resolveAttachedSimulatorSession({ ...env, AGENT_DEVICE_DAEMON_AUTH_TOKEN: "" }, undefined), /unsafe agent-device connection/);
 });
+
+test("an attached argent session is found from ARGENT_* and proven against the session's tool-server", async () => {
+  const { assertAttachedSimulatorSession, readSimulatorDotenvHandoff, resolveAttachedSimulatorSession } = await import(join(root, "dist", "capture", "simulator.js"));
+  const connection = { sessionId: "01a1-mine", daemonBaseUrl: "https://tools.example.eas.dev", daemonAuthToken: "secret", controller: "argent" };
+  const env = { EAS_SIMULATOR_SESSION_ID: "01a1-mine", ARGENT_TOOLS_URL: connection.daemonBaseUrl, ARGENT_AUTH_TOKEN: "secret" };
+  assert.deepEqual(await resolveAttachedSimulatorSession(env, undefined), connection);
+  // A tool-server that needs no token is still an argent session.
+  assert.deepEqual(await resolveAttachedSimulatorSession({ ...env, ARGENT_AUTH_TOKEN: undefined }, undefined), { ...connection, daemonAuthToken: "" });
+  await assert.rejects(resolveAttachedSimulatorSession({ ...env, ARGENT_TOOLS_URL: "http://tools.example.eas.dev" }, undefined), /unsafe argent/);
+  const session = (overrides = {}) => JSON.stringify({ id: "01a1-mine", name: "mine", type: "argent", status: "IN_PROGRESS", platform: "ANDROID",
+    remoteConfig: { toolsUrl: connection.daemonBaseUrl, toolsAuthToken: "secret" }, ...overrides });
+  assert.equal(assertAttachedSimulatorSession(session(), connection).platform, "android");
+  assert.throws(() => assertAttachedSimulatorSession(session({ type: "agent-device" }), connection), /attached argent session/);
+  assert.throws(() => assertAttachedSimulatorSession(session({ remoteConfig: { toolsUrl: connection.daemonBaseUrl, toolsAuthToken: "other" } }), connection), /different argent connection/);
+  const dir = await mkdtemp(join(tmpdir(), "explore-argent-dotenv-"));
+  try {
+    const path = join(dir, ".env.eas-simulator");
+    await writeFile(path, "# Do not commit this file.\n# Do not modify these values manually. They are managed by eas-cli.\n# It holds configuration only for the current simulator session.\n\nEAS_SIMULATOR_SESSION_ID='01a1-mine'\nARGENT_TOOLS_URL='https://tools.example.eas.dev'\nARGENT_AUTH_TOKEN='secret'\n");
+    const handoff = await readSimulatorDotenvHandoff(path);
+    assert.equal(handoff.validationError, undefined);
+    assert.deepEqual(handoff.connection, connection);
+    assert.deepEqual(await resolveAttachedSimulatorSession({}, path), connection);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

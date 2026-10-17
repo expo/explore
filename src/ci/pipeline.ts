@@ -26,6 +26,7 @@ import type { SourceCapturePlan } from "../source/capture-plan.js";
 import { createSourceChangeSummaries } from "../source/change-summary.js";
 import { assertNoCaptureHealthIssues, partitionCaptureHealthIssues, renderCaptureIssueAnnotation, renderComparisonDiagnosticAnnotation, renderNotesUnavailableAnnotation, renderReviewGapAnnotation, sortedCaptureHealthIssues } from "../capture/health.js";
 import { EXPLORE_PACKAGE, packageBin } from "../shared/package-paths.js";
+import { agentDeviceLauncher, ensureController } from "../shared/controller-cache.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
 
 
@@ -66,8 +67,8 @@ function captureOptions(config: ExploreConfig, environment: NodeJS.ProcessEnv, r
     ...(config.app.scheme ? { scheme: config.app.scheme } : {}), device: config.device.name,
     easProfile: config.app.easProfile, expoToken: environment.EXPO_TOKEN ?? "",
     maxScreens: 5000, maxActions: config.capture.maxActions, maxDurationMinutes: config.capture.maxMinutes,
-    setup: config.setup ?? [], forceFreshBuild: false, confirmExternalRun: true, confirmTrustedSource: true, repack: config.capture.repack, appearance: config.capture.appearance, launch: config.capture.launch, reset: config.capture.reset, unattributed: config.capture.unattributed, ...(config.capture.readinessSeconds !== undefined ? { readinessSeconds: config.capture.readinessSeconds } : {}),
-    environment, ...(runner ? { runner } : {}), easCommand: packageBin("eas-cli", "eas"), agentDeviceCommand: packageBin("agent-device", "agent-device"), repackCommand: packageBin("@expo/repack-app", "repack-app") };
+    setup: config.setup ?? [], forceFreshBuild: false, confirmExternalRun: true, confirmTrustedSource: true, repack: config.capture.repack, appearance: config.capture.appearance, launch: config.capture.launch, reset: config.capture.reset, unattributed: config.capture.unattributed, ...(config.capture.readinessSeconds !== undefined ? { readinessSeconds: config.capture.readinessSeconds } : {}), ...(config.capture.controller ? { controller: config.capture.controller } : {}),
+    environment, ...(runner ? { runner } : {}), easCommand: packageBin("eas-cli", "eas"), agentDeviceCommand: agentDeviceLauncher(environment), repackCommand: packageBin("@expo/repack-app", "repack-app") };
 }
 /**
  * Head and base run in parallel worker threads when nothing ties them together: an agent session is
@@ -246,6 +247,8 @@ export async function runCiReview(options: {
 }) {
   const { projects, output, config, environment, state, assertCurrentHead, postComment } = options;
   const progress = options.progress ?? silentProgress;
+  // Argent is fetched before any EAS work, so a slow or blocked download is not charged to a controller call.
+  if (config.capture.controller === "argent") await ensureController("argent", { environment, progress });
   const pr = options.presentation;
   const now = options.now ?? Date.now;
   const secretValues = Object.entries(environment).filter(([key]) => /(?:TOKEN|SECRET|PASSWORD|API_KEY)/i.test(key)).flatMap(([, value]) => value ? [value] : []);
@@ -344,7 +347,7 @@ export async function runCiReview(options: {
     stage = "compare";
     progress("comparing base and head captures");
     const sides = { base: await evidenceSide(join(output, "base-export")), head: await evidenceSide(join(output, "head-export")) };
-    const evidence = await assessPublicEvidence({ platform: config.app.platform, plan, ...sides, ...(options.measure ? { measure: options.measure } : {}), profile: `${config.app.easProfile}:${config.app.bundleId}`, agentDeviceCommand: packageBin("agent-device", "agent-device") });
+    const evidence = await assessPublicEvidence({ platform: config.app.platform, plan, ...sides, ...(options.measure ? { measure: options.measure } : {}), profile: `${config.app.easProfile}:${config.app.bundleId}`, agentDeviceCommand: agentDeviceLauncher(options.environment) });
     const result = await prepareCaptureReview({ plan, pullRequest: pr, baseDirectory: sides.base.directory, headDirectory: sides.head.directory,
       runId: options.runId, runAttempt: options.runAttempt, assertCurrentHead, assessments: evidence.surfaces,
       ...(options.platforms ? { platforms: options.platforms } : {}),
@@ -444,6 +447,7 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
   subscription?: boolean }) {
   const environment = options.environment ?? process.env;
   assertCheckout(options.project, options.sha);
+  if (options.config.capture.controller === "argent") await ensureController("argent", { environment, ...(options.progress ? { progress: options.progress } : {}) });
   const output = resolve(options.output);
   const relativeOutput = relative(await realpath(options.project), output);
   if (!relativeOutput.startsWith("..") || isAbsolute(relativeOutput)) throw new Error("Baseline output must be outside the source checkout");
