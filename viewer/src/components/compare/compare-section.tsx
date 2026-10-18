@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { ImageOff, ScanSearch } from "lucide-react";
 import type { ChangesMenuData } from "../panels/changes-menu";
 import { diffLabel, ACCESSIBILITY_ONLY_HIGHLIGHT, type BuildDiff, type ScreenDiff } from "../../utils/build-diff";
@@ -12,7 +12,10 @@ import { usePhoneLayout } from "../../utils/phone-layout";
 import { ToggleGroup } from "../shared/toggle-group";
 import { Tooltip } from "../shared/tooltip";
 import { DEFAULT_SCREENSHOT_RATIO, ScreenshotImage, ScreenshotPlaceholder } from "../shared/screenshot-image";
-import { ChangeOutlines, HomeIndicatorBand, StatusBarBand, SwipeCompare, SWIPE_STEP } from "../panels/visual-diff";
+import { ChangeOutlines, HomeIndicatorBand, PixelDiffOverlay, StatusBarBand, SwipeCompare, SWIPE_STEP } from "../panels/visual-diff";
+import { OUTLINE_VARIANTS, setOutlineVariant, useOutlineVariant, type OutlineVariant } from "../../utils/outline-variant";
+import { HOME_INDICATOR_BAND_PERCENT_BY_PLATFORM, STATUS_BAR_BAND_PERCENT } from "../../../../src/contracts/capture";
+import { outlineRect } from "../../utils/visual-diff";
 import { placeholderFor, presentedChanges, splitForAssistiveTechnology } from "../../utils/presented-changes";
 import { CompareNav, WhatChangedPopover } from "./compare-header";
 import "./compare-section.css";
@@ -318,9 +321,10 @@ export function CompareSection(props: CompareSectionProps) {
   const compare = useCompareController(props);
   const {
     screen, screenDiff, route, areas, facts, mode, chooseMode, modeOptions, outlines, shownOutlines,
-    statusBarIgnored, homeIndicatorIgnored, toggleOutlines, activeArea, flipSide, flip, swipePosition, setSwipePosition, aspect,
+    statusBarIgnored, homeIndicatorIgnored, toggleOutlines, activeArea, setActiveArea, flipSide, flip, swipePosition, setSwipePosition, aspect,
     setAspect, factsOpen, setFactsOpen,
   } = compare;
+  const variant = useOutlineVariant();
   const sectionRef = useRef<HTMLElement>(null);
   useBarGeometry(sectionRef, Boolean(screen && screenDiff));
 
@@ -346,8 +350,9 @@ export function CompareSection(props: CompareSectionProps) {
   const notes = compareNotes(screenDiff, facts.length, statusBarIgnored, homeIndicatorIgnored);
 
   return (
-    <section ref={sectionRef} className="compare-section" aria-label={`Compare ${route}`}
+    <section ref={sectionRef} className="compare-section" aria-label={`Compare ${route}`} data-outline-variant={variant}
       style={{ "--compare-aspect": aspect } as CSSProperties}>
+      <OutlineVariantPicker value={variant} />
       {/* One command bar at the top, in the bottom toolbar's make: which screen and where it sits,
           how to look at it, and what to look for. The bottom toolbar stays the same on every section. */}
       <header className="compare-top">
@@ -399,10 +404,76 @@ export function CompareSection(props: CompareSectionProps) {
           onSwipePosition={setSwipePosition}
           aspect={aspect}
           onAspect={setAspect}
+          variant={variant}
+          onSelectArea={setActiveArea}
         />
       </div>
 
     </section>
+  );
+}
+
+/** PROTOTYPE: picks how Split shows the changed areas. Floats at the bottom left of Compare. */
+function OutlineVariantPicker(props: { value: OutlineVariant }) {
+  const [open, setOpen] = useState(true);
+  const current = OUTLINE_VARIANTS.find((variant) => variant.id === props.value);
+  return (
+    <aside className={`outline-variant-picker${open ? "" : " collapsed"}`} aria-label="Outline variants (prototype)">
+      <button type="button" className="outline-variant-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {open ? "Changed areas" : `Changed areas: ${current?.label ?? props.value}`}
+      </button>
+      {open ? (
+        <>
+          <div className="outline-variant-list" role="radiogroup">
+            {OUTLINE_VARIANTS.map((variant) => (
+              <label key={variant.id} title={variant.detail}
+                className={`outline-variant-option${props.value === variant.id ? " selected" : ""}`}>
+                <input type="radio" name="outline-variant" value={variant.id} checked={props.value === variant.id}
+                  onChange={() => setOutlineVariant(variant.id)} />
+                <span className="outline-variant-text">
+                  <strong>{variant.label}</strong>
+                </span>
+              </label>
+            ))}
+          </div>
+          <span className="outline-variant-detail">{current?.detail}</span>
+        </>
+      ) : null}
+    </aside>
+  );
+}
+
+/**
+ * PROTOTYPE: ticks between the frames, one per change, at its height on the screenshot. Hovering one shows
+ * its box on both sides; clicking selects it as J and K do.
+ */
+function CompareGutter(props: {
+  areas: readonly VisualChange[];
+  activeArea: number | undefined;
+  hoverIndex: number | undefined;
+  onHover: (index: number | undefined) => void;
+  onSelect: ((index: number | undefined) => void) | undefined;
+}) {
+  return (
+    <figure className="compare-side compare-gutter" aria-label="Changed areas">
+      <div className="compare-side-label compare-side-label-reserved" aria-hidden="true">·</div>
+      <div className="compare-frame-wrap compare-gutter-track">
+        {props.areas.map((area, index) => {
+          const rect = outlineRect(area);
+          const selected = props.activeArea === index;
+          return (
+            <button key={index} type="button"
+              className={`compare-gutter-mark${area.move ? " moved" : ""}${selected ? " active" : ""}${props.hoverIndex === index ? " hovered" : ""}`}
+              style={{ top: `${rect.y}%`, height: `${rect.height}%` }}
+              aria-label={`Change ${index + 1} of ${props.areas.length}`}
+              aria-pressed={selected}
+              onPointerEnter={() => props.onHover(index)}
+              onPointerLeave={() => props.onHover(undefined)}
+              onClick={() => props.onSelect?.(selected ? undefined : index)} />
+          );
+        })}
+      </div>
+    </figure>
   );
 }
 
@@ -450,12 +521,17 @@ type StageProps = {
   onSwipePosition: (position: number) => void;
   aspect: number;
   onAspect: (aspect: number) => void;
+  /** PROTOTYPE: how Split shows the changed areas. Only Compare passes it; elsewhere Split draws them on both sides. */
+  variant?: OutlineVariant;
+  onSelectArea?: ((index: number | undefined) => void) | undefined;
 };
 
 export function CompareStage(props: StageProps) {
   const { diff } = props;
   const before = diff.beforeScreenshot;
   const after = diff.afterScreenshot;
+  const [hoverIndex, setHoverIndex] = useState<number>();
+  const variant: OutlineVariant = props.variant ?? "both";
   if (!before && !after) {
     const reason = diff.captureNotes?.after ?? diff.captureNotes?.before;
     return (
@@ -544,6 +620,47 @@ export function CompareStage(props: StageProps) {
   const sides = (["before", "after"] as const).filter((side) => (
     side === "before" ? diff.status !== "added" : diff.status !== "removed"
   ));
+  const comparable = Boolean(before && after) && props.showOutlines && props.areas.length > 0;
+  // PROTOTYPE: each variant's overlay for one side. `both` is what ships: the caller's overlay on each frame.
+  const sideOverlay = (side: "before" | "after"): ReactNode => {
+    if (variant === "both" || !comparable) return props.overlay;
+    const bands = (
+      <>
+        {props.statusBarIgnored ? <StatusBarBand /> : null}
+        {props.homeIndicatorIgnored ? <HomeIndicatorBand /> : null}
+      </>
+    );
+    if (variant === "after") {
+      return (
+        <>
+          <ChangeOutlines changes={props.areas} activeIndex={props.activeArea} hoverIndex={hoverIndex}
+            reveal={side === "after" ? "linked" : "ghost"} onHover={side === "after" ? setHoverIndex : undefined} />
+          {bands}
+        </>
+      );
+    }
+    if (variant === "hover") {
+      return <><ChangeOutlines changes={props.areas} activeIndex={props.activeArea} />{bands}</>;
+    }
+    if (variant === "gutter") {
+      return <><ChangeOutlines changes={props.areas} activeIndex={props.activeArea} hoverIndex={hoverIndex} reveal="ghost" />{bands}</>;
+    }
+    // pixels: the difference itself on After, the selected area (J, K) still outlined on both.
+    return (
+      <>
+        {side === "after" ? (
+          <PixelDiffOverlay before={before!} after={after!}
+            ignoreTopPercent={props.statusBarIgnored ? STATUS_BAR_BAND_PERCENT : 0}
+            ignoreBottomPercent={props.homeIndicatorIgnored ? HOME_INDICATOR_BAND_PERCENT_BY_PLATFORM.ios : 0} />
+        ) : null}
+        <ChangeOutlines changes={props.areas} activeIndex={props.activeArea} reveal="ghost" />
+        {bands}
+      </>
+    );
+  };
+  const gutter = comparable && variant === "gutter" ? (
+    <CompareGutter areas={props.areas} activeArea={props.activeArea} hoverIndex={hoverIndex} onHover={setHoverIndex} onSelect={props.onSelectArea} />
+  ) : null;
   return (
     <>
       {sides.map((side) => {
@@ -552,7 +669,9 @@ export function CompareStage(props: StageProps) {
         const note = side === "before" && diff.status === "removed" ? " · not in this PR"
           : side === "after" && diff.status === "added" ? " · not in baseline" : "";
         return (
-          <figure key={side} className="compare-side" data-side={side}>
+          <Fragment key={side}>
+          {side === "after" ? gutter : null}
+          <figure className="compare-side" data-side={side}>
             {props.labels === "inside" ? null : <figcaption className="compare-side-label">{label}{note}</figcaption>}
             <div className="compare-frame-wrap">
               <div className="compare-frame">
@@ -562,13 +681,14 @@ export function CompareStage(props: StageProps) {
                 ) : (
                   <ScreenshotPlaceholder label={placeholderFor(side, diff.status, diff.captureNotes)} />
                 )}
-                {src ? props.overlay : null}
+                {src ? sideOverlay(side) : null}
               </div>
               {props.labels === "inside" ? (
                 <span className={`compare-side-label compare-side-tag ${side}`}>{label}{note}</span>
               ) : null}
             </div>
           </figure>
+          </Fragment>
         );
       })}
     </>

@@ -1,7 +1,9 @@
-import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { ChevronsLeftRight } from "lucide-react";
 import { formatMove, outlineRect, type VisualChange } from "../../utils/visual-diff";
 import { useMeasurementsShown } from "../../utils/measurements-setting";
+import { releaseEmbeddedArtifactUrl, resolveEmbeddedArtifactUrl } from "../../utils/embedded-report";
+import { pixelDiff, type PixelDiffResult } from "../../utils/pixel-diff";
 import { HOME_INDICATOR_BAND_PERCENT_BY_PLATFORM, STATUS_BAR_BAND_PERCENT } from "../../../../src/contracts/capture";
 import { ScreenshotImage } from "../shared/screenshot-image";
 import "./visual-diff.css";
@@ -14,11 +16,18 @@ import "./visual-diff.css";
 export function ChangeOutlines(props: {
   changes: readonly VisualChange[];
   activeIndex?: number | undefined;
+  /** PROTOTYPE: the outline under the pointer on a linked frame; drawn stronger here. */
+  hoverIndex?: number | undefined;
+  /** PROTOTYPE: set when this frame's outlines take the pointer, so a hover on one can light its twin elsewhere. */
+  onHover?: ((index: number | undefined) => void) | undefined;
+  /** PROTOTYPE: `linked` outlines take the pointer; `ghost` ones are unseen until hovered or active. */
+  reveal?: "all" | "ghost" | "linked";
 }) {
   const measurements = useMeasurementsShown();
+  const reveal = props.reveal ?? "all";
   return (
     <span
-      className={`visual-change-outlines${props.activeIndex !== undefined ? " has-active" : ""}`}
+      className={`visual-change-outlines${props.activeIndex !== undefined ? " has-active" : ""}${reveal !== "all" ? ` ${reveal}` : ""}`}
       aria-hidden="true">
       {props.changes.map((change, index) => {
         const rect = outlineRect(change);
@@ -28,7 +37,9 @@ export function ChangeOutlines(props: {
         return (
           <span
             key={index}
-            className={`visual-change-outline${change.move ? " moved" : ""}${props.activeIndex === index ? " active" : ""}`}
+            className={`visual-change-outline${change.move ? " moved" : ""}${props.activeIndex === index ? " active" : ""}${props.hoverIndex === index ? " hovered" : ""}`}
+            onPointerEnter={props.onHover ? () => props.onHover!(index) : undefined}
+            onPointerLeave={props.onHover ? () => props.onHover!(undefined) : undefined}
             style={{
               left: back(rect.x, change.move?.x),
               top: back(rect.y, change.move?.y),
@@ -74,6 +85,42 @@ export function HomeIndicatorBand({ percent = HOME_INDICATOR_BAND_PERCENT_BY_PLA
       title="The home indicator at the bottom differs between the captures. It is not counted as a change."
     />
   );
+}
+
+/**
+ * PROTOTYPE: the pixels that differ between Before and After, tinted over one screenshot. Computed in the
+ * page from the two images; the bands CI ignores are left out. The parent must be positioned.
+ */
+export function PixelDiffOverlay(props: {
+  before: string;
+  after: string;
+  ignoreTopPercent?: number;
+  ignoreBottomPercent?: number;
+  onResult?: ((result: PixelDiffResult | undefined) => void) | undefined;
+}) {
+  const [result, setResult] = useState<PixelDiffResult>();
+  const { before, after, ignoreTopPercent, ignoreBottomPercent, onResult } = props;
+  useEffect(() => {
+    let disposed = false;
+    setResult(undefined);
+    const color = getComputedStyle(document.documentElement).getPropertyValue("--modified").trim() || "#ea580c";
+    void Promise.all([resolveEmbeddedArtifactUrl(before, "eager"), resolveEmbeddedArtifactUrl(after, "eager")])
+      .then(([beforeUrl, afterUrl]) => pixelDiff(beforeUrl, afterUrl, { ignoreTopPercent, ignoreBottomPercent, color }))
+      .catch(() => undefined)
+      .then((next) => {
+        if (disposed) return;
+        setResult(next);
+        onResult?.(next);
+      });
+    return () => {
+      disposed = true;
+      releaseEmbeddedArtifactUrl(before);
+      releaseEmbeddedArtifactUrl(after);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [before, after, ignoreTopPercent, ignoreBottomPercent]);
+  if (!result) return null;
+  return <img className="visual-pixel-diff" src={result.url} alt="" aria-hidden="true" draggable={false} />;
 }
 
 export const SWIPE_STEP = 5;
