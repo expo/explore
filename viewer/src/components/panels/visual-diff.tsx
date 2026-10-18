@@ -88,6 +88,8 @@ export function SwipeCompare(props: {
   before: string;
   after: string;
   imageAspect: number;
+  /** After's screenshot loaded: its width over its height, for a frame shaped before it arrived. */
+  onAspect?: (aspect: number, side: "after") => void;
   changes: readonly VisualChange[];
   activeIndex?: number | undefined;
   showOutlines?: boolean;
@@ -150,7 +152,11 @@ export function SwipeCompare(props: {
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}>
       <ScreenshotImage className="visual-swipe-after" src={props.after} alt={`${props.title}, after`}
-        loading="eager" draggable={false} />
+        loading="eager" draggable={false}
+        onLoad={(event) => {
+          const { naturalWidth, naturalHeight } = event.currentTarget;
+          if (naturalWidth > 0 && naturalHeight > 0) props.onAspect?.(naturalWidth / naturalHeight, "after");
+        }} />
       <ScreenshotImage className="visual-swipe-before" src={props.before} alt={`${props.title}, before`}
         loading="eager" draggable={false} />
       {props.showOutlines === false ? null : <ChangeOutlines changes={props.changes} activeIndex={props.activeIndex} />}

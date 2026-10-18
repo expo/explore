@@ -1518,3 +1518,56 @@ test("the Inspector keeps a portrait pair side by side", async t => {
   assert.ok(after.left >= before.left + before.width, `After is beside Before: ${JSON.stringify({ before, after })}`);
   assert.deepEqual(errors, []);
 });
+
+/** A white PNG of `width` × `height`, and the asset entry and record fields a report gives it. */
+function sizedCapture(width, height) {
+  const picture = new PNG({ width, height });
+  picture.data.fill(255);
+  const bytes = PNG.sync.write(picture);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  return { bytes, sha256: digest, path: `assets/${digest}.png`,
+    record: { url: `https://artifact.expo-explore.invalid/${digest}.png`, sha256: digest, width, height } };
+}
+
+test("the Inspector takes a pair's shape from After, whichever side loads last", async t => {
+  // A screen that turned landscape: Before is the 32×64 portrait fixture, After is landscape.
+  const landscape = sizedCapture(951, 669);
+  const report = reportFixture();
+  Object.assign(report.review.surfaces[0].headImage, landscape.record);
+  report.assets.push({ sha256: landscape.sha256, path: landscape.path });
+  // Before's screenshot is held until After's has loaded, so it loads last.
+  const { page, errors } = await harness(t, await archive(report, [{ name: landscape.path, bytes: landscape.bytes }]),
+    { app: true, fault: holdScreenshotHashes(png.length) });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const stage = page.locator(".sidebar-review-stage");
+  const frames = page.locator(".sidebar-review .compare-frame");
+  await expect(frames).toHaveCount(2);
+  await expect(frames.nth(1).locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(stage).toHaveClass(/landscape/);
+  await page.evaluate(() => window.releaseScreenshotHashes());
+  await expect(frames.nth(0).locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(stage).toHaveClass(/landscape/);
+  const ratio = await frames.nth(0).evaluate(element => element.getBoundingClientRect().width / element.getBoundingClientRect().height);
+  assert.ok(Math.abs(ratio - 951 / 669) < 0.02, `Both frames keep After's shape: ${ratio}`);
+  assert.deepEqual(errors, []);
+});
+
+test("Swipe takes the loaded screenshot's shape when it differs from the recorded one", async t => {
+  // The record says portrait; the screenshot is landscape. Swipe's frame follows the image, as
+  // Split's and Flip's do, so a capture whose size the report does not hold is not cropped.
+  const landscape = sizedCapture(951, 669);
+  const { bytes } = await imageArchive([landscape.bytes]);
+  const { page, errors } = await harness(t, Buffer.from(bytes), { app: true, fault: holdScreenshotHashes(landscape.bytes.length) });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  // Swipe is chosen before any screenshot loads, so only Swipe's images report a size.
+  await page.locator(".sidebar-review-modes").getByRole("button", { name: "Swipe", exact: true }).click();
+  const swipe = page.locator(".sidebar-review .visual-swipe");
+  await expect(swipe).toBeVisible();
+  await page.evaluate(() => window.releaseScreenshotHashes());
+  await expect(swipe.locator("img.visual-swipe-after")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect.poll(() => swipe.evaluate(element => {
+    const { width, height } = element.getBoundingClientRect();
+    return Math.abs(width / height - 951 / 669) < 0.02;
+  })).toBe(true);
+  assert.deepEqual(errors, []);
+});

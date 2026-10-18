@@ -136,14 +136,18 @@ export function useCompareController(options: CompareControllerOptions) {
   const [swipePosition, setSwipePosition] = useState(50);
   const [factsOpen, setFactsOpen] = useState(false);
   // The frame takes the recorded screenshot's shape at once, then the loaded image's (they agree
-  // unless the report's record is off), so a landscape pair stacks before its pixels arrive.
-  const recordedAspect = screenDiff?.screenshotAspect ?? DEFAULT_SCREENSHOT_RATIO;
+  // unless the report's record is off), so a landscape pair stacks before its pixels arrive. A
+  // screen with no recorded size keeps the last screen's shape until its own image loads. After
+  // decides, as it does for the recorded shape: Before's image counts only on a screen without one,
+  // so a pair whose shape changed does not take whichever side loaded last.
   const [loadedAspect, setLoadedAspect] = useState<{ screenId: string; aspect: number }>();
-  const aspect = loadedAspect?.screenId === options.screenId ? loadedAspect.aspect : recordedAspect;
-  const setAspect = useCallback(
-    (value: number) => setLoadedAspect({ screenId: options.screenId, aspect: value }),
-    [options.screenId],
-  );
+  const aspect = (loadedAspect?.screenId === options.screenId ? loadedAspect.aspect : undefined)
+    ?? screenDiff?.screenshotAspect ?? loadedAspect?.aspect ?? DEFAULT_SCREENSHOT_RATIO;
+  const hasAfter = Boolean(screenDiff?.afterScreenshot);
+  const setAspect = useCallback((value: number, side: "before" | "after") => {
+    if (side === "before" && hasAfter) return;
+    setLoadedAspect({ screenId: options.screenId, aspect: value });
+  }, [options.screenId, hasAfter]);
 
   // Each screen starts whole: no area selected, After showing, the facts closed.
   useEffect(() => {
@@ -457,7 +461,8 @@ type StageProps = {
   swipePosition: number;
   onSwipePosition: (position: number) => void;
   aspect: number;
-  onAspect: (aspect: number) => void;
+  /** A screenshot of the stage loaded: its width over its height, and which side it shows. */
+  onAspect: (aspect: number, side: "before" | "after") => void;
 };
 
 export function CompareStage(props: StageProps) {
@@ -482,6 +487,7 @@ export function CompareStage(props: StageProps) {
           before={before}
           after={after}
           imageAspect={props.aspect}
+          onAspect={props.onAspect}
           changes={props.areas}
           activeIndex={props.activeArea}
           showOutlines={props.showOutlines}
@@ -522,7 +528,7 @@ export function CompareStage(props: StageProps) {
           <button type="button" className="compare-frame compare-flip-frame" data-side={showing}
             aria-label={`Show ${showing === "after" ? "Before" : "After"}`} onClick={props.onFlip}>
             <CompareImage src={showing === "after" ? after : before} alt={`${props.title}, ${showing}`}
-              placeholder="No screenshot" onAspect={props.onAspect} />
+              placeholder="No screenshot" side={showing} onAspect={props.onAspect} />
             {props.overlay}
           </button>
         </div>
@@ -543,7 +549,7 @@ export function CompareStage(props: StageProps) {
         <div className="compare-frame-wrap">
           <div className="compare-frame">
             <CompareImage src={src} alt={`${props.title}, ${showing}`}
-              placeholder={placeholderFor(showing, diff.status, diff.captureNotes)} onAspect={props.onAspect} />
+              placeholder={placeholderFor(showing, diff.status, diff.captureNotes)} side={showing} onAspect={props.onAspect} />
           </div>
         </div>
       </figure>
@@ -566,7 +572,7 @@ export function CompareStage(props: StageProps) {
               <div className="compare-frame">
                 {src ? (
                   <CompareImage src={src} alt={`${props.title}, ${side}`}
-                    placeholder={placeholderFor(side, diff.status, diff.captureNotes)} onAspect={props.onAspect} />
+                    placeholder={placeholderFor(side, diff.status, diff.captureNotes)} side={side} onAspect={props.onAspect} />
                 ) : (
                   <ScreenshotPlaceholder label={placeholderFor(side, diff.status, diff.captureNotes)} />
                 )}
@@ -583,7 +589,10 @@ export function CompareStage(props: StageProps) {
   );
 }
 
-function CompareImage(props: { src: string; alt: string; placeholder: string; onAspect: (aspect: number) => void }) {
+function CompareImage(props: {
+  src: string; alt: string; placeholder: string; side: "before" | "after";
+  onAspect: (aspect: number, side: "before" | "after") => void;
+}) {
   return (
     <ScreenshotImage
       src={props.src}
@@ -594,7 +603,7 @@ function CompareImage(props: { src: string; alt: string; placeholder: string; on
       fallback={<ScreenshotPlaceholder label={props.placeholder} />}
       onLoad={(event) => {
         const { naturalWidth, naturalHeight } = event.currentTarget;
-        if (naturalWidth > 0 && naturalHeight > 0) props.onAspect(naturalWidth / naturalHeight);
+        if (naturalWidth > 0 && naturalHeight > 0) props.onAspect(naturalWidth / naturalHeight, props.side);
       }}
     />
   );
