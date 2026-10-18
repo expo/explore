@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { PNG as PngImage } from "pngjs";
 
-import { assessPublicEvidence, presenceDescription, ignoreStatusBar, ignoreSystemBands, ignoreSystemRegions, readExportedMap } from "../../dist/review/evidence-assessment.js";
+import { assessPublicEvidence, decideReview, presenceDescription, ignoreStatusBar, ignoreSystemBands, ignoreSystemRegions, readExportedMap } from "../../dist/review/evidence-assessment.js";
 import { STATUS_BAR_BAND_PERCENT } from "../../dist/shared/png-evidence.js";
 import { homeIndicatorBandPercent, statusBarBandPercent, systemRegions } from "../../dist/contracts/capture.js";
 import { AGENT_DEVICE_VERSION } from "../../dist/capture/run.js";
@@ -524,6 +524,48 @@ test("a presence verdict for a long route (an encoded share link) stays within t
     assert.ok(description.startsWith(`${prefix}/p/AAA`) && description.endsWith(`\u2026${suffix}`));
   }
   assert.equal(presenceDescription("Added ", "/home", " screen."), "Added /home screen.");
+});
+
+test("unstable text never makes a screen Modified, and names a variant's runtime state", () => {
+  const unstable = { category: "visible-text", templateId: "visible-text.unstable-within-build", bullet: 'Text varies between captures of the same build: "2m" / "4m" / "3m".' };
+  const summary = (facts) => ({ facts, needsReview: false, reviewIssues: [] });
+  const unchanged = { verdict: "unchanged", reason: "matched", mismatchPercentage: 0, threshold: 0.1, tool: "t" };
+  const modified = { ...unchanged, verdict: "modified", reason: "repeated-cross-build-delta", mismatchPercentage: 0.4, regions: [{ location: "center" }] };
+  assert.deepEqual(decideReview("screen", unchanged, summary([unstable])), { status: "unchanged", description: "No visible change" });
+  const pixels = decideReview("screen", modified, summary([unstable]));
+  assert.deepEqual([pixels.status, pixels.description, pixels.facts.length], ["modified", "Visual change · 0.4% · center", 1]);
+  const real = decideReview("screen", modified, summary([{ category: "accessibility", templateId: "accessibility.label-changed", bullet: 'Changed accessibility label from "Submit" to "Save".' }, unstable]));
+  assert.equal(real.description, 'Changed accessibility label from "Submit" to "Save".');
+  assert.equal(decideReview("none", modified, summary([unstable])).description, 'Runtime state differs: Text varies between captures of the same build: "2m" / "4m" / "3m".');
+  // A variant is named by what else differs, ahead of the runtime text.
+  const target = { category: "interaction", templateId: "interaction.target-changed", bullet: "Changed where “Open” leads." };
+  assert.equal(decideReview("none", modified, summary([unstable, target])).description, "Runtime state differs: Changed where “Open” leads.");
+});
+
+test("text that varies between both builds' own verified appearances is runtime state; an unverified one is no evidence", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "explore-public-evidence-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const capture = async (unverifiedHeadDark) => {
+    const base = await side(join(root, `${unverifiedHeadDark}`), "base", manifests.base);
+    const head = await side(join(root, `${unverifiedHeadDark}`), "head", manifests.head);
+    const labels = { base: ["edited 2m ago", "edited 3m ago"], head: ["edited 4m ago", "edited 5m ago"] };
+    for (const [name, current] of [["base", base], ["head", head]]) {
+      current.bundle.runtimeProfile = { deviceModel: "iPhone 17", osVersion: "26.0", locale: "en-US", orientation: "portrait", colorScheme: "light", colorSchemes: "light,dark" };
+      await addDarkAppearance(current, manifests[name]);
+      for (const [index, suffix] of ["", "@dark"].entries()) {
+        const observation = current.map.observations.find((entry) => entry.id === `${name}-changed-observation${suffix}`);
+        observation.elements[0].label = labels[name][index];
+      }
+    }
+    if (unverifiedHeadDark) head.bundle.outcomes["changed@dark"] = { status: "captured", attempts: 1, landing: "unverified" };
+    return assessPublicEvidence({ plan: plan(), base, head, profile: "explore:bundle", agentDeviceCommand: "/nonexistent/agent-device", measure: measurer({}) });
+  };
+  const verified = await capture(false);
+  assert.deepEqual(verified.surfaces.changed.review, { status: "unchanged", description: "No visible change" });
+  assert.deepEqual(verified.surfaces["changed@dark"].review, { status: "unchanged", description: "No visible change" });
+  // The head's dark capture may show another screen: the light label difference stays a change.
+  const unverified = await capture(true);
+  assert.equal(unverified.surfaces.changed.review.status, "modified");
+  assert.deepEqual(unverified.surfaces.changed.review.facts.map((fact) => fact.templateId), ["accessibility.label-changed"]);
 });
 
 test("a foldable's rail clock pill is left out of the verdict like a phone's status bar", () => {

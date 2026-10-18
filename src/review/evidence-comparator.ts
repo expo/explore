@@ -70,6 +70,11 @@ export type CommonSurfaceComparatorInput = {
   visualAssessment: VisualEvidenceAssessment;
   /** Explicit stable runtime scope; semantic meaning is never inferred from diff pixels. */
   visualScope?: VisualReviewerChange["scope"];
+  /**
+   * The screen's other appearances, captured and verified on both builds. A label that varies between each build's own
+   * captures, in the words that differ between the builds, is runtime state, and its difference is reported as such.
+   */
+  siblings?: readonly { base: MatchedSurfaceSide; head: MatchedSurfaceSide }[];
 };
 
 export type EvidenceComparatorInput =
@@ -139,6 +144,7 @@ const CHANGE_PRIORITY: Record<SupportedReviewerChange["kind"], number> = {
   "element-added": 20,
   "element-removed": 20,
   "visible-text-changed": 30,
+  "unstable-text": 35,
   "action-target-changed": 40,
   "accessibility-label-changed": 50,
   "accessibility-role-changed": 50,
@@ -772,10 +778,76 @@ function actionTarget(side: ResolvedSide, element: ObservedElement): ActionTarge
   return target ? { kind: "target", target } : { kind: "none", evidenceRefs: [] };
 }
 
+type ResolvedSibling = { base: ResolvedSide; head: ResolvedSide };
+
+function resolveSiblings(input: CommonSurfaceComparatorInput, requiredSamples: 1 | 3): ResolvedSibling[] {
+  const resolve = (side: "base" | "head", sibling: MatchedSurfaceSide) => {
+    const screenId = sibling.map.observations.find((candidate) => candidate.id === sibling.observationId)?.screenId;
+    const resolution = screenId === undefined ? undefined : resolveSide(side, sibling, { ...input.impact, id: screenId }, requiredSamples);
+    // A sibling is evidence only when it resolves as cleanly as a comparison would.
+    return resolution?.kind === "resolved" && resolution.side.issues.length === 0 ? resolution.side : undefined;
+  };
+  return (input.siblings ?? []).flatMap((sibling) => {
+    const base = resolve("base", sibling.base);
+    const head = resolve("head", sibling.head);
+    return base && head ? [{ base, head }] : [];
+  });
+}
+
+function sameBounds(left: ElementBounds | undefined, right: ElementBounds | undefined): boolean {
+  return !!left && !!right && left.x === right.x && left.y === right.y && left.width === right.width && left.height === right.height;
+}
+
+/** The element at the same place in another capture: the one of its role with its identifier or, without one, its bounds. */
+function counterpart(element: ObservedElement, other: ResolvedSide): ObservedElement | undefined {
+  const identifier = compact(element.identifier ?? "");
+  const bounds = boundsOf(element);
+  const candidates = other.elements.filter((candidate) => candidate.role === element.role && (identifier
+    ? compact(candidate.identifier ?? "") === identifier
+    : !compact(candidate.identifier ?? "") && sameBounds(bounds, boundsOf(candidate))));
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+/** The word positions at which two labels differ, or undefined when they have different numbers of words. */
+function changedWords(left: string, right: string): number[] | undefined {
+  const leftWords = left.split(" ");
+  const rightWords = right.split(" ");
+  return leftWords.length === rightWords.length
+    ? leftWords.flatMap((word, index) => word === rightWords[index] ? [] : [index])
+    : undefined;
+}
+
+/**
+ * What the head showed in its other appearance, when a label's difference between the builds is runtime state: each
+ * build shows the label differently in its own two appearances, the other appearance differs between the builds too,
+ * and every word that differs between the builds is one that varies within a build. A label that follows the
+ * appearance ("Switch to dark mode") does not vary within a build that broke it, or keeps a word that changed, so
+ * its change is still a change.
+ */
+function unstableWithin(base: ObservedElement, head: ObservedElement, siblings: readonly ResolvedSibling[]): string | undefined {
+  const baseLabel = compact(base.label);
+  const headLabel = compact(head.label);
+  for (const sibling of siblings) {
+    const baseOther = compact(counterpart(base, sibling.base)?.label ?? "");
+    const headOther = compact(counterpart(head, sibling.head)?.label ?? "");
+    if (!baseLabel || !headLabel || !baseOther || !headOther) continue;
+    const withinBase = changedWords(baseLabel, baseOther);
+    const withinHead = changedWords(headLabel, headOther);
+    const across = changedWords(baseLabel, headLabel);
+    const acrossOther = changedWords(baseOther, headOther);
+    if (!withinBase?.length || !withinHead?.length || !across?.length || !acrossOther?.length) continue;
+    const varying = new Set([...withinBase, ...withinHead]);
+    if ([...across, ...acrossOther].every((index) => varying.has(index))) return headOther;
+  }
+  return undefined;
+}
+
 function comparePair(
   pair: ElementPair,
   base: ResolvedSide,
   head: ResolvedSide,
+  /** What the head showed in its other appearance when this element's label is runtime state. */
+  within?: string,
 ): { facts: SupportedInput[]; issues: IssueInput[] } {
   const facts: SupportedInput[] = [];
   const issues: IssueInput[] = [];
@@ -784,6 +856,10 @@ function comparePair(
   const headLabel = compact(pair.head.label);
   const baseAnnotation = base.annotationsByElementId.get(pair.base.elementId);
   const headAnnotation = head.annotationsByElementId.get(pair.head.elementId);
+  // Runtime state replaces a label change only where the label comparison itself holds: provenance still decides first.
+  const labelChange = (change: SupportedReviewerChange): SupportedReviewerChange => within
+    ? { kind: "unstable-text", subjectRole: reviewerRole(pair.head.role), before: baseLabel, after: headLabel, within }
+    : change;
 
   if (baseLabel !== headLabel) {
     if (baseAnnotation && headAnnotation) {
@@ -793,14 +869,14 @@ function comparePair(
       } else if (!baseLabel || !headLabel) {
         issues.push(inconclusive("Visible-title comparison is missing before or after text.", refs));
       } else {
-        facts.push(supported({
+        facts.push(supported(labelChange({
           kind: "visible-text-changed",
           subjectRole: subject.subjectRole,
           subjectLabel: subject.subjectLabel,
           textKind: pair.head.role === "button" ? "title" : "label",
           before: baseLabel,
           after: headLabel,
-        }, refs));
+        }), refs));
       }
     } else if (baseAnnotation || headAnnotation) {
       issues.push(inconclusive(
@@ -810,12 +886,12 @@ function comparePair(
     } else if (!baseLabel || !headLabel) {
       issues.push(inconclusive("Accessibility label comparison is missing before or after text.", refs));
     } else {
-      facts.push(supported({
+      facts.push(supported(labelChange({
         kind: "accessibility-label-changed",
         subjectRole: reviewerRole(pair.head.role),
         before: baseLabel,
         after: headLabel,
-      }, refs));
+      }), refs));
     }
   }
   if (pair.base.role !== pair.head.role) {
@@ -1110,6 +1186,27 @@ function commonResult(input: CommonSurfaceComparatorInput): EvidenceComparatorRe
     gone = base.elements.filter(element => content(element, headWords));
     arrived = head.elements.filter(element => content(element, baseWords));
   }
+  // Text without an identifier is matched by its label, so a label that changed on its own leaves as one element and
+  // arrives as another: the one of its role at the same place on both sides is runtime state when its label is.
+  const siblings = mixedBackends ? [] : resolveSiblings(input, input.impact.baseSamples);
+  const runtimeText = { base: new Set<string>(), head: new Set<string>() };
+  for (const removed of siblings.length ? specificByLabel(gone) : []) {
+    const added = counterpart(removed, head);
+    if (!added || !arrived.includes(added) || counterpart(added, base) !== removed) continue;
+    const within = unstableWithin(removed, added, siblings);
+    if (!within) continue;
+    runtimeText.base.add(compact(removed.label));
+    runtimeText.head.add(compact(added.label));
+    facts.push(supported({
+      kind: "unstable-text",
+      subjectRole: reviewerRole(added.role),
+      before: compact(removed.label),
+      after: compact(added.label),
+      within,
+    }, [elementRef("base", removed), elementRef("head", added)]));
+  }
+  gone = gone.filter((element) => !runtimeText.base.has(compact(element.label)));
+  arrived = arrived.filter((element) => !runtimeText.head.has(compact(element.label)));
   for (const element of outermost(specificByLabel(gone))) {
     const label = compact(element.label);
     if (!label) {
@@ -1141,7 +1238,7 @@ function commonResult(input: CommonSurfaceComparatorInput): EvidenceComparatorRe
     }
   }
   for (const pair of pairing.pairs) {
-    const comparison = comparePair(pair, base, head);
+    const comparison = comparePair(pair, base, head, unstableWithin(pair.base, pair.head, siblings));
     facts.push(...comparison.facts);
     issues.push(...comparison.issues);
   }
@@ -1154,7 +1251,7 @@ function commonResult(input: CommonSurfaceComparatorInput): EvidenceComparatorRe
   const visual = visualFact(input, base, head);
   // Pixels always move when an element appears or its text changes. The generic styling line
   // only informs when nothing in the accessibility tree accounts for the difference.
-  const explained = facts.length > 0 && input.visualScope?.kind !== "landmark";
+  const explained = facts.some((fact) => fact.change.kind !== "unstable-text") && input.visualScope?.kind !== "landmark";
   if (visual.fact && !explained) facts.push(visual.fact);
   if (visual.issue) issues.push(visual.issue);
 

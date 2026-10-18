@@ -28,6 +28,7 @@ export type ReviewerChangeTemplateId =
   | "element.removed"
   | "visible-text.changed-short"
   | "visible-text.changed-long"
+  | "visible-text.unstable-within-build"
   | "interaction.target-changed"
   | "accessibility.label-changed"
   | "accessibility.role-changed"
@@ -95,6 +96,19 @@ export type VisibleTextReviewerChange = {
   after: string;
 };
 
+/**
+ * A label that differs between the two builds but also between two captures of the same build (its light and dark
+ * appearances): a clock, a relative time, a random name. Runtime state, not a change.
+ */
+export type UnstableTextReviewerChange = {
+  kind: "unstable-text";
+  subjectRole: ReviewerSubjectRole;
+  before: string;
+  after: string;
+  /** What the same build showed in its other capture. */
+  within: string;
+};
+
 export type InteractionReviewerChange = {
   kind: "action-target-changed";
   subjectRole: ReviewerSubjectRole;
@@ -134,6 +148,7 @@ export type SupportedReviewerChange =
   | ScreenReviewerChange
   | ElementReviewerChange
   | VisibleTextReviewerChange
+  | UnstableTextReviewerChange
   | InteractionReviewerChange
   | AccessibilityReviewerChange
   | VisualReviewerChange
@@ -383,6 +398,28 @@ function buildFact(change: SupportedReviewerChange, evidenceRefs: string[]): Can
           before,
           after,
           priority: PRIORITY.interaction,
+          evidenceRefs,
+        },
+      };
+    }
+    case "unstable-text": {
+      const before = compact(change.before);
+      const after = compact(change.after);
+      const within = compact(change.within);
+      if (!before || !after || !within) return invalidChange("An unstable-text change requires all three labels.", evidenceRefs);
+      if (before === after) return invalidChange("An unstable-text change has identical labels.", evidenceRefs);
+      const seen = [...new Set([before, within, after])];
+      return {
+        kind: "fact",
+        fact: {
+          category: "visible-text",
+          templateId: "visible-text.unstable-within-build",
+          bullet: `Text varies between captures of the same build: ${seen.map(quote).join(" / ")}.`,
+          subjectRole: change.subjectRole,
+          subjectLabel: after,
+          before,
+          after,
+          priority: PRIORITY["visible-text"],
           evidenceRefs,
         },
       };
