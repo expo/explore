@@ -308,11 +308,14 @@
 .compare-frame-wrap { position: relative; }
 /* Flip: one frame, centred under its Before/After names, in Compare and in the Inspector. The wrap
    is a flex row because a block sized by height + aspect-ratio does not shrink-wrap in every engine
-   (WebKit left the frame at the left edge). */
+   (WebKit left the frame at the left edge). A stacked landscape pair whose frames are held to part
+   of the window's height centres them the same way. */
 .compare-stage.mode-flip .compare-side,
-.sidebar-review-stage.mode-flip .compare-side { width: 100%; align-items: center; }
+.sidebar-review-stage.mode-flip .compare-side,
+.sidebar-review-stage.mode-split.landscape .compare-side { width: 100%; align-items: center; }
 .compare-stage.mode-flip .compare-frame-wrap,
-.sidebar-review-stage.mode-flip .compare-frame-wrap { display: flex; justify-content: center; }
+.sidebar-review-stage.mode-flip .compare-frame-wrap,
+.sidebar-review-stage.mode-split.landscape .compare-frame-wrap { display: flex; justify-content: center; }
 .compare-frame {
   position: relative;
   display: block;
@@ -497,11 +500,13 @@
   --compare-frame-height: min(calc(100cqw / var(--compare-aspect)), 70dvh);
 }
 /* A landscape screenshot (an opened iPhone Duo, an iPad on its side) is too wide for two frames to
-   share the panel: Before stacks over After, each the panel's width. */
+   share the panel: Before stacks over After, each the panel's width, up to about a third of
+   the window's height (half of Swipe's and Flip's one frame), so a near-square pair (an unfolded
+   foldable) and a short window still show both. */
 .sidebar-review-stage.mode-split.landscape {
   flex-direction: column;
   align-items: stretch;
-  --compare-frame-height: calc(100cqw / var(--compare-aspect));
+  --compare-frame-height: min(calc(100cqw / var(--compare-aspect)), 35dvh);
 }
 /* Split's labels sit inside the frames here, as Swipe's do. */
 .compare-side-tag {

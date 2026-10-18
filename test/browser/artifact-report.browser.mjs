@@ -1571,3 +1571,33 @@ test("Swipe takes the loaded screenshot's shape when it differs from the recorde
   })).toBe(true);
   assert.deepEqual(errors, []);
 });
+
+test("a near-square landscape pair in a short window keeps both halves on screen, centred", async t => {
+  // An unfolded foldable's inner display on its side: barely wider than tall.
+  const foldable = sizedCapture(960, 800);
+  const report = reportFixture();
+  for (const side of ["baseImage", "headImage"]) Object.assign(report.review.surfaces[0][side], { width: 960, height: 800 });
+  const { bytes } = await imageArchive([foldable.bytes], 0, report);
+  const { page, errors } = await harness(t, Buffer.from(bytes), { app: true });
+  await page.setViewportSize({ width: 1440, height: 760 });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const stage = page.locator(".sidebar-review-stage");
+  await expect(stage).toHaveClass(/landscape/);
+  const frames = page.locator(".sidebar-review .compare-frame");
+  await expect(frames).toHaveCount(2);
+  await expect(frames.nth(1).locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  const box = locator => locator.evaluate(element => {
+    const { left, top, width, height, bottom } = element.getBoundingClientRect();
+    return { left, top, width, height, bottom };
+  });
+  const [before, after, panel] = await Promise.all([box(frames.nth(0)), box(frames.nth(1)), box(stage)]);
+  const viewport = page.viewportSize();
+  assert.ok(after.top >= before.top + before.height, `After is under Before: ${JSON.stringify({ before, after })}`);
+  assert.ok(before.top >= 0 && after.bottom <= viewport.height, `Both halves are on screen: ${JSON.stringify({ before, after, viewport })}`);
+  for (const frame of [before, after]) {
+    assert.ok(frame.width < panel.width - 2, `The frame is held under the panel's width: ${JSON.stringify({ frame, panel })}`);
+    assert.ok(Math.abs(frame.left + frame.width / 2 - (panel.left + panel.width / 2)) <= 1, `The frame is centred: ${JSON.stringify({ frame, panel })}`);
+    assert.ok(Math.abs(frame.width / frame.height - 960 / 800) < 0.02, `The frame keeps the screenshot's shape: ${JSON.stringify(frame)}`);
+  }
+  assert.deepEqual(errors, []);
+});
