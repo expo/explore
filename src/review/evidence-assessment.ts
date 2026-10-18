@@ -190,9 +190,12 @@ export function ignoreSystemBands(measurement: ScreenshotDiffMeasurement, bands:
 export function ignoreSystemRegions(measurement: ScreenshotDiffMeasurement, system: readonly SystemRegion[]):
 { measurement: ScreenshotDiffMeasurement; ignoredStatusBar: number; ignoredHomeIndicator: number } {
   if (measurement.match || measurement.regions.length === 0 || system.length === 0) return { measurement, ignoredStatusBar: 0, ignoredHomeIndicator: 0 };
+  // agent-device rounds each of x, y, width and height to 0.01%, so an edge it reports can be up to 0.01% past the real one.
+  const slack = 0.015;
   const inside = (region: VisualDiffRegion, area: SystemRegion) => {
     const rect = region.normalizedRect;
-    return rect.x >= area.x && rect.y >= area.y && rect.x + rect.width <= area.x + area.width && rect.y + rect.height <= area.y + area.height;
+    return rect.x >= area.x - slack && rect.y >= area.y - slack
+      && rect.x + rect.width <= area.x + area.width + slack && rect.y + rect.height <= area.y + area.height + slack;
   };
   const kindOf = (region: VisualDiffRegion) => system.find((area) => inside(region, area))?.kind;
   const ignoredRegions = measurement.regions.filter((region) => kindOf(region) !== undefined);

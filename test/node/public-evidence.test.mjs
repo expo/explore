@@ -538,3 +538,18 @@ test("a foldable's rail clock pill is left out of the verdict like a phone's sta
   const both = ignoreSystemRegions(measurement([closedClock, indicator]), closed);
   assert.deepEqual([both.ignoredStatusBar, both.ignoredHomeIndicator, both.measurement.match], [1, 1, true]);
 });
+
+test("only an iPhone foldable gets the rail pill, and a region reaching the right edge stays inside a band", () => {
+  // An Android device whose name matches keeps its own top band; the iPhone Duo's rail is not on its screen.
+  assert.deepEqual(systemRegions({ platform: "android", device: "Surface Duo", pose: "open" }), [{ kind: "status-bar", x: 0, y: 0, width: 100, height: 5 }]);
+
+  // agent-device rounds x and width to 0.01% each, so a region that ends at the right edge can read as ending at 100.01%.
+  const region = (rect) => ({ index: 0, rect: { x: 0, y: 0, width: 1, height: 1 }, normalizedRect: rect, differentPixels: 400, shareOfDiffPercentage: 100, densityPercentage: 50, shape: "wide", size: "small", location: "top-right", dominantChange: "brighter" });
+  const measurement = (regions) => ({ baselinePath: "b", currentPath: "h", totalPixels: 2843532, differentPixels: 400 * regions.length, mismatchPercentage: 0.01, match: false, regions });
+  const battery = region({ x: 0.63, y: 2, width: 99.38, height: 2 }); // minX 9 of 1440 px
+  assert.equal(ignoreSystemBands(measurement([battery]), { top: 6.5, bottom: 0 }).ignoredTop, 1);
+  const indicator = region({ x: 0.63, y: 97.5, width: 99.38, height: 1 });
+  assert.equal(ignoreSystemRegions(measurement([indicator]), systemRegions({ platform: "ios", device: "iPhone 17" })).ignoredHomeIndicator, 1);
+  // The slack is the rounding, no more: a region a tenth of a percent past the band is still kept.
+  assert.equal(ignoreSystemBands(measurement([region({ x: 10, y: 2, width: 20, height: 4.6 })]), { top: 6.5, bottom: 0 }).ignoredTop, 0);
+});

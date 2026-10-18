@@ -181,16 +181,16 @@ const DUO_PANELS = {
   inner: { width: 951, height: 669, statusBar: { x: 883, y: 34, width: 40, height: 64 } },
 } as const;
 const DUO_STATUS_BAR_PADDING_POINTS = 4;
-const isFoldable = (device: string | undefined) => /\bduo\b/i.test(device ?? "");
+const isFoldable = (platform: "ios" | "android" | undefined, device: string | undefined) => platform !== "android" && /\bduo\b/i.test(device ?? "");
 
 /**
  * The areas the verdict leaves out for a capture: the platform's status-bar band and, on iOS, its home-indicator
- * band; on a foldable, the lit panel's status-bar pill instead of a top band. `pose` is the capture's device pose
+ * band; on an iPhone foldable, the lit panel's status-bar pill instead of a top band. `pose` is the capture's device pose
  * (closed lights the outer panel; open and half-open the inner one); a foldable with none boots closed.
  */
 export function systemRegions(options: { platform?: "ios" | "android" | undefined; device?: string | undefined; pose?: string | undefined }): SystemRegion[] {
   const regions: SystemRegion[] = [];
-  if (isFoldable(options.device)) {
+  if (isFoldable(options.platform, options.device)) {
     const panel = options.pose === "open" || options.pose === "half-open" ? DUO_PANELS.inner : DUO_PANELS.outer;
     const pad = DUO_STATUS_BAR_PADDING_POINTS;
     const percent = (value: number, of: number) => Math.round((value / of) * 10000) / 100;
