@@ -1,3 +1,4 @@
+import type { PublicReview } from "../../../../src/contracts/capture";
 import { useEffect, useRef } from "react";
 import { GitCompareArrows, PanelRight, ScanSearch, X } from "lucide-react";
 import { Tooltip } from "../shared/tooltip";
@@ -29,6 +30,8 @@ type RightPanelProps = {
   onOpenCompare?: (() => void) | undefined;
   /** The changed screens in review order, and how to step to one, for the sidebar review. */
   review?: { order: readonly ChangedScreen[]; onSelectScreen: (id: string) => void } | undefined;
+  /** The public review, for a flow frame's flow (its steps and e2e source). */
+  flowReview?: PublicReview | undefined;
 };
 
 export function RightPanel(props: RightPanelProps) {
@@ -149,6 +152,7 @@ export function RightPanel(props: RightPanelProps) {
           onSelectScreen={props.onSelectScreen}
           onOpenCompare={props.onOpenCompare}
           review={props.review}
+          flowReview={props.flowReview}
         />
       </AutoHideScrollArea>
     </aside>

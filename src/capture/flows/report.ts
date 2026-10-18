@@ -6,10 +6,14 @@
 import type { FlowStatus, FlowStepStatus } from "../../contracts/capture.js";
 
 export type FlowFrameSummary = { key: string; label: string; path: string; stepIndex: number; capturedAt: string };
-export type FlowStepSummary = { api: string; label: string; status: FlowStepStatus; durationMs: number; frame?: string; error?: { code: string; message: string } };
+export type FlowStepSummary = { api: string; label: string; status: FlowStepStatus; durationMs: number; frame?: string; error?: { code: string; message: string };
+  /** The line of the test file the step was called from, when e2e recorded one. */
+  line?: number };
 export type FlowTestSummary = {
   id: string; file: string; title: string; status: FlowStatus; durationMs: number;
   error?: { code: string; message: string };
+  /** The line of the test file the test is declared on, when e2e recorded one. */
+  line?: number;
   steps: FlowStepSummary[];
   frames: FlowFrameSummary[];
 };
@@ -59,6 +63,7 @@ export function summarizeFlowReport(report: unknown): FlowTestSummary[] {
         status: STEP_STATUSES.includes(step.status as FlowStepStatus) ? step.status as FlowStepStatus : "failed", durationMs: count(step.durationMs) };
       const error = serializedError(step.error);
       if (error) summary.error = error;
+      if (isRecord(step.source) && step.source.file === file && Number.isSafeInteger(step.source.line) && (step.source.line as number) > 0) summary.line = step.source.line as number;
       if (summary.api === "app.screenshot" && summary.status === "passed" && Array.isArray(step.artifacts) && step.artifacts.length === 1) {
         const artifact = artifacts.get(String(step.artifacts[0]));
         if (artifact?.kind === "screenshot" && typeof artifact.path === "string") {
@@ -73,8 +78,9 @@ export function summarizeFlowReport(report: unknown): FlowTestSummary[] {
       steps.push(summary);
     }
     const summaryError = serializedError(attempt?.error);
+    const line = isRecord(result.source) && result.source.file === file && Number.isSafeInteger(result.source.line) && (result.source.line as number) > 0 ? result.source.line as number : undefined;
     summaries.push({ id: flowId(file, titlePath), file, title: titlePath.join(" › "), status, durationMs: count(attempt?.durationMs),
-      ...(summaryError ? { error: summaryError } : {}), steps, frames });
+      ...(summaryError ? { error: summaryError } : {}), ...(line ? { line } : {}), steps, frames });
   }
   return summaries;
 }

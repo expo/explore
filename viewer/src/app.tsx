@@ -1658,6 +1658,7 @@ function ViewerApp() {
         onSelectScreen={goToScreenKeepingView}
         onOpenCompare={compareOrder.length > 0 ? () => selectCanvas("compare") : undefined}
         review={compareOrder.length > 0 ? { order: compareOrder, onSelectScreen: openChangedScreen } : undefined}
+        flowReview={loadedPublicReview ?? undefined}
       />}
       {error && payload && (
         <button className="sync-warning" onClick={() => void load()}>

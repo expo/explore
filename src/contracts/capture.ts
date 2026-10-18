@@ -74,6 +74,8 @@ export type BundleFlowStep = {
   /** The key under `frames` of the screenshot this step took. */
   frame?: string;
   error?: { code: string; message: string };
+  /** The line of the test file the step was called from, when e2e recorded one. */
+  line?: number;
 };
 /**
  * One flow (an e2e test) the capture ran on this revision: its outcome, its steps, and the frames it took. The frames
@@ -82,6 +84,8 @@ export type BundleFlowStep = {
 export type BundleFlow = {
   file: string; title: string; status: FlowStatus; durationMs: number;
   error?: { code: string; message: string };
+  /** The line of the test file the test is declared on, when e2e recorded one. */
+  line?: number;
   steps: BundleFlowStep[];
   frames: Record<string, FlowFrame>;
 };

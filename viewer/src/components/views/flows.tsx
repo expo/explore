@@ -1,5 +1,6 @@
 import type { PublicFlowEvidence, PublicFlowSide, PublicReview } from "../../../../src/contracts/capture";
 import { artifactUrl, type Artifact } from "../../utils/model";
+import { flowSourceHref } from "../../utils/flow-source";
 import { ScreenshotImage } from "../shared/screenshot-image";
 import "./flows.css";
 
@@ -75,7 +76,7 @@ function Frame(props: { entry: PublicFlowEvidence; frame: PublicFlowEvidence["fr
   );
 }
 
-function Steps(props: { entry: PublicFlowEvidence }) {
+function Steps(props: { entry: PublicFlowEvidence; review: PublicReview }) {
   // The steps as head ran them; base's are shown when head did not run at all.
   const side: Side = props.entry.head ? "head" : "base";
   const flow = props.entry[side];
@@ -89,8 +90,11 @@ function Steps(props: { entry: PublicFlowEvidence }) {
         return (
           <li key={index} className={`flow-step${failed ? " failed" : ""}${after ? " skipped" : ""}${step.frame ? " frame" : ""}`}>
             <span className="flow-step-number">{index + 1}</span>
-            <span className="flow-step-api">{step.api}</span>
-            <span className="flow-step-label">{step.label}</span>
+            {flowSourceHref(props.review, props.entry.file, step.line) ? (
+              <a className="flow-step-source" href={flowSourceHref(props.review, props.entry.file, step.line)} target="_blank" rel="noreferrer" title={`${props.entry.file}:${step.line}`}>
+                <span className="flow-step-api">{step.api}</span> <span className="flow-step-label">{step.label}</span>
+              </a>
+            ) : <><span className="flow-step-api">{step.api}</span> <span className="flow-step-label">{step.label}</span></>}
             {step.frame ? <span className="flow-step-frame">frame · {step.frame}</span> : null}
             {failed && step.error ? <span className="flow-step-error">{step.error.message}</span> : null}
           </li>
@@ -120,7 +124,7 @@ export function FlowsView(props: { review: PublicReview; phone?: boolean; onOpen
             <header className="flow-header">
               <div>
                 <h2 id={`flow-${entry.id}`}>{entry.title}</h2>
-                <p className="flow-file">{entry.file}</p>
+                <p className="flow-file">{flowSourceHref(props.review, entry.file, entry.head?.line ?? entry.base?.line) ? <a href={flowSourceHref(props.review, entry.file, entry.head?.line ?? entry.base?.line)} target="_blank" rel="noreferrer">{entry.file}</a> : entry.file}</p>
               </div>
               <div className="flow-outcomes">
                 <span className="flow-outcome"><span className="flow-outcome-side">After</span><span className={`flow-status tone-${tone}`}>{sideSummary(entry, "head")}</span></span>
@@ -136,7 +140,7 @@ export function FlowsView(props: { review: PublicReview; phone?: boolean; onOpen
               <ol className="flow-filmstrip" aria-label="Frames">
                 {entry.frames.map(frame => <Frame key={frame.key} entry={entry} frame={frame} {...(props.onOpenFrame ? { onOpen: props.onOpenFrame } : {})} />)}
               </ol>
-              <Steps entry={entry} />
+              <Steps entry={entry} review={props.review} />
             </div>
           </section>
         );

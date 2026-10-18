@@ -138,9 +138,11 @@ function validFlowSide(value: unknown): value is PublicFlowSide {
   if (!value || typeof value !== "object" || Object.keys(value).some(key => !["status", "durationMs", "error", "steps", "frames"].includes(key))) return false;
   const side = value as PublicFlowSide;
   return FLOW_STATUSES.has(side.status) && Number.isSafeInteger(side.durationMs) && side.durationMs >= 0
+    && (side.line === undefined || (Number.isSafeInteger(side.line) && side.line > 0))
     && (side.error === undefined || (typeof side.error?.code === "string" && typeof side.error.message === "string"))
     && Array.isArray(side.steps) && side.steps.length <= 10_000 && side.steps.every(step => step && typeof step === "object"
-      && Object.keys(step).every(key => ["api", "label", "status", "durationMs", "frame", "error"].includes(key))
+      && Object.keys(step).every(key => ["api", "label", "status", "durationMs", "frame", "error", "line"].includes(key))
+      && (step.line === undefined || (Number.isSafeInteger(step.line) && step.line > 0))
       && typeof step.api === "string" && typeof step.label === "string" && STEP_STATUSES.has(step.status) && Number.isSafeInteger(step.durationMs)
       && (step.frame === undefined || (typeof step.frame === "string" && Object.hasOwn(side.frames, step.frame))))
     && side.frames !== null && typeof side.frames === "object" && Object.entries(side.frames).every(([key, frame]) => /^[a-z0-9-]+$/.test(key) && validFlowFrame(frame));

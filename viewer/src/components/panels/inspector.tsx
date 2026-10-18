@@ -1,3 +1,5 @@
+import type { PublicFlowEvidence, PublicReview } from "../../../../src/contracts/capture";
+import { flowOfScreen, flowSourceHref } from "../../utils/flow-source";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { LAUNCH_SURFACE_ID } from "../../../../src/contracts/capture";
 import { isEmbeddedArtifactUrl, resolveEmbeddedArtifactUrl } from "../../utils/embedded-report";
@@ -415,6 +417,8 @@ type InspectorPanelProps = {
   onOpenCompare?: (() => void) | undefined;
   /** The changed screens in review order, and how to step to one, for the sidebar review. */
   review?: { order: readonly ChangedScreen[]; onSelectScreen: (id: string) => void } | undefined;
+  /** The public review, for a flow frame's flow (its steps and e2e source). */
+  flowReview?: PublicReview | undefined;
 };
 
 /** The URL to show for an artifact, resolving an embedded (self-contained report) reference lazily. */
@@ -461,6 +465,48 @@ function LaunchSection({ screen, index, note }: { screen: Screen; index: MapInde
   );
 }
 
+/** A flow frame's place in its flow: the step that took it, the steps around it, the outcome per side, and the e2e source. */
+function FlowSection(props: { context: { flow: PublicFlowEvidence; key: string }; review: PublicReview | undefined; onSelectScreen: (id: string) => void }) {
+  const { flow, key } = props.context;
+  const side = flow.head ?? flow.base;
+  const steps = side?.steps ?? [];
+  const stepIndex = steps.findIndex(step => step.frame === key);
+  const fileHref = flowSourceHref(props.review, flow.file, side?.line);
+  const outcome = (name: "base" | "head") => {
+    const run = flow[name];
+    if (!run) return "not run";
+    const failed = run.steps.findIndex(step => step.status !== "passed");
+    return run.status === "passed" || failed < 0 ? run.status : `${run.status} at step ${failed + 1}`;
+  };
+  return (
+    <section className="inspector-section flow-section">
+      <div className="section-title"><h3>Flow</h3></div>
+      <p className="flow-section-title">{flow.title}</p>
+      <p className="flow-section-file">{fileHref ? <a href={fileHref} target="_blank" rel="noreferrer">{flow.file}</a> : flow.file}</p>
+      <dl className="flow-section-outcomes">
+        <div><dt>After</dt><dd>{outcome("head")}</dd></div>
+        <div><dt>Before</dt><dd>{outcome("base")}</dd></div>
+      </dl>
+      {stepIndex >= 0 ? <p className="flow-section-step">Frame from step {stepIndex + 1} of {steps.length}</p> : null}
+      <ol className="flow-section-steps">
+        {steps.map((step, index) => {
+          const href = flowSourceHref(props.review, flow.file, step.line);
+          const frame = step.frame ? flow.frames.find(entry => entry.key === step.frame) : undefined;
+          const text = <><span className="flow-section-step-api">{step.api}</span> <span className="flow-section-step-label">{step.label}</span></>;
+          return (
+            <li key={index} className={`flow-section-step-row${index === stepIndex ? " current" : ""}${step.status !== "passed" ? " failed" : ""}`}>
+              <span className="flow-section-step-number">{index + 1}</span>
+              {href ? <a href={href} target="_blank" rel="noreferrer" title={`${flow.file}:${step.line}`}>{text}</a> : text}
+              {frame && frame.key !== key ? <button type="button" className="flow-section-step-frame" onClick={() => props.onSelectScreen(frame.id)}>frame · {frame.label}</button> : null}
+              {step.status !== "passed" && step.error ? <span className="flow-section-step-error">{step.error.message}</span> : null}
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
 export function InspectorPanel(props: InspectorPanelProps) {
   const { direction, screen } = props;
   const screenDiff = screen ? props.diff?.screens.get(screen.id) : undefined;
@@ -468,6 +514,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
   const { outgoing, incoming } = useMemo(
     () => inspectorTransitions(screen?.id, props.index), [screen?.id, props.index],
   );
+  const flowContext = useMemo(() => screen ? flowOfScreen(props.flowReview, screen.id) : undefined, [props.flowReview, screen]);
   // Only a screen whose comparison actually differs earns the Before → After layout. A screen
   // the review confirmed as unchanged reads like any other: one screenshot and its transitions.
   const showDiff = Boolean(
@@ -541,6 +588,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
 
       {screen.id.startsWith(LAUNCH_SURFACE_ID) ? <LaunchSection screen={screen} index={props.index} note={screenDiff?.note} /> : null}
 
+      {flowContext ? <FlowSection context={flowContext} review={props.flowReview} onSelectScreen={props.onSelectScreen} /> : (
       <section
         className={`inspector-section transition-section${transitions.length === 0 ? " is-empty" : ""}`}>
         <div className="section-title">
@@ -574,6 +622,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
           </div>
         )}
       </section>
+      )}
     </div>
   );
 }
