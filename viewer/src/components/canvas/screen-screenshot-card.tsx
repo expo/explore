@@ -91,12 +91,12 @@ export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
         <span className="screen-screenshot-slot">
           {props.leading}
           {/* With a pointer, what a click does is said once, zoom-independent, in the shared tooltip
-              after its usual delay; the selected screen is already in the Inspector. */}
+              after its usual delay; the selected screen is already in the Inspector. The button has
+              no title of its own, so no native tooltip joins it; the heading names the screen. */}
           <Tooltip label="Open in Inspector" placement="top" disabled={Boolean(props.selected)}>
           <button
             type="button"
             className="screen-screenshot-target"
-            title={props.plainTitle ? props.title : props.path}
             aria-label={props.ariaLabel ?? `Open ${props.plainTitle ? props.title : props.path}`}
             {...(props.ariaPressed !== undefined ? { "aria-pressed": props.ariaPressed } : {})}
             onClick={props.onClick}>

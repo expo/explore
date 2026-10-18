@@ -127,6 +127,13 @@ async function expectMapScreenSelectionDimming(
   }));
   const hoverTargetCount = options.hoverTargetCount ?? 1;
   expect(hoverableDimmedIndexes.length).toBeGreaterThanOrEqual(hoverTargetCount);
+  // A card fades through its frame's --map-card-opacity (the node itself stays opaque over the
+  // connectors). The property is not animated, so it reads what hover asks for at once.
+  const cardOpacities = () => screens.evaluateAll((nodes) => Object.fromEntries(nodes.map((node) => [
+    node.getAttribute("data-id") ?? "",
+    getComputedStyle(node.querySelector(":scope > .canvas-active-frame")!).getPropertyValue("--map-card-opacity").trim(),
+  ])));
+  const restingOpacities = await cardOpacities();
   let lastHoverTarget = dimmed.nth(hoverableDimmedIndexes[0]!);
 
   for (const index of hoverableDimmedIndexes.slice(0, hoverTargetCount)) {
@@ -171,13 +178,11 @@ async function expectMapScreenSelectionDimming(
     const unrelated = page.locator(
       ".map-canvas .react-flow__node-screen:not(.graph-node-hover-related):not(.canvas-node-exit)",
     );
-    expect(await unrelated.count()).toBeGreaterThan(0);
-    expect(await unrelated.evaluateAll((nodes) => nodes.every((node) => {
-      const style = getComputedStyle(node);
-      const image = node.querySelector(".screen-node-image img, .screen-node-image .image-placeholder");
-      return style.opacity === "1" && style.filter === "none"
-        && (image === null || getComputedStyle(image).opacity === "1");
-    }))).toBe(true);
+    const unrelatedIds = await unrelated.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-id") ?? ""));
+    expect(unrelatedIds.length).toBeGreaterThan(0);
+    const hoverOpacities = await cardOpacities();
+    expect(unrelatedIds.map((id) => hoverOpacities[id])).toEqual(unrelatedIds.map((id) => restingOpacities[id]));
+    expect(await unrelated.evaluateAll((nodes) => nodes.every((node) => getComputedStyle(node).filter === "none"))).toBe(true);
     await expect(page.locator(".map-canvas .screen-open-hint:visible")).toHaveCount(0);
     const activeEdges = page.locator(
       ".map-canvas .react-flow__edge.graph-edge-hover-related",
@@ -2001,6 +2006,67 @@ test("fits the visible Map screenshot frame to the capture's intrinsic ratio", a
   expect(metrics.slotBorder).toBe(0);
   expect(metrics.imageBorder).toBeGreaterThan(0);
   expect(metrics.slotBackground).toBe("rgba(0, 0, 0, 0)");
+});
+
+test("hovering a Map screen fades nothing and says Open in Inspector in a tooltip that keeps to the card", async ({ page }) => {
+  await serveSyntheticWorkspace(page);
+  await page.goto("/map");
+  const screens = page.locator(".map-canvas .react-flow__node-screen:not(.canvas-node-exit)");
+  await expect(screens.first()).toBeVisible();
+  await expect(page.locator(".map-canvas.canvas-focus-animating")).toHaveCount(0);
+  const cardOpacities = () => screens.evaluateAll((nodes) => nodes.map((node) => (
+    getComputedStyle(node.querySelector(":scope > .canvas-active-frame")!).getPropertyValue("--map-card-opacity").trim()
+  )));
+  const resting = await cardOpacities();
+  // A screen whose screenshot is under the pointer, with room above for the bubble.
+  const index = await screens.evaluateAll((nodes) => nodes.findIndex((node) => {
+    const target = node.querySelector(".screen-screenshot-target")!.getBoundingClientRect();
+    const hit = document.elementFromPoint(target.left + target.width / 2, target.top + target.height / 4);
+    return hit !== null && node.contains(hit) && target.top > 80 && target.bottom < window.innerHeight - 80;
+  }));
+  expect(index).toBeGreaterThanOrEqual(0);
+  const target = screens.nth(index).locator(".screen-screenshot-target");
+  // The tooltip says what a click does; no native title tooltip joins it.
+  await expect(target).not.toHaveAttribute("title");
+  // Hover once the camera rests, near the card's top so the pan below keeps the pointer on it.
+  const viewport = page.locator(".map-canvas .react-flow__viewport");
+  let transform = "";
+  await expect.poll(async () => {
+    const next = await viewport.evaluate((element) => getComputedStyle(element).transform);
+    const resting = next === transform;
+    transform = next;
+    return resting;
+  }).toBe(true);
+  const box = (await target.boundingBox())!;
+  await target.hover({ position: { x: box.width / 2, y: box.height / 4 } });
+  await expect(page.locator(".connection-canvas-surface.canvas-hovering")).toHaveCount(1);
+  const tooltip = page.locator(".tooltip", { hasText: "Open in Inspector" });
+  await expect(tooltip).toBeVisible();
+  expect(await cardOpacities()).toEqual(resting);
+  await expect(page.locator(".map-canvas .screen-open-hint:visible")).toHaveCount(0);
+  const clearance = async () => {
+    const [bubble, card] = await Promise.all([tooltip.boundingBox(), target.boundingBox()]);
+    return bubble && card ? card.y - (bubble.y + bubble.height) : Number.NaN;
+  };
+  expect(await clearance()).toBeGreaterThan(0);
+  // Panning with the pointer still on the card moves the card by transform; the bubble follows it
+  // rather than staying behind over the screenshot.
+  const before = await target.boundingBox();
+  await page.mouse.wheel(0, 40);
+  await expect.poll(async () => (await target.boundingBox())!.y).toBeLessThan(before!.y - 10);
+  await expect.poll(clearance).toBeGreaterThan(0);
+});
+
+test("a narrow window with a mouse gets the phone map's Open pill on the selected screen, as it has no tooltips", async ({ page }) => {
+  // The phone layout is a width, not a device: the first click there only selects, as a tap does.
+  await page.setViewportSize({ width: 800, height: 820 });
+  await serveSyntheticWorkspace(page);
+  await page.goto("/map?screen=area-0-screen-1");
+  expect(await page.evaluate(() => matchMedia("(hover: hover)").matches)).toBe(true);
+  await expect(page.locator(".app-shell.phone-layout")).toHaveCount(1);
+  const selected = page.locator(".map-canvas .react-flow__node-screen.selected");
+  await expect(selected.locator(".screen-open-hint")).toBeVisible();
+  await expect(page.locator(".map-canvas .screen-open-hint:visible")).toHaveCount(1);
 });
 
 test("fits a landscape Map capture at render time without app-specific dimensions", async ({ page }) => {

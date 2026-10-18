@@ -920,7 +920,7 @@ code {
 
 /* The phone map's open hint. The first tap there only selects, so the pill sits in the middle of
    the selected screenshot (always on the image whatever the slot's shape) and says what the next
-   tap does. With a pointer the card's tooltip carries the message and nothing covers the image. */
+   tap does. In a wider window the card's tooltip carries the message and nothing covers the image. */
 .screen-screenshot-target { cursor: pointer; }
 .screen-open-hint {
   position: absolute;
@@ -944,13 +944,12 @@ code {
   backdrop-filter: blur(6px);
 }
 .screen-open-hint > svg { width: 14px; height: 14px; flex: none; }
-/* Only a phone's map shows the pill, on the selected screen, where a second tap opens the Inspector.
-   With a pointer the screenshot button's tooltip says it instead, so nothing covers the image. */
-@media (hover: none) {
-  .phone-layout .map-canvas .screen-screenshot-card.selected .screen-open-hint {
-    display: inline-flex;
-    animation: screen-open-hint-in 140ms ease-out;
-  }
+/* Only the phone layout's map shows the pill, on the selected screen, where a second tap or click
+   opens the Inspector. That layout is a width, not a device, and has no tooltips, so a narrow
+   desktop window shows it too. Elsewhere the screenshot button's tooltip says it instead. */
+.phone-layout .map-canvas .screen-screenshot-card.selected .screen-open-hint {
+  display: inline-flex;
+  animation: screen-open-hint-in 140ms ease-out;
 }
 @keyframes screen-open-hint-in { from { opacity: 0; transform: translate(-50%, -40%); } }
 @media (prefers-reduced-motion: reduce) { .screen-open-hint { animation: none !important; } }
