@@ -1279,20 +1279,22 @@ test("a docs-only report with zero images and no EAS build opens Screens without
   await page.getByRole("button", { name: "Screens", exact: true }).click();
   await expect(page.locator(".screens-page .screens-cell")).toHaveCount(1);
   await expect(page.locator(".screens-page .diff-frame.diff-not-compared")).toHaveCount(1);
-  // The Inspector's missing screenshot matches the canvas node: the icon above a short label,
-  // centred in a phone-shaped preview frame.
+  // The Inspector's missing screenshot matches the canvas node: the icon above a short label and
+  // the report's reason for the gap, centred in a phone-shaped preview frame.
   await page.locator(".screens-page .screen-screenshot-target").click();
   const placeholder = page.locator(".inspector .inspector-preview .screenshot-placeholder");
-  await expect(placeholder).toHaveText("No screenshot");
+  await expect(placeholder.locator("span")).toHaveText("No screenshot");
+  await expect(placeholder.locator(".screenshot-placeholder-detail")).toHaveText("Not compared; no capture was recorded");
   const layout = await placeholder.evaluate(node => {
     const box = element => element.getBoundingClientRect();
     const frame = box(node.closest(".inspector-preview"));
     const icon = box(node.querySelector("svg"));
     const label = box(node.querySelector("span"));
+    const detail = box(node.querySelector(".screenshot-placeholder-detail"));
     return { frameRatio: frame.width / frame.height, iconSize: [icon.width, icon.height], iconAboveLabel: icon.bottom <= label.top,
       iconOffset: Math.abs(icon.left + icon.width / 2 - (frame.left + frame.width / 2)),
       labelOffset: Math.abs(label.left + label.width / 2 - (frame.left + frame.width / 2)),
-      verticalOffset: Math.abs((icon.top + label.bottom) / 2 - (frame.top + frame.height / 2)),
+      verticalOffset: Math.abs((icon.top + detail.bottom) / 2 - (frame.top + frame.height / 2)),
       labelSize: getComputedStyle(node.querySelector("span")).fontSize };
   });
   assert.deepEqual(layout.iconSize, [20, 20]);
