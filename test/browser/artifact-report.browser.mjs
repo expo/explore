@@ -86,7 +86,8 @@ async function harness(t, bytes, { app = false, open = true, name = fileName, re
           preview.queries = [...(preview.queries ?? []), url.search];
           if (preview.status && preview.status !== 200) { response.statusCode = preview.status; return response.end(preview.body ?? "Not found"); }
           response.setHeader("content-type", "application/json");
-          return response.end(served.manifest);
+          // A slow target (`delays` by query) keeps its manifest in flight while the reviewer moves on.
+          return void setTimeout(() => response.end(served.manifest), preview.delays?.[url.search] ?? 0);
         }
         if (preview && url.pathname.startsWith(`${pagePath}/assets/`)) {
           const asset = served.files.get(url.pathname.slice(pagePath.length + 1));
@@ -490,6 +491,61 @@ test("a hosted report from before targets still switches platforms by ?platform=
   await expect.poll(() => preview.queries).toContain("?platform=ios");
   await expect(page.locator(".app-shell")).toBeVisible();
   assert.equal(await page.evaluate(() => window.__samePage), true, "the switch stays on the page instead of reloading it");
+  assert.deepEqual(errors, []);
+});
+
+/** A two-platform deployment whose iOS manifest is slow, opened on Android with the platform menu ready. */
+async function slowSwitchHarness(t, token, delay) {
+  const report = reportFixture();
+  report.review.runtime = { ...report.review.runtime, platform: "android", platforms: ["ios", "android"] };
+  const preview = { token, listing: [{ platform: "ios" }, { platform: "android" }], delays: { "?platform=ios": delay } };
+  const opened = await harness(t, await archive(report), { app: true, reportIdentity: null, preview, query: "&platform=android" });
+  await expect(opened.page.locator(".app-shell")).toBeVisible();
+  const switchToIos = async () => {
+    await opened.page.getByRole("button", { name: "Platform: Android. Open another platform's report" }).click();
+    await opened.page.getByRole("menu", { name: "Platform" }).getByRole("menuitemradio").nth(0).click();
+    await opened.page.waitForURL(url => new URL(url).searchParams.get("platform") === "ios");
+  };
+  return { ...opened, preview, switchToIos };
+}
+
+test("a switch the prefetch joins keeps the report it shows open", { timeout: 60_000 }, async t => {
+  // The switch starts the iOS download before the prefetch does; the prefetch then waits on the same download.
+  const { page, errors, preview, switchToIos } = await slowSwitchHarness(t, "fghijklmnopqrstuvwxyz23456723456", 2500);
+  await switchToIos();
+  await expect(page.locator(".app-shell")).toBeVisible({ timeout: 10_000 });
+  assert.equal(preview.queries.filter(query => query === "?platform=ios").length, 1, "the switch and the prefetch share one download");
+  const screenshot = page.locator(".map-canvas img[data-screenshot-src]").first();
+  await expect(screenshot).toHaveAttribute("data-screenshot-state", "ready");
+  await expect.poll(() => screenshot.evaluate(image => image.naturalWidth)).toBe(32);
+  assert.deepEqual(errors, []);
+});
+
+test("a switch to a prefetched target lets go of the screenshots the other report showed", { timeout: 60_000 }, async t => {
+  const { page, errors, preview, switchToIos } = await slowSwitchHarness(t, "hijklmnopqrstuvwxyz2345672345672", 0);
+  const screenshot = page.locator(".map-canvas img[data-screenshot-src]").first();
+  await expect(screenshot).toHaveAttribute("data-screenshot-state", "ready");
+  const shown = await screenshot.getAttribute("src");
+  await expect.poll(() => preview.queries).toContain("?platform=ios");
+  await page.waitForTimeout(250);
+  await switchToIos();
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect.poll(() => page.evaluate(url => window.revokedUrls.includes(url), shown)).toBe(true);
+  await expect(screenshot).toHaveAttribute("data-screenshot-state", "ready");
+  assert.equal(preview.queries.filter(query => query === "?platform=ios").length, 1, "the switch opens the prefetched report without a download");
+  assert.deepEqual(errors, []);
+});
+
+test("going back during a switch shows the report the page was on, and the slow one does not replace it", { timeout: 60_000 }, async t => {
+  const { page, errors, switchToIos } = await slowSwitchHarness(t, "ghijklmnopqrstuvwxyz234567234567", 3000);
+  await switchToIos();
+  await page.goBack();
+  await page.waitForURL(url => new URL(url).searchParams.get("platform") === "android");
+  await expect(page.locator(".app-shell")).toBeVisible({ timeout: 1500 });
+  await page.locator(".app-shell").evaluate(shell => { shell.dataset.kept = "true"; });
+  await page.waitForTimeout(3500);
+  assert.equal(new URL(page.url()).searchParams.get("platform"), "android");
+  await expect(page.locator(".app-shell")).toHaveAttribute("data-kept", "true");
   assert.deepEqual(errors, []);
 });
 

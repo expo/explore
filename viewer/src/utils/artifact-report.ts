@@ -471,8 +471,16 @@ export class ArtifactReportArchive {
     this.close();
   }
 
-  /** Let go of the decoded screenshots a report nobody is looking at keeps; its index stays open for a quick return. */
+  /**
+   * Let go of every screenshot of a report nobody is looking at; its index stays open for a quick return. The Viewer that
+   * used them releases them against the report shown next, so the ones still in use are dropped here instead.
+   */
   trim(): void {
+    for (const load of this.queues.eager.splice(0).concat(this.queues.lazy.splice(0))) {
+      load.waiting?.drop(new Error("This screenshot is no longer in use."));
+    }
+    for (const load of this.loads.values()) if (load.url) URL.revokeObjectURL(load.url);
+    this.loads.clear();
     for (const { url } of this.retained.values()) URL.revokeObjectURL(url);
     this.retained.clear();
     this.retainedBytes = 0;
@@ -498,10 +506,11 @@ export class ArtifactReportArchive {
       if (actual !== load.sha256) throw new Error("The screenshot checksum does not match the report.");
       if (this.disposed) throw new Error("This report was closed.");
       const url = URL.createObjectURL(blob);
-      if (load.users > 0) load.url = url;
+      const current = this.loads.get(load.sha256) === load;
+      if (current && load.users > 0) load.url = url;
       else {
-        // Everyone let go while it decoded; keep the finished work for a quick return.
-        this.loads.delete(load.sha256);
+        // Everyone let go while it decoded, or the report was trimmed; keep the finished work for a quick return.
+        if (current) this.loads.delete(load.sha256);
         this.retain(load.sha256, url);
       }
       return url;
@@ -576,7 +585,7 @@ function activate(archive: ArtifactReportArchive): ArtifactReportArchive {
 
 /** Make an archive the one screenshots resolve from, keeping the previous one open (a hosted preview's other target). */
 export function showArchive(archive: ArtifactReportArchive): ArtifactReportArchive {
-  activeArtifactReport?.trim();
+  if (activeArtifactReport !== archive) activeArtifactReport?.trim();
   activeArtifactReport = archive;
   return archive;
 }

@@ -1,7 +1,7 @@
 import type { EmbeddedReport } from "../../../src/contracts/standalone-report";
 import {
-  ArtifactReportArchive, artifactIdentity, checkReportFile, isReportPage, isReportTargetId, openCachedReport, openReportFile, previewAssetUrl,
-  previewManifestUrl, previewReportUrl, previewReportsUrl, previewToken, reportDownloadUrl, reportFileName, reportTarget, ReportFileError,
+  ArtifactReportArchive, artifactIdentity, isReportPage, isReportTargetId, openCachedReport, openReportFile, previewAssetUrl,
+  previewManifestUrl, previewReportsUrl, previewToken, reportDownloadUrl, reportFileName, reportTarget, ReportFileError,
   showArchive, workflowRunUrl, type ArtifactIdentity, type ArtifactLoadProgress, type ReportFileErrorCode,
 } from "./artifact-report";
 
@@ -18,11 +18,6 @@ export type ReportSourceSnapshot = {
   reportKey: number;
 };
 
-/**
- * How a hosted preview's report reaches the browser: its manifest (metadata now, each screenshot when first shown)
- * or the whole ZIP (every byte before the first paint, as before). Built with VITE_EXPLORE_PREVIEW_TRANSPORT=zip for the latter.
- */
-const PREVIEW_TRANSPORT: "manifest" | "zip" = import.meta.env?.VITE_EXPLORE_PREVIEW_TRANSPORT === "zip" ? "zip" : "manifest";
 /** After the shown report is ready, the deployment's other targets are fetched so a switch needs no download. */
 const PREFETCH_DELAY = 1500;
 
@@ -37,8 +32,7 @@ export class ReportSource {
   data: EmbeddedReport | undefined;
   /** The hosted report page (the root, or `/r`) that opens a report ZIP for a linked run or any run. */
   readonly reportPage: boolean;
-  /** A hosted preview's report URL; the page downloads it instead of asking for a file. */
-  readonly previewUrl?: string;
+  /** A hosted preview's token and linked target; the page downloads its report instead of asking for a file. */
   private readonly preview?: PreviewPage;
   private readonly linkIdentity?: ArtifactIdentity;
   private readonly linkError?: string;
@@ -66,8 +60,6 @@ export class ReportSource {
       try {
         const target = reportTarget(page!);
         this.preview = { token, ...(target ? { target } : {}) };
-        const previewUrl = previewReportUrl(page!);
-        if (previewUrl) this.previewUrl = previewUrl;
       } catch (error) { linkError = error instanceof Error ? error.message : "Invalid report link."; }
     }
     this.reportPage = Boolean(page) && (isReportPage(page!) || Boolean(token));
@@ -137,7 +129,8 @@ export class ReportSource {
   private activateTarget(target: string | undefined): void {
     const key = target ?? "";
     const archive = this.archives.get(key);
-    if (this.current !== undefined && archive && archive === this.archives.get(this.current)) {
+    // Already shown (a hash-only navigation); going back to it from a switch still loading or failed shows it again.
+    if (this.snapshot.status === "ready" && this.current !== undefined && archive && archive === this.archives.get(this.current)) {
       this.current = key;
       return;
     }
@@ -157,7 +150,7 @@ export class ReportSource {
   private async show(target: string | undefined, generation: number): Promise<void> {
     const key = target ?? "";
     try {
-      const archive = this.archives.get(key) ?? await this.loadTarget(target, this.progressed);
+      const archive = this.archives.get(key) ?? await this.loadTarget(target, progress => { if (generation === this.generation) this.progressed(progress); });
       if (generation !== this.generation) return;
       this.adopt(key, archive);
     } catch (error) {
@@ -197,20 +190,12 @@ export class ReportSource {
 
   private async fetchTarget(target: string | undefined, onProgress?: (progress: ArtifactLoadProgress) => void): Promise<ArtifactReportArchive> {
     const { token } = this.preview!;
-    if (PREVIEW_TRANSPORT === "manifest") {
-      const chunks = await this.download(previewManifestUrl(token, target), onProgress);
-      onProgress?.({ phase: "opening" });
-      let manifest: unknown;
-      try { manifest = JSON.parse(await new Blob(chunks).text()); }
-      catch { throw new ReportFileError("invalid", "The hosted report manifest is not valid JSON."); }
-      return ArtifactReportArchive.openManifest(manifest, path => previewAssetUrl(token, path, target));
-    }
-    const chunks = await this.download(previewReportUrlFor(token, target), onProgress);
-    const blob = new Blob(chunks, { type: "application/zip" });
-    onProgress?.({ phase: "verifying" });
-    await checkReportFile(blob, "report.zip");
+    const chunks = await this.download(previewManifestUrl(token, target), onProgress);
     onProgress?.({ phase: "opening" });
-    return ArtifactReportArchive.open(blob, undefined, "report.zip");
+    let manifest: unknown;
+    try { manifest = JSON.parse(await new Blob(chunks).text()); }
+    catch { throw new ReportFileError("invalid", "The hosted report manifest is not valid JSON."); }
+    return ArtifactReportArchive.openManifest(manifest, path => previewAssetUrl(token, path, target));
   }
 
   /** The Worker's answer for this link: the bytes, or why there are none. */
@@ -256,9 +241,11 @@ export class ReportSource {
     for (const target of targets) {
       if (this.archives.has(target)) continue;
       try {
+        // A switch may have joined this download and shown the archive already; only a second copy is closed.
         const archive = await this.loadTarget(target);
-        if (this.archives.has(target)) archive.dispose();
-        else this.remember(target, archive);
+        const known = this.archives.get(target);
+        if (!known) this.remember(target, archive);
+        else if (known !== archive) archive.dispose();
       } catch { /* A switch downloads it then. */ }
     }
   }
@@ -285,11 +272,6 @@ export class ReportSource {
     if (this.snapshot.status !== "failed" || !this.canRetry) return;
     this.set({ status: "awaiting-file", progress: { phase: "cache" }, reportKey: this.snapshot.reportKey, ...(this.linkIdentity ? { identity: this.linkIdentity } : {}) });
   }
-}
-
-/** `/p/<token>/report.zip`, with the target's query. */
-function previewReportUrlFor(token: string, target: string | undefined): string {
-  return previewManifestUrl(token, target).replace("/manifest.json", "/report.zip");
 }
 
 /** The target an opened report says it is: its run's target id, or the platform of a report from before targets. */
