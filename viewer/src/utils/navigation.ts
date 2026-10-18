@@ -3,7 +3,7 @@
 // and the URL is that route written out, Figma-style: a path for the place and a query for the
 // selection. This module is DOM-free on purpose so the grammar can be tested in plain node.
 /** Map and Screens are canvases; Compare is the Before/After review of one changed screen. */
-export type CanvasView = "map" | "screens" | "compare";
+export type CanvasView = "map" | "screens" | "compare" | "flows";
 export type ThemePreference = "light" | "dark" | "system";
 export type MapDirection = "TB" | "LR";
 /** The explicitly selected amount of Map hierarchy, independent from camera zoom. */
@@ -81,7 +81,7 @@ export type FocusRequest = {
   preserveMapContent?: boolean;
 };
 
-const CANVASES: CanvasView[] = ["map", "screens", "compare"];
+const CANVASES: CanvasView[] = ["map", "screens", "compare", "flows"];
 const INSPECTS: InspectView[] = ["session", "diff"];
 const DIRECTIONS: TransitionDirection[] = ["in", "out"];
 const FOCUSES: FocusStatus[] = ["added", "modified", "accessibility-only", "removed", "needs-review", "source-affected"];
@@ -162,7 +162,7 @@ function routeFitsPath(route: string | undefined): route is string {
   return route !== undefined && route !== "/";
 }
 
-/** `#workspace/<canvas>` and the bare `#screens` predate path routing and are still linked; a retired canvas (flows) lands on the map. */
+/** `#workspace/<canvas>` and the bare `#screens` predate path routing and are still linked; an unknown canvas lands on the map. */
 function parseLegacyHash(hash: string): CanvasView | undefined {
   const [first, second] = hash.replace(/^#/, "").split("/");
   if (first === "screens" && !second) return "screens";
@@ -315,6 +315,7 @@ export const CANVAS_LABELS: Record<CanvasView, string> = {
   map: "Map",
   screens: "Screens",
   compare: "Compare",
+  flows: "Flows",
 };
 
 /** One line each, shown under the canvas name on hover, so the views are easy to tell apart. */
@@ -322,6 +323,7 @@ export const CANVAS_DESCRIPTIONS: Record<CanvasView, string> = {
   map: "How screens connect",
   screens: "Every screen in one grid",
   compare: "Before and After of each changed screen",
+  flows: "Each e2e flow: its steps and the frames it took, Before and After",
 };
 
 export const FOCUS_LABELS: Record<FocusStatus, string> = {

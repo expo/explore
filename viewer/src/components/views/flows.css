@@ -1,0 +1,42 @@
+.flows-page { padding: 72px 32px 120px; display: flex; flex-direction: column; gap: 24px; overflow: auto; height: 100%; box-sizing: border-box; }
+.flows-page.phone { padding: 64px 12px 120px; gap: 16px; }
+.flows-empty { color: var(--text-muted, #6b6b6b); }
+.flow-card { border: 1px solid var(--border, #e5e5e5); border-radius: 14px; background: var(--surface, #fff); padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.flow-header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.flow-header h2 { margin: 0; font-size: 17px; font-weight: 600; }
+.flow-file { margin: 4px 0 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--text-muted, #6b6b6b); }
+.flow-outcomes { display: flex; gap: 16px; }
+.flow-outcome { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.flow-outcome-side { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted, #6b6b6b); }
+.flow-status, .flow-verdict { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #f0f0f0; color: #444; }
+.tone-passed.flow-status, .tone-unchanged.flow-verdict { background: #e6f4ea; color: #1e7a3b; }
+.tone-failed.flow-status, .tone-removed.flow-verdict { background: #fdecec; color: #b42318; }
+.tone-modified.flow-verdict, .tone-needs-review.flow-verdict { background: #fff1e0; color: #b45309; }
+.tone-added.flow-verdict { background: #e6f4ea; color: #1e7a3b; }
+.flow-failure { margin: 0; padding: 10px 12px; border-radius: 10px; background: #fdecec; color: #7a1c14; font-size: 13px; }
+.flow-failure code { font-size: 12px; }
+.flow-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); gap: 20px; align-items: start; }
+.flows-page.phone .flow-body { grid-template-columns: 1fr; }
+.flow-filmstrip { list-style: none; margin: 0; padding: 4px 0 8px; display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x proximity; }
+.flow-frame { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; scroll-snap-align: start; }
+.flow-frame-pair { display: flex; gap: 8px; }
+.flow-frame-side { margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.flow-frame-side figcaption { font-size: 11px; color: var(--text-muted, #6b6b6b); text-align: center; }
+.flow-frame-button { padding: 0; border: 0; background: none; cursor: pointer; border-radius: 10px; min-width: 44px; min-height: 44px; }
+.flow-frame-button:focus-visible { outline: 2px solid #2f6fed; outline-offset: 2px; }
+.flow-frame-image { display: block; width: 140px; height: auto; border-radius: 10px; border: 1px solid var(--border, #e5e5e5); background: #fafafa; }
+.flows-page.phone .flow-frame-image { width: 150px; }
+.flow-frame-missing { width: 140px; aspect-ratio: 402 / 874; border-radius: 10px; border: 1px dashed #d0d0d0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 12px; box-sizing: border-box; font-size: 12px; color: var(--text-muted, #6b6b6b); }
+.flow-frame-missing small { font-size: 11px; }
+.flow-frame-caption { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.flow-frame-caption strong { font-size: 13px; font-weight: 600; }
+.flow-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.flow-step { display: grid; grid-template-columns: 22px auto 1fr; column-gap: 8px; row-gap: 2px; align-items: baseline; padding: 6px 8px; border-radius: 8px; min-height: 44px; box-sizing: border-box; }
+.flow-step.frame { background: #f6f8fb; }
+.flow-step.failed { background: #fdecec; }
+.flow-step.skipped { opacity: 0.45; }
+.flow-step-number { color: var(--text-muted, #6b6b6b); font-variant-numeric: tabular-nums; }
+.flow-step-api { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #444; }
+.flow-step-label { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.flow-step-frame { grid-column: 2 / -1; font-size: 11px; color: #2f6fed; }
+.flow-step-error { grid-column: 2 / -1; font-size: 12px; color: #7a1c14; }

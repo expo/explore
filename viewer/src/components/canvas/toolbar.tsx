@@ -1,4 +1,4 @@
-import { GitCompareArrows, Keyboard, LayoutGrid, Map, Search } from "lucide-react";
+import { GitCompareArrows, Keyboard, LayoutGrid, Map, Search, ListOrdered } from "lucide-react";
 import { type CSSProperties } from "react";
 import { Tooltip } from "../shared/tooltip";
 import { useCanvasVisibleFrame } from "./visible-frame-provider";
@@ -14,11 +14,16 @@ const VIEW_ICONS: Record<CanvasView, React.ReactNode> = {
   map: <Map />,
   screens: <LayoutGrid />,
   compare: <GitCompareArrows />,
+  flows: <ListOrdered />,
 };
 
 const TOOLBAR_MINIMUM_FRAME_WIDTH = 220;
 
 type CanvasToolbarProps = {
+  /** True when the review ran flows: the Flows view is offered. */
+  hasFlows?: boolean;
+  /** True when the review captured flows and no routes: Map and Screens have nothing to show. */
+  flowsOnly?: boolean;
   canvas: CanvasView;
   searchOpen: boolean;
   /** How many changed screens Compare holds, shown as a badge on its button. Compare's own header
@@ -41,7 +46,8 @@ export function CanvasToolbar(props: CanvasToolbarProps) {
   const style = visibleFrame ? ({
     "--canvas-visible-bottom-inset": `calc(100% - ${visibleFrame.y + visibleFrame.height}px)`,
   } as CSSProperties) : undefined;
-  const views = CANVAS_VIEW_ORDER;
+  // The Flows view exists only for a review that ran flows.
+  const views = CANVAS_VIEW_ORDER.filter((id) => (id !== "flows" || props.hasFlows) && !(props.flowsOnly && (id === "map" || id === "screens")));
 
   return (
     <div className="canvas-toolbar" role="toolbar" aria-label="Canvas tools" style={style}>

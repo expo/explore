@@ -17,6 +17,7 @@ import { MapView } from "./components/views/semantic-map";
 import { RightPanel } from "./components/panels/right";
 import { SearchCommand } from "./components/search-command";
 import { ScreensView } from "./components/views/screens";
+import { FlowsView } from "./components/views/flows";
 import { publicReviewProjection, publicReviewToWorkspace } from "./public/public-workspace";
 import type { PublicReview } from "../../src/contracts/capture";
 import {
@@ -27,7 +28,7 @@ import {
   type ViewerBuild,
   type ViewerWorkspace,
 } from "./utils/build-diff";
-import { type ViewerPayload, artifactUrl } from "./utils/model";
+import { type ViewerPayload, artifactUrl, isFlowScreen } from "./utils/model";
 import {
   canonicalRoute,
   formatRoute,
@@ -1183,6 +1184,12 @@ function ViewerApp() {
       ? { ...presentedMap, run: { ...presentedMap.run, name: workspace.catalog.name } }
       : presentedMap
   ), [presentedMap, workspace]);
+  const hasFlows = Array.isArray(loadedPublicReview?.flows) && loadedPublicReview!.flows!.length > 0;
+  // A flows-only review has no routes: the Map and Screens would be empty, so the Flows view is the home.
+  const flowsOnly = hasFlows && map !== undefined && map.screens.length > 0 && map.screens.every((screen) => isFlowScreen(screen));
+  useEffect(() => {
+    if (flowsOnly && (route.canvas === "map" || route.canvas === "screens")) navigate({ canvas: "flows" }, { replace: true });
+  }, [flowsOnly, route.canvas, navigate]);
   // Focus singles out diff states, so it means nothing without a baseline to diff against.
   const focusFilter = diff ? route.focus : [];
   const focusCounts = useMemo(() => countFocusStatuses(diff), [diff]);
@@ -1528,6 +1535,9 @@ function ViewerApp() {
       <CanvasVisibleFrameProvider
         layoutKey={`${rightCollapsed}:${route.canvas}:${route.inspect}`}>
         <div className="canvas-view-content" data-canvas-view={route.canvas}>
+          {route.canvas === "flows" && loadedPublicReview ? (
+            <FlowsView review={loadedPublicReview} phone={phone} onOpenFrame={(id) => openChangedScreen(id)} />
+          ) : null}
           {route.canvas === "screens" ? (
             <ScreensView
               map={map}
@@ -1600,12 +1610,16 @@ function ViewerApp() {
           <PhoneTabBar
             canvas={route.canvas}
             compareCount={compareOrder.length}
+            hasFlows={hasFlows}
+            flowsOnly={flowsOnly}
             onSelectCanvas={selectCanvas}
           />
         ) : <CanvasToolbar
           canvas={route.canvas}
           searchOpen={searchOpen}
           compareCount={compareOrder.length}
+          hasFlows={hasFlows}
+          flowsOnly={flowsOnly}
           {...(handoffAction ? { actions: handoffAction } : {})}
           onOpenShortcuts={() => setShortcutsOpen(true)}
           onSelectCanvas={selectCanvas}

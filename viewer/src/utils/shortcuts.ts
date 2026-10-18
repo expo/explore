@@ -79,12 +79,14 @@ export const SHORTCUTS = {
     map: plain("KeyM", "M"),
     screens: plain("KeyS", "S"),
     compare: plain("KeyC", "C"),
+    flows: plain("KeyF", "F"),
   },
   /** The canvases by their place in the toolbar, as tabs are numbered elsewhere. Apple keyboards only (CANVAS_NUMBER_KEYS). */
   canvasByNumber: {
     map: ctrl("Digit1", "1"),
     screens: ctrl("Digit2", "2"),
     compare: ctrl("Digit3", "3"),
+    flows: ctrl("Digit4", "4"),
   },
   /** Compare only. The arrows walk changed screens; J and K walk the changed areas of one. */
   compare: {
