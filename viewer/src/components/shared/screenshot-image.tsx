@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ImgHTMLAttributes, type ReactNode, type SyntheticEvent } from "react";
 import { ImageOff, LoaderCircle } from "lucide-react";
-import { isEmbeddedArtifactUrl, releaseEmbeddedArtifactUrl, resolveEmbeddedArtifactUrl } from "../../utils/embedded-report";
+import { isEmbeddedArtifactUrl, leaseEmbeddedArtifactUrl } from "../../utils/embedded-report";
 
 /** A phone screen's width over height; frames size to it until a screenshot supplies its own. */
 export const DEFAULT_SCREENSHOT_RATIO = 9 / 19.5;
@@ -71,13 +71,18 @@ export function ScreenshotImage({ src, loading, indicator, fallback, holdPreviou
     let requested = false;
     let generation = 0;
     let observer: IntersectionObserver | undefined;
+    // Released against the report that resolved it: a hosted preview's other target can hold the same screenshot,
+    // so this image can outlive its report without its source changing.
+    let lease: ReturnType<typeof leaseEmbeddedArtifactUrl> | undefined;
     const load = () => {
       if (disposed || requested) return;
       requested = true;
       const current = ++generation;
+      const leased = leaseEmbeddedArtifactUrl(src, loading === "eager" ? "eager" : "lazy");
+      lease = leased;
       void (async () => {
         try {
-          const url = await resolveEmbeddedArtifactUrl(src, loading === "eager" ? "eager" : "lazy");
+          const url = await leased.url;
           if (disposed || generation !== current) return;
           setResolved({ source: src, url });
           // A fresh URL gets its own chance to decode.
@@ -86,6 +91,11 @@ export function ScreenshotImage({ src, loading, indicator, fallback, holdPreviou
           if (disposed || generation !== current) return;
           // A failed load holds no reference, so nothing is released for it later.
           requested = false;
+          // The report it waited on was switched away from and let it go: ask the one shown now, which may hold it too.
+          if (!leased.current()) {
+            load();
+            return;
+          }
           observer?.disconnect();
           image.dispatchEvent(new Event("error"));
           setFailed(src);
@@ -96,7 +106,7 @@ export function ScreenshotImage({ src, loading, indicator, fallback, holdPreviou
     else {
       observer = new IntersectionObserver(entries => {
         if (entries.some(entry => entry.isIntersecting)) load();
-        else if (requested && releaseEmbeddedArtifactUrl(src)) {
+        else if (requested && lease?.release()) {
           requested = false;
           generation++;
           setResolved(undefined);
@@ -108,7 +118,7 @@ export function ScreenshotImage({ src, loading, indicator, fallback, holdPreviou
     return () => {
       disposed = true;
       observer?.disconnect();
-      if (requested) releaseEmbeddedArtifactUrl(src);
+      if (requested) lease?.release();
     };
   }, [embedded, src, loading]);
 

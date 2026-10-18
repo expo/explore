@@ -35,6 +35,13 @@ export function resolveEmbeddedArtifactUrl(source, priority) {
     window.pendingScreenshots.set(source, pending);
   });
 }
+// \`window.shownReport\` stands in for the report the page shows; a hosted preview's target switch changes it.
+export function leaseEmbeddedArtifactUrl(source, priority) {
+  const report = window.shownReport;
+  return { url: resolveEmbeddedArtifactUrl(source, priority),
+    release: () => { window.releasedFrom.push(report); return releaseEmbeddedArtifactUrl(source); },
+    current: () => window.shownReport === report };
+}
 `;
 
 const entry = `
@@ -122,6 +129,8 @@ async function fixture(t, options = {}) {
     window.resolverCalls = [];
     window.resolverPriorities = [];
     window.releaseCalls = [];
+    window.shownReport = "android";
+    window.releasedFrom = [];
     window.immediateScreenshots = new Map();
     if (fixture.observer === "manual") {
       // The test decides when the image enters or leaves the viewport, down to one task.
@@ -431,6 +440,25 @@ test("a held picture is not handed on past a source that failed: the next source
   await page.evaluate(source => window.updateScreenshot({ source }), thirdSource);
   await expect.poll(() => page.evaluate(() => window.resolverCalls)).toContain(thirdSource);
   await expectWaiting(image);
+});
+
+test("a target switch that drops a screenshot still waiting asks the report shown next, which holds the same one", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", fallback: true });
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
+
+  // The Viewer swaps in the other target's report; the same screenshot keeps its source, so this image stays mounted.
+  // Trimming the report it waited on rejects the wait.
+  await page.evaluate(source => { window.shownReport = "ios"; window.rejectScreenshot(source); }, firstSource);
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource, firstSource]);
+  await expect(image).toHaveAttribute("data-screenshot-state", "loading");
+  await resolveImage(page, firstSource);
+  await expectDecoded(image, 2, 3);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  assert.deepEqual(await page.evaluate(() => window.imageErrors), []);
+
+  // Let go after switching back, it releases to the report that resolved it, not the one shown.
+  await page.evaluate(() => { window.shownReport = "android"; window.updateScreenshot({ mounted: false }); });
+  await expect.poll(() => page.evaluate(() => window.releasedFrom)).toEqual(["ios"]);
 });
 
 test("a fresh URL for a screenshot that failed to decode gives it another try", { timeout: 30_000 }, async t => {
