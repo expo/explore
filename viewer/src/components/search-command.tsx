@@ -14,7 +14,12 @@ function ResultIcon({ kind }: { kind: SearchItemKind }) {
   return kind === "screen" ? <Route strokeWidth={1.75} /> : <Command strokeWidth={1.75} />;
 }
 
-/** The results in sections by kind, in the order the first result sets, with each item's place in the flat list. */
+/** The results grouped by kind, in the order the first result sets, so ↑ and ↓ step through the rows as they read. */
+function groupedByKind(results: readonly SearchItem[]): SearchItem[] {
+  return [...new Set(results.map((item) => item.kind))].flatMap((kind) => results.filter((item) => item.kind === kind));
+}
+
+/** Grouped results in their sections, with each item's place in the flat list. */
 function sections(results: readonly SearchItem[], suggested: boolean): { label: string; entries: { item: SearchItem; index: number }[] }[] {
   const byKind = new Map<SearchItemKind, { item: SearchItem; index: number }[]>();
   results.forEach((item, index) => {
@@ -43,7 +48,7 @@ export function SearchCommand(props: SearchCommandProps) {
   const dialogRef = useModalDialog(props.open, props.onClose);
   const listboxId = useId();
   const results = useMemo(
-    () => query.trim() ? searchItems(props.items, query) : [...props.suggestions],
+    () => groupedByKind(query.trim() ? searchItems(props.items, query) : props.suggestions),
     [props.items, props.suggestions, query],
   );
 

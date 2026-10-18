@@ -5157,3 +5157,29 @@ test("⌘K is a command palette: suggested commands lead, word queries rank comm
   await box.press("Enter");
   await expect(page.getByRole("main", { name: "Screens" })).toBeVisible();
 });
+
+test("⌘K steps through its results in the order it shows them, and a command that opens a menu keeps it open", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/map");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  const palette = page.getByRole("dialog", { name: "Search Explore" });
+  const box = palette.getByRole("combobox", { name: "Search screens and commands" });
+  // "c" matches commands and screens alike: ↓ walks the rows top to bottom, across the sections.
+  await box.fill("c");
+  const options = palette.getByRole("option");
+  const count = await options.count();
+  expect(await palette.getByRole("group").count()).toBe(2);
+  for (let step = 0; step < count; step += 1) {
+    await expect(options.nth(step)).toHaveAttribute("aria-selected", "true");
+    await expect(box).toHaveAttribute("aria-activedescendant", (await options.nth(step).getAttribute("id"))!);
+    await box.press("ArrowDown");
+  }
+  await expect(options.first()).toHaveAttribute("aria-selected", "true");
+
+  // The palette hands focus to the menu it opens instead of taking it back.
+  await box.fill("Changed screens menu");
+  await box.press("Enter");
+  await expect(palette).toHaveCount(0);
+  await expect(page.locator(".changes-menu")).toBeVisible();
+  await expect(page.locator(".changes-menu-body")).toBeFocused();
+});
