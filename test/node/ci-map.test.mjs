@@ -145,7 +145,8 @@ async function fixture(t, settings = {}) {
       if (request.args[1]?.includes('server start')) {
         const port = 4100 + serverStarts++;
         writeFileSync(request.environment.EXPLORE_ARGENT_SERVER_LOG, `      (or: argent link --host 127.0.0.1 --port ${port} --token abc123)\n[t] Tools server listening on http://127.0.0.1:${port}\n`);
-        return { stdout: `${4242 + serverStarts}\n`, stderr: '' };
+        // A pid no process can have: stopping the server signals it for real.
+        return { stdout: `${999_999_000 + serverStarts}\n`, stderr: '' };
       }
       return { stdout: '', stderr: '' };
     }
