@@ -4,7 +4,8 @@ import { appendFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm,
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter, configure } from "@zip.js/zip.js";
-import { MAX_METADATA_BYTES } from "./agent-api.js";
+import { loadReport, MAX_METADATA_BYTES } from "./agent-api.js";
+import { manifestBody } from "./preview-manifest.js";
 import { publishCiReportComment, readCiReportInput, type CiReportInput } from "./artifact.js";
 import { readZipDirectory, readZipEntry } from "./zip-reader.js";
 import { reviewChangeCount, reviewDevice } from "./pr-comment-body.js";
@@ -773,6 +774,19 @@ async function verifyDeployment(check: { origin: string; token: string; reports:
       if (report.status !== 200 || bytes.byteLength !== expected.bytes || createHash("sha256").update(bytes).digest("hex") !== expected.sha256) {
         return deployError("PREVIEW_VERIFY_FAILED", "The hosted preview did not serve the exact report that was deployed.",
           "Rerun the deploy job; the deployment's sealed key or ciphertext did not match.", { details: { status: report.status, report: expected.query } });
+      }
+      // What the Viewer opens: the manifest the deployed ZIP makes, and one of its assets byte for byte.
+      const loaded = await loadReport(bytes);
+      const manifest = await get(`/p/${check.token}/manifest.json${expected.query}`);
+      const body = manifest.status === 200 ? await manifest.text() : "";
+      const asset = loaded ? Object.keys(JSON.parse(manifestBody(loaded)).entries as Record<string, number>)[0] : undefined;
+      const served = asset ? await get(`/p/${check.token}/${asset}${expected.query}`) : undefined;
+      const assetBytes = served?.status === 200 ? new Uint8Array(await served.arrayBuffer()) : new Uint8Array();
+      if (!loaded || body !== manifestBody(loaded)
+        || (asset && createHash("sha256").update(assetBytes).digest("hex") !== asset.slice("assets/".length, "assets/".length + 64))) {
+        return deployError("PREVIEW_VERIFY_FAILED", "The hosted preview did not serve the report's manifest and screenshots, which the Viewer opens.",
+          "Rerun the deploy job; if it keeps failing, inspect the deployment in the EAS Hosting dashboard.",
+          { details: { status: manifest.status, ...(served ? { assetStatus: served.status } : {}), report: expected.query } });
       }
     }
     if (check.listing !== undefined) {

@@ -7,11 +7,13 @@ import type { ExplorePlatform } from "../config/explore-config.js";
 import type { RunTarget } from "../types.js";
 import { reportTarget } from "./saved-runs.js";
 import { AGENT_API_VERSION, agentApiReply, agentIndexMarkdown, loadReport, prefersHtml, type AgentContext, type LoadedReport } from "./agent-api.js";
+import { manifestBody, previewAsset } from "./preview-manifest.js";
 
 /**
  * Serve review reports on this machine the way a hosted report serves them: the built Viewer at `/p/<token>`, each
- * target's report at `/p/<token>/report.zip?target=…` (or `?platform=…`), and the list at `/p/<token>/reports.json`. The
- * Viewer already knows this layout, so nothing in it changes. An agent on this machine gets what it gets from a hosted
+ * target's manifest at `/p/<token>/manifest.json?target=…` (or `?platform=…`) and its assets at
+ * `/p/<token>/assets/<sha256>.<ext>`, the whole ZIP at `/p/<token>/report.zip`, and the list at `/p/<token>/reports.json`.
+ * The Viewer already knows this layout, so nothing in it changes. An agent on this machine gets what it gets from a hosted
  * link: the Markdown index when it fetches `/p/<token>` without asking for HTML, `/p/<token>/llms.txt`, and the JSON
  * API at `/p/<token>/api/v1/...` (agent-api.ts, shared with the hosted Worker). Loopback only; anything else answers 404.
  */
@@ -67,6 +69,16 @@ export async function startLocalReportServer(options: { reports: LocalReport[]; 
         return send(reply.status, body, reply.contentType, { vary: "Accept", ...reply.headers });
       }
       if (isPage) return send(200, await readFile(resolve(viewerRoot, "index.html")), TYPES[".html"]);
+      // What the Viewer opens (preview-manifest.ts, shared with the hosted Worker): the manifest, then each asset as it is shown.
+      if (url.pathname === `${page}/manifest.json` || url.pathname.startsWith(`${page}/assets/`)) {
+        if (!report) return send(404, "Not found");
+        if (!loaded.has(report)) loaded.set(report, loadReport(report.zip));
+        const content = await loaded.get(report);
+        if (!content) return send(404, "Not found");
+        if (url.pathname === `${page}/manifest.json`) return send(200, manifestBody(content), TYPES[".json"]);
+        const asset = await previewAsset(content, url.pathname.slice(page.length + 1));
+        return asset ? send(200, asset.bytes, asset.type) : send(404, "Not found");
+      }
       if (url.pathname === `${page}/report.zip`) return report ? send(200, report.zip, "application/zip") : send(404, "Not found");
       if (url.pathname === `${page}/reports.json` && options.reports.length > 1) return send(200, listing, TYPES[".json"]);
       // The Viewer's own assets, at the absolute paths its index.html names; never anything outside the build.

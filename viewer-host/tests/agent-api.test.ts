@@ -74,7 +74,7 @@ const explorationReport = {
 };
 const explorationZip = zip({ "exploration.json": new TextEncoder().encode(JSON.stringify(explorationReport)), [`assets/${pngSha}.png`]: png });
 
-function deployment(files: Record<string, Uint8Array<ArrayBuffer>>, env: PreviewEnvironment, now?: () => number) {
+function deployment(files: Record<string, Uint8Array<ArrayBuffer>>, env: PreviewEnvironment, now?: () => number, budget?: { held: number; peak: number }) {
   const calls: string[] = [];
   const fetchImpl = (async (input: RequestInfo | URL) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
@@ -82,7 +82,7 @@ function deployment(files: Record<string, Uint8Array<ArrayBuffer>>, env: Preview
     const body = files[url.pathname];
     return body ? new Response(body, { headers: { "content-length": String(body.byteLength) } }) : new Response("missing", { status: 404 });
   }) as typeof fetch;
-  const options = { env, indexHtml: html, fetchImpl, subtle, cache: new Map(), ...(now ? { now } : {}) };
+  const options = { env, indexHtml: html, fetchImpl, subtle, cache: new Map(), loading: new Map(), manifests: new Map(), oversized: new Set<string>(), ...(now ? { now } : {}), ...(budget ? { budget } : {}) };
   return { calls, get: (path: string, accept?: string) => previewResponse(new Request(`${origin}/p/${token}${path}`, accept === undefined ? {} : { headers: { accept } }), options) };
 }
 
@@ -106,7 +106,7 @@ test("the token page negotiates: browsers get the shell carrying the agent index
   assert.ok(shell.startsWith("<!doctype html>"));
   assert.match(shell, /<div id="root"><section data-explore-agent-index style="[^"]*clip:rect\(0 0 0 0\)[^"]*"><h1>Expo Explore report: .* PR #\d+/);
   assert.match(shell, new RegExp(`href="${origin}/p/${token}/api/v1/screens\\?status=modified,accessibility-only,added,removed"`));
-  assert.match(shell, /<\/section><\/div><script type="module"/);
+  assert.match(shell, /<\/section><\/div><link rel="preload" [^>]*><script type="module"/);
   assert.equal(browser.headers.get("vary"), "Accept");
   assert.equal(browser.headers.get("link"), `<${origin}/p/${token}/api/v1>; rel="alternate"; type="application/json", <${origin}/p/${token}/llms.txt>; rel="alternate"; type="text/markdown"`);
   assert.equal(browser.headers.get("cache-control"), "private, no-store");
@@ -362,4 +362,112 @@ test("a deployment of several targets keeps each target in its links and names t
   assert.ok(!index.includes(`- [iPhone Duo (open)]`), "the index does not list its own target among the others");
   assert.equal((await (await site.get("/api/v1?platform=android")).json()).kind, "exploration");
   assert.equal((await site.get("/api/v1?target=pixel")).status, 404);
+});
+
+test("the manifest and asset routes let the Viewer open a report before any screenshot, and the shell preloads the manifest", async () => {
+  const site = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(review) }, reviewEnv);
+  const loaded = (await loadReport(review))!;
+  const shell = await (await site.get("", "text/html")).text();
+  assert.ok(shell.includes(`<link rel="preload" href="/p/${token}/manifest.json" as="fetch" crossorigin><script type="module"`), shell.slice(0, 400));
+  const linked = await (await site.get("?target=ios&view=compare", "text/html")).text();
+  assert.ok(linked.includes(`<link rel="preload" href="/p/${token}/manifest.json?platform=ios" as="fetch" crossorigin>`), linked.slice(0, 400));
+
+  const manifest = await site.get("/manifest.json");
+  assert.equal(manifest.status, 200);
+  assert.match(manifest.headers.get("content-type") ?? "", /^application\/json/);
+  assert.equal(manifest.headers.get("cache-control"), "private, no-store");
+  const body = await manifest.json() as { format: string; file: string; entries: Record<string, number>; report: { review: unknown } };
+  assert.equal(body.format, "explore.preview-manifest/1");
+  assert.equal(body.file, "review.json");
+  assert.deepEqual(body.report, JSON.parse(new TextDecoder().decode(loaded.raw)));
+  const assets = [...loaded.entries].filter(([name]) => name.startsWith("assets/"));
+  assert.ok(assets.length > 0);
+  assert.deepEqual(body.entries, Object.fromEntries(assets.map(([name, entry]) => [name, entry.size])));
+  assert.ok(!("review.json" in body.entries));
+
+  const [name, entry] = assets.find(([file]) => file.endsWith(".png"))!;
+  const asset = await site.get(`/${name}`);
+  assert.equal(asset.status, 200);
+  assert.equal(asset.headers.get("content-type"), "image/png");
+  // Kept by this browser for a week, and never past the link's expiry; never by a shared cache.
+  assert.equal(asset.headers.get("cache-control"), "private, max-age=604800, immutable");
+  const nearExpiry = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(review) }, reviewEnv, () => Date.parse("2029-12-31T23:59:00Z"));
+  assert.equal((await nearExpiry.get(`/${name}`)).headers.get("cache-control"), "private, max-age=60, immutable");
+  const never = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(review) }, { ...reviewEnv, EXPLORE_PREVIEW_EXPIRES_AT: undefined });
+  assert.equal((await never.get(`/${name}`)).headers.get("cache-control"), "private, max-age=604800, immutable");
+  assert.equal(asset.headers.get("content-length"), String(entry.size));
+  assert.equal(asset.headers.get("etag"), `"${name.slice("assets/".length, "assets/".length + 64)}"`);
+  const bytes = new Uint8Array(await asset.arrayBuffer());
+  assert.equal(bytes.byteLength, entry.size);
+  assert.equal(createHash("sha256").update(bytes).digest("hex"), name.slice("assets/".length, "assets/".length + 64));
+
+  for (const path of ["/assets/" + "0".repeat(64) + ".png", "/assets/" + name.slice("assets/".length, -4) + ".gif", "/assets/review.json", `/${name}/`, `/${name}?platform=android`]) {
+    assert.equal((await site.get(path)).status, 404, path);
+  }
+  // The sealed file is still decrypted once per isolate.
+  assert.deepEqual(site.calls, [`${origin}${reviewEnv.EXPLORE_PREVIEW_REPORT}`]);
+});
+
+test("a ZIP's directory records are not assets: the manifest the Viewer validates names files only", async () => {
+  const withDirectory = zip({ "exploration.json": new TextEncoder().encode(JSON.stringify(explorationReport)), "assets/": new Uint8Array(), [`assets/${pngSha}.png`]: png });
+  assert.ok(readZipDirectory(withDirectory)!.has("assets/"));
+  const site = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(withDirectory) }, reviewEnv);
+  const body = await (await site.get("/manifest.json")).json() as { entries: Record<string, number> };
+  assert.deepEqual(body.entries, { [`assets/${pngSha}.png`]: png.byteLength });
+});
+
+test("a report the Worker cannot fetch this time answers 503, which the Viewer retries; one that never decrypts is a 404", async () => {
+  const flaky = { get: (path: string) => previewResponse(new Request(`${origin}/p/${token}${path}`), {
+    env: reviewEnv, indexHtml: html, subtle, cache: new Map(), loading: new Map(), manifests: new Map(),
+    fetchImpl: (async () => new Response("upstream", { status: 502 })) as typeof fetch }) };
+  for (const path of ["/manifest.json", `/assets/${pngSha}.png`, "/report.zip"]) {
+    const response = await flaky.get(path);
+    assert.equal(response.status, 503, path);
+    assert.equal(response.headers.get("retry-after"), "1");
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+  }
+  const garbage = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: new Uint8Array(64) as Uint8Array<ArrayBuffer> }, reviewEnv);
+  for (const path of ["/manifest.json", `/assets/${pngSha}.png`, "/report.zip"]) assert.equal((await garbage.get(path)).status, 404, path);
+  // A wrong token or an unknown target is still the same 404 as any other path.
+  assert.equal((await garbage.get("/manifest.json?target=pixel")).status, 404);
+});
+
+test("an isolate keeps decrypted reports within its byte budget, decrypts one at a time, and shares a decrypt between requests", async () => {
+  const listing = ["iphone", "duo-open", "duo-closed"].map(target => ({ target, platform: "ios", label: target, path: `/_report/abcdefghijklmnop/${target}.zip.enc` }));
+  const env: PreviewEnvironment = { ...reviewEnv, EXPLORE_PREVIEW_REPORT: undefined, EXPLORE_PREVIEW_REPORTS: JSON.stringify(listing) };
+  const size = explorationZip.byteLength;
+  // Room to keep two reports, and to decrypt one beside them.
+  const site = deployment(Object.fromEntries(await Promise.all(listing.map(async entry => [entry.path, await sealed(explorationZip)] as const))), env,
+    undefined, { held: 2 * size, peak: 4 * size + 64 });
+  const decrypts = () => site.calls.length;
+  // The prefetch: every target's manifest, each report decrypted once and let go.
+  for (const { target } of listing) assert.equal((await site.get(`/manifest.json?target=${target}`)).status, 200);
+  assert.equal(decrypts(), 3);
+  for (const { target } of listing) await site.get(`/manifest.json?target=${target}`);
+  assert.equal(decrypts(), 3, "manifests are kept");
+  const asset = (target: string) => site.get(`/assets/${pngSha}.png?target=${target}`).then(response => response.status);
+  // Requests that arrive together wait for one decrypt.
+  assert.deepEqual(await Promise.all([asset("iphone"), asset("iphone"), asset("iphone")]), [200, 200, 200]);
+  assert.equal(decrypts(), 4, "the report a reviewer looks at is kept");
+  assert.equal(await asset("duo-open"), 200);
+  assert.equal(await asset("iphone"), 200);
+  assert.equal(decrypts(), 5);
+  assert.equal(await asset("duo-closed"), 200);
+  assert.equal(decrypts(), 6, "a third report evicts the least recently used, duo-open");
+  assert.equal(await asset("iphone"), 200);
+  assert.equal(decrypts(), 6);
+  assert.equal(await asset("duo-open"), 200);
+  assert.equal(decrypts(), 7);
+
+  // A report larger than the budget keeps is decrypted for each request; one too large to decrypt is unavailable.
+  const perRequest = deployment({ [listing[0]!.path]: await sealed(explorationZip) }, env, undefined, { held: size - 1, peak: 4 * size });
+  for (let request = 1; request <= 3; request++) {
+    assert.equal(await perRequest.get(`/assets/${pngSha}.png?target=iphone`).then(response => response.status), 200);
+    assert.equal(perRequest.calls.length, request);
+  }
+  const tooLarge = deployment({ [listing[0]!.path]: await sealed(explorationZip) }, env, undefined, { held: size, peak: size });
+  for (const path of [`/assets/${pngSha}.png?target=iphone`, "/manifest.json?target=iphone", "/report.zip?target=iphone"]) {
+    assert.equal((await tooLarge.get(path)).status, 413, path);
+  }
+  assert.equal(tooLarge.calls.length, 2, "the isolate remembers a report it cannot decrypt (report.zip is not cached)");
 });

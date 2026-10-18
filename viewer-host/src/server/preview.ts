@@ -6,6 +6,7 @@
  * bundle under /viewer/ is public and identical to the central host's.
  */
 import { AGENT_API_VERSION, agentApiReply, agentIndexHtml, agentIndexMarkdown, loadReport, prefersHtml, type AgentContext, type LoadedReport } from "../../../src/report/agent-api";
+import { manifestBody, previewAsset } from "../../../src/report/preview-manifest";
 
 export type PreviewEnvironment = {
   /** Lowercase base32 path token the review comment links to. */
@@ -132,12 +133,44 @@ export type PreviewRequestOptions = {
   /** Same-deployment fetch of static files; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
   subtle?: SubtleCrypto;
-  /** Decrypted and parsed reports by path, kept for the life of the isolate; defaults to a module-level cache. */
-  cache?: Map<string, Promise<LoadedReport | undefined>>;
+  /** Decrypted and parsed reports by path, least recently used first, within HELD_REPORT_BYTES; defaults to a module-level cache. */
+  cache?: Map<string, LoadedReport>;
+  /** Decrypts in flight by path, shared by the requests that wait for them; defaults to a module-level map. */
+  loading?: Map<string, Promise<LoadResult>>;
+  /** Reports too large to decrypt in this isolate, by path; defaults to a module-level set. */
+  oversized?: Set<string>;
+  /** Bytes of decrypted reports kept, and of kept reports plus one decrypt; default to HELD_REPORT_BYTES and DECRYPT_PEAK_BYTES. */
+  budget?: { held: number; peak: number };
+  /** Manifest bodies by path, kept for the life of the isolate; defaults to a module-level cache. */
+  manifests?: Map<string, string>;
 };
 
-const ROUTE = /^\/p\/([a-z2-7]{32})(?:\/|\/(report\.zip|reports\.json|llms\.txt)|(\/api\/v1(?:\/[A-Za-z0-9._:@-]{1,200}){0,2}\/?))?$/;
-const reportCache = new Map<string, Promise<LoadedReport | undefined>>();
+const ROUTE = /^\/p\/([a-z2-7]{32})(?:\/|\/(report\.zip|reports\.json|manifest\.json|llms\.txt)|(\/api\/v1(?:\/[A-Za-z0-9._:@-]{1,200}){0,2}\/?)|\/assets\/([a-f0-9]{64}\.(?:png|jpg|mp4)))?$/;
+/**
+ * Content-addressed and token-gated: this browser may keep an asset until the link expires, and for a week at most (as
+ * long as the Viewer kept a whole report in Cache Storage before assets were served one by one); shared caches may not.
+ */
+const MAX_ASSET_AGE_SECONDS = 7 * 24 * 60 * 60;
+function assetCacheControl(expiresAt: number | null, now: number): string {
+  const untilExpiry = expiresAt === null ? MAX_ASSET_AGE_SECONDS : Math.floor((expiresAt - now) / 1000);
+  return `private, max-age=${Math.max(0, Math.min(MAX_ASSET_AGE_SECONDS, untilExpiry))}, immutable`;
+}
+/**
+ * An isolate has 128 MB. It keeps decrypted reports, least recently used first, within HELD_REPORT_BYTES, and every
+ * target's manifest (a few MB each at most). Decrypting needs the ciphertext and the plaintext at once, so decrypts run
+ * one at a time, and before each one older reports go until the two fit in DECRYPT_PEAK_BYTES with what is kept. A
+ * report too large to keep is decrypted for each request; one too large to decrypt (about 45 MB) answers 413, and the
+ * isolate remembers it so it does not fetch it again.
+ */
+const HELD_REPORT_BYTES = 60 * 1024 * 1024;
+const DECRYPT_PEAK_BYTES = 90 * 1024 * 1024;
+/** A decrypted report, or why there is none: "unavailable" this time (the Viewer retries), "too-large" for this isolate, undefined never. */
+type LoadResult = LoadedReport | "unavailable" | "too-large" | undefined;
+const reportCache = new Map<string, LoadedReport>();
+const reportLoading = new Map<string, Promise<LoadResult>>();
+const manifestCache = new Map<string, string>();
+const oversizedReports = new Set<string>();
+let decrypting: Promise<unknown> = Promise.resolve();
 
 /**
  * `GET /p/<token>` serves the Viewer shell to browsers and the report's Markdown index to anything
@@ -158,7 +191,7 @@ export async function previewResponse(request: Request, options: PreviewRequestO
   const url = new URL(request.url);
   const match = ROUTE.exec(url.pathname);
   if (!match || !sameToken(match[1]!, config.token)) return previewNotFound();
-  const route = match[2] ?? (match[3] ? "api" : undefined);
+  const route = match[2] ?? (match[3] ? "api" : match[4] ? "asset" : undefined);
   const expired = config.expiresAt !== null && (options.now ?? Date.now)() >= config.expiresAt;
   const pageUrl = `${url.origin}/p/${config.token}`;
   const linkHeader = `<${pageUrl}/api/${AGENT_API_VERSION}>; rel="alternate"; type="application/json", <${pageUrl}/llms.txt>; rel="alternate"; type="text/markdown"`;
@@ -168,8 +201,13 @@ export async function previewResponse(request: Request, options: PreviewRequestO
     headers.set("Link", linkHeader);
     headers.set("Vary", "Accept");
     if (expired) return new Response(options.indexHtml, { headers });
-    const loaded = await loadedReport(url.origin, selectReport(config, url), config, options);
-    return new Response(loaded ? shellWithIndex(options.indexHtml, agentIndexHtml(agentContext(pageUrl, config, loaded.report), loaded.loaded)) : options.indexHtml, { headers });
+    const selected = selectReport(config, url);
+    const loaded = await loadedReport(url.origin, selected, config, options);
+    if (!loaded || typeof loaded === "string") return new Response(options.indexHtml, { headers });
+    const shell = shellWithIndex(options.indexHtml, agentIndexHtml(agentContext(pageUrl, config, loaded.report), loaded.loaded));
+    // The same URL the Viewer will fetch for this page: its target's query when the link names one, none otherwise.
+    const requested = url.searchParams.get("target") ?? url.searchParams.get("platform");
+    return new Response(shellWithPreload(shell, `/p/${config.token}/manifest.json${requested ? `?${targetQuery(requested)}` : ""}`), { headers });
   }
   if (expired) return previewExpired(config.expiresAt!);
   if (route === "reports.json") {
@@ -179,7 +217,17 @@ export async function previewResponse(request: Request, options: PreviewRequestO
   const report = selectReport(config, url);
   if (!report) return previewNotFound();
   if (route === "report.zip") return decryptedReport(url.origin, report.path, config, options);
-  const loaded = await loadedReport(url.origin, report, config, options);
+  if (route === "manifest.json") {
+    const body = await manifestFor(url.origin, report, config, options);
+    if (body === "unavailable") return previewUnavailable();
+    if (body === "too-large") return previewTooLarge();
+    return body === undefined ? previewNotFound() : new Response(body, { headers: baseHeaders("application/json; charset=utf-8") });
+  }
+  const found = await loadedReport(url.origin, report, config, options);
+  // The token and the target are right, so a report that cannot be read this time is the Worker's failure, and the Viewer retries.
+  if (found === "unavailable" && route === "asset") return previewUnavailable();
+  if (found === "too-large" && route === "asset") return previewTooLarge();
+  const loaded = typeof found === "string" ? undefined : found;
   if (!loaded) {
     if (route !== undefined) return previewNotFound();
     const headers = baseHeaders("text/html; charset=utf-8");
@@ -187,6 +235,7 @@ export async function previewResponse(request: Request, options: PreviewRequestO
     headers.set("Vary", "Accept");
     return new Response(options.indexHtml, { headers });
   }
+  if (route === "asset") return assetResponse(loaded.loaded, match[4]!, assetCacheControl(config.expiresAt, (options.now ?? Date.now)()));
   const context = agentContext(pageUrl, config, report);
   if (route === undefined || route === "llms.txt") {
     const headers = baseHeaders("text/markdown; charset=utf-8");
@@ -220,6 +269,57 @@ function agentContext(pageUrl: string, config: PreviewConfig, report: PreviewRep
 }
 const PLATFORM_LABELS: Record<PreviewPlatform, string> = { ios: "iOS", android: "Android" };
 
+/** `platform=<id>` for a target named after its platform (links from before targets), `target=<id>` otherwise. */
+function targetQuery(target: string): string {
+  return `${target === "ios" || target === "android" ? "platform" : "target"}=${target}`;
+}
+
+/**
+ * Start the manifest download while the Viewer bundle is still loading: `crossorigin` makes the preload match
+ * the Viewer's same-origin `fetch`, so the bytes arrive once.
+ */
+export function shellWithPreload(indexHtml: string, manifestPath: string): string {
+  const link = `<link rel="preload" href="${manifestPath}" as="fetch" crossorigin>`;
+  const at = indexHtml.indexOf("</head>") !== -1 ? indexHtml.indexOf("</head>") : indexHtml.indexOf("<script");
+  return at === -1 ? indexHtml : `${indexHtml.slice(0, at)}${link}${indexHtml.slice(at)}`;
+}
+
+/** The manifest of one target: kept once built, from the isolate's copy of the report or from one it decrypts and lets go. */
+async function manifestFor(origin: string, report: PreviewReport, config: PreviewConfig, options: PreviewRequestOptions): Promise<string | "unavailable" | "too-large" | undefined> {
+  const manifests = options.manifests ?? manifestCache;
+  const key = `${origin}${report.path}`;
+  const known = manifests.get(key);
+  if (known !== undefined) return known;
+  const loaded = await loadedReport(origin, report, config, options, { keep: false });
+  if (!loaded || typeof loaded === "string") return loaded;
+  const body = manifestBody(loaded.loaded);
+  manifests.set(key, body);
+  return body;
+}
+
+/** A report route that could not read the report this time; the same token and target work once it can. */
+function previewUnavailable(): Response {
+  const headers = baseHeaders("text/plain; charset=utf-8");
+  headers.set("Retry-After", "1");
+  return new Response("Unavailable", { status: 503, headers });
+}
+
+/** A report this Worker cannot decrypt in an isolate's memory; it never will, so the Viewer says so instead of retrying. */
+function previewTooLarge(): Response {
+  return new Response(JSON.stringify({ error: "too-large" }), { status: 413, headers: baseHeaders("application/json; charset=utf-8") });
+}
+
+/** One asset of the report, inflated from the decrypted ZIP the isolate holds. */
+async function assetResponse(loaded: LoadedReport, file: string, cacheControl: string): Promise<Response> {
+  const asset = await previewAsset(loaded, `assets/${file}`);
+  if (!asset) return previewNotFound();
+  const headers = baseHeaders(asset.type);
+  headers.set("Cache-Control", cacheControl);
+  headers.set("Content-Length", String(asset.bytes.byteLength));
+  headers.set("ETag", `"${file.slice(0, 64)}"`);
+  return new Response(asset.bytes as BodyInit, { headers });
+}
+
 /** The agent index as the shell's initial `#root` content; the Viewer replaces it when it renders. */
 export function shellWithIndex(indexHtml: string, indexBlock: string): string {
   const root = '<div id="root"></div>';
@@ -228,29 +328,89 @@ export function shellWithIndex(indexHtml: string, indexBlock: string): string {
   return body === -1 ? indexHtml : `${indexHtml.slice(0, body)}${indexBlock}${indexHtml.slice(body)}`;
 }
 
-async function loadedReport(origin: string, report: PreviewReport | undefined, config: PreviewConfig, options: PreviewRequestOptions): Promise<{ report: PreviewReport; loaded: LoadedReport } | undefined> {
+/**
+ * A report decrypted and parsed, from the isolate's cache or decrypted now; requests for one that is decrypting wait for
+ * that decrypt. `keep: false` (a manifest) does not keep a report that is not cached already.
+ */
+async function loadedReport(origin: string, report: PreviewReport | undefined, config: PreviewConfig, options: PreviewRequestOptions,
+  { keep = true }: { keep?: boolean } = {}): Promise<{ report: PreviewReport; loaded: LoadedReport } | "unavailable" | "too-large" | undefined> {
   if (!report) return undefined;
   const cache = options.cache ?? reportCache;
+  const loading = options.loading ?? reportLoading;
   const key = `${origin}${report.path}`;
-  let pending = cache.get(key);
+  const oversized = options.oversized ?? oversizedReports;
+  if (oversized.has(key)) return "too-large";
+  const cached = cache.get(key);
+  if (cached) {
+    // Most recently used last, so the oldest is the first to go.
+    cache.delete(key);
+    cache.set(key, cached);
+    return { report, loaded: cached };
+  }
+  let pending = loading.get(key);
   if (!pending) {
-    pending = decryptedBytes(origin, report.path, config, options).then(bytes => (bytes ? loadReport(bytes) : undefined));
-    cache.set(key, pending);
-    pending.then(loaded => { if (!loaded) cache.delete(key); }, () => cache.delete(key));
+    pending = oneAtATime(() => decryptedBytes(origin, report.path, config, options, sealed => makeRoom(cache, 2 * sealed, peak(options))))
+      .then<LoadResult, LoadResult>(bytes => (bytes instanceof Uint8Array ? loadReport(bytes) : bytes), () => "unavailable");
+    loading.set(key, pending);
+    void pending.finally(() => { if (loading.get(key) === pending) loading.delete(key); });
   }
   const loaded = await pending;
-  return loaded ? { report, loaded } : undefined;
+  if (loaded === "too-large") oversized.add(key);
+  if (!loaded || typeof loaded === "string") return loaded;
+  const held = options.budget?.held ?? HELD_REPORT_BYTES;
+  if (keep && !cache.has(key) && loaded.zip.byteLength <= held) {
+    makeRoom(cache, loaded.zip.byteLength, held);
+    cache.set(key, loaded);
+  }
+  return { report, loaded };
 }
 
-async function decryptedBytes(origin: string, reportPath: string, config: PreviewConfig, options: PreviewRequestOptions): Promise<Uint8Array | undefined> {
+/** Lets the oldest kept reports go until `bytes` more fit beside the rest within `budget`; false when they never can. */
+function makeRoom(cache: Map<string, LoadedReport>, bytes: number, budget: number): boolean {
+  if (bytes > budget) return false;
+  let held = 0;
+  for (const loaded of cache.values()) held += loaded.zip.byteLength;
+  for (const [oldest, loaded] of cache) {
+    if (held + bytes <= budget) break;
+    cache.delete(oldest);
+    held -= loaded.zip.byteLength;
+  }
+  return true;
+}
+
+function peak(options: PreviewRequestOptions): number {
+  return options.budget?.peak ?? DECRYPT_PEAK_BYTES;
+}
+
+/** Decrypts run one after another, so two of them never need their ciphertext and plaintext at once. */
+function oneAtATime<T>(task: () => Promise<T>): Promise<T> {
+  const run = decrypting.then(task, task);
+  decrypting = run.catch(() => undefined);
+  return run;
+}
+
+/**
+ * The report's ZIP, decrypted: "unavailable" when its file cannot be fetched now, "too-large" when `reserve` cannot make
+ * room to decrypt it, undefined when the file is missing or does not decrypt.
+ */
+async function decryptedBytes(origin: string, reportPath: string, config: PreviewConfig, options: PreviewRequestOptions,
+  reserve: (sealedBytes: number) => boolean = () => true): Promise<Uint8Array | "unavailable" | "too-large" | undefined> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const subtle = options.subtle ?? crypto.subtle;
-  const upstream = await fetchImpl(new URL(reportPath, origin).href, { headers: { accept: "application/octet-stream" } });
+  let upstream: Response;
+  try { upstream = await fetchImpl(new URL(reportPath, origin).href, { headers: { accept: "application/octet-stream" } }); }
+  catch { return "unavailable"; }
+  if (upstream.status >= 500) return "unavailable";
   if (upstream.status !== 200 || !upstream.body) return undefined;
   const declared = Number(upstream.headers.get("content-length") ?? "0");
   if (declared > MAX_REPORT_BYTES + PREVIEW_CIPHER.ivBytes + 16) return undefined;
+  if (declared && !reserve(declared)) {
+    await upstream.body.cancel();
+    return "too-large";
+  }
   const sealed = new Uint8Array(await upstream.arrayBuffer());
   if (sealed.byteLength <= PREVIEW_CIPHER.ivBytes + 16 || sealed.byteLength > MAX_REPORT_BYTES + PREVIEW_CIPHER.ivBytes + 16) return undefined;
+  if (!declared && !reserve(sealed.byteLength)) return "too-large";
   try {
     const key = await subtle.importKey("raw", config.key, "AES-GCM", false, ["decrypt"]);
     return new Uint8Array(await subtle.decrypt(
@@ -259,8 +419,12 @@ async function decryptedBytes(origin: string, reportPath: string, config: Previe
   } catch { return undefined; }
 }
 
+/** The whole decrypted ZIP (downloads, older Viewers), decrypted in turn and within the same budget as every other decrypt. */
 async function decryptedReport(origin: string, reportPath: string, config: PreviewConfig, options: PreviewRequestOptions): Promise<Response> {
-  const plain = await decryptedBytes(origin, reportPath, config, options);
+  const cache = options.cache ?? reportCache;
+  const plain = await oneAtATime(() => decryptedBytes(origin, reportPath, config, options, sealed => makeRoom(cache, 2 * sealed, peak(options))));
+  if (plain === "unavailable") return previewUnavailable();
+  if (plain === "too-large") return previewTooLarge();
   if (!plain) return previewNotFound();
   const headers = baseHeaders("application/zip");
   headers.set("Content-Length", String(plain.byteLength));

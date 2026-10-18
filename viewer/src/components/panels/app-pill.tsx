@@ -6,6 +6,7 @@ import { Menu } from "../shared/menu";
 import { isPreviewPath, isReportTargetId, previewReportsUrl, targetQuery } from "../../utils/artifact-report";
 import { ScreenshotImage } from "../shared/screenshot-image";
 import { artifactUrl } from "../../utils/model";
+import { REPORT_SOURCE } from "../../utils/report-source";
 import { Tooltip } from "../shared/tooltip";
 import { KeyHint } from "../shared/key-hint";
 import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
@@ -152,7 +153,7 @@ export function AppPill(props: AppPillProps) {
       kind: "item" as const, label: target.label,
       description: [sibling.report?.changes === undefined ? undefined : `${sibling.report.changes} ${sibling.report.changes === 1 ? "change" : "changes"}`, sibling.report?.device]
         .filter(Boolean).join(" · ") || (target.platform === platform ? "Same review, other device" : "Same review, other platform"),
-      checked: false, onSelect: () => { setPlatformOpen(false); window.location.assign(sibling.url); },
+      checked: false, onSelect: () => { setPlatformOpen(false); if (!REPORT_SOURCE.switchTarget(target.id, sibling.url)) window.location.assign(sibling.url); },
     }] : [];
   }) : [];
   // A report whose target is not among the run's (a hand-edited one) still lists itself first, checked.

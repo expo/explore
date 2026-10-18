@@ -115,8 +115,9 @@ if (!preview) {
     for (const path of [`/p/${token}`, `/p/${token}/`, `/p/${token}?view=compare&screen=home`]) {
       const response = await handlers.GET(new Request(origin + path, { headers: { accept: "text/html,*/*;q=0.8" } }));
       const body = await response.text();
+      const preload = `<link rel="preload" href="/p/${token}/manifest.json" as="fetch" crossorigin>`;
       if (response.status !== 200 || response.headers.get("cache-control") !== "private, no-store" || !body.includes("<section data-explore-agent-index")
-        || body.replace(/<div id="root">.*<\/div>/s, '<div id="root"></div>') !== stagedHtml) {
+        || !body.includes(preload) || body.replace(preload, "").replace(/<div id="root">.*<\/div>/s, '<div id="root"></div>') !== stagedHtml) {
         throw new Error(`Preview page ${path} must serve the complete staged Viewer carrying the agent index`);
       }
       const markdown = await handlers.GET(new Request(origin + path));

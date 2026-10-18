@@ -1,4 +1,4 @@
-import { BlobReader, ZipReader, type FileEntry } from "@zip.js/zip.js";
+import type { FileEntry } from "@zip.js/zip.js";
 import type { ArtifactReport } from "../../../src/contracts/artifact-report";
 import { normalizePublicReviewForReading } from "../../../src/contracts/review-validation";
 import { reportContractGap } from "../public/public-workspace";
@@ -64,6 +64,21 @@ export function previewReportUrl(page: URL): string | undefined {
   if (!match) return undefined;
   const target = reportTarget(page);
   return `/p/${match[1]}/report.zip${target ? `?${targetQuery(target)}` : ""}`;
+}
+
+/** The token of a hosted preview page, `/p/<token>`. */
+export function previewToken(page: URL): string | undefined {
+  return PREVIEW_PATH.exec(page.pathname)?.[1];
+}
+
+/** The manifest the Worker serves instead of the whole ZIP (`/p/<token>/manifest.json`). */
+export function previewManifestUrl(token: string, target?: string): string {
+  return `/p/${token}/manifest.json${target ? `?${targetQuery(target)}` : ""}`;
+}
+
+/** One asset of a hosted preview's report, `assets/<sha256>.<ext>` under `/p/<token>/`. */
+export function previewAssetUrl(token: string, path: string, target?: string): string {
+  return `/p/${token}/${path}${target ? `?${targetQuery(target)}` : ""}`;
 }
 
 /** The hosted preview's list of the targets it serves (`/p/<token>/reports.json`). */
@@ -213,7 +228,49 @@ function validateReport(value: unknown, expected?: ArtifactIdentity, fileName?: 
   return { report: { ...report, review }, identity: expected ?? own };
 }
 
-type ImageEntry = { entry: FileEntry; metadata: EmbeddedScreenshot; extension: "png" | "jpg" | "mp4" };
+/** Where an archive's bytes come from: a ZIP entry in this browser, or one asset of a hosted preview. */
+type SourceEntry = { size: number; read: (limit: number, mimeType: string) => Promise<Blob> };
+type ImageEntry = { entry: SourceEntry; metadata: EmbeddedScreenshot; extension: "png" | "jpg" | "mp4" };
+
+function zipEntry(entry: FileEntry): SourceEntry {
+  return { size: entry.uncompressedSize, read: (limit, mimeType) => readEntry(entry, limit, mimeType) };
+}
+
+/** A hosted preview asset: fetched when a screenshot is first shown, kept by the browser's HTTP cache afterwards. */
+function remoteEntry(url: string, size: number): SourceEntry {
+  return { size, read: async (limit, mimeType) => {
+    if (size > limit) throw new Error(`Report asset is too large: ${url}`);
+    let response: Response | undefined;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try { response = await fetch(url, { credentials: "same-origin" }); }
+      catch (error) { if (attempt) throw error; continue; }
+      if (response.ok || response.status < 500) break;
+    }
+    if (!response?.ok) throw new Error(`The report screenshot could not be downloaded (HTTP ${response?.status ?? 0}).`);
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength !== size) throw new Error("The screenshot size does not match the report.");
+    return new Blob([bytes], { type: mimeType });
+  } };
+}
+
+/** The report page's manifest (src/report/preview-manifest.ts): the metadata file plus every asset's size. */
+export const PREVIEW_MANIFEST_FORMAT = "explore.preview-manifest/1";
+type PreviewManifest = { format: typeof PREVIEW_MANIFEST_FORMAT; file: "review.json" | "exploration.json"; entries: Record<string, number>; report: unknown };
+
+function validateManifest(value: unknown): PreviewManifest {
+  const invalid = () => new ReportFileError("invalid", "The hosted report manifest is invalid.");
+  if (!value || typeof value !== "object") throw invalid();
+  const manifest = value as PreviewManifest;
+  if (manifest.format !== PREVIEW_MANIFEST_FORMAT || !["review.json", "exploration.json"].includes(manifest.file)
+    || !manifest.entries || typeof manifest.entries !== "object" || Array.isArray(manifest.entries)
+    || !manifest.report || typeof manifest.report !== "object") throw invalid();
+  const entries = Object.entries(manifest.entries);
+  if (entries.length > ARTIFACT_LIMITS.entries) throw invalid();
+  for (const [path, size] of entries) {
+    if (!safePath(path) || !Number.isSafeInteger(size) || size < 0 || size > ARTIFACT_LIMITS.image) throw invalid();
+  }
+  return manifest;
+}
 /** Eager screenshots (the Inspector's) are decoded before lazy ones (canvas nodes and thumbnails). */
 export type ScreenshotPriority = "eager" | "lazy";
 type ImageLoad = {
@@ -233,6 +290,8 @@ const DECODE_SLOTS = 4;
  */
 export const RETAINED_SCREENSHOTS = 32;
 export const RETAINED_SCREENSHOT_BYTES = 128 * 1024 * 1024;
+/** A hosted preview's report in the background (another target is shown) keeps fewer, for a quick switch back. */
+export const BACKGROUND_RETAINED_SCREENSHOTS = 16;
 
 /**
  * Compressed Blob + entry index. Screenshots are extracted when a caller asks for them; the last
@@ -248,8 +307,9 @@ export class ArtifactReportArchive {
   private readonly queues: Record<ScreenshotPriority, ImageLoad[]> = { eager: [], lazy: [] };
   private disposed = false;
   private running = 0;
+  private retainedLimit = RETAINED_SCREENSHOTS;
 
-  private constructor(private readonly reader: ZipReader<Blob>, report: ArtifactReport | ExplorationReport,
+  private constructor(private readonly close: () => void, report: ArtifactReport | ExplorationReport,
     private readonly images: Map<string, ImageEntry>, readonly identity: ArtifactIdentity) {
     const assets = Object.fromEntries([...images].map(([sha, value]) => [sha, value.metadata]));
     this.data = report.kind === EXPLORATION_REPORT_KIND ? { contract: STANDALONE_REPORT_CONTRACT, exploration: report, assets }
@@ -259,6 +319,8 @@ export class ArtifactReportArchive {
   /** Bind the ZIP to the linked run when there is one; a bare page takes the run the report names. */
   static async open(blob: Blob, identity?: ArtifactIdentity, fileName?: string): Promise<ArtifactReportArchive> {
     await checkReportFile(blob, fileName);
+    // The ZIP reader is loaded on first use: a hosted preview opens its manifest and never needs it.
+    const { BlobReader, ZipReader } = await import("@zip.js/zip.js");
     const reader = new ZipReader(new BlobReader(blob), { strictness: "strict", useWebWorkers: false });
     try {
       const files = new Map<string, FileEntry>();
@@ -280,6 +342,30 @@ export class ArtifactReportArchive {
         }
         if (!entry.directory) files.set(entry.filename, entry);
       }
+      const entries = new Map<string, SourceEntry>([...files].map(([name, entry]) => [name, zipEntry(entry)]));
+      return await ArtifactReportArchive.fromEntries(entries, () => { void reader.close(); }, identity, fileName);
+    } catch (error) {
+      await reader.close();
+      throw error;
+    }
+  }
+
+  /**
+   * Open a hosted preview from its manifest alone: the metadata is validated like a ZIP's, and each asset is
+   * fetched from `assetUrl(path)` when a screenshot is first shown, so the first paint waits for no screenshot.
+   */
+  static async openManifest(value: unknown, assetUrl: (path: string) => string, identity?: ArtifactIdentity): Promise<ArtifactReportArchive> {
+    const manifest = validateManifest(value);
+    const text = JSON.stringify(manifest.report);
+    const metadata = new Blob([text], { type: "application/json" });
+    const entries = new Map<string, SourceEntry>();
+    for (const [path, size] of Object.entries(manifest.entries)) entries.set(path, remoteEntry(assetUrl(path), size));
+    entries.set(manifest.file, { size: metadata.size, read: () => Promise.resolve(metadata) });
+    return ArtifactReportArchive.fromEntries(entries, () => {}, identity, "report.zip");
+  }
+
+  private static async fromEntries(files: Map<string, SourceEntry>, close: () => void, identity?: ArtifactIdentity, fileName?: string): Promise<ArtifactReportArchive> {
+    {
       const indexImages = (assets: ArtifactReport["assets"]): Map<string, ImageEntry> => {
         const images = new Map<string, ImageEntry>();
         const imagePaths = new Set<string>();
@@ -290,34 +376,34 @@ export class ArtifactReportArchive {
           }
           const extension = /\.(png|jpg|mp4)$/.exec(asset.path)?.[1] as "png" | "jpg" | "mp4" | undefined;
           const entry = files.get(asset.path);
-          if (!extension || !entry || entry.uncompressedSize <= 0 || entry.uncompressedSize > ARTIFACT_LIMITS.image) {
+          if (!extension || !entry || entry.size <= 0 || entry.size > ARTIFACT_LIMITS.image) {
             throw new Error("A report screenshot is missing or invalid.");
           }
           images.set(asset.sha256, { entry, extension,
-            metadata: { mimeType: extension === "png" ? "image/png" : extension === "mp4" ? "video/mp4" : "image/jpeg", byteLength: entry.uncompressedSize } });
+            metadata: { mimeType: extension === "png" ? "image/png" : extension === "mp4" ? "video/mp4" : "image/jpeg", byteLength: entry.size } });
           imagePaths.add(asset.path);
         }
         return images;
       };
       const explorationEntry = files.get("exploration.json");
       if (explorationEntry && !files.has("review.json")) {
-        if (explorationEntry.uncompressedSize > ARTIFACT_LIMITS.metadata) throw new ReportFileError("too-large", `${describe(fileName)} has an exploration index over the browser limit.`);
+        if (explorationEntry.size > ARTIFACT_LIMITS.metadata) throw new ReportFileError("too-large", `${describe(fileName)} has an exploration index over the browser limit.`);
         let parsed: unknown;
-        try { parsed = JSON.parse(await (await readEntry(explorationEntry, ARTIFACT_LIMITS.metadata, "application/json")).text()); }
+        try { parsed = JSON.parse(await (await explorationEntry.read(ARTIFACT_LIMITS.metadata, "application/json")).text()); }
         catch { throw new ReportFileError("not-report", `${describe(fileName)} is not an Explore report: its exploration.json is not valid JSON.`); }
         const { report, identity: bound } = validateExplorationReport(parsed, identity, fileName);
         const images = indexImages(report.assets);
         for (const artifact of report.map.artifacts) {
           if (artifact.kind === "screenshot" && !images.has(artifact.sha256)) throw new Error("A captured screenshot is missing from the report image index.");
         }
-        return new ArtifactReportArchive(reader, report, images, bound);
+        return new ArtifactReportArchive(close, report, images, bound);
       }
       const metadata = files.get("review.json");
-      if (!metadata || metadata.uncompressedSize > ARTIFACT_LIMITS.metadata) {
+      if (!metadata || metadata.size > ARTIFACT_LIMITS.metadata) {
         throw new ReportFileError("not-report", `${describe(fileName)} is not an Explore report: it has no review.json. Download ${identity ? reportFileName(identity) : `the ${GENERIC_FILE_NAME} artifact`} from the workflow run.`);
       }
       let parsed: unknown;
-      try { parsed = JSON.parse(await (await readEntry(metadata, ARTIFACT_LIMITS.metadata, "application/json")).text()); }
+      try { parsed = JSON.parse(await (await metadata.read(ARTIFACT_LIMITS.metadata, "application/json")).text()); }
       catch { throw new ReportFileError("not-report", `${describe(fileName)} is not an Explore report: its review.json is not valid JSON.`); }
       const { report, identity: bound } = validateReport(parsed, identity, fileName);
       const images = indexImages(report.assets);
@@ -326,10 +412,7 @@ export class ArtifactReportArchive {
           if (image && !images.has(image.sha256)) throw new Error("A captured screenshot is missing from the report image index.");
         }
       }
-      return new ArtifactReportArchive(reader, report, images, bound);
-    } catch (error) {
-      await reader.close();
-      throw error;
+      return new ArtifactReportArchive(close, report, images, bound);
     }
   }
 
@@ -345,6 +428,8 @@ export class ArtifactReportArchive {
   async resolve(reference: string, priority: ScreenshotPriority = "lazy"): Promise<string> {
     const sha256 = IMAGE_REFERENCE.exec(reference)?.[1];
     if (!sha256) return reference;
+    // Shown again: back to the full allowance.
+    this.retainedLimit = RETAINED_SCREENSHOTS;
     if (this.disposed || !this.images.has(sha256)) throw new Error("This report screenshot is unavailable.");
     const existing = this.loads.get(sha256);
     if (existing) {
@@ -388,7 +473,22 @@ export class ArtifactReportArchive {
     this.loads.clear();
     this.retained.clear();
     this.retainedBytes = 0;
-    void this.reader.close();
+    this.close();
+  }
+
+  /**
+   * Let go of every screenshot of a report nobody is looking at; its index stays open for a quick return. The Viewer that
+   * used them releases them against the report shown next, so the ones still in use are dropped here instead.
+   */
+  trim(): void {
+    for (const load of this.queues.eager.splice(0).concat(this.queues.lazy.splice(0))) {
+      load.waiting?.drop(new Error("This screenshot is no longer in use."));
+    }
+    // What the Viewer was showing is kept as released, most recent last, so switching back shows it at once.
+    this.retainedLimit = BACKGROUND_RETAINED_SCREENSHOTS;
+    for (const load of this.loads.values()) if (load.url) this.retain(load.sha256, load.url);
+    this.loads.clear();
+    this.evictRetained();
   }
 
   private async decode(load: ImageLoad): Promise<string> {
@@ -396,7 +496,7 @@ export class ArtifactReportArchive {
     await this.acquireSlot(load);
     try {
       if (this.disposed) throw new Error("This report was closed.");
-      const blob = await readEntry(image.entry, ARTIFACT_LIMITS.image, image.metadata.mimeType);
+      const blob = await image.entry.read(ARTIFACT_LIMITS.image, image.metadata.mimeType);
       const bytes = await blob.arrayBuffer();
       const header = new Uint8Array(bytes, 0, Math.min(8, bytes.byteLength));
       const validImage = image.extension === "png"
@@ -411,10 +511,11 @@ export class ArtifactReportArchive {
       if (actual !== load.sha256) throw new Error("The screenshot checksum does not match the report.");
       if (this.disposed) throw new Error("This report was closed.");
       const url = URL.createObjectURL(blob);
-      if (load.users > 0) load.url = url;
+      const current = this.loads.get(load.sha256) === load;
+      if (current && load.users > 0) load.url = url;
       else {
-        // Everyone let go while it decoded; keep the finished work for a quick return.
-        this.loads.delete(load.sha256);
+        // Everyone let go while it decoded, or the report was trimmed; keep the finished work for a quick return.
+        if (current) this.loads.delete(load.sha256);
         this.retain(load.sha256, url);
       }
       return url;
@@ -468,10 +569,22 @@ export class ArtifactReportArchive {
   /** Keep a released URL; beyond either limit the least recently released ones are revoked. */
   private retain(sha256: string, url: string): void {
     const bytes = this.images.get(sha256)!.metadata.byteLength;
+    // A decode a trim left behind can finish after a later one for the same screenshot; nothing uses a kept URL, so the older one goes.
+    const replaced = this.retained.get(sha256);
+    if (replaced) {
+      this.retained.delete(sha256);
+      this.retainedBytes -= replaced.bytes;
+      if (replaced.url !== url) URL.revokeObjectURL(replaced.url);
+    }
     this.retained.set(sha256, { url, bytes });
     this.retainedBytes += bytes;
+    this.evictRetained();
+  }
+
+  /** Beyond either limit, the least recently released kept URLs are revoked. */
+  private evictRetained(): void {
     for (const [oldest, old] of this.retained) {
-      if (this.retained.size <= RETAINED_SCREENSHOTS && this.retainedBytes <= RETAINED_SCREENSHOT_BYTES) break;
+      if (this.retained.size <= this.retainedLimit && this.retainedBytes <= RETAINED_SCREENSHOT_BYTES) break;
       this.retained.delete(oldest);
       this.retainedBytes -= old.bytes;
       URL.revokeObjectURL(old.url);
@@ -482,7 +595,14 @@ export class ArtifactReportArchive {
 export let activeArtifactReport: ArtifactReportArchive | undefined;
 
 function activate(archive: ArtifactReportArchive): ArtifactReportArchive {
-  activeArtifactReport?.dispose();
+  if (activeArtifactReport !== archive) activeArtifactReport?.dispose();
+  activeArtifactReport = archive;
+  return archive;
+}
+
+/** Make an archive the one screenshots resolve from, keeping the previous one open (a hosted preview's other target). */
+export function showArchive(archive: ArtifactReportArchive): ArtifactReportArchive {
+  if (activeArtifactReport !== archive) activeArtifactReport?.trim();
   activeArtifactReport = archive;
   return archive;
 }
