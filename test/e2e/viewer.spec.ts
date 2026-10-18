@@ -5079,9 +5079,22 @@ test("/ finds screens on the Screens page: the tree and the grid narrow to the q
   // Every row stays open while finding, so the fold-all control steps aside.
   await expect(grid.locator(".screens-tree-fold-all")).toHaveCount(0);
 
+  // The results are the field's: ↓ and ↑ step the pick through them while typing can go on; Return opens the pick.
+  await field.press("ArrowDown");
+  await expect(cells.nth(0).locator(".screen-screenshot-card")).toHaveClass(/selected/);
+  await expect(field).toBeFocused();
+  if (matching.length > 1) {
+    await field.press("ArrowDown");
+    await expect(cells.nth(1).locator(".screen-screenshot-card")).toHaveClass(/selected/);
+    await field.press("ArrowUp");
+    await expect(cells.nth(0).locator(".screen-screenshot-card")).toHaveClass(/selected/);
+  }
+  await expect(page.getByRole("complementary", { name: "Inspector panel" })).toBeHidden();
   await field.press("Enter");
+  await expect(page.getByRole("complementary", { name: "Inspector panel" })).toBeVisible();
   await expect(cells.first().locator(".screen-screenshot-card")).toHaveClass(/selected/);
   await expect(cells).toHaveCount(matching.length);
+  await expect(field).toBeFocused();
 
   await field.fill("no-such-route-anywhere");
   await expect(grid.getByRole("status").filter({ hasText: "No screens match" }).first()).toBeVisible();

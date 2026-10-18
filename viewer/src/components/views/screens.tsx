@@ -384,7 +384,6 @@ export function ScreensView(props: ScreensViewProps) {
         name="screens-find"
         autoFocus
         onEscape={() => (query ? setQuery("") : closeFind())}
-        onEnter={() => { if (order[0]) jumpTo(order[0]); }}
         onChange={setQuery}
       />
     </div>
@@ -497,6 +496,20 @@ export function ScreensView(props: ScreensViewProps) {
       }
       const arrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.code);
       if (!arrow && event.key !== "Enter") return;
+      // In the find field the results below are the field's: ↓ and ↑ step the pick through them in page order while
+      // the field keeps the keyboard, and Return opens the picked one (the first match before any step).
+      if (event.target instanceof Element && event.target.closest(".screens-find")) {
+        if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.code === "ArrowLeft" || event.code === "ArrowRight") return;
+        const ids = orderRef.current;
+        const picked = selectedRef.current && ids.includes(selectedRef.current) ? selectedRef.current : undefined;
+        const id = !arrow ? picked ?? ids[0] : next(event.code === "ArrowDown" ? "ArrowRight" : "ArrowLeft", picked);
+        if (!id) return;
+        event.preventDefault();
+        if (!arrow) { openRef.current(id); return; }
+        pickRef.current(id);
+        requestAnimationFrame(() => document.getElementById(cardId(id))?.scrollIntoView({ block: "nearest" }));
+        return;
+      }
       // The browser's own repeat of a held arrow would scroll the page under the hold.
       if (event.repeat && hold.holding(event.code)) { event.preventDefault(); return; }
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.defaultPrevented || !shortcutsLive(event)) return;
