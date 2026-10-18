@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,7 +23,7 @@ import { ExploreStore, getCoverage } from "../map/store.js";
 import { whoamiAccounts } from "../report/preview-deploy.js";
 import { CiError, serializeCiError, toCiError } from "../shared/ci-errors.js";
 import { packageBin } from "../shared/package-paths.js";
-import { assertDecodedPng, type DecodedFrame } from "../shared/png-evidence.js";
+import { assertDecodedPng, solidColour } from "../shared/png-evidence.js";
 import { CONTRACT, type ExploreMap, type Platform } from "../types.js";
 import { assertEmulatorCompatible, extractIosBundle, inspectArchive, type ArchiveKind, type InspectedArchive, readArchiveIcon } from "./archive.js";
 import { runBlackBoxExploration, type BlackBoxExplorerResult, type BlackBoxFrame, SYSTEM_DIALOG_PACKAGES } from "./explorer.js";
@@ -855,18 +854,7 @@ export function assertAppUrl(url: string, appSchemes: readonly string[] = []): v
 
 export const BLANK_SCREENSHOT_MESSAGE = "The app blocks screen capture on this screen (Android FLAG_SECURE), so its screenshot came back blank.";
 
-/** A capture-protected screen comes back as a single flat colour (black on Android); every 97th pixel is enough to tell. */
-export function solidColour(png: Buffer): boolean {
-  let frame: DecodedFrame;
-  try { frame = createRequire(import.meta.url.replace(/\?.*$/, ""))("pngjs").PNG.sync.read(png, { checkCRC: false }) as DecodedFrame; }
-  catch { return false; }
-  const { data } = frame;
-  if (data.length < 4) return false;
-  for (let offset = 0; offset + 3 < data.length; offset += 4 * 97) {
-    if (data[offset] !== data[0] || data[offset + 1] !== data[1] || data[offset + 2] !== data[2]) return false;
-  }
-  return true;
-}
+export { solidColour };
 
 /** Setup commands whose last positional is free text (`fill <ref> <text>`, `type <text>`): move the flags ahead of a `--` separator. */
 export function guardPositionals(args: readonly string[]): string[] {

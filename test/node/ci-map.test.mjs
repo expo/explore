@@ -114,6 +114,8 @@ async function fixture(t, settings = {}) {
   let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let deviceLost = false; let relaunchedAfterForeign = false; let serverStarts = 0; let unreadableLeft = settings.unreadableAfterFold ?? 0;
   // startsErrored / startsUnnamed: how many session starts EAS fails, after naming the session (it ERRORS) or before.
   let starts = 0; let currentSession = 'session-1'; const erroredSessions = new Set(); let foldUnverifiedLeft = settings.foldUnverified ?? 0;
+  // blackAfterFold: the first so many folds of an EAS agent-device session light the panel but draw nothing.
+  let folds = 0;
   const deviceName = settings.android ? 'Pixel 7' : 'iPhone 17 Pro';
   const platform = settings.android ? 'android' : 'ios';
   // A local simulator is the one the capture created, named for Explore.
@@ -297,6 +299,7 @@ async function fixture(t, settings = {}) {
       // agent-device 0.21.15 cannot read Xcode 27.1's hinge angle back, so a local fold reports a failure after folding.
       // foldUnverified: the bridge's reader stayed on the dark panel through its own reset, for that many folds.
       // The bridge exits non-zero, and the runner throws its structured error, as defaultRunner does.
+      if (command === 'fold') folds += 1;
       if (command === 'fold' && foldUnverifiedLeft > 0) { foldUnverifiedLeft -= 1;
         throw controllerCommandFailure(json({ success: false, error: { code: 'CONTROLLER_FOLD_UNVERIFIED', message: 'Argent kept reading the other panel after folding the device open, and after its device helpers were reset.' } }).stdout, 'fold'); }
       if (command === 'fold') return settings.local ? json({ success: false, error: { code: 'COMMAND_FAILED', message: "CoreDevice reported no hinge angle sample: Unknown option '--device'" } })
@@ -371,6 +374,13 @@ async function fixture(t, settings = {}) {
       if (command === 'settings') {
         if (request.args[1] === 'appearance') appearance = request.args[2];
         return ok({ setting: request.args[1], value: request.args[2] });
+      }
+      // The display after a fold, as agent-device's screenshot shows it on EAS: in the pose's shape, drawn or black.
+      if (command === 'screenshot' && request.args[1]?.endsWith('/pose.png')) {
+        const display = new PNG(settings.devicePose === 'open' ? { width: 30, height: 20 } : { width: 20, height: 30 });
+        if (folds > (settings.blackAfterFold ?? 0)) display.data[0] = 255;
+        writeFileSync(request.args[1], PNG.sync.write(display));
+        return ok({ path: request.args[1] });
       }
       if (command === 'screenshot') {
         screenshotAttempts += 1;
@@ -658,20 +668,45 @@ test('an Argent capture of an app pinned to dark is labelled dark and is not war
   assert.equal(execution.colorScheme, 'dark');
 });
 
-test('device.pose folds the device first, before the app is opened, read or captured', async t => {
-  for (const argent of [false, true]) {
-    const f = await fixture(t, { devicePose: 'open', argent });
-    assert.equal((await runCiMap(f.options)).runStatus, 'complete');
-    const controller = f.requests.filter(request => request.command === 'fake-controller' || request.command.endsWith('/argent-controller'));
-    const folds = controller.filter(request => request.args[0] === 'fold');
-    assert.equal(folds.length, 1);
-    assert.deepEqual(folds[0].args.slice(0, 2), ['fold', 'open']);
-    const foldAt = controller.indexOf(folds[0]);
-    // The fold comes first: the app is installed but not opened, read or captured before it, so the controller starts on the lit panel.
-    assert.deepEqual(controller.slice(0, foldAt).map(request => request.args[0]).filter(command => command !== '--version' && command !== 'install'), []);
-    // Argent's bridge is told the pose, so it captures the opened panel's landscape UI upright.
-    if (argent) for (const request of controller) assert.equal(request.environment.EXPLORE_ARGENT_POSE, 'open');
+test('device.pose with Argent folds the device first, before the app is opened, read or captured', async t => {
+  const f = await fixture(t, { devicePose: 'open', argent: true });
+  assert.equal((await runCiMap(f.options)).runStatus, 'complete');
+  const controller = f.requests.filter(request => request.command.endsWith('/argent-controller'));
+  const folds = controller.filter(request => request.args[0] === 'fold');
+  assert.equal(folds.length, 1);
+  assert.deepEqual(folds[0].args.slice(0, 2), ['fold', 'open']);
+  const foldAt = controller.indexOf(folds[0]);
+  // The fold comes first: the app is installed but not opened, read or captured before it, so the controller starts on the lit panel.
+  assert.deepEqual(controller.slice(0, foldAt).map(request => request.args[0]).filter(command => command !== '--version' && command !== 'install'), []);
+  // Argent's bridge is told the pose, so it captures the opened panel's landscape UI upright.
+  for (const request of controller) assert.equal(request.environment.EXPLORE_ARGENT_POSE, 'open');
+});
+
+test('device.pose with agent-device on EAS opens the app, folds, and checks the display it lit', async t => {
+  const f = await fixture(t, { devicePose: 'open' });
+  assert.equal((await runCiMap({ ...f.options, sleep: () => {} })).runStatus, 'complete');
+  const controller = f.requests.filter(request => request.command === 'fake-controller').map(request => request.args[0] === 'screenshot' && request.args[1].endsWith('/pose.png') ? 'pose' : request.args[0]);
+  // agent-device folds only inside a session, so the app opens first; the fold's hinge readback is not trusted, the display is.
+  assert.deepEqual(controller.filter(command => command !== '--version' && command !== 'install').slice(0, 3), ['open', 'fold', 'pose']);
+  assert.equal(f.requests.some(request => request.args[0] === 'simulator:control' && request.args[1] === 'springboard.restart'), false);
+});
+
+test('when an agent-device fold on EAS lights a black panel, the capture restarts SpringBoard, reopens the app and folds again, once', async t => {
+  for (const [black, completes] of [[1, true], [2, false]]) {
+    const f = await fixture(t, { devicePose: 'open', blackAfterFold: black, controlActions: ['springboard.restart'] });
+    const lines = [];
+    const run = runCiMap({ ...f.options, sleep: () => {}, progress: line => lines.push(line) });
+    if (completes) assert.equal((await run).runStatus, 'complete');
+    else await assert.rejects(run, error => JSON.stringify(error).includes('CONTROLLER_READER_STUCK'));
+    const controller = f.requests.filter(request => request.command === 'fake-controller');
+    assert.equal(controller.filter(request => request.args[0] === 'fold').length, 2);
+    assert.ok(controller.some(request => request.args[0] === 'open' && request.args.includes('--relaunch')), 'the app is reopened after SpringBoard');
+    assert.equal(f.requests.filter(request => request.args[0] === 'simulator:control' && request.args[1] === 'springboard.restart').length, 1);
+    assert.ok(lines.some(line => /did not draw the open display after the fold; restarting SpringBoard/.test(line)), lines.join('\n'));
   }
+  // Without springboard.restart (an older serve-sim), a black panel is reported at once.
+  const older = await fixture(t, { devicePose: 'open', blackAfterFold: 1 });
+  await assert.rejects(runCiMap({ ...older.options, sleep: () => {} }), error => JSON.stringify(error).includes('CONTROLLER_FOLD_UNVERIFIED'));
 });
 
 test('a local simulator capture creates its own iOS simulator, installs the repacked app there, and deletes the simulator', async t => {

@@ -27,10 +27,11 @@ import { argentControllerInvocation } from "./controller-invocation.js";
 import { sharedBuild } from "./shared-build.js";
 import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, agentDeviceClaims, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
   deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, approveLinkScheme, localPoseShown,
-  setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
+  pngSize, setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
 import { ensureArgentToolServer } from "../shared/controller-cache.js";
 import { openLocalCaptureRecord } from "./local-registry.js";
 import { approveSessionUrlSchemes, simulatorControl, simulatorControlActions, type EasCommand } from "./simulator-control.js";
+import { solidColour } from "../shared/png-evidence.js";
 import { type UnattributedSetting } from "./unattributed.js";
 import { appScheme, hasConcreteRoutePath, unavailableRoute, capturePlannedRoutes, deviceArgs } from "./route-capture.js";
 
@@ -771,8 +772,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       // controller's accessibility reader starts on the lit panel: Argent's, started on the outer panel, can stay there.
       say(`folding ${options.device} ${options.devicePose}`);
       const target = deviceArgs({ platform: options.platform, deviceModel: options.device, ...(localDevice() ? { provider: "local-simulator" as const, controllerDeviceId: localDevice()! } : {}) });
+      // agent-device reads the hinge back after folding and fails to (locally and on EAS); its display is checked instead.
+      const easAgentDevice = !!sessionId && controller === "agent-device";
       const fold = () => runner({ command: controllerCommand, args: ["fold", options.devicePose!, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
-        cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000, ...(localSimulator ? { allowFailure: true } : {}) });
+        cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000, ...(localSimulator || easAgentDevice ? { allowFailure: true } : {}) });
+      const pause = options.sleep ?? (milliseconds => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); });
       if (localSimulator && controller === "argent") {
         // Argent folds without a session and checks the fold against its own reader; this machine also checks the display.
         fold();
@@ -790,6 +794,42 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           ...(options.sleep ? { sleep: options.sleep } : {}) })) throw new CiError({ code: "CONTROLLER_FOLD_UNVERIFIED", stage: "session",
           message: `${options.device} did not show the ${options.devicePose} display after folding: ${(folded.stderr || folded.stdout).trim().split("\n").at(-1) ?? ""}`.trim(),
           nextAction: "Rerun; if it persists, check that this Xcode's simulator supports folding the device." });
+      } else if (easAgentDevice && sessionId) {
+        // On EAS, agent-device also folds only inside a session, so the app opens first. The first fold of a fresh session
+        // can leave the panel it lights black, as it does for Argent: the controller then reads the old panel and a
+        // relaunch draws nothing. The display is the check, through the controller's own screenshot: in the pose's shape
+        // and drawn. If it is not, SpringBoard is restarted, the app reopened and the device folded again, once.
+        const open = (relaunch: boolean) => runner({ command: controllerCommand, args: ["open", options.bundleId, ...(relaunch ? ["--relaunch"] : []), "--session", CONTROLLER_SESSION,
+          ...target, "--platform", options.platform, "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 15 * 60_000 });
+        const shown = async () => {
+          if (options.devicePose !== "open" && options.devicePose !== "closed") return true;
+          const file = join(simulatorProject, "pose.png");
+          // The display relights and resizes over a moment after the hinge moves.
+          for (let attempt = 0; attempt < 10; attempt += 1) {
+            if (attempt) pause(1_000);
+            runner({ command: controllerCommand, args: ["screenshot", file, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
+              cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000, allowFailure: true });
+            const png = await readFile(file).catch(() => Buffer.alloc(0));
+            await rm(file, { force: true });
+            const size = pngSize(png);
+            if (size && (options.devicePose === "open" ? size.width > size.height : size.height > size.width) && !solidColour(png)) return true;
+          }
+          return false;
+        };
+        open(false);
+        fold();
+        if (!await shown()) {
+          if (!controlActions.has("springboard.restart")) throw new CiError({ code: "CONTROLLER_FOLD_UNVERIFIED", stage: "session",
+            message: `${options.device} did not show the ${options.devicePose} display after folding.`, nextAction: "Rerun the capture on a new session." });
+          say(`${options.device} did not draw the ${options.devicePose} display after the fold; restarting SpringBoard and folding ${options.devicePose} again`);
+          simulatorControl(sessionEas, sessionId, "springboard.restart");
+          pause(8_000);
+          open(true);
+          fold();
+          if (!await shown()) throw new CiError({ code: "CONTROLLER_READER_STUCK", stage: "session",
+            message: `${options.device} did not draw the ${options.devicePose} display after folding, nor after SpringBoard was restarted and it was folded again.`,
+            nextAction: "Rerun the capture; if it keeps happening, report it to Explore with the session's link." });
+        }
       } else if (controller === "argent" && sessionId && controlActions.has("springboard.restart")) {
         // The bridge has already reset Argent's device helpers once when its reader stayed on the dark panel. On EAS the
         // tool-server cannot be restarted, so the next step is SpringBoard, then the same fold and check again.
@@ -798,7 +838,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           if (toCiError(error).code !== "CONTROLLER_FOLD_UNVERIFIED") throw error;
           say(`Argent kept reading the other panel after the fold; restarting SpringBoard and folding ${options.devicePose} again`);
           simulatorControl(sessionEas, sessionId, "springboard.restart");
-          (options.sleep ?? (milliseconds => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }))(8_000);
+          pause(8_000);
           try { fold(); }
           catch (retry) {
             if (toCiError(retry).code !== "CONTROLLER_FOLD_UNVERIFIED") throw retry;
