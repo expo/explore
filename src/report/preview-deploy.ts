@@ -701,6 +701,28 @@ export async function deployFixturePreview(options: FixturePreviewOptions): Prom
 }
 
 /**
+ * The reports a fixture directory holds (scripts/refresh-viewer-preview-fixtures.sh writes it): its reports.json, as a
+ * hosted preview's /reports.json lists them, with `<target>.zip` beside it for each entry. An entry without a target,
+ * from fixtures refreshed before targets, is its platform's target with `<platform>.zip`.
+ */
+export function fixtureReports(listing: unknown, directory: string): FixturePreviewOptions["reports"] {
+  const invalid = () => previewError("PREVIEW_REPORTS_INVALID", "The fixtures' reports.json does not list valid reports",
+    "Refresh the fixtures with scripts/refresh-viewer-preview-fixtures.sh.");
+  if (!Array.isArray(listing)) throw invalid();
+  return listing.map((entry: unknown) => {
+    if (typeof entry !== "object" || entry === null) throw invalid();
+    const { platform, target: id, label, changes, device } = entry as Record<string, unknown>;
+    if (platform !== "ios" && platform !== "android") throw invalid();
+    const target = id === undefined ? undefined : readTarget({ id, platform, label });
+    if (id !== undefined && !target) throw invalid();
+    return {
+      platform, ...(target ? { target } : {}), zipPath: join(directory, `${target?.id ?? platform}.zip`),
+      ...(typeof changes === "number" ? { changes } : {}), ...(typeof device === "string" ? { device } : {}),
+    };
+  });
+}
+
+/**
  * Report ZIPs on this machine behind one token (`capture:review --upload`, `report:upload`), one per target: the same
  * sealed deployment as a PR preview, from ZIPs instead of GitHub artifacts, with the local EAS login or EXPO_TOKEN.
  */
