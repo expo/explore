@@ -48,7 +48,9 @@ export const DEFAULT_ANDROID_DEVICE = "pixel_7";
 export const DEVICE_POSES = ["closed", "half-open", "open"] as const;
 export type DevicePose = typeof DEVICE_POSES[number];
 
-export type PlatformConfig = { device?: string; bundleId?: string; easProfile?: string };
+export type PlatformConfig = { device?: string; bundleId?: string; easProfile?: string;
+  /** This platform's flows, over the top-level `flows` (e2e's own `platforms` option filters tests within a file). */
+  flows?: { tests: string[] } };
 
 /**
  * One named capture target (`targets.<id>`): a platform's device, optionally in a pose, captured as its own report.
@@ -56,7 +58,9 @@ export type PlatformConfig = { device?: string; bundleId?: string; easProfile?: 
  */
 export type TargetConfig = { platform: ExplorePlatform; device?: string; pose?: DevicePose; bundleId?: string; easProfile?: string; label?: string;
   /** This target's device controller and simulator, over `capture.controller` and `capture.simulator`. */
-  controller?: "agent-device" | "argent"; simulator?: "eas" | "local" };
+  controller?: "agent-device" | "argent"; simulator?: "eas" | "local";
+  /** This target's flows, over the top-level `flows`: a foldable may run its own journeys, a phone the common ones. */
+  flows?: { tests: string[] } };
 
 /**
  * A target id names directories, report files, CI artifacts and URL parameters, so it is short and plain. `base` and
@@ -281,13 +285,18 @@ function flowsConfig(value: unknown, mode: ExploreConfig["mode"]): ExploreConfig
     return undefined;
   }
   if (mode === "agent") fail("flows cannot be combined with agent mode", "flows", "Use mode: flows, or mode: deterministic with flows, so the agent and the flows do not drive the device at once.");
-  const input = record(value, "flows");
-  exactKeys(input, ["tests"], "flows");
+  return flowTests(value, "flows");
+}
+
+/** `{ tests: [...] }` at `label`: e2e files or globs inside the app directory. Targets and platforms carry their own. */
+function flowTests(value: unknown, label: string): NonNullable<ExploreConfig["flows"]> {
+  const input = record(value, label);
+  exactKeys(input, ["tests"], label);
   const tests = Array.isArray(input.tests) ? input.tests : input.tests === undefined ? [] : [input.tests];
-  if (!tests.length || tests.length > 100) fail("flows.tests must list between 1 and 100 test files or globs", "flows.tests");
+  if (!tests.length || tests.length > 100) fail(`${label}.tests must list between 1 and 100 test files or globs`, `${label}.tests`);
   return { tests: tests.map((entry, index) => {
-    const path = text(entry, `flows.tests[${index}]`, 512);
-    if (isAbsolute(path) || path.split(/[\\/]/).includes("..") || /[\u0000-\u001f]/.test(path)) fail(`flows.tests[${index}] must be a path or glob inside the app directory`, `flows.tests[${index}]`);
+    const path = text(entry, `${label}.tests[${index}]`, 512);
+    if (isAbsolute(path) || path.split(/[\\/]/).includes("..") || /[\u0000-\u001f]/.test(path)) fail(`${label}.tests[${index}] must be a path or glob inside the app directory`, `${label}.tests[${index}]`);
     return path.replace(/\\/g, "/");
   }) };
 }
@@ -318,6 +327,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
   const platforms = platformsConfig(root.platforms, platform);
   const targets = targetsConfig(root.targets, platform);
   if (platforms && targets) fail("Use targets or platforms, not both", "targets", "Move each platforms entry into targets, with its platform.");
+  if (mode === "agent" && [...Object.values(platforms ?? {}), ...Object.values(targets ?? {})].some(entry => entry.flows)) fail("flows cannot be combined with agent mode", "flows", "Use mode: flows, or mode: deterministic with flows, so the agent and the flows do not drive the device at once.");
   let agent: ExploreConfig["agent"];
   if (root.agent !== undefined || mode === "agent") {
     const input = record(root.agent, "agent");
@@ -394,15 +404,16 @@ function platformsConfig(value: unknown, primary: ExplorePlatform): ExploreConfi
   for (const platform of entries) {
     const label = `platforms.${platform}`;
     const entry = mapping[platform] === null ? {} : record(mapping[platform], label);
-    exactKeys(entry, ["device", "bundleId", "easProfile"], label);
+    exactKeys(entry, ["device", "bundleId", "easProfile", "flows"], label);
     const device = optionalText(entry.device, `${label}.device`, 128);
+    const flows = entry.flows === undefined ? undefined : flowTests(entry.flows, `${label}.flows`);
     const bundleId = entry.bundleId === undefined ? undefined : applicationId(entry.bundleId, `${label}.bundleId`);
     const easProfile = entry.easProfile === undefined ? undefined : profileName(entry.easProfile, `${label}.easProfile`);
     if (platform !== primary && (bundleId === undefined || easProfile === undefined)) {
       fail(`${label} needs bundleId and easProfile`, label,
         `Set ${label}.bundleId to the app's ${platform === "android" ? "android.package" : "ios.bundleIdentifier"} and ${label}.easProfile to an eas.json profile that builds a ${platform === "android" ? "signed APK (android.buildType: apk)" : "simulator app (ios.simulator: true)"}.`);
     }
-    result[platform] = { ...(device === undefined ? {} : { device }), ...(bundleId === undefined ? {} : { bundleId }), ...(easProfile === undefined ? {} : { easProfile }) };
+    result[platform] = { ...(device === undefined ? {} : { device }), ...(bundleId === undefined ? {} : { bundleId }), ...(easProfile === undefined ? {} : { easProfile }), ...(flows === undefined ? {} : { flows }) };
   }
   return result;
 }
@@ -418,7 +429,8 @@ function targetsConfig(value: unknown, primary: ExplorePlatform): ExploreConfig[
     const label = `targets.${id}`;
     if (!isTargetId(id)) fail(`${label}: a target id is lowercase letters, digits and dashes, starts with a letter, and is not base, head or report`, label);
     const entry = record(mapping[id], label);
-    exactKeys(entry, ["platform", "device", "pose", "bundleId", "easProfile", "label", "controller", "simulator"], label);
+    exactKeys(entry, ["platform", "device", "pose", "bundleId", "easProfile", "label", "controller", "simulator", "flows"], label);
+    const flows = entry.flows === undefined ? undefined : flowTests(entry.flows, `${label}.flows`);
     const platform = literal(entry.platform, EXPLORE_PLATFORMS, `${label}.platform`);
     const device = optionalText(entry.device, `${label}.device`, 128);
     const pose = entry.pose === undefined ? undefined : literal(entry.pose, DEVICE_POSES, `${label}.pose`);
@@ -433,7 +445,7 @@ function targetsConfig(value: unknown, primary: ExplorePlatform): ExploreConfig[
     }
     result[id] = { platform, ...(device === undefined ? {} : { device }), ...(pose === undefined ? {} : { pose }), ...(bundleId === undefined ? {} : { bundleId }),
       ...(easProfile === undefined ? {} : { easProfile }), ...(name === undefined ? {} : { label: name }),
-      ...(controller === undefined ? {} : { controller }), ...(simulator === undefined ? {} : { simulator }) };
+      ...(controller === undefined ? {} : { controller }), ...(simulator === undefined ? {} : { simulator }), ...(flows === undefined ? {} : { flows }) };
   }
   return result;
 }
@@ -485,7 +497,7 @@ export function resolveTargetConfig(config: ExploreConfig, selection: { target?:
   void _controller; void _simulator;
   const controller = entry.controller ?? config.capture.controller ?? "agent-device";
   const simulator = entry.simulator ?? config.capture.simulator ?? "eas";
-  return { ...rest, target: chosen,
+  return { ...rest, target: chosen, ...(entry.flows ? { flows: entry.flows } : {}),
     capture: { ...capture, ...(controller === "argent" ? { controller } : {}), ...(simulator === "local" ? { simulator } : {}) },
     app: { ...config.app, platform: entry.platform, bundleId: entry.bundleId ?? config.app.bundleId, easProfile: entry.easProfile ?? config.app.easProfile },
     device: { name: entry.device ?? (primary ? config.device.name : DEFAULT_ANDROID_DEVICE),
@@ -518,7 +530,7 @@ export function resolvePlatformConfig(config: ExploreConfig, platform: ExplorePl
   const primary = platform === config.app.platform;
   const { platforms: _platforms, ...rest } = config;
   void _platforms;
-  return { ...rest,
+  return { ...rest, ...(entry.flows ? { flows: entry.flows } : {}),
     app: { ...config.app, platform, bundleId: entry.bundleId ?? (primary ? config.app.bundleId : fail(`platforms.${platform}.bundleId is required`)),
       easProfile: entry.easProfile ?? (primary ? config.app.easProfile : fail(`platforms.${platform}.easProfile is required`)) },
     device: { name: entry.device ?? (primary ? config.device.name : platform === "android" ? DEFAULT_ANDROID_DEVICE : config.device.name),

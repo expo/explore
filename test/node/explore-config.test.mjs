@@ -376,3 +376,19 @@ test("--flows runs the named e2e files as the whole capture, in flows mode, and 
   assert.throws(() => withRunOverrides(plain, { flows: ["../other/app.e2e.ts"] }), error => error.code === "CONFIG_INVALID");
   assert.throws(() => withRunOverrides(validateExploreConfig({ ...base(), mode: "agent" }), { flows: ["e2e/a.e2e.ts"] }), error => error.code === "CONFIG_INVALID");
 });
+
+test("a target or platform runs its own flows over the top-level list; agent mode takes none", () => {
+  const shared = { tests: ["e2e/*.e2e.ts"] };
+  const targets = validateExploreConfig({ ...base(), flows: shared, targets: {
+    phone: { platform: "ios" },
+    fold: { platform: "ios", device: "iPhone Duo", flows: { tests: ["e2e/fold/*.e2e.ts"] } } } });
+  assert.deepEqual(resolveTargetConfig(targets, { target: "phone" }).flows, shared);
+  assert.deepEqual(resolveTargetConfig(targets, { target: "fold" }).flows, { tests: ["e2e/fold/*.e2e.ts"] });
+  const platforms = validateExploreConfig({ ...base(), mode: "flows", flows: shared, platforms: {
+    ios: {}, android: { bundleId: "com.example.app", easProfile: "explore", flows: { tests: ["e2e/android/*.e2e.ts"] } } } });
+  assert.deepEqual(resolvePlatformConfig(platforms, "ios").flows, shared);
+  assert.deepEqual(resolvePlatformConfig(platforms, "android").flows, { tests: ["e2e/android/*.e2e.ts"] });
+  assert.throws(() => validateExploreConfig({ ...base(), targets: { fold: { platform: "ios", flows: { tests: ["../e2e/x.e2e.ts"] } } } }), error => error.code === "CONFIG_INVALID");
+  assert.throws(() => validateExploreConfig({ ...base(), mode: "agent", agent: { provider: "openai", model: "gpt-5" }, targets: { fold: { platform: "ios", flows: shared } } }),
+    error => error.code === "CONFIG_INVALID" && /agent mode/.test(error.message));
+});

@@ -311,6 +311,7 @@ test("send money to a contact", async ({ app, device, screen }) => {
   the same trust rule as the capture itself (same-repository PRs by authors with write access, or `ci.trustedAuthors`).
 - `e2e` writes its report inside the app directory while the flows run (`.expo-explore-flows/`); Explore removes it
   before the checkout is verified clean.
+- A target or platform can run its own flows: `targets.fold.flows: { tests: [e2e/fold/*.e2e.ts] }` (or `platforms.android.flows`) replaces the top-level `flows` for that target; the others keep it. Within one file, e2e's own `test.describe(..., { platforms: ["ios"] })` already keeps a test to a platform, so a shared list usually suffices.
 - To run a few flows without touching the config, name them on the command line: `explore capture --flows e2e/sequencer.e2e.ts,e2e/patterns.e2e.ts` (files or globs, comma-separated) runs those e2e files as the whole capture — flows mode, no route frames — whatever `mode:` says.
 - Every step the review shows links to its line in the e2e file at the head commit (the Flows view and, for a frame, the inspector's Flow section), when the review names a GitHub repository.
 
