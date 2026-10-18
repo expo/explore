@@ -1,5 +1,5 @@
 import { appearanceLabel, appearanceOptions, appearanceScope, filterComparisonAppearance, filterMapAppearance, filterReviewAppearance, rememberAppearance, rememberedAppearance, type Appearance } from "./utils/appearance";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { Toaster } from "sonner";
@@ -291,7 +291,8 @@ export function App() {
   return <ViewerApp reportKey={source.reportKey} />;
 }
 
-function ViewerApp({ reportKey }: { reportKey: number }) {
+// The report source changes on every chunk while another target downloads; the Viewer re-renders only for a new report.
+const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) {
   const [payload, setPayload] = useState<ViewerPayload>();
   const [workspace, setWorkspace] = useState<ViewerWorkspace>();
   const [loadedPublicReview, setLoadedPublicReview] = useState<PublicReview>();
@@ -1702,4 +1703,4 @@ function ViewerApp({ reportKey }: { reportKey: number }) {
     </>
   );
   return viewer;
-}
+});
