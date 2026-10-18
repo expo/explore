@@ -402,6 +402,9 @@ export async function prepareCaptureReview(options: CaptureReviewOptions): Promi
     for (const record of Object.values(bundle.launch ?? {})) {
       for (const file of [record.splash, record.settled, record.video]) if (file) assets.set(file.sha256, { sha256: file.sha256, path: resolve(directory, file.path) });
     }
+    for (const flow of Object.values(bundle.flows ?? {})) {
+      for (const frame of Object.values(flow.frames)) assets.set(frame.sha256, { sha256: frame.sha256, path: resolve(directory, frame.path) });
+    }
   }
   // Only the head icon names the app in the review header.
   const icon = review.runtime.appIcon && (await readCaptureBundle(options.headDirectory)).appIcon;

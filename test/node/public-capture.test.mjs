@@ -368,3 +368,24 @@ test('a flows failure is published per side and validated as a code and a bounde
     assert.throws(() => assertPublicReview({ ...result.review, flowsFailure: invalid }), /Public flows failure is invalid/);
   }
 });
+
+test('flow frames are report assets: the review names them by hash and the local report carries their bytes', async t => {
+  const f = await captureFixture(t);
+  // A second PNG, distinct from the route frame.
+  const frameImage = new PNG({ width: 1, height: 1 }); frameImage.data = Buffer.from([12, 34, 56, 255]);
+  const framePng = PNG.sync.write(frameImage);
+  const frameSha = createHash('sha256').update(framePng).digest('hex');
+  const headDirectory = f.options.headDirectory;
+  await mkdir(join(headDirectory, 'flows', 'home', 'home-opens'), { recursive: true });
+  await writeFile(join(headDirectory, 'flows', 'home', 'home-opens', 'home.png'), framePng);
+  const head = { ...f.bundles.head, flows: { 'home/home-opens': { file: 'e2e/home.e2e.ts', title: 'home opens', status: 'passed', durationMs: 12,
+    steps: [{ api: 'app.screenshot', label: 'home', status: 'passed', durationMs: 3, frame: 'home' }],
+    frames: { home: { path: 'flows/home/home-opens/home.png', sha256: frameSha, width: 1, height: 1, capturedAt: '2026-09-08T00:00:01Z' } } } } };
+  await writeFile(join(headDirectory, 'bundle.json'), JSON.stringify(head));
+  const result = await prepareCaptureReview({ ...f.options });
+  assertPublicReview(result.review);
+  const flow = result.review.flows[0];
+  assert.equal(flow.id, 'home/home-opens');
+  assert.match(flow.head.frames.home.url, new RegExp(`${frameSha}\\.png$`));
+  assert.deepEqual(result.assets.filter(asset => asset.sha256 === frameSha).map(asset => asset.path), [join(headDirectory, 'flows', 'home', 'home-opens', 'home.png')]);
+});
