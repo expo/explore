@@ -295,6 +295,9 @@ test("send money to a contact", async ({ app, device, screen }) => {
 });
 ```
 
+- A flow starts by opening the app: `await app.open()` for a plain launch, or `device.openLink("myapp://…")` for a deep
+  link. The flows run in their own agent-device session on Explore's simulator, which begins with no app in the
+  foreground (e2e's mobile engine is built that way: "a test launches the pinned app with `app.open()`").
 - Every `app.screenshot(label)` is a frame of the review, `flow:<file>/<test>/<label>`, compared pixel by pixel
   between base and head like a route. The Viewer lists each flow as a journey through its frames; the PR comment has
   one line per flow.

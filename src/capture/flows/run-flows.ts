@@ -9,13 +9,18 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BundleFlow, FlowFrame } from "../../contracts/capture.js";
 import { assertDecodedPng } from "../../shared/png-evidence.js";
+import { CONTROLLER_SESSION } from "../common.js";
 import type { CommandRunner } from "../run.js";
 import type { SimulatorConnection } from "../simulator.js";
 import type { FlowsRequest, FlowsResult } from "./worker.js";
 
 export const FLOWS_WORKER = fileURLToPath(new URL("./worker-main.js", import.meta.url));
 /** The agent-device session the flows drive the device under, beside Explore's own locked session. */
-export const FLOWS_SESSION = "expo-explore-flows";
+/**
+ * The agent-device session the flows use: Explore's own. A daemon lets one session hold a device; a second session name
+ * connects but cannot open the app ("Device is already in use by session expo-explore-runtime", seen on EAS Simulator).
+ */
+export const FLOWS_SESSION = CONTROLLER_SESSION;
 /** Where e2e writes while the flows run, inside the app directory as e2e requires; removed once the frames are copied out. */
 export const FLOWS_OUTPUT_DIRECTORY = ".expo-explore-flows";
 const MAX_FRAME_BYTES = 30 * 1024 * 1024;

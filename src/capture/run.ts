@@ -773,6 +773,10 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       runtimeStage = "flows";
       // The flows share the deadline the routes had; a flow that fails or runs out of time keeps the frames it took.
       const remainingMs = Math.max(60_000, options.maxDurationMinutes * 60_000 - ((options.now ?? Date.now)() - captureStartedAt));
+      // A daemon lets one agent-device session hold the device, and e2e names its own (`<session>-<slot>`): Explore
+      // hands the device over by closing its session. The app and the state setup put in it stay on the device.
+      if (controller !== "argent") runner({ command: options.agentDeviceCommand, args: ["close", "--session", CONTROLLER_SESSION, "--json"], cwd: simulatorProject,
+        environment: controllerEnvironment, timeoutMs: 60_000, allowFailure: true });
       const result = await runFlows({ project, tests: options.flows.tests, platform: options.platform, bundleId: options.bundleId, connection,
         ...(connection ? {} : { stateDir: join(simulatorProject, "agent-device-state") }), deviceId: runtime.controllerDeviceId,
         workDirectory: simulatorProject, outputDirectory, runner, environment: controllerEnvironment, timeoutMs: remainingMs,
