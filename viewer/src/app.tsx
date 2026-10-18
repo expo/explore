@@ -11,7 +11,10 @@ import { CanvasVisibleFrameProvider } from "./components/canvas/visible-frame-pr
 import { AppLoading } from "./components/shared/app-loading";
 import { ReportLoadingShell } from "./components/shared/report-loading-shell";
 import { screenLabel } from "./utils/screen-path";
-import { AppPill, PLATFORM_NAMES, targetSwitch } from "./components/panels/app-pill";
+import { AppPill, PLATFORM_NAMES, runTargets, siblingReportUrl, targetSwitch } from "./components/panels/app-pill";
+import { useFullscreen } from "./components/panels/shell-actions";
+import { getCanvasZoomState, runCanvasZoomCommand } from "./utils/canvas-zoom";
+import { commandItems, suggestedCommands } from "./utils/commands";
 import { changedScreens, focusCounts as countFocusStatuses, isCapturedChange, type ChangedScreen } from "./utils/changed-screens";
 import { MapView } from "./components/views/semantic-map";
 import { RightPanel } from "./components/panels/right";
@@ -326,6 +329,7 @@ function ViewerApp() {
   const [findRequest, setFindRequest] = useState<number>();
   const clearFindRequest = useCallback(() => setFindRequest(undefined), []);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [fullscreen, toggleFullscreen] = useFullscreen();
   // Compare steps through the changed screens in review order. Callbacks read it from a ref,
   // because they are created before the diff that produces it.
   const compareOrderRef = useRef<readonly ChangedScreen[]>([]);
@@ -1538,6 +1542,44 @@ function ViewerApp() {
   };
   const openHandoff = () => setHandoffOpen(true);
   handoffAvailableRef.current = Boolean(handoffInput);
+  // ⌘K: the commands for this canvas, built while the palette is open, ahead of the screens in its search.
+  const paletteCommands = searchOpen ? commandItems({
+    canvas: route.canvas,
+    phone,
+    changed: compareOrder,
+    selectedScreenId,
+    find: !phone,
+    handoff: Boolean(handoffInput),
+    pullRequest: review?.pullRequest,
+    theme: themePreference,
+    appearances: appearances.length > 1 ? appearances.map((option) => ({ id: option, label: appearanceLabel(option), current: option === appearance })) : [],
+    inspector: phone || comparingScreens ? undefined : { open: !rightCollapsed },
+    fullscreen: !phone && typeof document.documentElement.requestFullscreen === "function" ? fullscreen : undefined,
+    targets: (() => {
+      const run = runTargets(map.run);
+      const noun = run.targets.every((target) => target.id === target.platform) ? "platform" as const : "device" as const;
+      const page = new URL(window.location.href);
+      return run.targets.flatMap((target, place) => target.id !== run.current && siblingReportUrl(page, target.id) ? [{ id: target.id, label: target.label, place, noun }] : []);
+    })(),
+    camera: !phone && route.canvas === "map" && Boolean(getCanvasZoomState().api),
+  }, {
+    selectCanvas,
+    openFind: () => { selectCanvas("screens"); setFindRequest((count) => (count ?? 0) + 1); },
+    openHandoff,
+    openShortcuts: () => setShortcutsOpen(true),
+    toggleChanges: () => setChangesOpen((open) => !open),
+    openChangedScreen,
+    setTheme: setThemePreference,
+    chooseAppearance,
+    toggleInspector: toggleRightPanel,
+    toggleFullscreen,
+    switchTarget: (id) => {
+      const url = siblingReportUrl(new URL(window.location.href), id);
+      if (url && !REPORT_SOURCE.switchTarget(id, url)) window.location.assign(url);
+    },
+    zoom: (command) => runCanvasZoomCommand(command === "fit" && getCanvasZoomState().api?.hasSelection() ? "selection" : command),
+  }) : [];
+  const paletteSuggestions = [...suggestedCommands(paletteCommands, route.canvas), ...searchSuggestions.filter((item) => item.screenId === selectedScreenId)];
   const handoffAction = handoffInput ? <HandoffButton {...(phone ? { className: "collapsed-search" } : { tooltip: true })} onOpen={openHandoff} /> : null;
 
   const viewer = (
@@ -1662,8 +1704,8 @@ function ViewerApp() {
       ) : null}
       <SearchCommand
         open={searchOpen}
-        items={searchIndex}
-        suggestions={searchSuggestions}
+        items={[...paletteCommands, ...searchIndex]}
+        suggestions={paletteSuggestions}
         onClose={closeSearch}
         onSelectScreen={selectSearchScreen}
       />
