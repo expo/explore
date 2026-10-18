@@ -433,6 +433,15 @@ test("status-bar glyph differences never count as an app change", async (t) => {
   assert.equal(clipped.measurement.regions[0].normalizedRect.y, 6.41);
   const glyph = ignoreSystemBands({ ...whole, differentPixels: 60, regions: [straddling(7, 60)] }, { top: statusBarBandPercent("ios"), bottom: 0 }, frames(56));
   assert.deepEqual([glyph.ignoredTop, glyph.measurement.match, glyph.measurement.regions], [1, true, []]);
+  // agent-device's regions can overlap: a clock merged with a header line below the band has a rect that also holds the
+  // battery, a region of its own. The header line is still what the merged region keeps, not cancelled by the battery.
+  const paintRects = (...rects) => (png) => { for (const [x0, y0, w, h] of rects) for (let y = y0; y < y0 + h; y += 1) for (let x = x0; x < x0 + w; x += 1) png.data.fill(0, (y * 100 + x) * 4, (y * 100 + x) * 4 + 3); };
+  const overlapFrames = () => ({ baseline: frame(), current: frame(paintRects([10, 40, 10, 10], [70, 40, 20, 10], [0, 60, 100, 1])), distance: 0.1 * Math.sqrt(3 * 255 ** 2) });
+  const merged = { ...straddling(21, 200), rect: { x: 0, y: 40, width: 100, height: 21 }, normalizedRect: { x: 0, y: 4.58, width: 100, height: 2.4 } };
+  const battery = { ...straddling(10, 200), index: 1, rect: { x: 70, y: 40, width: 20, height: 10 }, normalizedRect: { x: 70, y: 4.58, width: 20, height: 1.14 } };
+  const overlapping = ignoreSystemBands({ ...whole, differentPixels: 400, regions: [merged, battery] }, { top: statusBarBandPercent("ios"), bottom: 0 }, overlapFrames);
+  assert.deepEqual([overlapping.ignoredTop, overlapping.measurement.match, overlapping.measurement.differentPixels], [1, false, 100]);
+  assert.deepEqual(overlapping.measurement.regions.map((entry) => [entry.rect.y, entry.rect.height, entry.differentPixels]), [[56, 5, 100]]);
   const unreadable = ignoreSystemBands(whole, { top: statusBarBandPercent("ios"), bottom: 0 }, () => undefined);
   assert.deepEqual([unreadable.ignoredTop, unreadable.measurement.differentPixels], [0, 100]);
   assert.equal(statusBarBandPercent("android"), 7, "Android 15 status glyphs on a 720x1600 emulator reach 6.4 %");

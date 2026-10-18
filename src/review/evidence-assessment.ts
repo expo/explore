@@ -190,9 +190,9 @@ export function systemBandFrameLoader(measurement: ScreenshotDiffMeasurement, th
  * Leaves out of a measurement every diff region that lies inside the system's bands: the status bar at the top and,
  * on iOS, the home indicator at the bottom. Both are drawn by the OS and differ between captures without the app
  * having changed. A region that crosses a band's edge is clipped to the part below (above) it when the frames can be
- * read: its pixels inside the band are counted and dropped, and it stays only for what differs in the app's area.
- * Without frames such a region is kept whole, as before. (A region's pixel count is its own cluster's, so the pixels
- * counted inside the band are clamped to it.)
+ * read: its pixels inside the band are dropped, and it stays only for what differs in the app's area.
+ * Without frames such a region is kept whole, as before. (A region's pixel count is its own cluster's, while its rect
+ * can overlap other regions, so what it keeps is counted outside the band and clamped to its own count.)
  */
 export function ignoreSystemBands(measurement: ScreenshotDiffMeasurement, bands: { top: number; bottom: number }, frames?: SystemBandFrameLoader):
 { measurement: ScreenshotDiffMeasurement; ignoredTop: number; ignoredBottom: number } {
@@ -214,20 +214,13 @@ export function ignoreSystemBands(measurement: ScreenshotDiffMeasurement, bands:
     const { height, width } = decoded.baseline;
     const bandRows = Math.floor((height * bands.top) / 100); const indicatorStart = height - Math.floor((height * bands.bottom) / 100);
     const rect = { ...region.rect };
-    let inside = 0;
-    if (top) {
-      const rows = Math.min(rect.y + rect.height, bandRows) - rect.y;
-      inside += differentPixelsInRect(decoded.baseline, decoded.current, { ...rect, height: rows }, decoded.distance);
-      rect.y = bandRows; rect.height -= rows;
-    }
-    if (bottom) {
-      const start = Math.max(rect.y, indicatorStart);
-      inside += differentPixelsInRect(decoded.baseline, decoded.current, { ...rect, y: start, height: rect.y + rect.height - start }, decoded.distance);
-      rect.height = start - rect.y;
-    }
-    inside = Math.min(inside, region.differentPixels);
-    const differentPixels = region.differentPixels - inside;
-    if (differentPixels === 0 || rect.height <= 0) {
+    if (top) { const rows = Math.max(0, Math.min(rect.y + rect.height, bandRows) - rect.y); rect.y += rows; rect.height -= rows; }
+    if (bottom) rect.height = Math.min(rect.y + rect.height, indicatorStart) - rect.y;
+    // Counted in what is left of the rect, not in what the band takes: the rect can enclose another region's pixels,
+    // which can only add to what is kept (up to the region's own count), never take from it.
+    const differentPixels = rect.height > 0 ? Math.min(region.differentPixels, differentPixelsInRect(decoded.baseline, decoded.current, rect, decoded.distance)) : 0;
+    const inside = region.differentPixels - differentPixels;
+    if (differentPixels === 0) {
       if (top) ignoredTop += 1; else ignoredBottom += 1;
       ignoredPixels += region.differentPixels;
       continue;
