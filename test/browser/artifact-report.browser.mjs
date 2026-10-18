@@ -1543,3 +1543,146 @@ test("local run ZIP opens and reloads without a fabricated GitHub identity", asy
   await expect(localRun).toHaveText("Local");
   assert.deepEqual(errors, []);
 });
+
+test("the Inspector stacks Before over After for a landscape screenshot; Swipe and Flip keep one frame", async t => {
+  // An opened iPhone Duo's inner display, as a screenshot: wider than tall.
+  const picture = new PNG({ width: 951, height: 669 });
+  picture.data.fill(255);
+  const capture = PNG.sync.write(picture);
+  const report = reportFixture();
+  for (const side of ["baseImage", "headImage"]) Object.assign(report.review.surfaces[0][side], { width: 951, height: 669 });
+  const { bytes } = await imageArchive([capture], 0, report);
+  const { page, errors } = await harness(t, Buffer.from(bytes), { app: true, fault: holdScreenshotHashes(capture.length) });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const stage = page.locator(".sidebar-review-stage");
+  const box = locator => locator.evaluate(element => {
+    const { left, top, width, height } = element.getBoundingClientRect();
+    return { left, top, width, height };
+  });
+  const frames = page.locator(".sidebar-review .compare-frame");
+  await expect(frames).toHaveCount(2);
+  // The report's recorded size shapes the pair before the screenshots load: no side-by-side flash.
+  await expect(frames.first().locator("img")).toHaveAttribute("data-screenshot-state", "loading");
+  await expect(stage).toHaveClass(/landscape/);
+  const waiting = await Promise.all([box(frames.nth(0)), box(frames.nth(1))]);
+  await page.evaluate(() => window.releaseScreenshotHashes());
+  await expect(frames.first().locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(stage).toHaveClass(/landscape/);
+  const [before, after] = await Promise.all([box(frames.nth(0)), box(frames.nth(1))]);
+  assert.deepEqual([before, after], waiting, "The frames do not move or resize when the screenshots load");
+  const panel = await box(stage);
+  // Each frame takes the review's width; After sits under Before, not beside it.
+  assert.ok(Math.abs(before.width - panel.width) <= 2, `Before spans the panel: ${JSON.stringify({ before, panel })}`);
+  assert.ok(Math.abs(after.width - panel.width) <= 2, `After spans the panel: ${JSON.stringify({ after, panel })}`);
+  assert.ok(after.top >= before.top + before.height, `After is under Before: ${JSON.stringify({ before, after })}`);
+  assert.ok(Math.abs(before.width / before.height - 951 / 669) < 0.02, `The frame keeps the screenshot's shape: ${JSON.stringify(before)}`);
+  // Swipe and Flip show one frame the panel's width, as before.
+  for (const mode of ["Swipe", "Flip"]) {
+    await page.locator(".sidebar-review-modes").getByRole("button", { name: mode, exact: true }).click();
+    const frame = await box(page.locator(".sidebar-review :is(.visual-swipe, .compare-frame)").first());
+    assert.ok(Math.abs(frame.width - panel.width) <= 2, `${mode} spans the panel: ${JSON.stringify({ frame, panel })}`);
+  }
+  await page.locator(".sidebar-review-modes").getByRole("button", { name: "Split", exact: true }).click();
+  await expect(frames).toHaveCount(2);
+  assert.deepEqual(errors, []);
+});
+
+test("the Inspector keeps a portrait pair side by side", async t => {
+  const { page, errors } = await harness(t, await archive(), { app: true });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const frames = page.locator(".sidebar-review .compare-frame");
+  await expect(frames).toHaveCount(2);
+  await expect(frames.first().locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(page.locator(".sidebar-review-stage")).not.toHaveClass(/landscape/);
+  const box = locator => locator.evaluate(element => {
+    const { left, top, width } = element.getBoundingClientRect();
+    return { left, top, width };
+  });
+  const [before, after] = await Promise.all([box(frames.nth(0)), box(frames.nth(1))]);
+  assert.equal(after.top, before.top, `Before and After share a row: ${JSON.stringify({ before, after })}`);
+  assert.ok(after.left >= before.left + before.width, `After is beside Before: ${JSON.stringify({ before, after })}`);
+  assert.deepEqual(errors, []);
+});
+
+/** A white PNG of `width` × `height`, and the asset entry and record fields a report gives it. */
+function sizedCapture(width, height) {
+  const picture = new PNG({ width, height });
+  picture.data.fill(255);
+  const bytes = PNG.sync.write(picture);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  return { bytes, sha256: digest, path: `assets/${digest}.png`,
+    record: { url: `https://artifact.expo-explore.invalid/${digest}.png`, sha256: digest, width, height } };
+}
+
+test("the Inspector takes a pair's shape from After, whichever side loads last", async t => {
+  // A screen that turned landscape: Before is the 32×64 portrait fixture, After is landscape.
+  const landscape = sizedCapture(951, 669);
+  const report = reportFixture();
+  Object.assign(report.review.surfaces[0].headImage, landscape.record);
+  report.assets.push({ sha256: landscape.sha256, path: landscape.path });
+  // Before's screenshot is held until After's has loaded, so it loads last.
+  const { page, errors } = await harness(t, await archive(report, [{ name: landscape.path, bytes: landscape.bytes }]),
+    { app: true, fault: holdScreenshotHashes(png.length) });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const stage = page.locator(".sidebar-review-stage");
+  const frames = page.locator(".sidebar-review .compare-frame");
+  await expect(frames).toHaveCount(2);
+  await expect(frames.nth(1).locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(stage).toHaveClass(/landscape/);
+  await page.evaluate(() => window.releaseScreenshotHashes());
+  await expect(frames.nth(0).locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(stage).toHaveClass(/landscape/);
+  const ratio = await frames.nth(0).evaluate(element => element.getBoundingClientRect().width / element.getBoundingClientRect().height);
+  assert.ok(Math.abs(ratio - 951 / 669) < 0.02, `Both frames keep After's shape: ${ratio}`);
+  assert.deepEqual(errors, []);
+});
+
+test("Swipe takes the loaded screenshot's shape when it differs from the recorded one", async t => {
+  // The record says portrait; the screenshot is landscape. Swipe's frame follows the image, as
+  // Split's and Flip's do, so a capture whose size the report does not hold is not cropped.
+  const landscape = sizedCapture(951, 669);
+  const { bytes } = await imageArchive([landscape.bytes]);
+  const { page, errors } = await harness(t, Buffer.from(bytes), { app: true, fault: holdScreenshotHashes(landscape.bytes.length) });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  // Swipe is chosen before any screenshot loads, so only Swipe's images report a size.
+  await page.locator(".sidebar-review-modes").getByRole("button", { name: "Swipe", exact: true }).click();
+  const swipe = page.locator(".sidebar-review .visual-swipe");
+  await expect(swipe).toBeVisible();
+  await page.evaluate(() => window.releaseScreenshotHashes());
+  await expect(swipe.locator("img.visual-swipe-after")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect.poll(() => swipe.evaluate(element => {
+    const { width, height } = element.getBoundingClientRect();
+    return Math.abs(width / height - 951 / 669) < 0.02;
+  })).toBe(true);
+  assert.deepEqual(errors, []);
+});
+
+test("a near-square landscape pair in a short window keeps both halves on screen, centred", async t => {
+  // An unfolded foldable's inner display on its side: barely wider than tall.
+  const foldable = sizedCapture(960, 800);
+  const report = reportFixture();
+  for (const side of ["baseImage", "headImage"]) Object.assign(report.review.surfaces[0][side], { width: 960, height: 800 });
+  const { bytes } = await imageArchive([foldable.bytes], 0, report);
+  const { page, errors } = await harness(t, Buffer.from(bytes), { app: true });
+  await page.setViewportSize({ width: 1440, height: 760 });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const stage = page.locator(".sidebar-review-stage");
+  await expect(stage).toHaveClass(/landscape/);
+  const frames = page.locator(".sidebar-review .compare-frame");
+  await expect(frames).toHaveCount(2);
+  await expect(frames.nth(1).locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  const box = locator => locator.evaluate(element => {
+    const { left, top, width, height, bottom } = element.getBoundingClientRect();
+    return { left, top, width, height, bottom };
+  });
+  const [before, after, panel] = await Promise.all([box(frames.nth(0)), box(frames.nth(1)), box(stage)]);
+  const viewport = page.viewportSize();
+  assert.ok(after.top >= before.top + before.height, `After is under Before: ${JSON.stringify({ before, after })}`);
+  assert.ok(before.top >= 0 && after.bottom <= viewport.height, `Both halves are on screen: ${JSON.stringify({ before, after, viewport })}`);
+  for (const frame of [before, after]) {
+    assert.ok(frame.width < panel.width - 2, `The frame is held under the panel's width: ${JSON.stringify({ frame, panel })}`);
+    assert.ok(Math.abs(frame.left + frame.width / 2 - (panel.left + panel.width / 2)) <= 1, `The frame is centred: ${JSON.stringify({ frame, panel })}`);
+    assert.ok(Math.abs(frame.width / frame.height - 960 / 800) < 0.02, `The frame keeps the screenshot's shape: ${JSON.stringify(frame)}`);
+  }
+  assert.deepEqual(errors, []);
+});

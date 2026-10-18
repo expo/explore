@@ -94,6 +94,31 @@ test("reviewed build diff preserves exact cross-build evidence and split/merge s
   );
 });
 
+test("a screen diff carries the compared screenshot's recorded shape, After's first", async () => {
+  const fixture = await createBuildWorkspaceFixture();
+  const currentBuild = fixture.catalog.builds.find((build) => build.id === "build-2.0.0");
+  const baselineBuild = fixture.catalog.builds.find((build) => build.id === "build-1.0.0");
+  const artifact = (map, id) => map.artifacts.find((entry) => entry.id === `artifact-observation-${id}`);
+  // The reviewed After turned landscape; Before stays portrait.
+  Object.assign(artifact(fixture.currentMap, "build-2.0.0-current-profile-reviewed"), { width: 60, height: 30 });
+  // A capture without a recorded size (not a PNG) gives the frame nothing to take.
+  const added = artifact(fixture.currentMap, "build-2.0.0-current-added-primary");
+  delete added.width;
+  delete added.height;
+
+  const diff = diffModel.buildDiff({
+    currentBuild,
+    currentMap: fixture.currentMap,
+    baselineBuild,
+    baselineMap: fixture.baselineMap,
+    comparison: fixture.comparison,
+  });
+
+  assert.equal(diff.screens.get("current-profile")?.screenshotAspect, 2);
+  assert.equal(diff.screens.get(removedScreenId("build-1.0.0", "baseline-legacy"))?.screenshotAspect, 0.5);
+  assert.equal(diff.screens.get("current-added")?.screenshotAspect, undefined);
+});
+
 test("catalog route context contains only the two real builds", async () => {
   const fixture = await createBuildWorkspaceFixture();
   assert.deepEqual(diffModel.routeContextForCatalog(fixture.catalog), {

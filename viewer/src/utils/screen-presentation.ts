@@ -235,6 +235,7 @@ function familyEvidence(diffs: readonly ScreenDiff[]): {
   note?: string;
   beforeScreenshot?: string;
   afterScreenshot?: string;
+  screenshotAspect?: number;
   visual?: ReviewVisualDiff;
   captureNotes?: CaptureNotes;
   redirectTo?: string;
@@ -264,6 +265,7 @@ function familyEvidence(diffs: readonly ScreenDiff[]): {
   )];
   const metadata = {
     ...(primary.note ? { note: primary.note } : {}),
+    ...(primary.screenshotAspect ? { screenshotAspect: primary.screenshotAspect } : {}),
     reviewerChanges,
     runtimeEvidenceRefs,
     noVisibleChange: diffs.some((diff) => diff.noVisibleChange),
