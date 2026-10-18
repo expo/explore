@@ -127,6 +127,17 @@ test('local review preparation preserves metadata and verified evidence without 
   await assert.rejects(readCaptureBundle(join(f.root, 'bad')), /explore\.bundle/);
 });
 
+test('a review names the system areas its verdict left out, the platform\'s bands unless told otherwise', async t => {
+  const f = await captureFixture(t);
+  // The bundle names the device but not its pose, so preparation does not guess a foldable's panel from it.
+  const duo = { ...runtimeProfile, deviceModel: 'iPhone Duo' };
+  for (const side of ['base', 'head']) await writeFile(join(f.options[`${side}Directory`], 'bundle.json'), JSON.stringify({ ...f.bundles[side], runtimeProfile: duo }));
+  const bands = [{ kind: 'status-bar', x: 0, y: 0, width: 100, height: 6.5 }, { kind: 'home-indicator', x: 0, y: 97, width: 100, height: 3 }];
+  assert.deepEqual((await prepareCaptureReview(f.options)).review.runtime.systemRegions, bands);
+  const pill = [{ kind: 'status-bar', x: 92.43, y: 4.48, width: 5.05, height: 10.76 }, bands[1]];
+  assert.deepEqual((await prepareCaptureReview({ ...f.options, systemRegions: pill })).review.runtime.systemRegions, pill);
+});
+
 test('review preparation rejects altered image hashes, metadata and paths outside the capture directory', async t => {
   for (const mutation of ['hash', 'dimensions', 'source-commit', 'parent-path', 'absolute-path', 'symlink']) {
     await t.test(mutation, async t => {

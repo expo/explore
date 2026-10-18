@@ -16,7 +16,8 @@ test('round trip: light + dark on both sides with a fully reused baseline', asyn
   const inconclusiveDark = report.review.surfaces.filter(surface => surface.id.endsWith('@dark') && surface.review?.status === 'needs-review');
   assert.deepEqual(inconclusiveDark.map(surface => `${surface.id}: ${surface.review.description}`), [], 'an unchanged dark pair compares conclusively');
   assert.ok(!progress.some(line => line.startsWith('::warning')), progress.filter(line => line.startsWith('::warning')).join('\n'));
-  assert.match(comment, /\| iOS \| [^|]*light \+ dark[^|]*\| 🟩 /);
+  assert.match(comment, /^### (\d+ screens?|No screens) changed · \[Review in Explore\]/m);
+  assert.doesNotMatch(comment, /^iOS · /m, 'nothing is missing on iOS');
   assert.equal(records.current.ios?.phase, 'ready');
   assert.ok(records.current.ios?.capture, 'the final record keeps the capture counts');
   assert.deepEqual(records.current.ios.capture.done, records.current.ios.capture.planned, 'progress counts surfaces (routes), not light + dark images');
@@ -33,7 +34,8 @@ test('round trip: a dark-only base against a light + dark head (the first PR tha
   const lightOnly = report.review.surfaces.filter(surface => surface.head && !surface.base && !surface.id.endsWith('@dark') && surface.head.route !== '/added');
   assert.ok(lightOnly.length > 0, 'the light appearance is an added surface, not a modified one');
   assert.ok(!progress.some(line => line.startsWith('::warning')), progress.filter(line => line.startsWith('::warning')).join('\n'));
-  assert.match(comment, /\| iOS \| [^|]*light \+ dark[^|]*\| 🟩 /);
+  assert.match(comment, /^### (\d+ screens?|No screens) changed · \[Review in Explore\]/m);
+  assert.doesNotMatch(comment, /^iOS · /m, 'nothing is missing on iOS');
   assert.equal(records.current.ios?.phase, 'ready');
 });
 
@@ -41,14 +43,16 @@ test('round trip: light + dark with a freshly captured base', async t => {
   const { result, bundles, comment } = await roundTrip(t, { userInterfaceStyle: 'automatic' }, { cachedBase: false });
   assert.deepEqual(schemesOf(bundles.base), ['light', 'dark']);
   assert.equal(result.evidence.summary.visual.failed, 0);
-  assert.match(comment, /\| iOS \| [^|]*light \+ dark[^|]*\| 🟩 /);
+  assert.match(comment, /^### (\d+ screens?|No screens) changed · \[Review in Explore\]/m);
+  assert.doesNotMatch(comment, /^iOS · /m, 'nothing is missing on iOS');
 });
 
 test('round trip: Android light + dark', async t => {
   const { result, bundles, comment, records } = await roundTrip(t, { userInterfaceStyle: 'automatic', platform: 'android' });
   assert.deepEqual(schemesOf(bundles.head), ['light', 'dark']);
   assert.equal(result.evidence.summary.visual.failed, 0);
-  assert.match(comment, /\| Android \| [^|]*light \+ dark[^|]*\| 🟩 /);
+  assert.match(comment, /^### (\d+ screens?|No screens) changed · \[Review in Explore\]/m);
+  assert.doesNotMatch(comment, /^Android · /m, 'nothing is missing on Android');
   assert.equal(records.current.android?.phase, 'ready');
 });
 
@@ -57,7 +61,8 @@ test('round trip: a single-scheme app (no userInterfaceStyle) captures light onl
   assert.deepEqual(bundleColorSchemes(bundles.head), ['light']);
   assert.ok(!report.review.surfaces.some(surface => /@(light|dark)$/.test(surface.id)), 'no secondary appearance surfaces');
   assert.equal(report.review.runtime.colorSchemes, undefined);
-  assert.match(comment, /\| iOS \| [^|]*\| 🟩 /);
+  assert.match(comment, /^### (\d+ screens?|No screens) changed · \[Review in Explore\]/m);
+  assert.doesNotMatch(comment, /^iOS · /m);
   assert.doesNotMatch(comment, /light \+ dark/);
   assert.equal(records.current.ios.phase, 'ready');
 });

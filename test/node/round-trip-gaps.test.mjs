@@ -11,7 +11,7 @@ test('round trip: light + dark with an unavailable screen publishes an incomplet
   assert.ok(unattributed.length >= 1);
   assert.ok(unattributed.every(surface => surface.headImage && surface.headOutcome.observed?.reason === 'observer-not-ready'));
   assert.ok(progress.some(line => line.startsWith('::warning title=Explore head capture unavailable')), progress.filter(line => line.startsWith('::warning')).join('\n'));
-  assert.match(comment, /\| iOS \| [^|]*\| 🟨 [^|]*unattributed/);
+  assert.match(comment, /^iOS · [^\n]*unattributed · \[run\]/m);
   assert.doesNotMatch(comment, /🟥 failed/);
   assert.equal(records.current.ios?.phase, 'ready');
 });
@@ -33,7 +33,7 @@ test('round trip: a failed screenshot comparison is a named gap, not a failed ru
     assert.ok(surface, `${id} stays in the report`);
     assert.notEqual(surface.review?.status, 'modified', 'a failed comparison is not reported as a change');
   }
-  assert.match(comment, /\| iOS \| [^|]*\| 🟨 [^|]*2 comparisons failed/);
+  assert.match(comment, /^iOS · [^\n]*2 comparisons failed · \[run\]/m);
   assert.doesNotMatch(comment, /🟥 failed/);
   assert.equal(records.current.ios?.phase, 'ready');
 });
@@ -44,7 +44,7 @@ test('round trip: a baseline with an unavailable screen is still cached, and the
   assert.ok(progress.some(line => line.startsWith('baseline: ::warning title=Explore head capture unavailable')));
   assert.ok(progress.some(line => !line.startsWith('baseline:') && /reused from the baseline, \d+ to capture/.test(line)), progress.filter(line => line.includes('capture')).join('\n'));
   assert.ok(result.evidence.summary.visual.compared > 0);
-  assert.match(comment, /\| iOS \| [^|]*\| 🟨 /);
+  assert.match(comment, /^iOS · [^\n]*· \[run\]/m, 'the gap is named on the iOS line');
   assert.equal(records.current.ios?.phase, 'ready');
 });
 

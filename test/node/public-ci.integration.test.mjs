@@ -78,8 +78,7 @@ for (const provider of ['expo-router', 'react-navigation']) {
     const published = await publishCiReportComment({ inputPath: result.inputPath,
       artifactUrl: 'https://github.com/acme/example/actions/runs/1234/artifacts/900', environment: f.environment, transport: f.transport });
     assert.equal(new URL(published.artifactUrl).origin, 'https://explore-preview.expo.app', 'CI always uses the hosted viewer, even with a legacy origin override');
-    assert.match(f.comments.at(-1), /\[Open\]\(<https:\/\/explore-preview\.expo\.app\/\?[^>]+>\)/);
-    assert.match(f.comments.at(-1), /\[zip\]\(<https:\/\/github\.com\/acme\/example\/actions\/runs\/1234\/artifacts\/900>\)/);
+    assert.match(f.comments.at(-1), /\[Review in Explore\]\(<https:\/\/explore-preview\.expo\.app\/\?[^>]+artifact=900>\)/);
     assert.match(f.comments.at(-1), /explore-preview\.expo\.app/);
     assert.doesNotMatch(f.comments.at(-1), /viewer\.example/);
     // A matrix job's report artifact carries its target id: an unsuffixed artifact is not target duo-open's.
@@ -132,12 +131,12 @@ test('unreachable screens do not fail CI: both revisions, the report and an Inco
   await publishCiReportComment({ inputPath: result.inputPath,
     artifactUrl: 'https://github.com/acme/example/actions/runs/1234/artifacts/900', environment: f.environment, transport: f.transport });
   const comment = f.comments.at(-1).replaceAll('\\', '');
-  assert.match(comment, /\| iOS \| [^|]+\| 🟨 [^|]*unavailable[^|]*\| \[Open\]\(<https:\/\/explore-preview\.expo\.app/, 'the report link is published even though a screen is unavailable');
+  assert.match(comment, /^### \d+ screens? changed · \[Review in Explore\]\(<https:\/\/explore-preview\.expo\.app/m, 'the report link is published even though a screen is unavailable');
+  assert.match(comment, /^iOS · 1 capture unavailable · 1 unattributed · \[run\]/m);
   assert.doesNotMatch(comment, /🟥 failed/);
   assert.match(comment, /Head · \/home · CAPTURE_OBSERVER_NOT_READY/);
   assert.match(comment, /Base · \/home · CAPTURE_OBSERVER_MISSING/);
-  assert.match(comment, /1 unavailable/);
-  assert.match(comment, /1 unattributed/);
+  assert.match(comment, /<summary>Capture issues \(2\)<\/summary>/);
   assert.equal(f.requests.filter(request => request.args[0] === 'simulator:stop').length, 2);
   assert.equal(git(f.baseProject, 'status', '--porcelain'), '');
   assert.equal(git(f.headProject, 'status', '--porcelain'), '');
@@ -290,7 +289,7 @@ test('a PR that moved during a verification retry still publishes, as a previous
   assert.ok(f.comments.length > 0, 'the run keeps posting; its report is kept under previous runs');
   assert.match(f.comments.at(-1), /Previous runs \(1\)/);
   assert.match(f.comments.at(-1), /The pull request moved while this run worked/);
-  assert.doesNotMatch(f.comments.at(-1), /^<sub>base \[/m, 'nothing is presented as the current review');
+  assert.match(f.comments.at(-1), /^### Explore review$/m, 'nothing is presented as the current review');
 });
 
 test('authorization and other non-server PR verification failures are never retried', async t => {
@@ -520,3 +519,28 @@ for (const failedPhase of ['preflight', 'capture-head']) {
     assert.doesNotMatch(f.comments.join('\n'), /agent-usage|estimatedCostUsd|cacheReadInputTokens|query-pipeline/);
   });
 }
+
+test('an excluded route is flagged in the published review and never captured on either side', async t => {
+  const f = await fixture(t, 'expo-router');
+  t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
+  const output = join(f.root, 'review');
+  const result = await runPublicCi({ baseProject: f.baseProject, headProject: f.headProject, pullRequestPath: f.pullRequestPath, output,
+    config: { ...f.config, exploration: { scope: 'changes', exclude: ['/settings'] } }, environment: f.environment,
+    transport: f.transport, runner: f.runner, now: f.now, sleep: f.sleep });
+  const plan = JSON.parse(await readFile(join(output, 'execution-plan.json'), 'utf8'));
+  const settings = plan.surfaces.find(surface => surface.headSurface?.route === '/settings');
+  assert.deepEqual(plan.excludedSurfaceIds, [settings.id]);
+  for (const side of ['base', 'head']) {
+    const bundle = await readCaptureBundle(join(output, `${side}-export`));
+    assert.equal(settings.id in bundle.outcomes, false, `${side}: an excluded route is not captured`);
+  }
+  const packaged = await exportCiReport({ inputPath: result.inputPath, outputPath: join(f.root, 'artifact') });
+  const report = JSON.parse(await readFile(join(packaged.outputPath, 'review.json'), 'utf8'));
+  const published = report.review.surfaces.find(surface => surface.id === settings.id);
+  assert.equal(published.excluded, true);
+  assert.equal(published.headImage ?? published.baseImage ?? published.headOutcome ?? published.baseOutcome, undefined);
+  assert.ok(report.review.surfaces.filter(surface => surface.id !== settings.id).every(surface => surface.excluded === undefined));
+  // /home changed and links to /settings: the neighbor is still captured, the excluded route is not a missing screen.
+  const home = report.review.surfaces.find(surface => surface.head?.route === '/home');
+  assert.ok(home.headImage && home.baseImage);
+});

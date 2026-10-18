@@ -69,8 +69,11 @@ export function indexMap(map: ExploreMap): MapIndex {
     outgoing,
     incoming,
     plainTitles: map.run?.exploration === "black-box",
+    // Why a screen has no screenshot, in the report's words: its first open gap, else its first accepted one.
+    // The map keeps a screen's last entry, so the gaps are reversed and then open ones are sorted after accepted ones.
     screenNotes: new Map(
-      (map.gaps ?? []).filter((gap) => gap.status === "open" && gap.screenId).reverse().map((gap) => [gap.screenId!, gap.message]),
+      (map.gaps ?? []).filter((gap) => gap.status !== "resolved" && gap.screenId)
+        .reverse().sort((a, b) => Number(a.status === "open") - Number(b.status === "open")).map((gap) => [gap.screenId!, gap.message]),
     ),
   };
 }

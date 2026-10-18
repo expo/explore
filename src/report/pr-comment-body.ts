@@ -2,7 +2,7 @@ import type { PublicReview } from "../contracts/capture.js";
 import type { RunTarget } from "../types.js";
 import type { SimulatorRuntimeMetadata } from "../capture/run.js";
 import { CI_COMMENT_MARKER } from "./pr-comment.js";
-import { CHANGE_GROUPS, MAX_COMMENT_TARGETS, MAX_NAVIGATION_EDGES, MAX_NAVIGATION_NODES, changeCountText, compareTargets, defaultTargetLabel, foldRecord, strongerGroup, historyLine, orderedRecords, readCommentRecords, recordLabel, recordLine, recordSummary, recordTarget,
+import { CHANGE_GROUPS, MAX_COMMENT_TARGETS, MAX_NAVIGATION_EDGES, MAX_NAVIGATION_NODES, compareTargets, defaultTargetLabel, foldRecord, strongerGroup, historyLine, orderedPrevious, orderedRecords, previousLine, readCommentRecords, recordLabel, recordLine, recordSummary,
   type ChangeGroup, type CommentNavigation, type CommentTarget, type CommentRecords, type HistoryEntry, type NavigationGroup, type NavigationKind, type PlatformRecord } from "./pr-comment-record.js";
 import { isAccessibilityOnlyChange } from "../contracts/review-validation.js";
 import type { PublicCaptureHealth, PublicEvidenceSummary } from "../review/evidence-assessment.js";
@@ -64,13 +64,6 @@ export type PublicCommentState = {
 type ReviewGroup = ChangeGroup;
 
 const GROUP_ORDER: ReviewGroup[] = CHANGE_GROUPS;
-const GROUP_LABEL: Record<ReviewGroup, string> = {
-  added: "🟩 Added",
-  modified: "🟧 Modified",
-  removed: "🟥 Removed",
-  "accessibility-only": "🟦 Accessibility only",
-  "needs-review": "🟨 Needs review",
-};
 
 /** The body is HTML, so no blank lines are needed and the block keeps its natural spacing. */
 function details(summary: string, content: string[]): string[] {
@@ -114,14 +107,6 @@ function link(label: string, destination: string): string {
 }
 
 const SUPERSEDED_NOTE = "The pull request moved while this run worked; its report is kept here until the current run replaces it.";
-
-function duration(startedAt: number, updatedAt: number): string {
-  const total = Math.max(0, Math.round((updatedAt - startedAt) / 1000));
-  if (startedAt <= 0 || total > 24 * 3600) return "";
-  const minutes = Math.floor(total / 60);
-  const seconds = total % 60;
-  return minutes > 0 ? `${minutes}m ${String(seconds).padStart(2, "0")}s` : `${seconds}s`;
-}
 
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -191,12 +176,7 @@ function previewExpiry(expiresAt: number): string {
   return new Date(expiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }) + " (UTC)";
 }
 
-/**
- * Differences that are not review targets, stated once instead of per screen: screen variants
- * (source-unchanged screens captured in another runtime state) and app-wide source changes that
- * left some screens without a visible difference.
- */
-/** "Launch: splash unchanged for 3.1 s" — the app launch per appearance, kept apart from the screen rows. */
+/** "Launch: splash unchanged for 3.1 s" — the app launch per appearance, for the local text summary. */
 function launchLine(review: PublicReview): string | undefined {
   const launch = review.launch ?? [];
   if (!launch.length) return undefined;
@@ -220,9 +200,19 @@ function launchLine(review: PublicReview): string | undefined {
   return `Launch: ${parts.join("; ")}.`;
 }
 
+/** "Splash screen changed": the launch comparison when it found a difference; a steady splash is not news for the comment. */
+function splashLines(review: PublicReview): string[] {
+  const launch = review.launch ?? [];
+  const changed = launch.filter(entry => entry.visual && entry.visual.verdict !== "unchanged");
+  if (!changed.length) return [];
+  const verdict = changed.every(entry => entry.visual!.verdict === "needs-review") ? "needs review" : "changed";
+  const schemes = changed.map(entry => entry.colorScheme).filter((scheme): scheme is NonNullable<typeof scheme> => Boolean(scheme));
+  return [`Splash screen ${verdict}${schemes.length && changed.length < launch.length ? ` in ${schemes.join(" and ")} mode` : ""}`];
+}
+
 function contextLines(review: PublicReview): string[] {
   const variants = review.surfaces.filter(surface => surface.review?.status === "variant").length;
-  const appWide = review.surfaces.filter(surface => surface.sourceScope === "app-wide");
+  const appWide = review.surfaces.filter(surface => surface.sourceScope === "app-wide" && !surface.excluded);
   const files = [...new Set(appWide.flatMap(surface => surface.sourceChange?.files.filter(file => file.relation === "global").map(file => file.path) ?? []))].sort();
   const lines: string[] = [];
   const launch = launchLine(review);
@@ -236,7 +226,6 @@ function contextLines(review: PublicReview): string[] {
 }
 
 const SURFACE_ID = /^[A-Za-z0-9._-]{1,200}(@(light|dark))?$/;
-const MAX_ROWS_PER_GROUP = 200;
 
 /** The run id and attempt the run link names (`…/actions/runs/<id>/attempts/<n>`). */
 function runIdentity(run: string): { runId: string; runAttempt: string } {
@@ -316,7 +305,7 @@ export function platformRecordOf(state: PublicCommentState, target?: CommentTarg
     if (navigation) record.navigation = navigation;
     const notCompared = state.review.surfaces.filter(notComparedChange).length;
     if (notCompared) record.notCompared = notCompared;
-    record.context = contextLines(state.review).filter(line => line.length);
+    record.context = splashLines(state.review);
     const diagnostics = [...(state.evidence?.diagnostics ?? [])];
     for (const surface of state.review.surfaces) {
       for (const side of ["base", "head"] as const) {
@@ -447,214 +436,185 @@ function surfaceLink(report: string, id: string): string | undefined {
   return url.href;
 }
 
-function resultCell(record: PlatformRecord): string {
-  switch (record.phase) {
-    case "pending": return "⏳ starting";
-    case "capturing": {
-      const capture = record.capture;
-      if (!capture) return "⏳ capturing";
-      const side = capture.current ?? (capture.done.head > 0 || capture.baseFromCache ? "head" : "base");
-      return `⏳ capturing ${side} ${capture.done[side]}/${capture.planned[side]}${capture.baseFromCache && side === "head" ? " · base reused" : ""}`;
-    }
-    case "failed": return `🟥 failed · ${inlineText(record.failure?.step ?? "capture", 48)}`;
-    case "ready": {
-      const unavailable = record.health ? record.health.base.unavailable + record.health.head.unavailable : 0;
-      const unverified = record.health ? record.health.base.unverified + record.health.head.unverified : 0;
-      const failed = (record.validation?.visual?.failed ?? 0) + (record.validation?.accessibility?.failed ?? 0);
-      const notCompared = record.notCompared ?? 0;
-      const icon = unavailable || unverified || failed || notCompared ? "🟨" : "🟩";
-      return [`${icon} ${changeCountText(record.changes?.map(change => change.group) ?? [])}`, notCompared ? `${notCompared} not compared` : undefined, unavailable ? `${unavailable} unavailable` : undefined, unverified ? `${unverified} unattributed` : undefined,
-        failed ? `${failed} comparison${failed === 1 ? "" : "s"} failed` : undefined, duration(record.startedAt, record.updatedAt)].filter(Boolean).join(" · ");
-    }
-  }
-}
-
-/** The report link alone; the workflow run and the report zip sit in the footer, where someone debugging looks for them. */
-function reportCell(record: PlatformRecord): string {
-  const run = link("run", record.links.run);
-  if (record.phase === "failed") return `${run} · ${link("evidence", record.links.artifacts)}`;
-  if (record.phase !== "ready") return run;
-  return record.links.report ? link(record.links.report.includes(".expo.app/") ? "Open" : "Viewer", record.links.report) : record.links.deploying ? "deploying…" : run;
-}
+const ROW_LIMIT = 10;
+const MAX_FAILURE_MESSAGE = 600;
 
 /** A target's label as Markdown text. */
 const labelOf = (record: PlatformRecord) => inlineText(recordLabel(record), 80);
+const finished = (record: PlatformRecord) => record.phase === "ready" || record.phase === "failed";
+const firstReport = (records: PlatformRecord[]) => records.find(record => record.phase === "ready" && record.links.report)?.links.report;
 
 /** "platform" for the per-platform targets of a config without targets, "device" once a config names its own. */
 function targetNoun(records: PlatformRecord[]): "platform" | "device" {
   return records.every(record => !record.target && record.label === undefined) ? "platform" : "device";
 }
 
-/** "Workflow iOS run · zip; Android run · zip" for the ready targets, with the target named only when there are several. */
-function artifactLinks(records: PlatformRecord[]): string | undefined {
+function updatedText(records: PlatformRecord[]): string {
+  const at = Math.max(...records.map(record => record.updatedAt));
+  return `${new Date(at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "UTC" })} UTC`;
+}
+
+/** "17 screens changed · Review in Explore": what the run found, with the report as the heading's link; until a target finished, what it is doing. */
+function title(records: PlatformRecord[], rows: ChangeRow[]): string {
   const ready = records.filter(record => record.phase === "ready");
-  if (!ready.length) return undefined;
-  const parts = ready.map(record => {
-    const links = [link("run", record.links.run), record.links.download ? link("zip", record.links.download) : undefined].filter(Boolean).join(" · ");
-    return ready.length > 1 ? `${labelOf(record)} ${links}` : links;
-  });
-  return `Workflow ${parts.join("; ")}`;
-}
-
-function deviceCell(record: PlatformRecord): string {
-  const parts = [record.device ? inlineText(record.device, 80) : undefined,
-    record.app?.version ? inlineText(`${record.app.name ? `${record.app.name} ` : ""}${record.app.version}${record.app.build ? ` (${record.app.build})` : ""}`, 80) : undefined].filter(Boolean);
-  return parts.length ? parts.join(" · ") : "—";
-}
-
-type ChangeRow = { id: string; route: string; scheme?: string; group: ReviewGroup; description: string; perTarget: Partial<Record<CommentTarget, { group: ReviewGroup; href?: string }>> };
-
-function changeRows(records: PlatformRecord[]): Map<ReviewGroup, ChangeRow[]> {
-  const rows = new Map<string, ChangeRow>();
-  for (const record of records) {
-    if (record.phase !== "ready") continue;
-    for (const change of record.changes ?? []) {
-      const href = record.links.report ? surfaceLink(record.links.report, change.id) : undefined;
-      const row = rows.get(change.id) ?? { id: change.id, route: change.route, group: change.group, description: change.description, perTarget: {}, ...(change.scheme ? { scheme: change.scheme } : {}) };
-      // A screen accessibility-only on one target and visibly changed on another is listed as the visible change.
-      if (strongerGroup(row.group, change.group) !== row.group) Object.assign(row, { group: change.group, description: change.description });
-      row.perTarget[recordTarget(record)] = { group: change.group, ...(href ? { href } : {}) };
-      rows.set(change.id, row);
-    }
-  }
-  const groups = new Map<ReviewGroup, ChangeRow[]>();
-  for (const row of rows.values()) groups.set(row.group, [...(groups.get(row.group) ?? []), row]);
-  return groups;
-}
-
-function renderChangeRow(row: ChangeRow, records: PlatformRecord[]): string {
-  const where = records.flatMap(record => {
-    const entry = row.perTarget[recordTarget(record)];
-    if (!entry) return [];
-    const label = labelOf(record) + (entry.group !== row.group ? ` (${GROUP_LABEL[entry.group].replace(/^\S+ /, "").toLowerCase()})` : "");
-    return [entry.href ? link(label, entry.href) : label];
-  });
-  const route = `\`${plainText(row.route, MAX_ROUTE_LENGTH).replace(/`/g, "")}\`${row.scheme ? ` (${inlineText(row.scheme, 20)})` : ""}`;
-  return `- ${route} — ${inlineText(row.description, MAX_DESCRIPTION_LENGTH)}${where.length ? ` · ${where.join(" · ")}` : ""}`;
-}
-
-function changesSection(records: PlatformRecord[], rowCap: number, withMap: boolean): string[] {
-  const ready = records.filter(record => record.phase === "ready");
-  if (!ready.length) return [];
-  const groups = changeRows(ready);
-  const lines: string[] = [];
-  const noun = targetNoun(records);
-  const total = [...groups.values()].reduce((sum, rows) => sum + rows.length, 0);
-  lines.push(`**Changes** · ${plural(total, "screen")}${records.length > 1 && ready.length > 1 ? ` · a screen is listed once, with a link per ${noun}` : ""}`, "");
-  // With screens left uncompared, nothing changed only among the ones compared.
-  if (total === 0) lines.push(ready.some(record => record.notCompared) ? `No compared screen changed on the reviewed ${noun}s.` : `No screen changed on the reviewed ${noun}s.`, "");
-  for (const group of GROUP_ORDER) {
-    const rows = groups.get(group) ?? [];
-    if (!rows.length) continue;
-    const shown = rows.slice(0, rowCap);
-    const content = ["", ...(group === "accessibility-only" ? ["Before and After look the same. What screen readers and voice control read changed.", ""] : []),
-      ...shown.map(row => renderChangeRow(row, records))];
-    if (rows.length > shown.length) {
-      const report = ready.find(record => record.links.report)?.links.report;
-      content.push(`- ${rows.length - shown.length} more${report ? ` — ${link("Explore report", report)}` : ""}`);
-    }
-    content.push("");
-    lines.push(...details(`${GROUP_LABEL[group]} (${rows.length})`, content));
-  }
-  if (withMap) lines.push(...mapSection(ready));
-  const seen = new Set<string>();
-  for (const record of ready) for (const line of record.context ?? []) {
-    if (seen.has(line)) continue;
-    seen.add(line);
-    const everywhere = ready.every(other => other.context?.includes(line));
-    lines.push(everywhere ? line : `${labelOf(record)} · ${line}`, "");
-  }
-  return lines;
-}
-
-/**
- * The heading carries the report links: on a phone the table's last column is clipped, and the
- * commits it reviews are a subtitle under it. A target still capturing adds its link when it is ready.
- */
-function heading(records: PlatformRecord[]): string {
-  const ready = records.filter(record => record.phase === "ready" && record.links.report);
   if (!ready.length) {
-    return records.some(record => record.phase === "ready" && record.links.deploying) ? "### Explore review · report deploying, not ready yet" : "### Explore review";
+    if (records.every(record => record.phase === "failed")) return "### Explore review · capture failed";
+    const active = records.filter(record => !finished(record));
+    const verb = active.some(record => record.phase === "capturing") ? "capturing" : "starting";
+    return `### Explore review · ${verb}${records.length > 1 ? ` on ${plural(active.length, targetNoun(records))}` : ""}`;
   }
-  const links = ready.length === 1 ? [link("Open report", ready[0]!.links.report!)]
-    : ready.map(record => link(`${labelOf(record)} report`, record.links.report!));
-  return `### Explore review · ${links.join(" · ")}`;
+  // With screens left uncompared, nothing changed only among the ones compared.
+  const summary = rows.length ? `${plural(rows.length, "screen")} changed` : ready.some(record => gaps(record).length) ? "No compared screens changed" : "No screens changed";
+  const report = firstReport(ready);
+  const open = report ? link("Review in Explore", report) : ready.some(record => record.links.deploying) ? "report deploying…" : undefined;
+  return `### ${summary}${open ? ` · ${open}` : ""}`;
 }
 
-function validationCell(record: PlatformRecord, check: "capture" | "routes" | "visual" | "accessibility" | "inventory"): string {
-  if (record.phase === "pending" || record.phase === "capturing") return "⏳";
-  if (record.phase === "failed") {
-    if (check !== "capture") return "—";
-    const capture = record.capture;
-    return capture ? `🟥 ${capture.done.base + capture.done.head}/${capture.planned.base + capture.planned.head} surfaces` : "🟥 not started";
-  }
-  const health = record.health;
-  switch (check) {
-    case "capture": {
-      const planned = health ? health.base.planned + health.head.planned : (record.capture?.planned.base ?? 0) + (record.capture?.planned.head ?? 0);
-      const done = health ? health.base.captured + health.head.captured : (record.capture?.done.base ?? 0) + (record.capture?.done.head ?? 0);
-      const cache = record.capture?.baseFromCache ? " · base cache reused" : "";
-      return done < planned ? `🟨 ${done}/${planned} surfaces · ${planned - done} unavailable${cache}` : `🟩 ${done}/${planned} surfaces${cache}`;
-    }
-    case "routes": {
-      if (!health) return "—";
-      const verified = health.base.verified + health.head.verified, planned = health.base.planned + health.head.planned;
-      const unverified = health.base.unverified + health.head.unverified, unavailable = health.base.unavailable + health.head.unavailable;
-      return `${verified === planned ? "🟩" : "🟨"} ${verified}/${planned} verified${unverified ? ` · ${unverified} unattributed` : ""}${unavailable ? ` · ${unavailable} unavailable` : ""}`;
-    }
-    case "visual": {
-      const v = record.validation?.visual;
-      if (!v) return "🟨 not run";
-      const mark = v.compared === 0 || v.failed > 0 || v.skipped ? "🟨" : "🟩";
-      return `${mark} ${v.compared} compared · threshold ${v.threshold}${v.failed ? ` · ${v.failed} failed` : ""}${v.skipped ? ` · ${v.skipped} skipped` : ""}`;
-    }
-    case "accessibility": {
-      const a = record.validation?.accessibility;
-      if (!a) return "🟨 not run";
-      return `${a.compared === 0 || a.failed > 0 ? "🟨" : "🟩"} ${a.compared} compared · ${plural(a.described, "description")}${a.failed ? ` · ${a.failed} failed` : ""}`;
-    }
-    case "inventory": return record.validation?.routes !== undefined ? `🟩 ${plural(record.validation.routes, "route")}` : "🟩 analyzed";
-  }
+/** Every target by name, each linking its own report, then the commits and when the comment last changed. */
+function subtitle(records: PlatformRecord[], repository: string): string {
+  const first = records[0]!;
+  const targets = records.map(record => record.phase === "ready" && record.links.report ? link(labelOf(record), record.links.report) : labelOf(record));
+  return `<sub>${[...targets, `${commitLink(repository, first.headSha)} vs ${commitLink(repository, first.baseSha)}`, `updated ${updatedText(records)}`].join(" · ")}</sub>`;
 }
 
-function validationSummary(record: PlatformRecord): string {
+/** One line for a target that is not simply done: still working, failed, or finished with captures missing. */
+function statusLine(record: PlatformRecord): string | undefined {
+  const label = labelOf(record), run = link("run", record.links.run);
   switch (record.phase) {
-    case "failed": return "🟥 failed";
-    case "ready": {
-      const health = record.health;
-      if (!health) return "🟩 reviewed";
-      const captured = health.base.captured + health.head.captured, planned = health.base.planned + health.head.planned;
-      return `${captured < planned ? "🟨" : "🟩"} ${captured}/${planned} captured`;
+    case "pending": return `${label} · starting · ${run}`;
+    case "capturing": {
+      const capture = record.capture;
+      if (!capture) return `${label} · capturing · ${run}`;
+      const side = capture.current ?? (capture.done.head > 0 || capture.baseFromCache ? "head" : "base");
+      return `${label} · capturing ${side} ${capture.done[side]}/${capture.planned[side]}${capture.baseFromCache && side === "head" ? " · base reused" : ""} · ${run}`;
     }
-    default: return "⏳ in progress";
+    case "failed": return [`**${label} failed**`, inlineText(record.failure?.step ?? "capture", 48), record.failure?.message ? inlineText(record.failure.message, MAX_FAILURE_MESSAGE) : undefined,
+      run, link("evidence", record.links.artifacts)].filter(Boolean).join(" · ");
+    case "ready": {
+      const parts = gaps(record);
+      return parts.length ? `${label} · ${parts.join(" · ")} · ${run}` : undefined;
+    }
   }
 }
 
-function validationSection(byTarget: PlatformRecord[]): string[] {
-  if (!byTarget.some(record => record.phase === "ready" || record.phase === "failed")) return [];
-  const summary = `Validation · ${byTarget.map(record => `${labelOf(record)} ${validationSummary(record)}`).join(" · ")}`;
-  const header = `| Check | ${byTarget.map(labelOf).join(" | ")} |`;
-  const checks: [string, Parameters<typeof validationCell>[1]][] = [["Capture", "capture"], ["Route verification", "routes"], ["Visual comparison", "visual"], ["Accessibility comparison", "accessibility"], ["Source inventory", "inventory"]];
-  const content = ["", header, `|---|${byTarget.map(() => "---").join("|")}|`,
-    ...checks.map(([label, check]) => `| ${label} | ${byTarget.map(record => validationCell(record, check)).join(" | ")} |`), ""];
-  for (const record of byTarget) {
-    if (record.phase === "failed" && record.failure) {
-      content.push(`**${labelOf(record)} failed** — ${inlineText(record.failure.message, 1200)} ${link("Open the failed run", record.links.run)} · ${link("Evidence artifact", record.links.artifacts)}`, "");
-    }
-    if (record.phase !== "ready") continue;
-    const health = record.health;
-    const gaps = health ? health.base.unavailable + health.base.unverified + health.head.unavailable + health.head.unverified : 0;
-    if (!gaps && !record.diagnostics?.length) continue;
-    const sideLine = (side: "base" | "head") => { const h = health![side]; return `${side} ${h.verified}/${h.planned} verified${h.unverified ? ` · ${h.unverified} unattributed` : ""}${h.unavailable ? ` · ${h.unavailable} unavailable` : ""}`; };
-    content.push(health ? `**${labelOf(record)}** · ${sideLine("base")} · ${sideLine("head")}` : `**${labelOf(record)}**`, "");
+/** What a finished target has no verdict on: captures missing or unattributed, comparisons that did not run or failed. */
+function gaps(record: PlatformRecord): string[] {
+  const unavailable = record.health ? record.health.base.unavailable + record.health.head.unavailable : 0;
+  const unverified = record.health ? record.health.base.unverified + record.health.head.unverified : 0;
+  const failed = (record.validation?.visual?.failed ?? 0) + (record.validation?.accessibility?.failed ?? 0);
+  return [unavailable ? `${plural(unavailable, "capture")} unavailable` : undefined, unverified ? `${unverified} unattributed` : undefined,
+    record.notCompared ? `${record.notCompared} not compared` : undefined, failed ? `${plural(failed, "comparison")} failed` : undefined]
+    .filter((part): part is string => Boolean(part));
+}
+
+/** The per-screen capture problems, collapsed: the status line already counts them. */
+function diagnosticsSection(records: PlatformRecord[]): string[] {
+  const flagged = records.filter(record => record.phase === "ready" && ((record.diagnostics?.length ?? 0) > 0 || (record.diagnosticCount ?? 0) > 0));
+  if (!flagged.length) return [];
+  const content: string[] = [""];
+  for (const record of flagged) {
+    if (records.length > 1) content.push(`**${labelOf(record)}**`, "");
     for (const diagnostic of record.diagnostics ?? []) {
       content.push(`- ${diagnostic.side ? `${diagnostic.side === "base" ? "Base" : "Head"} · ` : ""}${inlineText(diagnostic.route, MAX_ROUTE_LENGTH)} · ${inlineText(diagnostic.code, 80)}: ${inlineText(diagnostic.message, 160)} Next action: ${inlineText(diagnostic.nextAction, 240)}`);
     }
     const more = (record.diagnosticCount ?? 0) - (record.diagnostics?.length ?? 0);
-    if (more > 0) content.push(`- ${more} more — ${link("View run", record.links.run)}`);
-    if (record.diagnostics?.length) content.push("");
+    if (more > 0) content.push(`- ${more} more — ${link("run", record.links.run)}`);
+    content.push("");
   }
-  return details(summary, content);
+  const total = flagged.reduce((sum, record) => sum + Math.max(record.diagnosticCount ?? 0, record.diagnostics?.length ?? 0), 0);
+  return details(`Capture issues (${total})`, content);
+}
+
+type ChangeRow = { id: string; route: string; scheme?: string; group: ReviewGroup; description: string; href?: string; targets: PlatformRecord[] };
+
+/** Every changed screen once, in group order (added, removed, modified, …), linking the first target in config order that shows its group. */
+function changeRows(ready: PlatformRecord[]): ChangeRow[] {
+  const rows = new Map<string, ChangeRow>();
+  for (const record of ready) {
+    for (const change of record.changes ?? []) {
+      const href = record.links.report ? surfaceLink(record.links.report, change.id) : undefined;
+      const row = rows.get(change.id) ?? { id: change.id, route: change.route, group: change.group, description: change.description, targets: [], ...(change.scheme ? { scheme: change.scheme } : {}) };
+      // A screen accessibility-only on one target and visibly changed on another is listed as the visible change.
+      // The link opens the target the row describes.
+      if (strongerGroup(row.group, change.group) !== row.group) Object.assign(row, { group: change.group, description: change.description, href });
+      else if (!row.href && href && change.group === row.group) row.href = href;
+      row.targets.push(record);
+      rows.set(change.id, row);
+    }
+  }
+  return [...rows.values()].sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group));
+}
+
+function renderChangeRow(row: ChangeRow, ready: PlatformRecord[]): string {
+  const code = `\`${plainText(row.route, MAX_ROUTE_LENGTH).replace(/`/g, "")}\``;
+  const route = `${row.href ? link(code, row.href) : code}${row.scheme ? ` (${inlineText(row.scheme, 20)})` : ""}`;
+  const description = inlineText(row.description.replace(/\.$/, ""), MAX_DESCRIPTION_LENGTH);
+  let text: string;
+  if (row.group === "added" || row.group === "removed") {
+    const verb = row.group === "added" ? "Added" : "Removed";
+    // The default description repeats the verb and route; an agent's note does not.
+    text = row.description === `${verb} ${row.route} screen` ? `${verb} ${route}` : `${verb} ${route} · ${description}`;
+  } else {
+    text = `${route} · ${description}`;
+  }
+  const tag = row.group === "accessibility-only" ? "accessibility only" : row.group === "needs-review" ? "needs review" : undefined;
+  // A target with screens it has no verdict on may have changed this one too: name where it changed, not where it did not.
+  const where = ready.some(record => !row.targets.includes(record) && gaps(record).length)
+    ? `on ${row.targets.map(labelOf).join(", ")}` : targetsNote(row.targets, ready);
+  return `- ${[text, tag, where].filter(Boolean).join(" · ")}`;
+}
+
+/** "Android only" / "not on Android": the targets a screen changed on, when not all of them, named the shorter way. */
+function targetsNote(on: PlatformRecord[], ready: PlatformRecord[]): string | undefined {
+  if (ready.length < 2 || on.length >= ready.length) return undefined;
+  const missing = ready.filter(record => !on.includes(record));
+  return missing.length < on.length ? `not on ${missing.map(labelOf).join(", ")}` : `${on.map(labelOf).join(", ")} only`;
+}
+
+function changesSection(ready: PlatformRecord[], rows: ChangeRow[], rowCap: number, withMap: boolean): string[] {
+  if (!ready.length) return [];
+  const lines: string[] = [];
+  const shown = rows.slice(0, rowCap);
+  lines.push(...shown.map(row => renderChangeRow(row, ready)));
+  if (rows.length > shown.length) {
+    const report = firstReport(ready);
+    const more = `${plural(rows.length - shown.length, "more screen")} in the report`;
+    lines.push(`- ${report ? link(more, report) : more}`);
+  }
+  if (lines.length) lines.push("");
+  if (withMap) lines.push(...mapSection(ready));
+  const byLine = new Map<string, PlatformRecord[]>();
+  for (const record of ready) for (const line of record.context ?? []) byLine.set(line, [...(byLine.get(line) ?? []), record]);
+  for (const [line, records] of byLine) lines.push(records.length === ready.length ? line : `${line} · ${targetsNote(records, ready)}`, "");
+  return lines;
+}
+
+/**
+ * The previous run stays on the comment while a new one works or has only failed; this line, above it, says which,
+ * with each failure's step and message.
+ */
+function newRunLine(current: PlatformRecord[], shown: PlatformRecord[], repository: string): string {
+  const first = current[0]!;
+  const active = current.filter(record => !finished(record));
+  const failed = current.filter(record => record.phase === "failed");
+  const named = current.length > 1 || shown.length > 1 || Boolean(first.target) || first.label !== undefined;
+  const verb = active.some(record => record.phase === "capturing") ? "capturing" : "starting";
+  const working = active.length ? [`${verb}${named ? ` on ${active.map(labelOf).join(", ")}` : ""}`] : [];
+  const failures = failed.map(record => [named ? `**${labelOf(record)} failed**` : undefined, inlineText(record.failure?.step ?? "capture", 48),
+    record.failure?.message ? inlineText(record.failure.message, MAX_FAILURE_MESSAGE) : undefined].filter(Boolean).join(" · "));
+  const links = [link("run", first.links.run), ...(failed.length ? [link("evidence", failed[0]!.links.artifacts)] : [])];
+  return `> **${active.length ? "New run in progress" : "New run failed"}** for ${commitLink(repository, first.headSha)} · ${[...working, ...failures, ...links].join(" · ")}`;
+}
+
+function footer(records: PlatformRecord[]): string {
+  const parts: string[] = [];
+  const expiries = records.filter(record => record.phase === "ready" && record.links.expiresAt !== undefined).map(record => record.links.expiresAt);
+  if (expiries.length) parts.push(expiries.some(at => at === null) ? "Preview links work for anyone who has them until the deployment is deleted"
+    : `Preview links work for anyone who has them until ${previewExpiry(Math.min(...expiries.filter((at): at is number => at !== null)))}`);
+  const runs = records.filter((record, index, all) => all.findIndex(other => other.links.run === record.links.run) === index);
+  parts.push(runs.length === 1 ? link("Workflow run", runs[0]!.links.run) : runs.map(record => link(`${labelOf(record)} run`, record.links.run)).join(" · "));
+  parts.push(link("Config", records[0]!.links.config));
+  return `<sub>${parts.join(" · ")}</sub>`;
 }
 
 function historySection(repository: string, history: HistoryEntry[]): string[] {
@@ -683,54 +643,53 @@ function deploymentOf(url: string | undefined): string | undefined {
 }
 function deploymentMarkerOf(records: CommentRecords): string | undefined {
   const names = new Set<string>();
-  for (const record of Object.values(records.current)) { const name = deploymentOf(record?.links.report); if (name) names.add(name); }
+  for (const record of [...Object.values(records.current), ...Object.values(records.previous ?? {})]) { const name = deploymentOf(record?.links.report); if (name) names.add(name); }
   for (const entry of records.history) for (const item of Object.values(entry.platforms)) { const name = deploymentOf(item?.report); if (name) names.add(name); }
   return names.size ? `<!-- expo-explore-deployments:${[...names].sort().join(",")} -->` : undefined;
 }
 
-/** The whole comment from its records: hidden lines first, then one review for every target of the current run, in config order. */
+/**
+ * The whole comment from its records: hidden lines first, then the review. Until a target of the current run is ready,
+ * the previous run's review stays up under a line that says a new run is working or failed.
+ */
 export function renderCommentRecords(records: CommentRecords, existing?: string, budget = PUBLIC_COMMENT_BODY_BUDGET): string {
   const current = orderedRecords(records);
+  const previous = orderedPrevious(records);
   const hidden = [CI_COMMENT_MARKER, ...[deploymentMarkerOf(records)].filter((line): line is string => Boolean(line)),
-    ...current.map(recordLine), ...[historyLine(records.history)].filter((line): line is string => Boolean(line))];
+    ...current.map(recordLine), ...previous.map(previousLine), ...[historyLine(records.history)].filter((line): line is string => Boolean(line))];
   if (!current.length) return [...hidden, "### Explore review", "", ...(records.history.some(entry => Object.values(entry.platforms).some(item => item?.superseded)) ? [SUPERSEDED_NOTE, ""] : []),
     ...historySection("", records.history)].join("\n");
-  const first = current[0]!;
+  const shown = current.some(record => record.phase === "ready") || !previous.length ? current : previous;
+  const first = shown[0]!;
   const repository = repositoryOf(first.links.run);
+  const ready = shown.filter(record => record.phase === "ready");
+  const rows = changeRows(ready);
   const render = (rowCap: number, withMap: boolean): string => {
-    const lines: string[] = [...hidden, heading(current), "",
-      `<sub>base ${commitLink(repository, first.baseSha)} → ${commitLink(repository, first.headSha)}</sub>`, ""];
+    const lines: string[] = [...hidden];
+    if (shown !== current) lines.push(newRunLine(current, shown, repository), "");
+    lines.push(title(shown, rows), "", subtitle(shown, repository), "");
     if (first.superseded) lines.push(SUPERSEDED_NOTE, "");
-    lines.push(`| | Device | Result | Report |`, `|---|---|---|---|`,
-      ...current.map(record => `| ${labelOf(record)} | ${deviceCell(record)} | ${resultCell(record)} | ${reportCell(record)} |`), "");
-    lines.push(...changesSection(current, rowCap, withMap));
-    lines.push(...validationSection(current));
+    for (const line of shown.map(statusLine)) if (line) lines.push(line, "");
+    lines.push(...changesSection(ready, rows, rowCap, withMap));
+    lines.push(...diagnosticsSection(shown));
     lines.push(...historySection(repository, records.history));
-    const expiries = current.filter(record => record.phase === "ready" && record.links.expiresAt !== undefined).map(record => record.links.expiresAt);
-    const footer: string[] = [];
-    if (expiries.length) footer.push(expiries.some(at => at === null) ? "Preview links work for anyone who has them until the deployment is deleted."
-      : `Preview links work until ${previewExpiry(Math.min(...expiries.filter((at): at is number => at !== null)))} for anyone who has them.`);
-    footer.push(`Managed via ${link("`" + plainText(configPathOf(first.links.config), 120).replace(/`/g, "") + "`", first.links.config)}`);
-    const artifacts = artifactLinks(current);
-    if (artifacts) footer.push(artifacts);
-    lines.push(footer.join(" · "));
+    lines.push(footer(shown));
     return lines.join("\n");
   };
-  // The map goes first when the body is over budget, then the change lists shrink.
-  let rowCap = MAX_ROWS_PER_GROUP;
+  // The map goes first when the body is over budget, then the list shrinks, then the previous run's records go; once the
+  // current run shows, nothing renders them, so they go first.
+  let rowCap = ROW_LIMIT;
   let body = render(rowCap, true);
+  if (body.length > budget && shown === current && previous.length) return renderCommentRecords({ ...records, previous: {} }, existing, budget);
   if (body.length > budget) body = render(rowCap, false);
   while (body.length > budget && rowCap > 1) { rowCap = Math.max(1, Math.floor(rowCap / 2)); body = render(rowCap, false); }
+  if (body.length > budget && previous.length) return renderCommentRecords({ ...records, previous: {} }, existing, budget);
   return body;
 }
 
 function repositoryOf(run: string): string {
   const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/actions\//.exec(run);
   return match ? `${decodeURIComponent(match[1]!)}/${decodeURIComponent(match[2]!)}` : "";
-}
-function configPathOf(config: string): string {
-  const match = /\/blob\/[0-9a-f]{40}\/(.+)$/.exec(config);
-  return match ? decodeURIComponent(match[1]!) : "config";
 }
 
 /**

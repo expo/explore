@@ -1,5 +1,5 @@
 import { appearanceLabel, appearanceOptions, appearanceScope, filterComparisonAppearance, filterMapAppearance, filterReviewAppearance, rememberAppearance, rememberedAppearance, type Appearance } from "./utils/appearance";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { Toaster } from "sonner";
@@ -16,7 +16,7 @@ import { changedScreens, focusCounts as countFocusStatuses, isCapturedChange, ty
 import { MapView } from "./components/views/semantic-map";
 import { RightPanel } from "./components/panels/right";
 import { SearchCommand } from "./components/search-command";
-import { ScreensView } from "./components/views/screens";
+import { FIND_KEY, ScreensView } from "./components/views/screens";
 import { publicReviewProjection, publicReviewToWorkspace } from "./public/public-workspace";
 import type { PublicReview } from "../../src/contracts/capture";
 import {
@@ -287,11 +287,12 @@ export function App() {
       {...(droppable ? { onOpenFile: openFile } : {})}
       {...(droppable && source.status === "failed" ? { onRetry: retry } : {})} />;
   }
-  // A hosted preview switches targets in place; the new report gets a fresh Viewer.
-  return <ViewerApp key={source.reportKey} />;
+  // A hosted preview switches targets in place; the running Viewer swaps in the new report.
+  return <ViewerApp reportKey={source.reportKey} />;
 }
 
-function ViewerApp() {
+// The report source changes on every chunk while another target downloads; the Viewer re-renders only for a new report.
+const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) {
   const [payload, setPayload] = useState<ViewerPayload>();
   const [workspace, setWorkspace] = useState<ViewerWorkspace>();
   const [loadedPublicReview, setLoadedPublicReview] = useState<PublicReview>();
@@ -322,6 +323,9 @@ function ViewerApp() {
   const focusSeq = useRef(0);
   const landed = useRef(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  /** `/` on another canvas: Screens opens with its find field focused; each press is a new request. */
+  const [findRequest, setFindRequest] = useState<number>();
+  const clearFindRequest = useCallback(() => setFindRequest(undefined), []);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Compare steps through the changed screens in review order. Callbacks read it from a ref,
   // because they are created before the diff that produces it.
@@ -384,41 +388,60 @@ function ViewerApp() {
     setThemePreference(current => (current === "system" ? preferredSystemTheme : current) === "dark" ? "light" : "dark");
   }, [preferredSystemTheme]);
 
+  /** Takes the report the page holds (an opened file, a hosted preview's target), synchronously; false when there is none. */
+  const adoptEmbeddedReport = useCallback((): boolean => {
+    if (REPORT_SOURCE.data?.exploration) {
+      const { map, coverage } = REPORT_SOURCE.data.exploration;
+      workspaceModeRef.current = false;
+      revisionRef.current = { runId: map.run.id, revision: map.revision };
+      setLoadedPublicReview(undefined);
+      setWorkspace(undefined);
+      setPayload({ map, coverage });
+      const nextContext = routeContextForMap(map);
+      const nextRoute = viewerRoute(parseLocation(viewerLocation(), nextContext));
+      contextRef.current = nextContext;
+      routeRef.current = nextRoute;
+      setRoute(nextRoute);
+      setError(undefined);
+      return true;
+    }
+    if (REPORT_SOURCE.data) {
+      const publicReview = REPORT_SOURCE.data.publicReview;
+      const body = publicReview ? publicReviewToWorkspace(publicReview) : REPORT_SOURCE.data.workspace!;
+      const current = body.builds[body.catalog.currentBuildId];
+      if (!current) throw new Error(`Current build is missing: ${body.catalog.currentBuildId}`);
+      workspaceModeRef.current = true;
+      setLoadedPublicReview(publicReview);
+      setWorkspace(body);
+      setPayload(current);
+      const nextContext = routeContextForMap(current.map, body.catalog);
+      const nextRoute = viewerRoute(parseLocation(viewerLocation(), nextContext));
+      contextRef.current = nextContext;
+      routeRef.current = nextRoute;
+      setRoute(nextRoute);
+      setError(undefined);
+      return true;
+    }
+    return false;
+  }, []);
+
+  // Another report took the page (a hosted preview switched targets): adopt it in this very render, so no frame shows
+  // the old report against the new report's assets, and the chrome, the camera and the view stay instead of a fresh
+  // Viewer flashing its loading screen and an empty canvas.
+  const [shownReportKey, setShownReportKey] = useState(reportKey);
+  if (shownReportKey !== reportKey) {
+    setShownReportKey(reportKey);
+    try {
+      adoptEmbeddedReport();
+    } catch (adoptError) {
+      setError(adoptError instanceof Error ? adoptError.message : String(adoptError));
+    }
+  }
+
   const load = useCallback(async (silent = false) => {
     void silent;
     try {
-      if (REPORT_SOURCE.data?.exploration) {
-        const { map, coverage } = REPORT_SOURCE.data.exploration;
-        workspaceModeRef.current = false;
-        revisionRef.current = { runId: map.run.id, revision: map.revision };
-        setLoadedPublicReview(undefined);
-        setWorkspace(undefined);
-        setPayload({ map, coverage });
-        const nextContext = routeContextForMap(map);
-        const nextRoute = viewerRoute(parseLocation(viewerLocation(), nextContext));
-        contextRef.current = nextContext;
-        routeRef.current = nextRoute;
-        setRoute(nextRoute);
-        setError(undefined);
-        return;
-      }
-      if (REPORT_SOURCE.data) {
-        const publicReview = REPORT_SOURCE.data.publicReview;
-        const body = publicReview ? publicReviewToWorkspace(publicReview) : REPORT_SOURCE.data.workspace!;
-        const current = body.builds[body.catalog.currentBuildId];
-        if (!current) throw new Error(`Current build is missing: ${body.catalog.currentBuildId}`);
-        workspaceModeRef.current = true;
-        setLoadedPublicReview(publicReview);
-        setWorkspace(body);
-        setPayload(current);
-        const nextContext = routeContextForMap(current.map, body.catalog);
-        const nextRoute = viewerRoute(parseLocation(viewerLocation(), nextContext));
-        contextRef.current = nextContext;
-        routeRef.current = nextRoute;
-        setRoute(nextRoute);
-        setError(undefined);
-        return;
-      }
+      if (adoptEmbeddedReport()) return;
       if (STATIC_VIEWER_SOURCE.mode === "invalid") {
         throw new Error(STATIC_VIEWER_SOURCE.error);
       }
@@ -524,7 +547,7 @@ function ViewerApp() {
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     }
-  }, []);
+  }, [adoptEmbeddedReport]);
 
   const poll = useCallback(async () => {
     if (pollingRef.current) return;
@@ -1001,6 +1024,14 @@ function ViewerApp() {
       if (event.key === "?" && !event.metaKey && !event.ctrlKey && !event.altKey) {
         event.preventDefault();
         setShortcutsOpen(true);
+        return;
+      }
+      // "/" finds a screen: on Screens the page itself opens its field; elsewhere it goes to Screens with the field open.
+      if (event.key === FIND_KEY && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        if (routeRef.current.canvas === "screens" || phoneRef.current) return;
+        event.preventDefault();
+        selectCanvas("screens");
+        setFindRequest((count) => (count ?? 0) + 1);
         return;
       }
       if (matchesShortcut(event, SHORTCUTS.app.handoff)) {
@@ -1564,6 +1595,8 @@ function ViewerApp() {
               {...(focusRequest ? { focusRequest } : {})}
               focus={focusFilter}
               phone={phone}
+              findRequest={findRequest}
+              onFindRequestDone={clearFindRequest}
               onSelectScreen={selectScreenOnCanvas}
               onPickScreen={pickScreenInPlace}
               onClearSelection={clearSelectedScreen}
@@ -1683,4 +1716,4 @@ function ViewerApp() {
     </>
   );
   return viewer;
-}
+});

@@ -87,7 +87,7 @@ test("the Android controller open response is accepted only for the Android plat
   assert.throws(() => openedSimulatorDevice(response, "dev.brent.euxy", "open", "ios"), /full ios device shape/);
 });
 
-test("the PR comment names Android builds and runtimes", () => {
+test("the PR comment names the Android target while it captures", () => {
   const pullRequest = { repositoryId: "1", repository: "expo/explore-playground", number: 1, title: "Android", url: "https://github.com/expo/explore-playground/pull/1",
     base: { ref: "main", sha: "a".repeat(40) }, head: { ref: "android", sha: "b".repeat(40) } };
   const body = renderPublicComment({
@@ -99,7 +99,8 @@ test("the PR comment names Android builds and runtimes", () => {
       deviceModel: "EasAndroidDevice01", osVersion: "35", locale: "en-US", orientation: "portrait", colorScheme: "light" },
     capture: { planned: { base: 3, head: 3 }, done: { base: 0, head: 1 }, baseFromCache: false },
   });
-  assert.match(body, /\| Android \| EasAndroidDevice01 35 · euxy 1\\\.2\\\.0 \\\(1\\\) \| ⏳ capturing head 1\/3 \|/);
+  assert.match(body, /^### Explore review · capturing$/m);
+  assert.match(body, /^Android · capturing head 1\/3 · \[run\]\(<[^>]+>\)$/m);
   assert.doesNotMatch(body, /iOS/);
 });
 

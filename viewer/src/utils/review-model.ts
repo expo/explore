@@ -95,7 +95,21 @@ export type ReviewVisualDiff = {
   ignoredStatusBarRegions?: number;
   /** Diff regions inside the home-indicator band (iOS, bottom) that CI left out of the verdict. */
   ignoredHomeIndicatorRegions?: number;
+  /** The system-drawn areas CI left out, in percent of the screenshot; older reports name only the counts above. */
+  systemRegions?: SystemRegion[];
 };
+
+/** An area the system draws (status bar, home indicator), in percent of the screenshot's width and height. */
+export type SystemRegion = { kind: "status-bar" | "home-indicator"; x: number; y: number; width: number; height: number };
+
+function systemRegion(value: unknown): SystemRegion | undefined {
+  const candidate = record(value);
+  if (!candidate || (candidate.kind !== "status-bar" && candidate.kind !== "home-indicator")) return undefined;
+  const side = (entry: unknown) => (typeof entry === "number" && Number.isFinite(entry) && entry >= 0 && entry <= 100 ? entry : undefined);
+  const x = side(candidate.x), y = side(candidate.y), width = side(candidate.width), height = side(candidate.height);
+  if (x === undefined || y === undefined || width === undefined || height === undefined || width === 0 || height === 0) return undefined;
+  return { kind: candidate.kind, x, y, width, height };
+}
 
 /** Why a side that exists in its revision has no screenshot, as the report states it. */
 export type CaptureNotes = { before?: string; after?: string };
@@ -294,8 +308,11 @@ export function visualDiff(value: unknown): ReviewVisualDiff | undefined {
   const count = (value: unknown) => (typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined);
   const ignoredStatusBarRegions = count(candidate.ignoredStatusBarRegions);
   const ignoredHomeIndicatorRegions = count(candidate.ignoredHomeIndicatorRegions);
+  const systemRegions = Array.isArray(candidate.systemRegions)
+    ? candidate.systemRegions.slice(0, MAX_VISUAL_REGIONS).flatMap((entry) => { const area = systemRegion(entry); return area ? [area] : []; }) : [];
   return {
     regions,
+    ...(systemRegions.length > 0 ? { systemRegions } : {}),
     ...(candidate.allRegionsMoved === true && regions.length > 0 && regions.every((region) => region.move) ? { allRegionsMoved: true as const } : {}),
     ...(mismatchPercentage !== undefined ? { mismatchPercentage } : {}),
     ...(ignoredStatusBarRegions !== undefined ? { ignoredStatusBarRegions } : {}),

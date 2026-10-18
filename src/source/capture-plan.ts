@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { canonicalizeSourceChanges, type SourceChange } from "./git-diff.js";
 import type { SourceChangeSummary } from "./change-summary.js";
 import { hasRuntimeChange, readSourceSnapshot, surfaceDependencies, type SourceSnapshot } from "./dependency-graph.js";
+import { sameCodeIgnoringTrivia } from "./trivia.js";
 import { discoverRoutes, type DiscoverRouteOptions } from "./route-inventory.js";
 import { sourceRouteNames, validateSourceRoutes, type SourceRoute } from "../contracts/source-route.js";
 import { navigationCaptureContext, type NavigationGraph } from "../contracts/navigation-graph.js";
@@ -120,7 +121,15 @@ export function createSourceCapturePlan(options: CapturePlanOptions): SourceCapt
   const headRoutes = checkedRoutes(options.headRoutes, headInventory.routes, "head");
   const base = surfaceDependencies(baseRoutes, options.baseFiles, options.platform);
   const head = surfaceDependencies(headRoutes, options.headFiles, options.platform);
-  const changes = canonicalizeSourceChanges(options.changedFiles).filter(change => !/(?:^|\/)surfaces?\.json$/.test(change.path));
+  // A file whose two versions differ only in comments or whitespace compiles to the same program, so it changes no screen.
+  // Parsed once per path: every surface that imports a shared file asks about it.
+  const trivia = new Map<string, boolean>();
+  const triviaOnly = (path: string) => {
+    if (!trivia.has(path)) trivia.set(path, sameCodeIgnoringTrivia(path, options.baseFiles.get(path), options.headFiles.get(path)));
+    return trivia.get(path)!;
+  };
+  const changes = canonicalizeSourceChanges(options.changedFiles).filter(change => !/(?:^|\/)surfaces?\.json$/.test(change.path)
+    && !(change.status === "modified" && triviaOnly(change.path)));
   const changedPaths = new Set(changes.flatMap(change => [change.path, ...("previousPath" in change ? [change.previousPath] : [])]));
   const externalRuntimeChange = hasRuntimeChange(options.externalChanges ?? []);
   const unresolved = [...new Set([...base.unresolved, ...head.unresolved,
@@ -138,7 +147,7 @@ export function createSourceCapturePlan(options: CapturePlanOptions): SourceCapt
     const headSurface = headById.get(id) ?? null;
     const dependencies = new Set([...(baseSurface?.sourceFiles ?? []), ...(headSurface?.sourceFiles ?? [])]);
     const touched = [...changedPaths].filter(path => dependencies.has(path)).sort();
-    const sourceChanged = baseSurface && headSurface && [...dependencies].some(path => options.baseFiles.get(path) !== options.headFiles.get(path));
+    const sourceChanged = baseSurface && headSurface && [...dependencies].some(path => options.baseFiles.get(path) !== options.headFiles.get(path) && !triviaOnly(path));
     const definitionChanged = baseSurface && headSurface && canonicalJSON(baseSurface) !== canonicalJSON(headSurface);
     // A redirect renders no interface: only its own declaration can change what it does, so
     // imported or app-wide edits cannot make it a reviewable difference.

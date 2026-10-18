@@ -162,7 +162,18 @@ export function Tooltip({
     if (bubbleRef.current) observer.observe(bubbleRef.current);
     window.addEventListener("resize", update);
     window.addEventListener("scroll", update, true);
+    // A canvas pans and zooms its cards by transform, which neither observer reports: while open,
+    // follow the anchor frame by frame so the bubble never stays behind over what it labels.
+    let followed = "";
+    let frame = requestAnimationFrame(function follow() {
+      const anchor = anchorRef.current?.getBoundingClientRect();
+      const key = anchor ? `${anchor.left} ${anchor.top} ${anchor.width} ${anchor.height}` : "";
+      if (followed && key !== followed) update();
+      followed = key;
+      frame = requestAnimationFrame(follow);
+    });
     return () => {
+      cancelAnimationFrame(frame);
       observer.disconnect();
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);

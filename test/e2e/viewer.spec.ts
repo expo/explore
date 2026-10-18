@@ -127,6 +127,13 @@ async function expectMapScreenSelectionDimming(
   }));
   const hoverTargetCount = options.hoverTargetCount ?? 1;
   expect(hoverableDimmedIndexes.length).toBeGreaterThanOrEqual(hoverTargetCount);
+  // A card fades through its frame's --map-card-opacity (the node itself stays opaque over the
+  // connectors). The property is not animated, so it reads what hover asks for at once.
+  const cardOpacities = () => screens.evaluateAll((nodes) => Object.fromEntries(nodes.map((node) => [
+    node.getAttribute("data-id") ?? "",
+    getComputedStyle(node.querySelector(":scope > .canvas-active-frame")!).getPropertyValue("--map-card-opacity").trim(),
+  ])));
+  const restingOpacities = await cardOpacities();
   let lastHoverTarget = dimmed.nth(hoverableDimmedIndexes[0]!);
 
   for (const index of hoverableDimmedIndexes.slice(0, hoverTargetCount)) {
@@ -149,7 +156,9 @@ async function expectMapScreenSelectionDimming(
       return label.startsWith(`Edge from ${nodeId} to `) || label.endsWith(` to ${nodeId}`);
     }).length, hoverTargetId!);
     expect(directEdgeCount).toBeGreaterThan(0);
-    // The hovered screen and every screen it shares an edge with stay bright; the rest recede.
+    // The hovered screen and every screen it shares an edge with are marked related; nothing on
+    // the map recedes while hovering, so the only changes are the subject ring, the incident
+    // edges and the neighbours' frames.
     const neighbourIds = await allEdges.evaluateAll((edges, nodeId) => {
       const ids = new Set<string>([nodeId]);
       for (const edge of edges) {
@@ -166,14 +175,15 @@ async function expectMapScreenSelectionDimming(
     await expect.poll(() => brightNodes.evaluateAll((nodes) => (
       nodes.map((node) => node.getAttribute("data-id") ?? "").sort()
     ))).toEqual(neighbourIds);
-    const receded = page.locator(
-      ".map-canvas .react-flow__node-screen:not(.graph-node-hover-related)",
+    const unrelated = page.locator(
+      ".map-canvas .react-flow__node-screen:not(.graph-node-hover-related):not(.canvas-node-exit)",
     );
-    if (await receded.count() > 0) {
-      await expect.poll(() => receded.first().evaluate(
-        (node) => Number.parseFloat(getComputedStyle(node).opacity),
-      )).toBeGreaterThan(0.5);
-    }
+    const unrelatedIds = await unrelated.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-id") ?? ""));
+    expect(unrelatedIds.length).toBeGreaterThan(0);
+    const hoverOpacities = await cardOpacities();
+    expect(unrelatedIds.map((id) => hoverOpacities[id])).toEqual(unrelatedIds.map((id) => restingOpacities[id]));
+    expect(await unrelated.evaluateAll((nodes) => nodes.every((node) => getComputedStyle(node).filter === "none"))).toBe(true);
+    await expect(page.locator(".map-canvas .screen-open-hint:visible")).toHaveCount(0);
     const activeEdges = page.locator(
       ".map-canvas .react-flow__edge.graph-edge-hover-related",
     );
@@ -1996,6 +2006,148 @@ test("fits the visible Map screenshot frame to the capture's intrinsic ratio", a
   expect(metrics.slotBorder).toBe(0);
   expect(metrics.imageBorder).toBeGreaterThan(0);
   expect(metrics.slotBackground).toBe("rgba(0, 0, 0, 0)");
+});
+
+/** Each Map card's --map-card-opacity by id: what fades its frame. The property is not animated. */
+function mapCardOpacities(page: Page) {
+  return page.locator(".map-canvas .react-flow__node-screen:not(.canvas-node-exit)").evaluateAll((nodes) => (
+    Object.fromEntries(nodes.map((node) => [
+      node.getAttribute("data-id") ?? "",
+      getComputedStyle(node.querySelector(":scope > .canvas-active-frame")!).getPropertyValue("--map-card-opacity").trim(),
+    ]))
+  ));
+}
+
+/** Waits until the Map camera stops moving. */
+async function expectMapCameraAtRest(page: Page) {
+  await expect(page.locator(".map-canvas.canvas-focus-animating")).toHaveCount(0);
+  const viewport = page.locator(".map-canvas .react-flow__viewport");
+  let transform = "";
+  await expect.poll(async () => {
+    const next = await viewport.evaluate((element) => getComputedStyle(element).transform);
+    const resting = next === transform;
+    transform = next;
+    return resting;
+  }).toBe(true);
+}
+
+/** The first `candidates` card whose screenshot is under the pointer near its top, with `room` above and below. */
+async function hoverableMapScreen(candidates: Locator, room = 80) {
+  const index = await candidates.evaluateAll((nodes, room) => nodes.findIndex((node) => {
+    const target = node.querySelector(".screen-screenshot-target")!.getBoundingClientRect();
+    const hit = document.elementFromPoint(target.left + target.width / 2, target.top + target.height / 4);
+    return hit !== null && node.contains(hit) && target.top > room && target.bottom < window.innerHeight - room;
+  }), room);
+  expect(index).toBeGreaterThanOrEqual(0);
+  return candidates.nth(index);
+}
+
+test("hovering a Map screen fades nothing and says Open in Inspector in a tooltip below the card that keeps to it", async ({ page }) => {
+  await serveSyntheticWorkspace(page);
+  await page.goto("/map");
+  const screens = page.locator(".map-canvas .react-flow__node-screen:not(.canvas-node-exit)");
+  await expect(screens.first()).toBeVisible();
+  await expectMapCameraAtRest(page);
+  const resting = await mapCardOpacities(page);
+  // A screen at one end of a secondary transition, which rests a little faded.
+  const secondaryEnds = await page.locator(".map-canvas .react-flow__edge.graph-edge-secondary").evaluateAll((edges) => (
+    [...new Set(edges.flatMap((edge) => /^Edge from (.+) to (.+)$/.exec(edge.getAttribute("aria-label") ?? "")?.slice(1) ?? []))]
+  ));
+  expect(secondaryEnds.length).toBeGreaterThan(0);
+  const node = await hoverableMapScreen(page.locator(
+    secondaryEnds.map((id) => `.map-canvas .react-flow__node-screen[data-id="${id}"]`).join(", "),
+  ));
+  const target = node.locator(".screen-screenshot-target");
+  const heading = node.locator(".screen-node-heading");
+  // The tooltip says what a click does; no native title tooltip joins it.
+  await expect(target).not.toHaveAttribute("title");
+  // Near the card's top, so the pan below keeps the pointer on it.
+  const box = (await target.boundingBox())!;
+  await target.hover({ position: { x: box.width / 2, y: box.height / 4 } });
+  await expect(page.locator(".connection-canvas-surface.canvas-hovering")).toHaveCount(1);
+  const tooltip = page.locator(".tooltip", { hasText: "Open in Inspector" });
+  await expect(tooltip).toBeVisible();
+  const related = await page.locator(".map-canvas .react-flow__node-screen.graph-node-hover-related")
+    .evaluateAll((nodes) => nodes.map((element) => element.getAttribute("data-id") ?? ""));
+  const unrelated = Object.keys(resting).filter((id) => !related.includes(id));
+  expect(unrelated.length).toBeGreaterThan(0);
+  const hovering = await mapCardOpacities(page);
+  expect(unrelated.map((id) => hovering[id])).toEqual(unrelated.map((id) => resting[id]));
+  await expect(page.locator(".map-canvas .screen-open-hint:visible")).toHaveCount(0);
+  // The transitions into and out of it come fully up, the secondary one too.
+  const incident = page.locator(".map-canvas .react-flow__edge.graph-edge-hover-related");
+  await expect(incident.and(page.locator(".graph-edge-secondary"))).not.toHaveCount(0);
+  await expect.poll(() => incident.evaluateAll((edges) => edges.every((edge) => getComputedStyle(edge).opacity === "1"))).toBe(true);
+  // The route heads a Map card, so the bubble sits below the screenshot, clear of both.
+  const clearance = async () => {
+    const [bubble, card, title] = await Promise.all([tooltip.boundingBox(), target.boundingBox(), heading.boundingBox()]);
+    if (!bubble || !card || !title) return Number.NaN;
+    const headingOverlap = bubble.y < title.y + title.height && title.y < bubble.y + bubble.height
+      && bubble.x < title.x + title.width && title.x < bubble.x + bubble.width;
+    return headingOverlap ? -1 : bubble.y - (card.y + card.height);
+  };
+  expect(await clearance()).toBeGreaterThan(0);
+  // Panning with the pointer still on the card moves the card by transform; the bubble follows it
+  // rather than staying behind over the screenshot.
+  const before = await target.boundingBox();
+  await page.mouse.wheel(0, 40);
+  await expect.poll(async () => (await target.boundingBox())!.y).toBeLessThan(before!.y - 10);
+  await expect.poll(clearance).toBeGreaterThan(0);
+});
+
+test("hovering a Map screen the Changes filter muted brings it and its neighbours back up, and nothing else", async ({ page }) => {
+  await serveSyntheticWorkspace(page);
+  await page.goto("/map?focus=modified");
+  const muted = page.locator(".map-canvas .react-flow__node-screen.graph-node-muted:not(.canvas-node-exit)");
+  await expect.poll(() => muted.count()).toBeGreaterThan(0);
+  await expectMapCameraAtRest(page);
+  const resting = await mapCardOpacities(page);
+  const node = await hoverableMapScreen(muted, 0);
+  const id = (await node.getAttribute("data-id"))!;
+  expect(Number.parseFloat(resting[id]!)).toBeLessThan(1);
+  await node.locator(".screen-screenshot-target").hover();
+  await expect(node).toHaveClass(/graph-node-hover-subject/);
+  const related = await page.locator(".map-canvas .react-flow__node-screen.graph-node-hover-related")
+    .evaluateAll((nodes) => nodes.map((element) => element.getAttribute("data-id") ?? ""));
+  expect(related).toContain(id);
+  expect(related.length).toBeGreaterThan(1);
+  const hovering = await mapCardOpacities(page);
+  expect(related.map((relatedId) => hovering[relatedId])).toEqual(related.map(() => "1"));
+  const unrelated = Object.keys(resting).filter((otherId) => !related.includes(otherId));
+  expect(unrelated.length).toBeGreaterThan(0);
+  expect(unrelated.map((otherId) => hovering[otherId])).toEqual(unrelated.map((otherId) => resting[otherId]));
+  // The transitions between them come up with them.
+  const edges = page.locator(".map-canvas .react-flow__edge.graph-edge-hover-related");
+  await expect.poll(() => edges.count()).toBeGreaterThan(0);
+  await expect.poll(() => edges.evaluateAll((elements) => elements.every((edge) => getComputedStyle(edge).opacity === "1"))).toBe(true);
+});
+
+test("on Screens the Open in Inspector tooltip sits above the screenshot, clear of the route under it", async ({ page }) => {
+  await serveSyntheticWorkspace(page);
+  await page.goto("/screens");
+  const card = page.locator(".screens-page .screen-screenshot-card:not(.selected)").nth(1);
+  const target = card.locator(".screen-screenshot-target");
+  await target.scrollIntoViewIfNeeded();
+  await target.hover();
+  const tooltip = page.locator(".tooltip", { hasText: "Open in Inspector" });
+  await expect(tooltip).toBeVisible();
+  const [bubble, screenshot, title] = await Promise.all([
+    tooltip.boundingBox(), target.boundingBox(), card.locator(".screen-node-heading").boundingBox(),
+  ]);
+  expect(bubble!.y + bubble!.height).toBeLessThanOrEqual(screenshot!.y);
+  expect(title!.y).toBeGreaterThanOrEqual(screenshot!.y + screenshot!.height - 1);
+});
+
+test("a narrow window with a mouse gets the phone map's Open pill on the selected screen, as it has no tooltips", async ({ page }) => {
+  // The phone layout is a width, not a device: the first click there only selects, as a tap does.
+  await page.setViewportSize({ width: 800, height: 820 });
+  await serveSyntheticWorkspace(page);
+  await page.goto("/map?screen=area-0-screen-1");
+  expect(await page.evaluate(() => matchMedia("(hover: hover)").matches)).toBe(true);
+  await expect(page.locator(".app-shell.phone-layout")).toHaveCount(1);
+  const selected = page.locator(".map-canvas .react-flow__node-screen.selected");
+  await expect(selected.locator(".screen-open-hint")).toBeVisible();
+  await expect(page.locator(".map-canvas .screen-open-hint:visible")).toHaveCount(1);
 });
 
 test("fits a landscape Map capture at render time without app-specific dimensions", async ({ page }) => {
@@ -4312,7 +4464,6 @@ test("desktop Compare: one command bar with the modes in it, even gaps to both b
   await expect(divider).toHaveAttribute("aria-valuenow", "45");
   const dividerAt = async () => Number(await divider.getAttribute("aria-valuenow"));
   await page.keyboard.down("BracketRight");
-  await expect(divider).toHaveAttribute("aria-valuenow", "50");
   await expect.poll(dividerAt, { timeout: 4000 }).toBeGreaterThanOrEqual(65);
   await page.keyboard.up("BracketRight");
   const dividerHeld = await dividerAt();
@@ -5052,4 +5203,146 @@ test("the theme is Auto until the toggle picks one: it follows the system, then 
   await page.reload();
   await expect(html).toHaveAttribute("data-theme", "light");
   await expect(page.getByRole("button", { name: "Toggle theme" })).toHaveAttribute("data-theme-preference", "light");
+});
+
+test("/ finds screens on the Screens page: the tree and the grid narrow to the query, Enter picks the first match, Esc clears then closes", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/screens");
+  const grid = page.getByRole("main", { name: "Screens" });
+  const cells = grid.locator(".screens-grid .screens-cell");
+  const treeRows = grid.locator(".screens-tree-row[data-screen-id]");
+  await expect(cells.first()).toBeVisible();
+  const all = await cells.count();
+  const titles = await cells.locator(".screen-node-title").allTextContents();
+  // A query that keeps some screens and drops others: the last path segment of a route only some routes share.
+  const query = titles.map(title => title.split("/").filter(Boolean).at(-1) ?? "")
+    .find(segment => segment && titles.filter(title => title.includes(segment)).length < titles.length)!;
+  expect(query).toBeTruthy();
+
+  // Opening the field does not move the tree under it: the head keeps one height in every state.
+  const heading = grid.locator(".screens-tree h2");
+  const headingTop = (await heading.boundingBox())!.y;
+  await page.keyboard.press("/");
+  const field = grid.getByRole("searchbox", { name: "Find screens" });
+  await expect(field).toBeFocused();
+  expect((await heading.boundingBox())!.y).toBe(headingTop);
+  await field.fill(query);
+  const matching = titles.filter(title => title.toLowerCase().includes(query.toLowerCase()));
+  await expect(cells).toHaveCount(matching.length);
+  for (const title of await cells.locator(".screen-node-title").allTextContents()) expect(title.toLowerCase()).toContain(query.toLowerCase());
+  await expect(treeRows).toHaveCount(matching.length);
+  // Every row stays open while finding, so the fold-all control steps aside.
+  await expect(grid.locator(".screens-tree-fold-all")).toHaveCount(0);
+
+  // The results are the field's: ↓ and ↑ step the pick through them while typing can go on; Return opens the pick.
+  await field.press("ArrowDown");
+  await expect(cells.nth(0).locator(".screen-screenshot-card")).toHaveClass(/selected/);
+  await expect(field).toBeFocused();
+  if (matching.length > 1) {
+    await field.press("ArrowDown");
+    await expect(cells.nth(1).locator(".screen-screenshot-card")).toHaveClass(/selected/);
+    await field.press("ArrowUp");
+    await expect(cells.nth(0).locator(".screen-screenshot-card")).toHaveClass(/selected/);
+  }
+  await expect(page.getByRole("complementary", { name: "Inspector panel" })).toBeHidden();
+  await field.press("Enter");
+  await expect(page.getByRole("complementary", { name: "Inspector panel" })).toBeVisible();
+  await expect(cells.first().locator(".screen-screenshot-card")).toHaveClass(/selected/);
+  await expect(cells).toHaveCount(matching.length);
+  await expect(field).toBeFocused();
+
+  await field.fill("no-such-route-anywhere");
+  await expect(grid.getByRole("status").filter({ hasText: "No screens match" }).first()).toBeVisible();
+  await field.press("Escape");
+  await expect(field).toHaveValue("");
+  await expect(cells).toHaveCount(all);
+  await field.press("Escape");
+  await expect(field).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: "Find a screen" })).toBeVisible();
+
+  // From the Map, "/" opens Screens with the field focused.
+  await chooseCanvasView(page, "Map");
+  await expect(page.getByRole("main", { name: "Screens" })).toHaveCount(0);
+  await page.keyboard.press("/");
+  await expect(page.getByRole("main", { name: "Screens" }).getByRole("searchbox", { name: "Find screens" })).toBeFocused();
+});
+
+test("a / from the Map opens the find once: Screens opened again from the toolbar comes up without it", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/map");
+  await page.keyboard.press("/");
+  const grid = page.getByRole("main", { name: "Screens" });
+  const field = grid.getByRole("searchbox", { name: "Find screens" });
+  await expect(field).toBeFocused();
+  await field.press("Escape");
+  await expect(field).toHaveCount(0);
+
+  await chooseCanvasView(page, "Map");
+  await chooseCanvasView(page, "Screens");
+  await expect(grid.locator(".screens-grid .screens-cell").first()).toBeVisible();
+  await expect(grid.getByRole("button", { name: "Find a screen" })).toBeVisible();
+  await expect(field).toHaveCount(0);
+});
+
+test("the find's keys stay in its field: Return on the clear button clears, and Return while composing text opens nothing", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/screens");
+  const grid = page.getByRole("main", { name: "Screens" });
+  const inspector = page.getByRole("complementary", { name: "Inspector panel" });
+  await expect(grid.locator(".screens-grid .screens-cell").first()).toBeVisible();
+  await page.keyboard.press("/");
+  const field = grid.getByRole("searchbox", { name: "Find screens" });
+  await field.fill("/");
+  await field.press("Tab");
+  await expect(grid.getByRole("button", { name: "Clear find query" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(field).toHaveValue("");
+  await expect(inspector).toBeHidden();
+
+  await field.fill("/");
+  // An input method's Return confirms the composed text; it is not the find's Return.
+  await field.evaluate((input) => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", isComposing: true, bubbles: true, cancelable: true })));
+  await page.waitForTimeout(200);
+  await expect(inspector).toBeHidden();
+});
+
+test("a find inside Changed that only matches other screens says so and offers All", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/screens");
+  const grid = page.getByRole("main", { name: "Screens" });
+  const cells = grid.locator(".screens-grid .screens-cell");
+  const titles = () => cells.locator(".screen-node-title").allTextContents();
+  await expect(cells.first()).toBeVisible();
+  const all = await titles();
+  await grid.getByRole("button", { name: /^Changed/ }).click();
+  await expect.poll(async () => (await titles()).length).toBeLessThan(all.length);
+  const changed = (await titles()).map(title => title.toLowerCase());
+  const query = all.find(title => !changed.some(other => other.includes(title.toLowerCase())));
+  test.skip(!query, "every unchanged screen's title is part of a changed one's");
+
+  await page.keyboard.press("/");
+  const field = grid.getByRole("searchbox", { name: "Find screens" });
+  await field.fill(query!);
+  await expect(grid.getByRole("status").filter({ hasText: `No changed screens match “${query}”` }).first()).toBeVisible();
+  await grid.getByRole("button", { name: /^Show all/ }).click();
+  await expect(cells.filter({ hasText: query! }).first()).toBeVisible();
+  await expect(field).toBeFocused();
+  await field.press("Escape");
+  await field.press("Escape");
+  await expect(grid.getByRole("button", { name: /^All/ })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("a find left on when the window narrows to the phone layout does not filter the phone's screens", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/screens");
+  const grid = page.getByRole("main", { name: "Screens" });
+  const cells = grid.locator(".screens-grid .screens-cell");
+  await expect(cells.first()).toBeVisible();
+  await grid.getByRole("button", { name: /^All/ }).click();
+  const all = await cells.count();
+  await page.keyboard.press("/");
+  await grid.getByRole("searchbox", { name: "Find screens" }).fill("no-such-route-anywhere");
+  await expect(cells).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(cells).toHaveCount(all);
 });

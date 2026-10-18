@@ -144,11 +144,13 @@ export function assertAgentAcceptance(bundle: CaptureBundle,
  * capture, and the Android emulator's clock and indicators sit inside the same fraction of a
  * Pixel frame. Its glyphs differ between sessions even after `--normalize-status-bar`, and within one
  * session whenever the clock or an indicator redraws, so evidence never treats a difference that
- * lies entirely inside this band as an app change. The Viewer marks the same band.
+ * lies entirely inside this band as an app change; a difference that crosses its edge counts only for
+ * its pixels below it. The Viewer marks the same band. Android: the glyphs of `sdk_gphone64` on Android 15
+ * (720x1600) reach 6.4 % of the frame, measured on euxy #164, so its band is 7.
  */
 export const STATUS_BAR_BAND_PERCENT = 6.5;
 /** The top band of a portrait screenshot that holds the system status bar, per platform. */
-export const STATUS_BAR_BAND_PERCENT_BY_PLATFORM: Record<"ios" | "android", number> = { ios: STATUS_BAR_BAND_PERCENT, android: 5 };
+export const STATUS_BAR_BAND_PERCENT_BY_PLATFORM: Record<"ios" | "android", number> = { ios: STATUS_BAR_BAND_PERCENT, android: 7 };
 export function statusBarBandPercent(platform: "ios" | "android" | undefined): number {
   return STATUS_BAR_BAND_PERCENT_BY_PLATFORM[platform ?? "ios"];
 }
@@ -162,6 +164,47 @@ export const HOME_INDICATOR_BAND_PERCENT_BY_PLATFORM: Record<"ios" | "android", 
 /** The bottom band of a portrait screenshot that holds the system home indicator, per platform; 0 when there is none. */
 export function homeIndicatorBandPercent(platform: "ios" | "android" | undefined): number {
   return HOME_INDICATOR_BAND_PERCENT_BY_PLATFORM[platform ?? "ios"];
+}
+
+/**
+ * An area of a screenshot the system draws, in percent of the screenshot's width and height. A difference that
+ * lies entirely inside one is never an app change; the verdict leaves it out and the Viewer blurs it.
+ */
+export type SystemRegion = { kind: "status-bar" | "home-indicator"; x: number; y: number; width: number; height: number };
+
+/**
+ * iPhone Duo (iOS 27) has no status bar across the top: its clock and Wi-Fi indicator stack in one pill in the
+ * right-hand rail, 28 points from the edge, lower on the outer (closed) panel than on the inner one. Measured on
+ * EAS Simulator captures of both panels; the pill is the same 40×64 points on each, only its top differs. The app's own
+ * rail controls start about 3% of the height below it on the outer panel, so the padding stays small.
+ */
+const DUO_PANELS = {
+  outer: { width: 466, height: 678, statusBar: { x: 398, y: 87, width: 40, height: 64 } },
+  inner: { width: 951, height: 669, statusBar: { x: 883, y: 34, width: 40, height: 64 } },
+} as const;
+const DUO_STATUS_BAR_PADDING_POINTS = 4;
+const isFoldable = (platform: "ios" | "android" | undefined, device: string | undefined) => platform !== "android" && /\bduo\b/i.test(device ?? "");
+
+/**
+ * The areas the verdict leaves out for a capture: the platform's status-bar band and, on iOS, its home-indicator
+ * band; on an iPhone foldable, the lit panel's status-bar pill instead of a top band. `pose` is the capture's device pose
+ * (closed lights the outer panel; open and half-open the inner one); a foldable with none boots closed.
+ */
+export function systemRegions(options: { platform?: "ios" | "android" | undefined; device?: string | undefined; pose?: string | undefined }): SystemRegion[] {
+  const regions: SystemRegion[] = [];
+  if (isFoldable(options.platform, options.device)) {
+    const panel = options.pose === "open" || options.pose === "half-open" ? DUO_PANELS.inner : DUO_PANELS.outer;
+    const pad = DUO_STATUS_BAR_PADDING_POINTS;
+    const percent = (value: number, of: number) => Math.round((value / of) * 10000) / 100;
+    regions.push({ kind: "status-bar",
+      x: percent(panel.statusBar.x - pad, panel.width), y: percent(panel.statusBar.y - pad, panel.height),
+      width: percent(panel.statusBar.width + 2 * pad, panel.width), height: percent(panel.statusBar.height + 2 * pad, panel.height) });
+  } else {
+    regions.push({ kind: "status-bar", x: 0, y: 0, width: 100, height: statusBarBandPercent(options.platform) });
+  }
+  const home = homeIndicatorBandPercent(options.platform);
+  if (home > 0) regions.push({ kind: "home-indicator", x: 0, y: 100 - home, width: 100, height: home });
+  return regions;
 }
 
 /** Deterministic pixel comparison of one surface's base and head screenshots. */
@@ -187,10 +230,12 @@ export type PublicVisualVerdict = {
    * content. Absent when any region changed, or moves were not measured.
    */
   allRegionsMoved?: true;
-  /** Diff regions inside the iOS status-bar band that were excluded from the verdict. */
+  /** Diff regions inside the status-bar band that were excluded from the verdict, or clipped to their part below it. */
   ignoredStatusBarRegions?: number;
-  /** Diff regions that lay entirely inside the home-indicator band and were left out of the verdict. */
+  /** Diff regions that lay inside the home-indicator band and were left out of the verdict, or clipped to their part above it. */
   ignoredHomeIndicatorRegions?: number;
+  /** The system-drawn areas the verdict left out, present when a difference inside one was ignored. */
+  systemRegions?: SystemRegion[];
 };
 /**
  * Evidence-based reviewer status. `status` on the surface stays source-derived because capture
@@ -248,6 +293,8 @@ export type PublicReview = {
     statusBarBandPercent?: number;
     /** The share of each screenshot's height, from the bottom, the verdict ignored as the home indicator. */
     homeIndicatorBandPercent?: number;
+    /** Every system-drawn area the verdict leaves out of each screenshot; the bands above, or a foldable's rail pill. */
+    systemRegions?: SystemRegion[];
     /** Every platform the config captures, so the Viewer can offer the sibling platform's report of the same run. */
     platforms?: Array<"ios" | "android">;
     /** The target this report captured; absent in reports from before targets, whose target is their platform. */
@@ -277,6 +324,8 @@ export type PublicReview = {
     note?: PublicChangeNote;
     /** The appearance this surface rendered in; a secondary appearance is its own surface, `<id>@<scheme>`. */
     colorScheme?: "light" | "dark";
+    /** Named in `exploration.exclude`: kept for its neighbors' navigation context, never captured on either side. */
+    excluded?: true;
   }>;
 };
 export function validateCapturePlan(value: unknown): SourceCapturePlan {
