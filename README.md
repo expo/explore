@@ -28,7 +28,7 @@ Explore maps your app: a screenshot of every screen, connected by the taps betwe
 <td width="50%" valign="top">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-pr-comment-dark.png">
-  <img width="100%" alt="Explore's GitHub PR comment on a euxy PR: the heading links to the iOS and Android reports, a table with one row per platform giving device, result and an Open link, the Added, Removed, Modified, Needs review and Source-affected screens as collapsed lists, fading out below them" src="docs/screenshots/readme-pr-comment-light.png">
+  <img width="100%" alt="Explore's GitHub PR comment on a euxy PR: a heading with how many screens changed and a Review in Explore link, a line naming each device with a link to its report, and the changed screens as a short list, fading out below them" src="docs/screenshots/readme-pr-comment-light.png">
 </picture>
 <strong>A comment on every PR</strong>: with <a href="#set-up-ci">CI</a>, the report links and the added, removed and modified screens.
 </td>

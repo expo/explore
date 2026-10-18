@@ -100,17 +100,18 @@ try {
     const context = await browser.newContext({ viewport: { width: 1000, height: 1400 }, deviceScaleFactor: 2, colorScheme: theme });
     const page = await context.newPage();
     await page.goto(args.pr, { waitUntil: "domcontentloaded" });
-    const comment = page.locator(".timeline-comment").filter({ has: page.locator("h3", { hasText: /Explore review/ }) }).first();
+    const comment = page.locator(".timeline-comment").filter({ has: page.locator("h3", { hasText: /Review in Explore|Explore review/ }) }).first();
     await comment.waitFor({ timeout: 30_000 });
     await comment.scrollIntoViewIfNeeded();
     // The comment's pointer toward the avatar would show as a stray tick above the card.
     await page.addStyleTag({ content: ".timeline-comment::before, .timeline-comment::after { display: none !important; }" });
     await page.waitForTimeout(1000);
-    // Cut after the list of changed screens: the launch timings, validation, and footer below it are detail.
+    // Cut after the list of changed screens: the collapsed blocks and footer below it are detail.
     const clip = await comment.evaluate((card) => {
       const box = card.getBoundingClientRect();
-      const after = [...card.querySelectorAll("p")].find(p => /Launch:/.test(p.textContent ?? ""));
-      const bottom = after ? after.getBoundingClientRect().top : box.bottom;
+      const list = [...card.querySelectorAll("ul")].find(ul => ul.querySelector(":scope > li code"));
+      const after = list?.nextElementSibling;
+      const bottom = after ? after.getBoundingClientRect().top : list ? list.getBoundingClientRect().bottom : box.bottom;
       return { x: box.left + window.scrollX, y: box.top + window.scrollY, width: box.width, height: Math.round(bottom - box.top) };
     });
     const shot = await page.screenshot({ clip, fullPage: true });
