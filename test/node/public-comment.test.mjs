@@ -588,3 +588,54 @@ test('a comment written by a per-platform version keeps parsing, and malformed t
   const many = Array.from({ length: 10 }, (_, index) => line(`t${index}`, { ...valid, target: `t${index}` }));
   assert.equal(parse(...many).length, 8, 'a comment holds at most one record per configurable target');
 });
+
+test('the map draws the added, removed and visually changed screens, the screens one step before them, and tabs as a group', async () => {
+  const { readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
+  const edge = (from, to, kind) => ({ from, to, kind, sourceFile: 'src/app/_layout.tsx', provenance: 'source' });
+  const graph = edges => ({ contract: 'explore.navigation', edges, modalSurfaceIds: [], unresolved: [] });
+  const base = evidenceReview();
+  const dark = surface('settings@dark', 'modified', { route: '/settings', extra: base.surfaces[2].review && { review: base.surfaces[2].review, visual: base.surfaces[2].visual } });
+  const withNavigation = { ...base, surfaces: [...base.surfaces, dark], navigation: {
+    // home is a redirect, not a screen; cats and settings are tabs; cats changed only in source, so it is drawn as the way to care-guide.
+    head: graph([edge('cats', 'care-guide', 'push'), edge('cats', 'settings', 'tab'), edge('settings', 'cats', 'tab'), edge('home', 'cats', 'replace')]),
+    base: graph([edge('cats', 'sweet-bee', 'push'), edge('cats', 'settings', 'tab')]),
+  } };
+  const body = renderPublicComment(state({ artifactOnly: true, review: withNavigation }));
+  assert.deepEqual(summaries(body), ['🟩 Added (1)', '🟥 Removed (1)', '🟧 Modified (2)', 'Map (4 screens)', 'Validation · iOS 🟩 8/8 captured']);
+  const map = body.slice(body.indexOf('```mermaid'), body.indexOf('```\n', body.indexOf('```mermaid')) + 3);
+  assert.equal(map, ['```mermaid', 'flowchart LR', '  subgraph tabs["Tabs"]', '    n0["/cats"]', '    n3["/settings"]', '  end',
+    '  n1["/cats/care-guide"]', '  n2["/cats/sweet-bee"]', '  n0 -->|push| n1', '  n0 -.->|push| n2',
+    '  classDef added stroke:#1a7f37,stroke-width:3px', '  class n1 added', '  classDef modified stroke:#bc4c00,stroke-width:3px', '  class n3 modified',
+    '  classDef removed stroke:#cf222e,stroke-width:2px,stroke-dasharray:5 4', '  class n2 removed', '```'].join('\n'));
+  assert.ok(body.indexOf('<summary>🟧 Modified') < body.indexOf('<summary>Map') && body.indexOf('<summary>Map') < body.indexOf('<summary>Validation'));
+  assert.match(body, /<summary>Map \(4 screens\)<\/summary>\n\n```mermaid\n/, 'a blank line opens the fence inside the collapsible');
+  assert.deepEqual(readCommentRecords(body).current.ios.navigation, platformRecordOf(state({ review: withNavigation })).navigation, 'the map is carried in the record');
+
+  // A label cannot end itself, its line or the fence.
+  const odd = { ...withNavigation, surfaces: withNavigation.surfaces.map(entry => entry.id === 'care-guide'
+    ? { ...entry, head: { ...entry.head, logicalPath: 'cats/"a"#<b>`c`' } } : entry) };
+  assert.match(renderPublicComment(state({ review: odd })), /\n {2}n1\["\/cats\/#quot;a#quot;#35;#lt;b#gt;#96;c#96;"\]\n/);
+  // No navigation, or nothing changed visually: no map.
+  assert.ok(!summaries(renderPublicComment(state())).includes('Map (4 screens)'));
+  const unchanged = { ...withNavigation, surfaces: withNavigation.surfaces.filter(entry => entry.status !== 'added' && entry.status !== 'removed' && !entry.id.startsWith('settings')) };
+  assert.ok(!/<summary>Map/.test(renderPublicComment(state({ review: unchanged }))));
+});
+
+test('the map is dropped before the change lists shrink, and a malformed map is dropped from the record', async () => {
+  const { encodeRecordPayload } = await import('../../dist/report/pr-comment-record.js');
+  const { readCommentRecords, renderCommentRecords } = await import('../../dist/report/pr-comment-body.js');
+  const record = { ...platformRecordOf(state()), navigation: { nodes: [{ route: '/a', group: 'modified' }, { route: '/b' }], edges: [{ from: 1, to: 0, kinds: ['push'] }] } };
+  const records = { current: { ios: record }, history: [] };
+  assert.match(renderCommentRecords(records), /<summary>Map \(2 screens\)<\/summary>/);
+  const tight = renderCommentRecords(records, undefined, renderCommentRecords(records).length - 1);
+  assert.ok(!tight.includes('```mermaid'));
+  assert.match(tight, /<summary>🟧 Modified \(1\)<\/summary>/);
+  const parse = navigation => readCommentRecords(`<!-- expo-explore-record:ios:${encodeRecordPayload({ ...record, navigation })} -->`).current.ios;
+  assert.deepEqual(parse(record.navigation).navigation, record.navigation);
+  for (const navigation of [{ ...record.navigation, edges: [{ from: 0, to: 2, kinds: ['push'] }] }, { ...record.navigation, edges: [{ from: 0, to: 1, kinds: ['teleport'] }] },
+    { ...record.navigation, nodes: [{ route: '/a', group: 'needs-review' }, { route: '/b' }] }, { nodes: [], edges: [] }]) {
+    const parsed = parse(navigation);
+    assert.ok(parsed, 'the rest of the record still parses');
+    assert.equal(parsed.navigation, undefined);
+  }
+});
