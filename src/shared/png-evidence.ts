@@ -38,6 +38,40 @@ export function frameChangedForTap(first: DecodedFrame, second: DecodedFrame, y:
   return !first.data.subarray(start).equals(second.data.subarray(start));
 }
 
+/** The decoded frame, or undefined when the bytes are not a PNG pngjs can read. */
+export function decodePng(png: Buffer): DecodedFrame | undefined {
+  try { return createRequire(import.meta.url.replace(/\?.*$/, ""))("pngjs").PNG.sync.read(png, { checkCRC: false }) as DecodedFrame; }
+  catch { return undefined; }
+}
+
+/** agent-device's rule for a changed pixel: an RGB distance above `threshold` of the longest diagonal. */
+export function maxColorDistance(threshold: number): number {
+  return threshold * Math.sqrt(3 * 255 ** 2);
+}
+
+/** How many pixels of `rect` (clipped to the frames) differ between two same-sized frames by agent-device's rule. */
+export function differentPixelsInRect(
+  first: DecodedFrame,
+  second: DecodedFrame,
+  rect: { x: number; y: number; width: number; height: number },
+  distance: number,
+): number {
+  if (first.width !== second.width || first.height !== second.height) return 0;
+  const left = Math.max(0, rect.x); const right = Math.min(first.width, rect.x + rect.width);
+  const top = Math.max(0, rect.y); const bottom = Math.min(first.height, rect.y + rect.height);
+  let count = 0;
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = left; x < right; x += 1) {
+      const offset = (y * first.width + x) * 4;
+      const r = first.data[offset]! - second.data[offset]!;
+      const g = first.data[offset + 1]! - second.data[offset + 1]!;
+      const b = first.data[offset + 2]! - second.data[offset + 2]!;
+      if (Math.sqrt(r * r + g * g + b * b) > distance) count += 1;
+    }
+  }
+  return count;
+}
+
 export function assertDecodedPng(contents: Buffer, label: string): void {
   const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   if (contents.length < 45 || !contents.subarray(0, 8).equals(signature)) {
