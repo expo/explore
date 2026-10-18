@@ -395,9 +395,18 @@ test("when Argent reads nothing while the prompt is up, Open is tapped from a sc
   assert.equal(context.state.deepLinkPromptAccepted, true);
 });
 
+test("reset-reader stops the device's Argent helpers by its UDID and forgets what the old reader saw", async () => {
+  const state = { generation: 3, udid: UDID, screen: { width: 402, height: 874 }, refs: { e1: {} } };
+  const { calls, run } = harness("ios", { "stop-all-simulator-servers": { stopped: [`NativeDevtools:${UDID}`, `AXService:${UDID}`] } }, { state });
+  const reset = await run(["reset-reader", ...flags("ios")]);
+  assert.deepEqual(reset.json.data, { action: "reset-reader", stopped: [`NativeDevtools:${UDID}`, `AXService:${UDID}`] });
+  assert.deepEqual(calls, [{ tool: "stop-all-simulator-servers", args: { devices: [UDID] } }]);
+  assert.equal(state.screen, undefined); assert.equal(state.refs, undefined); assert.equal(state.generation, 4);
+});
+
 test("fold moves a foldable to a pose and forgets the old panel's geometry", async () => {
   // Argent's fold answers with the panel it lit, in pixels; the inner panel is 2007 × 2853 (669 × 951 points).
-  const { run, calls, context } = harness("ios", { "list-devices": DUO_DEVICES, "ui-tree": [DUO_HOME, DUO_OPEN_EDIT_LANE],
+  const { run, calls, context } = harness("ios", { "list-devices": DUO_DEVICES, "ui-tree": [DUO_HOME, DUO_OPEN_EDIT_LANE], "stop-all-simulator-servers": { stopped: [] },
     fold: { activeScreen: 3, screen: { id: 3, panel: "inner panel", width: 2007, height: 2853 }, posture: "open", hingeAngle: 180 } });
   await run(["snapshot", ...flags("ios")]);
   const generation = context.state.generation;
@@ -407,10 +416,27 @@ test("fold moves a foldable to a pose and forgets the old panel's geometry", asy
   const fold = calls.findIndex(call => call.tool === "fold");
   assert.equal(calls.slice(0, fold).filter(call => call.tool === "ui-tree").length, reads, "nothing is read between the command and the fold");
   assert.deepEqual(calls[fold].args, { udid: "74195B53-4DBC-4EAA-9991-F98E5BB86BA8", posture: "open" });
+  // The device's helpers are reset just before the fold, so the panel it lights is read by fresh ones.
+  assert.deepEqual(calls[fold - 1], { tool: "stop-all-simulator-servers", args: { devices: ["74195B53-4DBC-4EAA-9991-F98E5BB86BA8"] } });
   assert.equal(context.state.screen, undefined);
   assert.equal(context.state.refs, undefined);
   assert.equal(context.state.generation, generation + 1);
   assert.equal((await run(["fold", "sideways", ...flags("ios")])).json.error.code, "INVALID_ARGS");
+});
+
+test("a reader stuck on the dark panel after a fold is reset once more before the fold is called unverified", async () => {
+  const fold = { activeScreen: 3, screen: { id: 3, panel: "inner panel", width: 2007, height: 2853 }, posture: "open", hingeAngle: 180 };
+  const stopped = { stopped: ["AXService:74195B53-4DBC-4EAA-9991-F98E5BB86BA8"] };
+  // Ten reads still in the cover panel's shape (as on EAS, 2026-10-17), then the inner panel once the helpers restart.
+  const recovers = harness("ios", { "list-devices": DUO_DEVICES, fold, "stop-all-simulator-servers": stopped, "ui-tree": [...Array(10).fill(DUO_HOME), DUO_OPEN_EDIT_LANE] });
+  assert.deepEqual((await recovers.run(["fold", "open", ...flags("ios")])).json.data, { action: "fold", pose: "open" });
+  assert.deepEqual(recovers.calls.filter(call => call.tool === "stop-all-simulator-servers").map(call => call.args), Array(2).fill({ devices: ["74195B53-4DBC-4EAA-9991-F98E5BB86BA8"] }));
+
+  const stuck = harness("ios", { "list-devices": DUO_DEVICES, fold, "stop-all-simulator-servers": stopped, "ui-tree": DUO_HOME });
+  const failed = await stuck.run(["fold", "open", ...flags("ios")]);
+  assert.equal(failed.json.error.code, "CONTROLLER_FOLD_UNVERIFIED");
+  assert.match(failed.json.error.message, /after its device helpers were reset/);
+  assert.equal(stuck.calls.filter(call => call.tool === "stop-all-simulator-servers").length, 2, "before the fold and once after, not in a loop");
 });
 
 test("an alert that is not the link prompt is left for capture to answer", async () => {
@@ -534,9 +560,9 @@ test("a node its ancestor clips away is still reported hidden on iOS", () => {
 test("a fold whose panel Argent never reads fails clearly instead of capturing the dark panel", async () => {
   const lit = { activeScreen: 3, screen: { id: 3, panel: "inner panel", width: 2007, height: 2853 }, posture: "open", hingeAngle: 180 };
   const blindClosed = { ...DUO_HOME, foregroundApp: undefined, roots: [{ role: "AXGroup", children: [] }] };
-  const late = harness("ios", { "list-devices": DUO_DEVICES, fold: lit, "ui-tree": [blindClosed, blindClosed, DUO_OPEN_EDIT_LANE] });
+  const late = harness("ios", { "list-devices": DUO_DEVICES, fold: lit, "stop-all-simulator-servers": { stopped: [] }, "ui-tree": [blindClosed, blindClosed, DUO_OPEN_EDIT_LANE] });
   assert.equal((await late.run(["fold", "open", ...flags("ios")])).exitCode, 0, "a reader that catches up within the wait is fine");
-  const stuck = harness("ios", { "list-devices": DUO_DEVICES, fold: lit, "ui-tree": blindClosed });
+  const stuck = harness("ios", { "list-devices": DUO_DEVICES, fold: lit, "stop-all-simulator-servers": { stopped: [] }, "ui-tree": blindClosed });
   const failed = await stuck.run(["fold", "open", ...flags("ios")]);
   assert.equal(failed.json.error.code, "CONTROLLER_FOLD_UNVERIFIED");
   assert.equal(stuck.calls.filter(call => call.tool === "fold").length, 1, "the session is not folded back and forth");

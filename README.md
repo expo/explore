@@ -341,7 +341,7 @@ Explore pins each controller's version and starts the EAS session with it. Repor
 
 Neither controller is installed with Explore. The first run that needs one downloads its pinned npm release (agent-device 1.6 MB, Argent 27 MB), checks it against the integrity hash Explore pins, and keeps it in `~/.cache/expo-explore/controllers` (`EXPLORE_CONTROLLER_CACHE` moves it). Behind a private registry, set `EXPLORE_NPM_REGISTRY` to a mirror of it.
 
-Argent cannot switch the simulator's appearance yet ([software-mansion/argent#1509](https://github.com/software-mansion/argent/pull/1509)), so an Argent capture on EAS Simulator records one appearance: the one the app forces, else light. Explore warns when it skips one. On a [local simulator](#simulator) the host switches it, so every appearance the config asks for is captured.
+Argent cannot switch the simulator's appearance yet ([software-mansion/argent#1509](https://github.com/software-mansion/argent/pull/1509)), so the host switches it: on an iOS EAS Simulator session (`eas simulator:control appearance.set`) and on a [local simulator](#simulator), every appearance the config asks for is captured. An Argent capture on an Android EAS Simulator session records one appearance: the one the app forces, else light. Explore warns when it skips one.
 
 </details>
 
@@ -372,7 +372,7 @@ For a review, builds still run on EAS. The app is repacked with the route observ
 
 With `--controller argent`, Explore installs Argent's tool-server on first use with `npm ci` from a lockfile Explore ships, so every dependency is pinned (about 160 MB, in the controller cache), and starts one per device. The host switches the appearance, so a local Argent capture records every appearance the config asks for. Reports record where they were captured, and a baseline is reused only by a review captured the same way.
 
-A foldable folds before the app first opens (`pose` on a [target](#targets)); with agent-device on a local simulator it folds just after, since agent-device folds only inside a session. With Argent, an opened iPhone Duo is captured upright, in landscape. After a fold, Argent's reader can stay on the panel that went dark; Explore then restarts its tool-server, and if that is not enough SpringBoard as well, and opens the app again.
+A foldable folds before the app first opens (`pose` on a [target](#targets)); with agent-device on a local simulator it folds just after, since agent-device folds only inside a session. With Argent, an opened iPhone Duo is captured upright, in landscape. After a fold, Argent's reader can stay on the panel that went dark. Explore resets Argent's device helpers before each fold, which prevents it on a fresh EAS Simulator session. If it still happens, Explore restarts the tool-server on a local simulator, or resets the helpers on EAS Simulator, where the tool-server is the session's, and then restarts SpringBoard as well.
 
 Each capture records what it starts on your Mac (simulators, emulators, controller daemons, tool-servers) and removes it when it ends. If a review or a local `explore:binary` run is stopped hard, the next local one stops what it left running; nothing Explore did not record is touched.
 
@@ -533,8 +533,7 @@ Reports and baselines are kept for 30 days and diagnostics for 7. Hosted deploym
 - The launch is captured once per appearance and compared like any screen. The comment says how long the splash stayed as it first appeared, when it first changed (a native launch screen handing over to an app-drawn one, an animation starting on it), and when the first screen settled. `capture.launch: video` adds a recording; a launch too fast to observe is reported as "no splash observed".
 - On Android the splash usually shows only in the recording, which needs `ffmpeg`. The generated workflows install it.
 - Hosted acceptance of agent mode with an API key is incomplete.
-- With `capture.controller: argent` on EAS Simulator, each capture records one appearance (see [device controller](#controller)).
-- On EAS Simulator, an opened iPhone Duo can fail to capture when Argent's reader stays on the cover panel after the fold. A [local simulator](#simulator) recovers from it.
+- With `capture.controller: argent` on an Android EAS Simulator session, each capture records one appearance (see [device controller](#controller)).
 - A local simulator runs only on your machine; the CI workflows capture on EAS Simulator.
 - `explore:session` explores EAS Simulator sessions only.
 

@@ -60,7 +60,7 @@ function state(overrides = {}) {
     phase: 'ready', pullRequest, mode: 'changes', executionMode: 'deterministic', configPath: '.expo-explore/config.yaml', links,
     startedAt: Date.parse('2026-09-11T03:00:48Z'), updatedAt: Date.parse('2026-09-11T03:07:00Z'),
     build: { appName: 'Example', appVersion: '1.4.0', appBuildNumber: '27', platform: 'ios', easProfile: 'explore', easBuildId: 'eas-build', reusedEasBuild: true },
-    runtime: { provider: 'eas-simulator', controller: 'agent-device', controllerPackageVersion: '0.20.2', easCliVersion: '25.0.0', platform: 'ios', deviceModel: 'iPhone 17', osVersion: '26.5', locale: 'en-US', orientation: 'portrait', colorScheme: 'light', sessionLifecycle: 'stopped' },
+    runtime: { provider: 'eas-simulator', controller: 'agent-device', controllerPackageVersion: '0.20.2', easCliVersion: '25.2.0', platform: 'ios', deviceModel: 'iPhone 17', osVersion: '26.5', locale: 'en-US', orientation: 'portrait', colorScheme: 'light', sessionLifecycle: 'stopped' },
     capture: { planned: { base: 3, head: 3 }, done: { base: 3, head: 3 }, baseFromCache: true },
     review: evidenceReview(),
     evidence: {

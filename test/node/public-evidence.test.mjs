@@ -13,7 +13,7 @@ const BASE_SHA = "a".repeat(40);
 const HEAD_SHA = "b".repeat(40);
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
 const EXECUTION = {
-  provider: "eas-simulator", controller: "agent-device", controllerPackageVersion: AGENT_DEVICE_VERSION, easCliVersion: "25.0.0",
+  provider: "eas-simulator", controller: "agent-device", controllerPackageVersion: AGENT_DEVICE_VERSION, easCliVersion: "25.2.0",
   platform: "ios", deviceModel: "iPhone 17", osVersion: "26.0", locale: "en-US", orientation: "portrait",
   colorScheme: "light", sessionLifecycle: "stopped",
 };

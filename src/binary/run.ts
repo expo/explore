@@ -17,6 +17,7 @@ import { agentDeviceLauncher, ensureArgentToolServer, ensureController } from ".
 import { agentDeviceClaims, approveLinkScheme, createLocalSimulator, deleteLocalEmulator, deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, startLocalArgentServer,
   startLocalEmulator, stopLocalAgentDevice, stopLocalArgentServer, waitForLocalEmulator, waitForLocalSimulator, type LocalArgentServer } from "../capture/local-simulator.js";
 import { openLocalCaptureRecord, sweepLocalCaptures } from "../capture/local-registry.js";
+import { approveSessionUrlSchemes, simulatorControlActions, type EasCommand } from "../capture/simulator-control.js";
 import { DEFAULT_ANDROID_DEVICE } from "../config/explore-config.js";
 import { createExplorationInputs } from "../config/exploration-inputs.js";
 import { ExploreStore, getCoverage } from "../map/store.js";
@@ -277,6 +278,8 @@ export type ConnectedSessionExploration = {
    * serial (agent-device with a daemon of its own in `stateDirectory`, or a local Argent tool-server pinned to it).
    */
   local?: { deviceId: string; osVersion: string; stateDirectory: string };
+  /** Runs once the app is installed and before anything opens it, as an EAS session's link approval must. */
+  afterInstall?: () => void;
 };
 
 /** Drives an agent-device daemon we already hold a connection to: optional install, open, then the model-led exploration. */
@@ -317,6 +320,7 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
     try { controller(["install", install.path, "--json"], 15 * 60_000); }
     catch (error) { throw binaryError("APP_INSTALL_FAILED", `${controllerName} could not install the app: ${failureText(error)}`, "Check that the archive is a simulator build for this platform and under the size limit, then rerun.", { sessionId: connection.sessionId }); }
   }
+  ctx.afterInstall?.();
   // On a local device, the first open also builds agent-device's iOS runner.
   const opened = controller(["open", bundleId, "--level", "full", "--json"], local ? 15 * 60_000 : 2 * 60_000);
   const openedDevice = openedSimulatorDevice(opened.stdout, bundleId, "initial app open", platform, controllerSession);
@@ -714,7 +718,8 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
     let installPath = archive.path;
     if (archive.kind === "ios-tgz" || archive.kind === "ios-ipa") { say("unpacking the iOS bundle"); installPath = await extractIosBundle(archive, join(work, "bundle")); }
     const appIcon = await readArchiveIcon(archive);
-    const exploreOn = (connection: SimulatorConnection, sessionJson: () => string, localDevice?: LocalDevice) => exploreConnectedSession({ connection, platform, device, bundleId,
+    const exploreOn = (connection: SimulatorConnection, sessionJson: () => string, localDevice?: LocalDevice, afterInstall?: () => void) => exploreConnectedSession({ connection, platform, device, bundleId,
+      ...(afterInstall ? { afterInstall } : {}),
       ...(appIcon ? { appIcon } : {}), app: { name: archive.appName, ...(archive.version ? { version: archive.version } : {}) },
       // A local device has the app installed by simctl or adb before the controller starts.
       ...(localDevice ? { local: localDevice } : { install: { path: installPath, kind: archive.kind } }),
@@ -770,7 +775,18 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
       if (handoff.validationError) throw handoff.validationError;
       if (!handoff.connection) throw new Error("Simulator handoff is missing its controller connection");
       await rm(dotenvPath, { force: true });
-      ({ runtime, exploration } = await exploreOn(handoff.connection, () => eas(["simulator:get", "--id", handoff.connection!.sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout));
+      // The app's own links open without iOS asking first, when the session's host can approve them (serve-sim 0.10.0).
+    const verifiedSession = sessionId;
+    const sessionEas: EasCommand = (args, commandOptions) => {
+      const result = eas(args, commandOptions?.timeoutMs);
+      if (result.status !== 0 && !commandOptions?.allowFailure) throw new Error(lastLine(result.stderr || result.stdout) || `eas ${args[0]} failed`);
+      return result;
+    };
+    const afterInstall = platform === "ios" && archive.urlSchemes.length ? () => {
+      const approved = approveSessionUrlSchemes(sessionEas, verifiedSession, simulatorControlActions(sessionEas, verifiedSession), bundleId, archive.urlSchemes);
+      if (approved.length) say(`approved ${approved.map(item => `${item}://`).join(", ")} links on the session`);
+    } : undefined;
+    ({ runtime, exploration } = await exploreOn(handoff.connection, () => eas(["simulator:get", "--id", handoff.connection!.sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout, undefined, afterInstall));
     }
   } catch (error) {
     primaryError = toCiError(error, { code: "EXPLORE_BINARY_FAILED", stage: "exploration", nextAction: "Inspect the diagnostic, correct the failing prerequisite, and rerun explore:binary." });
