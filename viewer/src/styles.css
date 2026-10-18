@@ -2200,6 +2200,18 @@ code {
   line-height: 1.45;
 }
 .search-command-result-copy code { color: inherit; font-size: inherit; }
+.search-command-section + .search-command-section { margin-top: 4px; }
+.search-command-section > .search-command-section-label { padding: 8px 8px 4px; }
+.search-command-result-key {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--tertiary);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
 .search-command-result-kind {
   padding: 2px 6px;
   border: 1px solid var(--border-subtle);

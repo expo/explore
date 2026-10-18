@@ -4639,7 +4639,7 @@ test.describe("phone layout", () => {
     await page.goto("/map");
     await page.getByRole("button", { name: "Search", exact: true }).tap();
     await page.keyboard.type("c");
-    await expect(page.locator(".search-command-section-label")).toBeVisible();
+    await expect(page.locator(".search-command-section-label").first()).toBeVisible();
     expect(await offScaleText(page, ".search-command")).toEqual([]);
     // iOS zooms into any field under 16px.
     expect(await page.locator(".search-command-input-row input").evaluate((element) => getComputedStyle(element).fontSize))
@@ -5265,6 +5265,74 @@ test("/ finds screens on the Screens page: the tree and the grid narrow to the q
   await expect(page.getByRole("main", { name: "Screens" })).toHaveCount(0);
   await page.keyboard.press("/");
   await expect(page.getByRole("main", { name: "Screens" }).getByRole("searchbox", { name: "Find screens" })).toBeFocused();
+});
+
+test("⌘K is a command palette: suggested commands lead, word queries rank commands first and run on Enter, route queries rank screens first", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/map");
+  const mod = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.press(`${mod}+KeyK`);
+  const palette = page.getByRole("dialog", { name: "Search Explore" });
+  await expect(palette).toBeVisible();
+  const box = palette.getByRole("combobox", { name: "Search screens and commands" });
+  await expect(box).toBeFocused();
+
+  // The empty palette suggests what to do next on this canvas, not the screen inventory.
+  const suggested = palette.getByRole("group", { name: "Suggested" });
+  await expect(suggested.getByRole("option").filter({ hasText: "Next changed screen" })).toBeVisible();
+  expect(await palette.getByRole("option").count()).toBeLessThanOrEqual(7);
+
+  // A word query ranks commands first; each prints the key that also runs it.
+  await box.fill("dark");
+  await expect(palette.getByRole("option").first()).toContainText("Theme: Dark");
+  await box.fill("fit");
+  const fit = palette.getByRole("option").filter({ hasText: "Fit the canvas" });
+  await expect(fit).toBeVisible();
+  await expect(fit.locator("kbd")).toBeVisible();
+
+  // Enter runs the command.
+  await box.fill("dark");
+  await box.press("Enter");
+  await expect(palette).toHaveCount(0);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  // A route-shaped query ranks screens first, with the commands after them.
+  await page.keyboard.press(`${mod}+KeyK`);
+  await box.fill("/");
+  await expect(palette.getByRole("option").first().locator("code")).toBeVisible();
+  await expect(palette.getByRole("group", { name: "Screens" })).toBeVisible();
+
+  // A navigation command.
+  await box.fill("screens");
+  await expect(palette.getByRole("option").first()).toHaveText(/^Screens/);
+  await box.press("Enter");
+  await expect(page.getByRole("main", { name: "Screens" })).toBeVisible();
+});
+
+test("⌘K steps through its results in the order it shows them, and a command that opens a menu keeps it open", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/map");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  const palette = page.getByRole("dialog", { name: "Search Explore" });
+  const box = palette.getByRole("combobox", { name: "Search screens and commands" });
+  // "c" matches commands and screens alike: ↓ walks the rows top to bottom, across the sections.
+  await box.fill("c");
+  const options = palette.getByRole("option");
+  const count = await options.count();
+  expect(await palette.getByRole("group").count()).toBe(2);
+  for (let step = 0; step < count; step += 1) {
+    await expect(options.nth(step)).toHaveAttribute("aria-selected", "true");
+    await expect(box).toHaveAttribute("aria-activedescendant", (await options.nth(step).getAttribute("id"))!);
+    await box.press("ArrowDown");
+  }
+  await expect(options.first()).toHaveAttribute("aria-selected", "true");
+
+  // The palette hands focus to the menu it opens instead of taking it back.
+  await box.fill("Changed screens menu");
+  await box.press("Enter");
+  await expect(palette).toHaveCount(0);
+  await expect(page.locator(".changes-menu")).toBeVisible();
+  await expect(page.locator(".changes-menu-body")).toBeFocused();
 });
 
 test("a / from the Map opens the find once: Screens opened again from the toolbar comes up without it", async ({ page }) => {
