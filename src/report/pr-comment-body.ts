@@ -57,6 +57,8 @@ export type PublicCommentState = {
   artifactOnly?: boolean;
   /** The PR moved while this run worked; the comment keeps its report under previous runs. */
   superseded?: boolean;
+  /** report.comment.map: draw the map of the changed screens. */
+  map?: true;
 };
 
 type ReviewGroup = ChangeGroup;
@@ -310,7 +312,7 @@ export function platformRecordOf(state: PublicCommentState, target?: CommentTarg
       const scheme = schemeOf(surface.id);
       record.changes.push({ id: surface.id, route: routeOf(surface), group, description: descriptionOf(surface, group), ...(scheme ? { scheme } : {}) });
     }
-    const navigation = navigationOf(state.review, new Map(record.changes.map(change => [change.id, change.group])));
+    const navigation = state.map ? navigationOf(state.review, new Map(record.changes.map(change => [change.id, change.group]))) : undefined;
     if (navigation) record.navigation = navigation;
     const notCompared = state.review.surfaces.filter(notComparedChange).length;
     if (notCompared) record.notCompared = notCompared;

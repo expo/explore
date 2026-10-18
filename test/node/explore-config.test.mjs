@@ -191,6 +191,15 @@ test("report.preview opts into hosted previews with a bounded expiry and an opti
   assert.throws(() => validateExploreConfig({ ...base(), report: { hosting: "eas" } }), /report/);
 });
 
+test("report.comment.map opts the PR comment into its map of changed screens, beside or without a hosted preview", () => {
+  assert.deepEqual(validateExploreConfig({ ...base(), report: { comment: { map: true } } }).report, { comment: { map: true } });
+  assert.deepEqual(validateExploreConfig({ ...base(), report: { comment: { map: false }, preview: { hosting: "eas" } } }).report,
+    { comment: { map: false }, preview: { hosting: "eas", expiresAfterDays: 30 } });
+  for (const comment of [{}, { map: "yes" }, { map: true, graph: true }, true]) {
+    assert.throws(() => validateExploreConfig({ ...base(), report: { comment } }), /Invalid .expo-explore\/config.yaml: report.comment/);
+  }
+});
+
 test("platforms: a flat config is iOS-only and resolves to itself", () => {
   const config = validateExploreConfig(base());
   assert.deepEqual(configPlatforms(config), ["ios"]);
