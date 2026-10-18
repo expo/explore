@@ -88,60 +88,61 @@ function reviewOnlyState(review) {
   };
 }
 
-
-const visible = body => body.split('\n').filter(line => !line.startsWith('<!-- expo-explore-record') && !line.startsWith('<!-- expo-explore-history')).join('\n');
+const visible = body => body.split('\n').filter(line => !line.startsWith('<!-- expo-explore-record') && !line.startsWith('<!-- expo-explore-previous') && !line.startsWith('<!-- expo-explore-history')).join('\n');
 const summaries = body => [...body.matchAll(/<summary>([^<]+)<\/summary>/g)].map(match => match[1]);
-const platformRow = (body, platform) => body.split('\n').find(line => line.startsWith(`| ${platform} |`));
-const checkRow = (body, check) => body.split('\n').find(line => line.startsWith(`| ${check} |`));
+const titleOf = body => body.split('\n').find(line => line.startsWith('### '));
+/** The `<sub>` two lines under the heading; the footer is the last line. */
+const subtitleOf = body => { const lines = body.split('\n'); return lines[lines.findIndex(line => line.startsWith('### ')) + 2]; };
+const statusOf = (body, label) => body.split('\n').find(line => line.startsWith(`${label} · `) || line.startsWith(`**${label} failed**`));
+/** The changed-screen rows: the list before any collapsed block. */
+const listOf = body => visible(body).split('\n<details>')[0].split('\n').filter(line => line.startsWith('- '));
 const runLink = '[run](<https://github.com/expo/explore-playground/actions/runs/42/attempts/2>)';
+const workflowRun = '[Workflow run](<https://github.com/expo/explore-playground/actions/runs/42/attempts/2>)';
+const evidenceLink = '[evidence](<https://github.com/expo/explore-playground/actions/runs/42#artifacts>)';
+const reportUrl = 'https://explore-preview.expo.app/?repo=expo%2Fexplore-playground&run=42&attempt=2&artifact=7654';
+const commits = `[bbbbbbbb](<https://github.com/expo/explore-playground/commit/${headSha}>) vs [aaaaaaaa](<https://github.com/expo/explore-playground/commit/${baseSha}>)`;
+const configLink = `[Config](<https://github.com/expo/explore-playground/blob/${headSha}/.expo-explore/config.yaml>)`;
 
-test('the ready comment is one header, a platform table, the changes listed once, and a collapsed validation block', () => {
+test('the ready comment is a heading with the count and the report, a subtitle, the changed screens, and a footer', () => {
   const body = renderPublicComment(state({ artifactOnly: true }));
   const lines = body.split('\n');
   assert.equal(lines[0], CI_COMMENT_MARKER);
   assert.match(lines[1], /^<!-- expo-explore-record:ios:[A-Za-z0-9_-]+ -->$/);
-  assert.match(lines[2], /^### Explore review · \[Open report\]\(<https:\/\/explore-preview\.expo\.app\/\?repo=expo%2Fexplore-playground&run=42&attempt=2[^>]*>\)$/, 'the report link is the heading, where a phone shows it first');
-  assert.equal(lines[4], '<sub>base [aaaaaaaa](<https://github.com/expo/explore-playground/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa>) → [bbbbbbbb](<https://github.com/expo/explore-playground/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb>)</sub>');
-  assert.deepEqual([lines[3], ...lines.slice(5, 8)], ['', '', '| | Device | Result | Report |', '|---|---|---|---|']);
-  assert.equal(lines[8], `| iOS | iPhone 17 26\\.5 · Example 1\\.4\\.0 \\(27\\) | 🟩 3 changes · 6m 12s | [Open](<https://explore-preview.expo.app/?repo=expo%2Fexplore-playground&run=42&attempt=2&artifact=7654>) |`, 'the Report cell is the report link alone');
-  assert.deepEqual(summaries(body), ['🟩 Added (1)', '🟥 Removed (1)', '🟧 Modified (1)', 'Validation · iOS 🟩 6/6 captured']);
-  assert.match(body, /\n\*\*Changes\*\* · 3 screens\n/);
-  assert.match(body, /\n- `\/settings` — Changed button title from “Share” to “Share Example”\\\. · \[iOS\]\(<https:\/\/explore-preview\.expo\.app\/\?repo=expo%2Fexplore-playground&run=42&attempt=2&artifact=7654&view=compare&screen=settings>\)\n/);
-  assert.match(body, /\n- `\/cats\/care-guide` — Added \/cats\/care\\-guide screen · \[iOS\]\(<[^>]+screen=care-guide>\)\n/);
-  assert.match(body, /\n- `\/cats\/sweet-bee` — Removed \/cats\/sweet\\-bee screen · \[iOS\]\(<[^>]+screen=sweet-bee>\)\n/);
-  assert.equal(checkRow(body, 'Capture'), '| Capture | 🟩 6/6 surfaces · base cache reused |');
-  assert.equal(checkRow(body, 'Route verification'), '| Route verification | 🟩 6/6 verified |');
-  assert.equal(checkRow(body, 'Visual comparison'), '| Visual comparison | 🟩 2 compared · threshold 0.1 |');
-  assert.equal(checkRow(body, 'Accessibility comparison'), '| Accessibility comparison | 🟩 2 compared · 1 description |');
-  assert.equal(checkRow(body, 'Source inventory'), '| Source inventory | 🟩 54 routes |');
-  assert.equal(lines.at(-1), `Managed via [\`.expo-explore/config.yaml\`](<https://github.com/expo/explore-playground/blob/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/.expo-explore/config.yaml>) · Workflow ${runLink} · [zip](<https://github.com/expo/explore-playground/actions/runs/42/artifacts/7654>)`, 'the run and the report zip sit in the footer');
-  assert.doesNotMatch(body, /<img|### Review target|### What changed|### Validation|Unchanged|screen=cats|\/home|Reviewed at|Open Explore|Download report|View run/);
-  assert.ok(body.indexOf('**Changes**') < body.indexOf('<summary>Validation'));
+  assert.equal(lines[2], `### 3 screens changed · [Review in Explore](<${reportUrl}>)`, 'the report link is the heading, where a phone shows it first');
+  assert.equal(lines[4], `<sub>[iOS](<${reportUrl}>) · ${commits} · updated Sep 11, 3:07 AM UTC</sub>`);
+  assert.deepEqual(lines.slice(5, 10), ['',
+    `- Added [\`/cats/care-guide\`](<${reportUrl}&view=compare&screen=care-guide>)`,
+    `- Removed [\`/cats/sweet-bee\`](<${reportUrl}&view=compare&screen=sweet-bee>)`,
+    `- [\`/settings\`](<${reportUrl}&view=compare&screen=settings>) · Changed button title from “Share” to “Share Example”`, '']);
+  assert.equal(lines.at(-1), `<sub>${workflowRun} · ${configLink}</sub>`, 'the run and the config sit in the footer');
+  assert.equal(lines.length, 11);
+  assert.deepEqual(summaries(body), []);
+  assert.doesNotMatch(body, /<img|\*\*Changes\*\*|Validation|Capture issues|🟩|🟧|🟨|Managed via|zip|6m 12s|iPhone 17|Example 1|Unchanged|screen=cats|\/home|Reviewed at|Open Explore|Download report|View run|^\|/m);
   // Hidden state is the only thing the comment carries besides markdown.
   assert.equal(lines.filter(line => line.startsWith('<!--')).length, 2);
 });
 
-test('report links appear only once a report exists; a failed run links the run and its evidence', () => {
+test('report links appear only once a report exists; a failed target says so with its run and evidence', () => {
   const beforeUpload = viewerLinks({ repository: pullRequest.repository, headSha, runId: '42', runAttempt: '2', configPath: '.expo-explore/config.yaml' });
   const ready = renderPublicComment(state({ links: beforeUpload }));
-  assert.match(platformRow(ready, 'iOS'), /\| 🟩 3 changes · 6m 12s \| \[run\]\(<[^>]+>\) \|$/, 'before the artifact exists there is nothing to open');
-  assert.doesNotMatch(ready, /\[zip\]|\[Open\]/);
+  assert.equal(titleOf(ready), '### 3 screens changed', 'before the artifact exists there is nothing to open');
+  assert.match(subtitleOf(ready), /^<sub>iOS · \[bbbbbbbb\]/);
+  assert.match(ready, /\n- Added `\/cats\/care-guide`\n/);
+  assert.doesNotMatch(ready, /\[zip\]|\[Open\]|Review in Explore|explore-preview/);
   const failed = renderPublicComment(state({ phase: 'failed', review: undefined, evidence: undefined, failure: { step: 'capture-head', message: 'head capture did not complete; token=abc123 leaked' } }));
-  assert.equal(platformRow(failed, 'iOS'), `| iOS | iPhone 17 26\\.5 · Example 1\\.4\\.0 \\(27\\) | 🟥 failed · capture\\-head | ${runLink} · [evidence](<https://github.com/expo/explore-playground/actions/runs/42#artifacts>) |`);
-  assert.deepEqual(summaries(failed), ['Validation · iOS 🟥 failed']);
-  assert.match(failed, /\*\*iOS failed\*\* — head capture did not complete; token=\\\[redacted\\\] leaked \[Open the failed run\]\(<[^>]+>\) · \[Evidence artifact\]\(<[^>]+>\)/);
-  assert.equal(checkRow(failed, 'Capture'), '| Capture | 🟥 6/6 surfaces |');
-  assert.equal(checkRow(failed, 'Visual comparison'), '| Visual comparison | — |');
-  assert.doesNotMatch(failed, /\*\*Changes\*\*|\[Open\]|\[zip\]|abc123/);
+  assert.equal(titleOf(failed), '### Explore review · capture failed');
+  assert.equal(statusOf(failed, 'iOS'), `**iOS failed** · capture\\-head · head capture did not complete; token=\\[redacted\\] leaked · ${runLink} · ${evidenceLink}`);
+  assert.deepEqual(listOf(failed), []);
+  assert.doesNotMatch(failed, /\[Open\]|\[zip\]|abc123|Review in Explore|Validation/);
 });
 
 test('a secondary appearance surface (<route>@<scheme>) is listed with its scheme and deep-linked like any other route', () => {
   const dark = surface('settings@dark', 'added', { route: '/settings', extra: { colorScheme: 'dark', review: { status: 'added', description: 'Added the dark appearance of /settings.' } } });
   const body = renderPublicComment(state({ review: review([dark]) }));
-  assert.match(body, /\n- `\/settings` \(dark\) — Added [^·]+ · \[iOS\]\(<[^>]+&view=compare&screen=settings%40dark>\)\n/);
+  assert.match(body, /\n- Added \[`\/settings`\]\(<[^>]+&view=compare&screen=settings%40dark>\) \(dark\)\n/, 'an added screen needs no description beyond its route');
 });
 
-test('agent notes replace descriptions without changing groups, counts, or the rest of the comment', () => {
+test('agent notes replace descriptions without changing counts or the rest of the comment', () => {
   const original = evidenceReview();
   const annotated = structuredClone(original);
   for (const [index, text] of [[0, 'Added care guidance and a daily reminder action.'], [1, 'Removed the Sweet Bee activity screen.'], [2, 'The settings share action now reads “Share Example”.']]) {
@@ -149,83 +150,78 @@ test('agent notes replace descriptions without changing groups, counts, or the r
   }
   const before = visible(renderPublicComment(state({ review: original })));
   const after = visible(renderPublicComment(state({ review: annotated })));
-  assert.deepEqual(summaries(after), summaries(before));
-  assert.equal(after.slice(after.indexOf('<summary>Validation')), before.slice(before.indexOf('<summary>Validation')));
-  assert.equal(after.slice(0, after.indexOf('**Changes**')), before.slice(0, before.indexOf('**Changes**')));
-  assert.match(after, /Added care guidance and a daily reminder action/);
-  assert.match(after, /The settings share action now reads “Share Example”/);
+  assert.equal(titleOf(after), titleOf(before));
+  assert.equal(subtitleOf(after), subtitleOf(before));
+  assert.equal(after.split('\n').at(-1), before.split('\n').at(-1));
+  assert.equal(listOf(after).length, listOf(before).length);
+  assert.match(after, /\n- Added \[`\/cats\/care-guide`\]\(<[^>]+>\) · Added care guidance and a daily reminder action\n/, 'a note on an added screen follows the route');
+  assert.match(after, /\n- \[`\/settings`\]\(<[^>]+>\) · The settings share action now reads “Share Example”\n/);
   assert.doesNotMatch(after, /Changed button title from|evidenceDigest|Model|Tokens/);
 });
 
-test('a long group is capped before the body budget and the comment stays under GitHub\'s limit', () => {
-  const many = review(Array.from({ length: 40 }, (_, index) => surface(`screen-${index}`, 'modified', { extra: {
-    review: { status: 'modified', description: `Changed ${index}` },
+test('the list shows ten screens and links the rest; the comment stays under GitHub\'s limit', () => {
+  const screens = (count, description) => review(Array.from({ length: count }, (_, index) => surface(`screen-${index}`, 'modified', { extra: {
+    review: { status: 'modified', description: description(index) },
     visual: { verdict: 'modified', reason: 'repeated-cross-build-delta', mismatchPercentage: 1, threshold: 0.1, tool: 'agent-device@0.20.2' },
   } })));
-  const body = renderPublicComment(state({ review: many, capture: { planned: { base: 40, head: 40 }, done: { base: 40, head: 40 }, baseFromCache: false } }));
-  assert.match(body, /<summary>🟧 Modified \(40\)<\/summary>/);
-  assert.equal((body.match(/\n- `\/screen-\d+`/g) ?? []).length, 40);
+  const body = renderPublicComment(state({ review: screens(40, index => `Changed ${index}`), capture: { planned: { base: 40, head: 40 }, done: { base: 40, head: 40 }, baseFromCache: false } }));
+  assert.equal(titleOf(body), `### 40 screens changed · [Review in Explore](<${reportUrl}>)`);
+  assert.equal((body.match(/\n- \[`\/screen-\d+`\]/g) ?? []).length, 10);
+  assert.equal(listOf(body).at(-1), `- [30 more screens in the report](<${reportUrl}>)`);
   assert.ok(body.length < PUBLIC_COMMENT_BODY_BUDGET);
-  const huge = review(Array.from({ length: 900 }, (_, index) => surface(`s${index}`, 'modified', { extra: { review: { status: 'modified', description: `Changed ${index} in a way that takes a sentence to describe for the budget check.` } } })));
-  const long = renderPublicComment(state({ review: huge }));
+  assert.equal(listOf(renderPublicComment(state({ review: screens(11, () => 'Changed') }))).at(-1), `- [1 more screen in the report](<${reportUrl}>)`);
+  assert.equal(listOf(renderPublicComment(state({ review: screens(10, () => 'Changed') }))).length, 10, 'ten screens need no link to the rest');
+  const long = renderPublicComment(state({ review: screens(900, index => `Changed ${index} in a way that takes a sentence to describe for the budget check.`) }));
   assert.ok(long.length < PUBLIC_COMMENT_BODY_BUDGET, String(long.length));
-  assert.match(long, /<summary>🟧 Modified \(900\)<\/summary>/);
-  assert.match(long, /\n- \d+ more — \[Explore report\]\(<[^>]+>\)\n/);
+  assert.match(titleOf(long), /^### 900 screens changed · /);
+  assert.match(long, /\n- \[890 more screens in the report\]\(<[^>]+>\)\n/);
 });
 
-test('pending and capturing runs show progress in the platform table and no change lists', () => {
-  const links = viewerLinks({ viewerUrl: 'https://explore-preview.expo.app/map', repository: pullRequest.repository, headSha, runId: '42', runAttempt: '2', configPath: '.expo-explore/config.yaml' });
+test('pending and capturing runs say what they are doing in the heading and a line per target, with no list', () => {
+  const links = viewerLinks({ repository: pullRequest.repository, headSha, runId: '42', runAttempt: '2', configPath: '.expo-explore/config.yaml' });
   const pending = renderPublicComment(state({ phase: 'pending', links, review: undefined, evidence: undefined, runtime: undefined, capture: { planned: { base: 3, head: 3 }, done: { base: 0, head: 0 }, baseFromCache: false } }));
-  assert.equal(platformRow(pending, 'iOS'), `| iOS | Example 1\\.4\\.0 \\(27\\) | ⏳ starting | ${runLink} |`);
+  assert.equal(titleOf(pending), '### Explore review · starting');
+  assert.equal(subtitleOf(pending), `<sub>iOS · ${commits} · updated Sep 11, 3:07 AM UTC</sub>`);
+  assert.equal(statusOf(pending, 'iOS'), `iOS · starting · ${runLink}`);
+  assert.deepEqual(listOf(pending), []);
   assert.deepEqual(summaries(pending), []);
-  assert.doesNotMatch(pending, /\*\*Changes\*\*|Validation|Waiting|Open|zip/);
-  const progress = (current, baseFromCache) => platformRow(renderPublicComment(state({ phase: 'capturing', links, review: undefined, evidence: undefined,
+  assert.doesNotMatch(pending, /changed|Review in Explore|Validation|Waiting|Open|zip/);
+  const progress = (current, baseFromCache) => statusOf(renderPublicComment(state({ phase: 'capturing', links, review: undefined, evidence: undefined,
     capture: { planned: { base: 3, head: 3 }, done: { base: 2, head: 1 }, baseFromCache, current } })), 'iOS');
-  assert.match(progress('base', false), /\| ⏳ capturing base 2\/3 \| /);
-  assert.match(progress('head', false), /\| ⏳ capturing head 1\/3 \| /);
-  assert.match(progress('head', true), /\| ⏳ capturing head 1\/3 · base reused \| /);
-  assert.match(progress(undefined, false), /\| ⏳ capturing head 1\/3 \| /);
+  assert.equal(progress('base', false), `iOS · capturing base 2/3 · ${runLink}`);
+  assert.equal(progress('head', false), `iOS · capturing head 1/3 · ${runLink}`);
+  assert.equal(progress('head', true), `iOS · capturing head 1/3 · base reused · ${runLink}`);
+  assert.equal(progress(undefined, false), `iOS · capturing head 1/3 · ${runLink}`);
+  assert.equal(titleOf(renderPublicComment(state({ phase: 'capturing', links, review: undefined, evidence: undefined }))), '### Explore review · capturing');
   const none = renderPublicComment(state({ review: review([surface('cats', 'modified', { extra: { review: { status: 'unchanged', description: 'No visible change' } } })]) }));
-  assert.deepEqual(summaries(none), ['Validation · iOS 🟩 6/6 captured'], 'unchanged surfaces produce no group');
-  assert.match(none, /\*\*Changes\*\* · 0 screens\n\nNo screen changed on the reviewed platforms\./);
+  assert.equal(titleOf(none), `### No screens changed · [Review in Explore](<${reportUrl}>)`, 'unchanged surfaces are no change');
+  assert.deepEqual(listOf(none), []);
 });
 
-test('an OS version the simulator did not report is omitted, not shown as unknown', () => {
-  const body = renderPublicComment(state({ runtime: { ...state().runtime, osVersion: 'unknown' } }));
-  assert.match(platformRow(body, 'iOS'), /^\| iOS \| iPhone 17 · Example 1\\\.4\\\.0 \\\(27\\\) \|/);
-  assert.doesNotMatch(body, /unknown/i);
-});
-
-test('without evidence the comment lists only added and removed screens and says comparisons did not run', () => {
+test('without evidence the comment lists only added and removed screens and counts the uncompared one', () => {
   const plain = review([surface('care-guide', 'added'), surface('sweet-bee', 'removed'), surface('settings', 'modified'), surface('cats', 'unchanged')]);
   const body = renderPublicComment(reviewOnlyState(plain));
   // A source change nobody compared is not a change the captures show.
-  assert.deepEqual(summaries(body).slice(0, 2), ['🟩 Added (1)', '🟥 Removed (1)']);
-  assert.doesNotMatch(body, /Source-affected|screen=settings/);
-  assert.equal(checkRow(body, 'Visual comparison'), '| Visual comparison | 🟨 not run |');
-  assert.equal(checkRow(body, 'Accessibility comparison'), '| Accessibility comparison | 🟨 not run |');
-  assert.match(platformRow(body, 'iOS'), /^\| iOS \| Example 1\\\.4\\\.0 \\\(27\\\) \| 🟨 2 changes · 1 not compared · 0s \|/, 'the uncompared /settings is counted, not hidden');
-  assert.doesNotMatch(body, /Needs review|Unchanged|screen=cats/);
+  assert.match(titleOf(body), /^### 2 screens changed · /);
+  assert.deepEqual(listOf(body).map(line => /^- (Added|Removed) /.exec(line)?.[1]), ['Added', 'Removed']);
+  assert.equal(statusOf(body, 'iOS'), `iOS · 1 not compared · ${runLink}`, 'the uncompared /settings is counted, not hidden');
+  assert.doesNotMatch(body, /Source-affected|screen=settings|Needs review|Unchanged|screen=cats|not run/);
 });
 
-test('the completed duration stays tied to the captured review when the comment is republished', () => {
-  const original = platformRow(renderPublicComment(state()), 'iOS');
-  assert.equal(platformRow(renderPublicComment(state({ updatedAt: Date.parse('2026-09-12T09:42:00Z') })), 'iOS'), original);
-  assert.match(original, /🟩 3 changes · 6m 12s/);
-  assert.doesNotMatch(renderPublicComment(state({ phase: 'capturing', review: undefined })), /6m 12s/);
+test('the subtitle says when the comment last changed: the review\'s time once ready, the writer\'s before', () => {
+  assert.match(subtitleOf(renderPublicComment(state({ updatedAt: Date.parse('2026-09-12T09:42:00Z') }))), /· updated Sep 11, 3:07 AM UTC<\/sub>$/, 'a republished review keeps its time');
+  assert.match(subtitleOf(renderPublicComment(state({ phase: 'capturing', review: undefined, updatedAt: Date.parse('2026-09-12T09:42:00Z') }))), /· updated Sep 12, 9:42 AM UTC<\/sub>$/);
 });
 
-test('needs-review surfaces keep their group and validation status without capture warnings', () => {
+test('needs-review surfaces are tagged on their row; screen variants and capture warnings stay out', () => {
   const flagged = evidenceReview();
   flagged.surfaces[2].review = { status: 'needs-review', description: 'Screenshots differ (2.1%) without a source change' };
   flagged.surfaces.push(surface('coins', 'unchanged', { extra: { sourceScope: 'none', review: { status: 'variant', description: 'Runtime state differs: Removed text “84”.' },
     visual: { verdict: 'modified', reason: 'repeated-cross-build-delta', mismatchPercentage: 0.2, threshold: 0.1, tool: 'agent-device@0.21.15' } } }));
   const body = renderPublicComment(state({ review: flagged, warnings: ['src/app/orphan.tsx has unresolved navigation'], inventory: { routes: 54 } }));
-  assert.match(body, /<summary>🟨 Needs review \(1\)<\/summary>/);
-  assert.doesNotMatch(body, /<summary>🟧 Modified/);
-  assert.match(body, /\n- `\/settings` — Screenshots differ \\\(2\\\.1%\\\) without a source change · \[iOS\]/);
-  assert.equal(checkRow(body, 'Source inventory'), '| Source inventory | 🟩 54 routes |');
-  assert.doesNotMatch(body, /Capture warnings|orphan/);
+  assert.match(titleOf(body), /^### 3 screens changed · /);
+  assert.match(body, /\n- \[`\/settings`\]\(<[^>]+>\) · Screenshots differ \\\(2\\\.1%\\\) without a source change · needs review\n/);
+  assert.doesNotMatch(body, /coins|Capture warnings|orphan|Needs review \(|54 routes/);
 });
 
 test('text is redacted and escaped before it reaches the comment, and credentialed links are refused', () => {
@@ -236,19 +232,18 @@ test('text is redacted and escaped before it reaches the comment, and credential
   assert.throws(() => renderPublicComment(state({ links: { ...state().links, run: 'https://user:pw@github.com/x' } })), /credentials/);
 });
 
-test('completed partial capture shows unavailable targets rather than ongoing work', () => {
+test('a completed partial capture gets one line with the count of missing captures, not ongoing work', () => {
   const capture = { planned: { base: 34, head: 34 }, done: { base: 21, head: 34 }, baseFromCache: false };
   const ready = renderPublicComment(state({ capture }));
-  assert.equal(checkRow(ready, 'Capture'), '| Capture | 🟨 55/68 surfaces · 13 unavailable |');
-  assert.match(platformRow(ready, 'iOS'), /\| 🟨 3 changes · 13 unavailable · 6m 12s \|/);
-  assert.doesNotMatch(ready, /⏳/);
-  assert.equal(checkRow(renderPublicComment(state({ phase: 'failed', capture, failure: { step: 'capture-base', message: 'failed' } })), 'Capture'), '| Capture | 🟥 55/68 surfaces |');
-  assert.equal(checkRow(renderPublicComment(state({ capture: { ...capture, done: { base: 34, head: 34 } } })), 'Capture'), '| Capture | 🟩 68/68 surfaces |');
-  assert.equal(checkRow(renderPublicComment(state({ capture: { ...capture, done: { base: 0, head: 0 } } })), 'Capture'), '| Capture | 🟨 6/68 surfaces · 62 unavailable |', 'the review’s own frames count as captured');
-  assert.equal(checkRow(renderPublicComment(state({ capture: { ...capture, baseFromCache: true } })), 'Capture'), '| Capture | 🟨 55/68 surfaces · 13 unavailable · base cache reused |');
+  assert.equal(statusOf(ready, 'iOS'), `iOS · 13 captures unavailable · ${runLink}`);
+  assert.match(titleOf(ready), /^### 3 screens changed · /);
+  assert.doesNotMatch(ready, /⏳|Capture issues|surfaces/);
+  assert.equal(statusOf(renderPublicComment(state({ phase: 'failed', capture, failure: { step: 'capture-base', message: 'failed' } })), 'iOS'), `**iOS failed** · capture\\-base · failed · ${runLink} · ${evidenceLink}`);
+  assert.equal(statusOf(renderPublicComment(state({ capture: { ...capture, done: { base: 34, head: 34 } } })), 'iOS'), undefined, 'a complete capture needs no line');
+  assert.equal(statusOf(renderPublicComment(state({ capture: { ...capture, done: { base: 0, head: 0 } } })), 'iOS'), `iOS · 62 captures unavailable · ${runLink}`, 'the review’s own frames count as captured');
 });
 
-test('capture problems are listed as diagnostics inside the validation block with both sides', () => {
+test('capture problems are counted on the target\'s line and listed, collapsed, with both sides', () => {
   const flagged = evidenceReview();
   const failure = side => ({ status: 'failed', attempts: 1, landing: 'unverified', error: {
     code: `${side.toUpperCase()}_SESSION_FAILED`, stage: 'capture', message: `${side} simulator disconnected; token=private`,
@@ -262,17 +257,18 @@ test('capture problems are listed as diagnostics inside the validation block wit
   flagged.surfaces[2].headOutcome.landing = 'unverified';
   flagged.surfaces[2].review = { status: 'needs-review', description: 'old destination failure' };
   const body = renderPublicComment(state({ review: flagged, capture: { planned: { base: 3, head: 3 }, done: { base: 1, head: 2 }, baseFromCache: false } }));
-  // /settings could not be compared, so it is no change: its failures are named under Validation.
-  assert.deepEqual(summaries(body), ['🟩 Added (1)', '🟥 Removed (1)', 'Validation · iOS 🟨 3/6 captured']);
-  assert.match(platformRow(body, 'iOS'), /\| 🟨 2 changes · 3 unavailable · 1 unattributed · 6m 12s \|/);
+  // /settings could not be compared, so it is no change: its failures are named under Capture issues.
+  assert.match(titleOf(body), /^### 2 screens changed · /);
+  assert.equal(statusOf(body, 'iOS'), `iOS · 3 captures unavailable · 1 unattributed · ${runLink}`);
+  assert.deepEqual(summaries(body), ['Capture issues (4)']);
+  assert.ok(body.indexOf('<summary>Capture issues') > body.indexOf('\n- Removed '), 'the list comes first');
   assert.match(body, /\n- Base · \/settings · /);
-  assert.match(body, /\*\*iOS\*\* · base 1\/3 verified · 2 unavailable · head 1\/3 verified · 1 unattributed · 1 unavailable/);
   assert.match(body, /\n- Base · \/cats\/sweet\\-bee · BASE\\_SESSION\\_FAILED: base simulator disconnected; token=\\\[redacted\\\] Next action: Restart the base simulator session and rerun capture\\\./);
   assert.match(body, /\n- Head · \/cats\/care\\-guide · HEAD\\_SESSION\\_FAILED/);
-  assert.doesNotMatch(body, /Needs review|Modified|old capture|old destination|token=private/);
+  assert.doesNotMatch(body, /needs review|Modified|old capture|old destination|token=private|\*\*iOS\*\*|Validation/);
 });
 
-test('zero eligible pairs are visibly skipped instead of successful comparisons', () => {
+test('zero eligible pairs are counted as unattributed instead of successful comparisons', () => {
   const flagged = evidenceReview();
   for (const surface of flagged.surfaces) {
     for (const side of ['base', 'head']) if (surface[`${side}Outcome`]) surface[`${side}Outcome`].landing = 'unverified';
@@ -284,30 +280,29 @@ test('zero eligible pairs are visibly skipped instead of successful comparisons'
     visual: { compared: 0, modified: 0, unchanged: 0, needsReview: 0, failed: 0, errors: [], threshold: 0.1, tool: 'agent-device@0.20.2' },
     accessibility: { compared: 0, described: 0, failed: 0, skipped: 0, errors: [] },
   } }));
-  assert.equal(checkRow(body, 'Route verification'), '| Route verification | 🟨 0/6 verified · 6 unattributed |');
-  assert.equal(checkRow(body, 'Visual comparison'), '| Visual comparison | 🟨 0 compared · threshold 0.1 · 2 skipped |');
-  assert.equal(checkRow(body, 'Accessibility comparison'), '| Accessibility comparison | 🟨 0 compared · 0 descriptions |');
-  assert.match(platformRow(body, 'iOS'), /\| 🟨 2 changes · 6 unattributed · 6m 12s \|/, 'the uncompared modified screens are not changes');
+  assert.match(titleOf(body), /^### 2 screens changed · /, 'the uncompared modified screens are not changes');
+  assert.equal(statusOf(body, 'iOS'), `iOS · 6 unattributed · ${runLink}`);
 });
 
-test('the review-only comment counts failed outcomes in planned coverage and lists the reason', () => {
+test('the review-only comment counts failed outcomes as unavailable and lists the reason', () => {
   const added = surface('added', 'added');
   delete added.headImage;
   added.headOutcome = { status: 'missing-params', attempts: 0, landing: 'unverified', reason: 'Provide the item ID.' };
   const body = renderPublicComment(reviewOnlyState(review([added])));
-  assert.equal(checkRow(body, 'Capture'), '| Capture | 🟨 0/1 surfaces · 1 unavailable |');
-  assert.match(body, /<summary>🟩 Added \(1\)<\/summary>/);
+  assert.equal(statusOf(body, 'iOS'), `iOS · 1 capture unavailable · ${runLink}`);
+  assert.match(body, /\n- Added \[`\/added`\]\(<[^>]+screen=added>\)\n/);
+  assert.deepEqual(summaries(body), ['Capture issues (1)']);
   assert.match(body, /CAPTURE\\_UNAVAILABLE: Provide the item ID\\\./);
 });
 
-test('a failed run keeps the source additions and removals of its partial report', () => {
+test('a failed run keeps its message on the target\'s line and lists nothing', () => {
   const body = renderPublicComment(state({ phase: 'failed', failure: { step: 'capture', message: 'Capture coverage is incomplete.' } }));
-  assert.match(platformRow(body, 'iOS'), /\| 🟥 failed · capture \|/);
-  assert.match(body, /\*\*iOS failed\*\* — Capture coverage is incomplete\\\./);
-  assert.doesNotMatch(body, /\*\*Changes\*\*|🟩 Added/, 'a failed run has no review to list');
+  assert.equal(titleOf(body), '### Explore review · capture failed');
+  assert.equal(statusOf(body, 'iOS'), `**iOS failed** · capture · Capture coverage is incomplete\\. · ${runLink} · ${evidenceLink}`);
+  assert.deepEqual(listOf(body), [], 'a failed run has no review to list');
 });
 
-test('screen variants and app-wide changes are stated once, not listed as review targets', () => {
+test('screen variants and app-wide source changes are left to the report', () => {
   const variant = surface('coins', 'unchanged', { extra: { sourceScope: 'none',
     review: { status: 'variant', description: 'Runtime state differs: Removed text “84”.' },
     visual: { verdict: 'modified', reason: 'repeated-cross-build-delta', mismatchPercentage: 0.2, threshold: 0.1, tool: 'agent-device@0.21.15' } } });
@@ -315,29 +310,40 @@ test('screen variants and app-wide changes are stated once, not listed as review
     review: { status: 'unchanged', description: 'No visible change' },
     sourceChange: { ...sourceChange('Dependency update.', 'global'), files: [{ path: 'package.json', status: 'modified', relation: 'global', hunks: [], facts: [], truncated: false }] } } });
   const body = renderPublicComment(state({ review: review([...evidenceReview().surfaces, variant, appWide]) }));
-  assert.doesNotMatch(body, /\/coins|\/profile|Needs review \(/);
-  assert.match(body, /1 screen differs only in runtime state \(screen variants\); no source change reaches it\./);
-  assert.match(body, /App-wide source changes \(`package\.json`\) reach every screen; screens without a visible difference are not listed\./);
+  assert.match(titleOf(body), /^### 3 screens changed · /);
+  assert.doesNotMatch(body, /\/coins|\/profile|runtime state|App-wide|package\.json/);
 });
 
-test('a hosted preview is the Open link, the footer keeps the zip and run and says how long the link works', () => {
+test('a changed splash screen is one line after the list; an unchanged one is not mentioned', () => {
+  const launch = verdict => ({ ...evidenceReview(), launch: [
+    { colorScheme: 'light', head: { status: 'observed', source: 'recording', splashVisibleMs: 900, firstScreenMs: 1900 }, base: { status: 'observed' }, visual: { verdict } },
+    { colorScheme: 'dark', head: { status: 'observed', source: 'recording', splashVisibleMs: 900, firstScreenMs: 1900 }, base: { status: 'observed' }, visual: { verdict: 'unchanged' } }] });
+  const changed = renderPublicComment(state({ review: launch('modified'), artifactOnly: true }));
+  assert.match(changed, /\n- \[`\/settings`\][^\n]+\n\nSplash screen changed in light mode\n\n<sub>/);
+  assert.match(renderPublicComment(state({ review: launch('needs-review'), artifactOnly: true })), /\nSplash screen needs review in light mode\n/);
+  assert.doesNotMatch(renderPublicComment(state({ review: launch('unchanged'), artifactOnly: true })), /Splash|Launch|first screen/);
+  const both = { ...evidenceReview(), launch: [{ head: { status: 'observed', source: 'recording' }, base: { status: 'observed' }, visual: { verdict: 'modified' } }] };
+  assert.match(renderPublicComment(state({ review: both, artifactOnly: true })), /\nSplash screen changed\n/);
+});
+
+test('a hosted preview is the report link, and the footer says how long the links work', () => {
   const token = 'abcdefghijklmnopqrstuvwxyz234567';
   const preview = previewLinks(`https://acme-explore--1lcbdcpwn3.expo.app/p/${token}`, Date.parse('2026-09-18T03:07:00Z'));
   const links = { ...viewerLinks({ repository: pullRequest.repository, headSha, runId: '42', runAttempt: '2', configPath: '.expo-explore/config.yaml', artifactUrl }), preview };
   const body = renderPublicComment(state({ links, artifactOnly: true }));
   const lines = body.split('\n');
   assert.equal(lines[1], '<!-- expo-explore-deployments:acme-explore--1lcbdcpwn3 -->');
-  assert.match(platformRow(body, 'iOS'), new RegExp(`\\| \\[Open\\]\\(<https://acme-explore--1lcbdcpwn3\\.expo\\.app/p/${token}>\\) \\|$`));
-  assert.match(lines.at(-1), /· Workflow \[run\]\(<[^>]+>\) · \[zip\]\(<[^>]+>\)$/);
-  assert.match(body, new RegExp(`\\[iOS\\]\\(<https://acme-explore--1lcbdcpwn3\\.expo\\.app/p/${token}\\?view=compare&screen=settings>\\)`));
-  assert.match(lines.at(-1), /^Preview links work until Sep 18, 2026 \(UTC\) for anyone who has them\. · Managed via /);
-  assert.doesNotMatch(body, /Open Explore|explore-viewer\.expo\.app|explore-preview\.expo\.app/);
+  assert.equal(titleOf(body), `### 3 screens changed · [Review in Explore](<https://acme-explore--1lcbdcpwn3.expo.app/p/${token}>)`);
+  assert.equal(subtitleOf(body), `<sub>[iOS](<https://acme-explore--1lcbdcpwn3.expo.app/p/${token}>) · ${commits} · updated Sep 11, 3:07 AM UTC</sub>`);
+  assert.match(body, new RegExp(`\\n- \\[\`/settings\`\\]\\(<https://acme-explore--1lcbdcpwn3\\.expo\\.app/p/${token}\\?view=compare&screen=settings>\\) · `));
+  assert.equal(lines.at(-1), `<sub>Preview links work for anyone who has them until Sep 18, 2026 (UTC) · ${workflowRun} · ${configLink}</sub>`);
+  assert.doesNotMatch(body, /Open Explore|explore-viewer\.expo\.app|explore-preview\.expo\.app|zip/);
   assert.doesNotMatch(renderPublicComment(state({ links, phase: 'failed', review: undefined, failure: { step: 'capture-head', message: 'boom' } })), /acme-explore--1lcbdcpwn3\.expo\.app\/p|for anyone who has/);
   const forever = renderPublicComment(state({ links: { ...links, preview: previewLinks(`https://acme-explore--1lcbdcpwn3.expo.app/p/${token}`, null) }, artifactOnly: true }));
-  assert.match(forever, /\nPreview links work for anyone who has them until the deployment is deleted\. · Managed via /);
+  assert.match(forever, /\n<sub>Preview links work for anyone who has them until the deployment is deleted · \[Workflow run\]/);
 });
 
-test('two platforms share one comment: one table row each, every changed screen listed once with a link per platform, one validation table', async () => {
+test('two platforms share one comment: both named in the subtitle, every changed screen listed once, a line only for the one still working', async () => {
   const { platformSectionMerge, readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
   const ready = state({ artifactOnly: true });
   const single = renderPublicComment(ready);
@@ -347,29 +353,24 @@ test('two platforms share one comment: one table row each, every changed screen 
     runtime: { ...state().runtime, platform: 'android', deviceModel: 'EasAndroidDevice01', osVersion: '15.0' }, ...overrides });
   const capturing = platformSectionMerge(androidState({ phase: 'capturing', review: undefined, evidence: undefined, capture: { planned: { base: 3, head: 3 }, done: { base: 3, head: 1 }, baseFromCache: false, current: 'head' } }), 'android').merge(single);
   assert.deepEqual(Object.keys(readCommentRecords(capturing).current), ['ios', 'android']);
-  assert.equal(platformRow(capturing, 'iOS'), platformRow(single, 'iOS'));
-  assert.equal(platformRow(capturing, 'Android'), `| Android | EasAndroidDevice01 15\\.0 · Example 1\\.4\\.0 \\(27\\) | ⏳ capturing head 1/3 | ${runLink} |`);
-  assert.deepEqual(summaries(capturing), ['🟩 Added (1)', '🟥 Removed (1)', '🟧 Modified (1)', 'Validation · iOS 🟩 6/6 captured · Android ⏳ in progress']);
-  assert.match(capturing, /\| Check \| iOS \| Android \|\n\|---\|---\|---\|\n\| Capture \| 🟩 6\/6 surfaces · base cache reused \| ⏳ \|/);
-  assert.match(capturing, /\n- `\/settings` — Changed button title from “Share” to “Share Example”\\\. · \[iOS\]\(<[^>]+>\)\n/, 'a platform still capturing adds no link');
+  assert.equal(titleOf(capturing), titleOf(single), 'a platform still capturing has no report to link yet');
+  assert.equal(subtitleOf(capturing), `<sub>[iOS](<${reportUrl}>) · Android · ${commits} · updated Sep 11, 3:07 AM UTC</sub>`);
+  assert.equal(statusOf(capturing, 'Android'), `Android · capturing head 1/3 · ${runLink}`);
+  assert.equal(statusOf(capturing, 'iOS'), undefined);
+  assert.deepEqual(listOf(capturing), listOf(single), 'a platform still capturing adds nothing to the list');
   const flagged = evidenceReview();
   flagged.surfaces[2].review = { status: 'needs-review', description: 'Screenshots differ (2.1%) without a source change' };
   flagged.surfaces.push(surface('coins', 'unchanged', { extra: { sourceScope: 'none', review: { status: 'variant', description: 'Runtime state differs: Removed text “84”.' },
     visual: { verdict: 'modified', reason: 'repeated-cross-build-delta', mismatchPercentage: 0.2, threshold: 0.1, tool: 'agent-device@0.21.15' } } }));
   const both = platformSectionMerge(androidState({ review: flagged }), 'android').merge(capturing);
   assert.deepEqual(Object.keys(readCommentRecords(both).current), ['ios', 'android']);
-  assert.equal(platformRow(both, 'iOS'), platformRow(single, 'iOS'));
-  assert.match(platformRow(both, 'Android'), /^\| Android \| EasAndroidDevice01 15\\\.0 · Example 1\\\.4\\\.0 \\\(27\\\) \| 🟩 3 changes · 6m 12s \| \[Open\]/);
-  assert.match(both, /\*\*Changes\*\* · 3 screens · a screen is listed once, with a link per platform\n/);
-  assert.match(capturing, /^### Explore review · \[Open report\]\(<[^>]+>\)$/m, 'a platform still capturing has no report to link yet');
-  assert.match(both, /^### Explore review · \[iOS report\]\(<[^>]+>\) · \[Android report\]\(<[^>]+>\)$/m, 'with two platforms the heading links each report');
-  assert.match(both, /\nAndroid · 1 screen differs only in runtime state \(screen variants\); no source change reaches it\.\n/, 'a context line from one platform names it');
-  assert.doesNotMatch(both, /iOS · /);
-  assert.match(both, /\n- `\/cats\/care-guide` — Added \/cats\/care\\-guide screen · \[iOS\]\(<[^>]+screen=care-guide>\) · \[Android\]\(<[^>]+screen=care-guide>\)\n/);
-  assert.match(both, /\n- `\/settings` — Changed button title from “Share” to “Share Example”\\\. · \[iOS\]\(<[^>]+>\) · \[Android \(needs review\)\]\(<[^>]+>\)\n/, 'a platform whose verdict differs says so on the row');
-  assert.deepEqual(summaries(both), ['🟩 Added (1)', '🟥 Removed (1)', '🟧 Modified (1)', 'Validation · iOS 🟩 6/6 captured · Android 🟩 8/8 captured']);
-  assert.equal((both.match(/\n- `/g) ?? []).length, 3, 'no screen is listed twice');
-  assert.equal((both.match(/\| Capture \|/g) ?? []).length, 1);
+  assert.equal(titleOf(both), titleOf(single), 'the heading links the first platform’s report');
+  assert.match(subtitleOf(both), /^<sub>\[iOS\]\(<[^>]+artifact=7654>\) · \[Android\]\(<[^>]+artifact=7654>\) · \[bbbbbbbb\]/);
+  assert.equal(statusOf(both, 'Android'), undefined);
+  assert.equal(listOf(both).length, 3, 'no screen is listed twice');
+  assert.match(both, /\n- Added \[`\/cats\/care-guide`\]\(<[^>]+screen=care-guide>\)\n/);
+  assert.match(both, /\n- \[`\/settings`\]\(<[^>]+>\) · Changed button title from “Share” to “Share Example”\n/, 'a platform whose verdict differs does not change the row');
+  assert.doesNotMatch(both, / only\n|not on |coins|runtime state|iOS · /);
   assert.ok(both.length < 8_000, String(both.length));
   // A writer that finds no records (a legacy or hand-edited comment) starts over rather than failing.
   const legacy = `${CI_COMMENT_MARKER}\nExplore review for x\n<!-- expo-explore-platform:ios -->\n## iOS · 3 changes\n<!-- /expo-explore-platform:ios -->`;
@@ -378,32 +379,62 @@ test('two platforms share one comment: one table row each, every changed screen 
   assert.equal(platformSectionMerge(ready, 'ios').merge(tampered), single);
 });
 
-test('a newer run moves the current run into Previous runs; a run the PR moved past joins history without displacing the current review', async () => {
+test('a screen that changed on some devices only says which, the shorter way', async () => {
+  const { platformSectionMerge } = await import('../../dist/report/pr-comment-body.js');
+  const [iphone, closed, open, android] = duoTargets;
+  const settingsOnly = review([evidenceReview().surfaces[2]]);
+  let body;
+  for (const target of [iphone, closed, open]) body = platformSectionMerge(targetState(target), target.id).merge(body);
+  body = platformSectionMerge(targetState(android, { review: settingsOnly }), 'android').merge(body);
+  assert.match(body, /\n- Added \[`\/cats\/care-guide`\]\(<[^>]+>\) · not on Pixel 7\n/);
+  assert.match(body, /\n- \[`\/settings`\]\(<[^>]+>\) · Changed button title from “Share” to “Share Example”\n/, 'a screen changed everywhere names no device');
+  const two = platformSectionMerge(targetState(android, { review: settingsOnly }), 'android').merge(platformSectionMerge(targetState(iphone), 'iphone').merge(undefined));
+  assert.match(two, /\n- Added \[`\/cats\/care-guide`\]\(<[^>]+>\) · iPhone 17 only\n/);
+});
+
+test('a new run keeps the last finished review up, under a line saying it is working, until it has a finished target; the old run joins Previous runs', async () => {
   const { platformSectionMerge, readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
   const first = platformSectionMerge(state({ artifactOnly: true }), 'ios').merge(undefined);
   const androidReady = state({ artifactOnly: true, build: { ...state().build, platform: 'android' }, runtime: { ...state().runtime, platform: 'android', deviceModel: 'Pixel 9' } });
   const both = platformSectionMerge(androidReady, 'android').merge(first);
   const nextHead = 'd'.repeat(40);
-  const nextLinks = runId => viewerLinks({ repository: pullRequest.repository, headSha: nextHead, runId, runAttempt: '1', configPath: '.expo-explore/config.yaml' });
+  const nextLinks = (runId, artifact) => viewerLinks({ ...(artifact ? { artifactUrl: `https://github.com/expo/explore-playground/actions/runs/${runId}/artifacts/${artifact}` } : {}),
+    repository: pullRequest.repository, headSha: nextHead, runId, runAttempt: '1', configPath: '.expo-explore/config.yaml' });
   const nextState = overrides => state({ phase: 'capturing', review: undefined, evidence: undefined, links: nextLinks('43'), pullRequest: { ...pullRequest, head: { ref: 'feature', sha: nextHead } },
     startedAt: Date.parse('2026-09-11T04:00:00Z'), updatedAt: Date.parse('2026-09-11T04:01:00Z'), capture: { planned: { base: 3, head: 3 }, done: { base: 3, head: 0 }, baseFromCache: true, current: 'head' }, ...overrides });
   const next = platformSectionMerge(nextState(), 'ios').merge(both);
-  assert.match(next.split('\n').find(line => line.startsWith('<sub>')), /^<sub>base \[aaaaaaaa\]\(<[^>]+>\) → \[dddddddd\]/);
+  assert.equal(visible(next).split('\n')[1], `> **New run in progress** for [dddddddd](<https://github.com/expo/explore-playground/commit/${nextHead}>) · capturing on iOS · [run](<https://github.com/expo/explore-playground/actions/runs/43/attempts/1>)`);
+  assert.equal(titleOf(next), titleOf(both), 'the previous review stays up');
+  assert.equal(subtitleOf(next), subtitleOf(both));
+  assert.deepEqual(listOf(next), listOf(both));
   assert.deepEqual(Object.keys(readCommentRecords(next).current), ['ios']);
+  assert.deepEqual(Object.keys(readCommentRecords(next).previous), ['ios', 'android']);
   assert.deepEqual(summaries(next), ['Previous runs (1)']);
   assert.match(next, /\n- \[bbbbbbbb\]\(<https:\/\/github\.com\/expo\/explore-playground\/commit\/b{40}>\) · iOS 🟩 3 changes \(\[report\]\(<https:\/\/explore-preview\.expo\.app\/\?repo=[^>]+&artifact=7654>\) · \[run\]\(<[^>]+runs\/42\/attempts\/2>\)\) · Android 🟩 3 changes \(\[report\]\(<[^>]+>\) · \[run\]\(<[^>]+>\)\)\n/);
-  assert.doesNotMatch(next, /\*\*Changes\*\*|screen=settings/);
   // The previous run's Android report job finishes after the new run started: it is superseded and lands in history.
   const late = platformSectionMerge(androidReady, 'android').merge(next);
   assert.deepEqual(Object.keys(readCommentRecords(late).current), ['ios']);
   assert.equal(readCommentRecords(late).history.length, 1);
-  assert.match(late, /^<sub>base \[aaaaaaaa\]\(<[^>]+>\) → \[dddddddd\]/m);
-  // The new run's Android writer joins the current run, and the previous run stays listed.
+  assert.equal(titleOf(late), titleOf(both));
+  // The new run's Android writer joins; nothing finished yet, so the previous review stays.
   const joined = platformSectionMerge(nextState({ build: { ...state().build, platform: 'android' } }), 'android').merge(late);
   assert.deepEqual(Object.keys(readCommentRecords(joined).current), ['ios', 'android']);
+  assert.match(visible(joined).split('\n')[1], /^> \*\*New run in progress\*\* for \[dddddddd\]\(<[^>]+>\) · capturing on iOS, Android · \[run\]/);
+  assert.deepEqual(listOf(joined), listOf(both));
   assert.deepEqual(summaries(joined), ['Previous runs (1)']);
+  // The new run's iOS finishes: its review takes over; the previous Android record waits for the new one.
+  const iosDone = platformSectionMerge(nextState({ phase: 'ready', review: evidenceReview(), links: nextLinks('43', '7700') }), 'ios').merge(joined);
+  assert.doesNotMatch(iosDone, /New run in progress/);
+  assert.match(titleOf(iosDone), /^### 3 screens changed · \[Review in Explore\]\(<[^>]+artifact=7700>\)$/);
+  assert.match(subtitleOf(iosDone), /^<sub>\[iOS\]\(<[^>]+artifact=7700>\) · Android · \[dddddddd\]/);
+  assert.equal(statusOf(iosDone, 'Android'), 'Android · capturing head 0/3 · base reused · [run](<https://github.com/expo/explore-playground/actions/runs/43/attempts/1>)');
+  assert.deepEqual(Object.keys(readCommentRecords(iosDone).previous), ['android']);
+  const androidDone = platformSectionMerge(nextState({ phase: 'ready', review: evidenceReview(), links: nextLinks('43', '7700'), build: { ...state().build, platform: 'android' } }), 'android').merge(iosDone);
+  assert.equal(readCommentRecords(androidDone).previous, undefined, 'once every target finished nothing previous is kept');
+  assert.doesNotMatch(androidDone, /expo-explore-previous/);
+  assert.equal(statusOf(androidDone, 'Android'), undefined);
   // Each later run pushes one more entry; history is capped.
-  let body = joined;
+  let body = androidDone;
   for (let run = 44; run < 52; run += 1) {
     const sha = run.toString(16).padStart(40, '0');
     body = platformSectionMerge(state({ links: viewerLinks({ repository: pullRequest.repository, headSha: sha, runId: String(run), runAttempt: '1', configPath: '.expo-explore/config.yaml' }),
@@ -414,11 +445,27 @@ test('a newer run moves the current run into Previous runs; a run the PR moved p
   assert.deepEqual(history.map(entry => entry.runId), ['50', '49', '48', '47', '46']);
   assert.match(body, /<summary>Previous runs \(5\)<\/summary>/);
   assert.ok(body.length < PUBLIC_COMMENT_BODY_BUDGET);
+  assert.doesNotMatch(body, /expo-explore-previous|New run in progress/);
   // A state marked superseded by its own writer goes straight to history even when the comment has nothing newer yet.
   const superseded = platformSectionMerge(state({ artifactOnly: true, superseded: true }), 'ios').merge(undefined);
-  assert.match(superseded, /The pull request moved while this run worked; its report is kept here until the current run replaces it\./);
+  assert.match(superseded, /^### Explore review\n\nThe pull request moved while this run worked; its report is kept here until the current run replaces it\./m);
   const replaced = platformSectionMerge(nextState(), 'ios').merge(superseded);
+  assert.equal(titleOf(replaced), '### Explore review · capturing');
   assert.match(replaced, /Previous runs \(1\)/);
+});
+
+test('over budget, the previous run\'s records go before the hidden state is cut', async () => {
+  const { readCommentRecords, renderCommentRecords } = await import('../../dist/report/pr-comment-body.js');
+  const previous = platformRecordOf(state({ artifactOnly: true }));
+  const nextHead = 'd'.repeat(40);
+  const current = platformRecordOf(state({ phase: 'capturing', review: undefined, evidence: undefined, pullRequest: { ...pullRequest, head: { ref: 'feature', sha: nextHead } },
+    links: viewerLinks({ repository: pullRequest.repository, headSha: nextHead, runId: '43', runAttempt: '1', configPath: '.expo-explore/config.yaml' }) }));
+  const records = { current: { ios: current }, previous: { ios: previous }, history: [] };
+  const full = renderCommentRecords(records);
+  assert.match(full, /New run in progress/);
+  assert.deepEqual(Object.keys(readCommentRecords(full).previous), ['ios']);
+  const without = renderCommentRecords({ current: { ios: current }, history: [] });
+  assert.equal(renderCommentRecords(records, undefined, without.length + 10), without);
 });
 
 test('the deployments line names every hosted preview the comment links right now, current and previous', async () => {
@@ -437,24 +484,28 @@ test('the deployments line names every hosted preview the comment links right no
   const next = state({ links: { ...viewerLinks({ repository: pullRequest.repository, headSha: nextHead, runId: '43', runAttempt: '1', configPath: '.expo-explore/config.yaml' }),
     preview: previewLinks('https://acme-explore--def456.expo.app/p/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', Date.now() + 86_400_000) }, pullRequest: { ...pullRequest, head: { ref: 'feature', sha: nextHead } } });
   assert.equal(platformSectionMerge(next, 'ios').merge(single).split('\n')[1], '<!-- expo-explore-deployments:acme-explore--abc123,acme-explore--def456 -->');
+  // While the new run works the previous run's preview is still the one on show.
+  const working = platformSectionMerge({ ...next, phase: 'capturing', review: undefined, evidence: undefined, links: viewerLinks({ repository: pullRequest.repository, headSha: nextHead, runId: '43', runAttempt: '1', configPath: '.expo-explore/config.yaml' }) }, 'ios').merge(single);
+  assert.equal(working.split('\n')[1], marker);
   assert.equal(existingDeploymentMarker(`${CI_COMMENT_MARKER}\n<!-- expo-explore-deployments:Bad Host -->\nx`), undefined);
 });
 
 test('a report whose hosted preview is still deploying says so instead of linking the central Viewer', () => {
   const deploying = renderPublicComment(state({ links: { ...state().links, deploying: true }, artifactOnly: true }));
-  assert.match(deploying, /^### Explore review · report deploying, not ready yet$/m, 'the heading says the report is not ready');
+  assert.equal(titleOf(deploying), '### 3 screens changed · report deploying…', 'the heading says the report is not ready');
   assert.ok(!deploying.includes('explore-preview.expo.app'), 'no download-and-drop Viewer link while the hosted report is on its way');
-  assert.match(deploying, /\| deploying… \|/, 'the Report cell says so');
-  assert.match(deploying, /· Workflow \[run\]\(<[^>]+>\) · \[zip\]\(<[^>]+>\)$/, 'the footer keeps the zip and run');
+  assert.match(subtitleOf(deploying), /^<sub>iOS · \[bbbbbbbb\]/, 'nothing to link the platform to yet');
+  assert.match(deploying, /\n- Added `\/cats\/care-guide`\n/);
+  assert.equal(deploying.split('\n').at(-1), `<sub>${workflowRun} · ${configLink}</sub>`);
   const deployed = renderPublicComment(state({ links: { ...state().links, deploying: true,
     preview: previewLinks('https://acme-explore--1lcbdcpwn3.expo.app/p/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', null) } }));
-  assert.match(deployed, /^### Explore review · \[Open report\]\(<https:\/\/acme-explore--1lcbdcpwn3\.expo\.app[^>]*>\)$/m, 'once deployed the hosted report is the heading');
+  assert.match(titleOf(deployed), /^### 3 screens changed · \[Review in Explore\]\(<https:\/\/acme-explore--1lcbdcpwn3\.expo\.app[^>]*>\)$/, 'once deployed the hosted report is the heading');
   const record = JSON.parse(JSON.stringify(platformRecordOf(state({ links: { ...state().links, deploying: true }, artifactOnly: true }))));
   assert.equal(record.links.report, undefined, 'the record carries no report link while deploying');
   assert.equal(parsePlatformRecord(record).links.deploying, true, 'the deploying flag survives the comment round trip');
 });
 
-test('a screen whose screenshots match but whose accessibility tree changed is listed as accessibility only, apart from the visual changes', () => {
+test('a screen whose screenshots match but whose accessibility tree changed is listed after the visual changes, tagged accessibility only', () => {
   const accessibilityOnly = (id) => surface(id, 'modified', { extra: {
     review: { status: 'modified', description: 'Added button “Edit tempo”.', facts: [
       { category: 'element', templateId: 'element.added', bullet: 'Added button “Edit tempo”.' },
@@ -465,27 +516,28 @@ test('a screen whose screenshots match but whose accessibility tree changed is l
   } });
   const withAccessibility = review([...evidenceReview().surfaces, accessibilityOnly('device-picker'), accessibilityOnly('enable-midi')]);
   const body = renderPublicComment(state({ review: withAccessibility, artifactOnly: true }));
-  assert.match(platformRow(body, 'iOS'), /\| 🟩 3 visual changes · 2 accessibility only · 6m 12s \|/);
-  assert.deepEqual(summaries(body), ['🟩 Added (1)', '🟥 Removed (1)', '🟧 Modified (1)', '🟦 Accessibility only (2)', 'Validation · iOS 🟩 10/10 captured']);
-  assert.match(body, /\n\*\*Changes\*\* · 5 screens\n/);
-  assert.match(body, /<summary>🟦 Accessibility only \(2\)<\/summary>\n\nBefore and After look the same\. What screen readers and voice control read changed\.\n\n- `\/device-picker` — Added button “Edit tempo”\\\. · \[iOS\]/);
+  assert.match(titleOf(body), /^### 5 screens changed · /);
+  assert.deepEqual(listOf(body).slice(3), [
+    `- [\`/device-picker\`](<${reportUrl}&view=compare&screen=device-picker>) · Added button “Edit tempo” · accessibility only`,
+    `- [\`/enable-midi\`](<${reportUrl}&view=compare&screen=enable-midi>) · Added button “Edit tempo” · accessibility only`]);
+  assert.doesNotMatch(body, /Before and After look the same/);
   const record = parsePlatformRecord(JSON.parse(JSON.stringify(platformRecordOf(state({ review: withAccessibility, artifactOnly: true })))));
   assert.deepEqual(record.changes.filter(change => change.group === 'accessibility-only').map(change => change.id), ['device-picker', 'enable-midi'],
     'the group survives the comment round trip');
-  // A comment with no accessibility-only screen keeps its plain count.
-  assert.match(platformRow(renderPublicComment(state({ artifactOnly: true })), 'iOS'), /\| 🟩 3 changes · 6m 12s \|/);
 });
 
-test('a comment whose only changes are for assistive technology counts just those', () => {
+test('a comment whose only change is for assistive technology counts it like any other', () => {
   const only = review([surface('device-picker', 'modified', { extra: {
     review: { status: 'modified', description: 'Changed “Play” from a text to a button.', facts: [{ category: 'accessibility', templateId: 'accessibility.role-changed', bullet: 'Changed “Play” from a text to a button.' }] },
     visual: { verdict: 'unchanged', reason: 'matched', mismatchPercentage: 0, threshold: 0.1, tool: 'agent-device@0.20.2' },
     sourceChange: sourceChange('Made Play a button.'),
   } })]);
-  assert.match(platformRow(renderPublicComment(state({ review: only, artifactOnly: true })), 'iOS'), /\| 🟩 1 accessibility only · 6m 12s \|/);
+  const body = renderPublicComment(state({ review: only, artifactOnly: true }));
+  assert.match(titleOf(body), /^### 1 screen changed · /);
+  assert.deepEqual(listOf(body), [`- [\`/device-picker\`](<${reportUrl}&view=compare&screen=device-picker>) · Changed “Play” from a text to a button · accessibility only`]);
 });
 
-test('a screen accessibility-only on iOS and visibly modified on Android is listed as Modified, whichever platform comes first', async () => {
+test('a screen accessibility-only on iOS and visibly modified on Android is listed as the visible change, whichever platform comes first', async () => {
   const { platformSectionMerge } = await import('../../dist/report/pr-comment-body.js');
   const settings = (verdict) => {
     const changed = evidenceReview();
@@ -495,24 +547,23 @@ test('a screen accessibility-only on iOS and visibly modified on Android is list
   const androidState = overrides => state({ artifactOnly: true, build: { ...state().build, platform: 'android' },
     runtime: { ...state().runtime, platform: 'android', deviceModel: 'EasAndroidDevice01', osVersion: '15.0' }, ...overrides });
   const ios = renderPublicComment(state({ review: settings('unchanged'), artifactOnly: true }));
-  assert.ok(summaries(ios).includes('🟦 Accessibility only (1)'), 'iOS alone: the screenshots match');
+  assert.match(ios, /\n- \[`\/settings`\]\(<[^>]+>\) · [^\n]+ · accessibility only\n/, 'iOS alone: the screenshots match');
   const both = platformSectionMerge(androidState({ review: settings('modified') }), 'android').merge(ios);
-  assert.deepEqual(summaries(both).slice(0, 3), ['🟩 Added (1)', '🟥 Removed (1)', '🟧 Modified (1)']);
-  assert.doesNotMatch(both, /Accessibility only \(|Before and After look the same/);
-  assert.match(both, /\n- `\/settings` — [^\n]+ · \[iOS \(accessibility only\)\]\(<[^>]+>\) · \[Android\]\(<[^>]+>\)\n/);
+  assert.match(both, /\n- \[`\/settings`\]\(<[^>]+>\) · Changed button title from “Share” to “Share Example”\n/);
+  assert.doesNotMatch(both, /accessibility only/);
 });
 
 test('screens whose comparison did not run are counted as not compared, never as a green "no change"', () => {
   const uncompared = review([surface('settings', 'modified'), surface('tempo', 'modified')]);
   const body = renderPublicComment(state({ review: uncompared, artifactOnly: true }));
-  assert.match(platformRow(body, 'iOS'), /\| 🟨 0 changes · 2 not compared · 6m 12s \|/);
-  assert.match(body, /\nNo compared screen changed on the reviewed platforms\.\n/);
+  assert.equal(titleOf(body), `### No screens changed · [Review in Explore](<${reportUrl}>)`);
+  assert.equal(statusOf(body, 'iOS'), `iOS · 2 not compared · ${runLink}`);
   // A screen that was never captured (outside the capture scope) stays out of the count.
   const outOfScope = surface('channel', 'modified');
   for (const key of ['baseImage', 'headImage', 'baseOutcome', 'headOutcome']) delete outOfScope[key];
   const quiet = renderPublicComment(state({ review: review([outOfScope]), artifactOnly: true, evidence: undefined, capture: { planned: { base: 0, head: 0 }, done: { base: 0, head: 0 }, baseFromCache: false } }));
-  assert.match(platformRow(quiet, 'iOS'), /\| 🟩 0 changes · 6m 12s \|/);
-  assert.match(quiet, /\nNo screen changed on the reviewed platforms\.\n/);
+  assert.equal(titleOf(quiet), `### No screens changed · [Review in Explore](<${reportUrl}>)`);
+  assert.equal(statusOf(quiet, 'iOS'), undefined);
 });
 
 const duoTargets = [{ id: 'iphone', platform: 'ios', label: 'iPhone 17' }, { id: 'duo-closed', platform: 'ios', label: 'iPhone Duo (closed)' },
@@ -535,7 +586,7 @@ test('a config without targets writes the same records and comment as before tar
   assert.deepEqual(Object.keys(readCommentRecords(after).current), ['ios', 'android']);
 });
 
-test('several targets share a comment: one row each in config order, labelled by target, keyed by id in the records and history', async () => {
+test('several targets share a comment: named in config order in the subtitle, each linking its report, keyed by id in the records and history', async () => {
   const { platformSectionMerge, readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
   const [iphone, closed, open, android] = duoTargets;
   // Report jobs finish in any order; the comment follows config order.
@@ -548,19 +599,19 @@ test('several targets share a comment: one row each in config order, labelled by
   assert.deepEqual(Object.keys(records).sort(), ['android', 'duo-closed', 'duo-open', 'iphone']);
   assert.deepEqual([records['duo-open'].platform, records['duo-open'].target, records['duo-open'].label, records['duo-open'].order], ['ios', 'duo-open', 'iPhone Duo (open)', 2]);
   assert.deepEqual([records.android.platform, records.android.target, records.android.label, records.android.order], ['android', undefined, 'Pixel 7', 3]);
-  const lines = body.split('\n'), header = lines.indexOf('| | Device | Result | Report |');
-  assert.deepEqual(lines.slice(header + 2, lines.indexOf('', header)).map(line => line.split(' | ')[0]),
-    ['| iPhone 17', '| iPhone Duo \\(closed\\)', '| iPhone Duo \\(open\\)', '| Pixel 7']);
-  assert.match(body, /^### Explore review · \[iPhone 17 report\]\(<[^>]+>\) · \[iPhone Duo \\\(open\\\) report\]\(<[^>]+>\) · \[Pixel 7 report\]\(<[^>]+>\)$/m);
-  assert.match(body, /\*\*Changes\*\* · 3 screens · a screen is listed once, with a link per device\n/);
-  assert.match(body, /\n- `\/cats\/care-guide` — Added \/cats\/care\\-guide screen · \[iPhone 17\]\(<[^>]+>\) · \[iPhone Duo \\\(open\\\)\]\(<[^>]+>\) · \[Pixel 7\]\(<[^>]+>\)\n/);
-  assert.match(body, /\| Check \| iPhone 17 \| iPhone Duo \\\(closed\\\) \| iPhone Duo \\\(open\\\) \| Pixel 7 \|\n\|---\|---\|---\|---\|---\|/);
-  assert.deepEqual(summaries(body).at(-1), 'Validation · iPhone 17 🟩 6/6 captured · iPhone Duo \\(closed\\) ⏳ in progress · iPhone Duo \\(open\\) 🟩 6/6 captured · Pixel 7 🟩 6/6 captured');
-  // A newer run moves them all into history, still labelled and ordered by target.
+  assert.equal(titleOf(body), `### 3 screens changed · [Review in Explore](<${reportUrl}>)`);
+  assert.equal(subtitleOf(body), `<sub>[iPhone 17](<${reportUrl}>) · iPhone Duo \\(closed\\) · [iPhone Duo \\(open\\)](<${reportUrl}>) · [Pixel 7](<${reportUrl}>) · ${commits} · updated Sep 11, 3:07 AM UTC</sub>`);
+  assert.equal(statusOf(body, 'iPhone Duo \\(closed\\)'), `iPhone Duo \\(closed\\) · capturing head 1/3 · ${runLink}`);
+  assert.equal(listOf(body).length, 3);
+  assert.doesNotMatch(body, / only\n|not on /);
+  // A newer run moves them all into history, still labelled and ordered by target, and keeps their review up while it works.
   const nextHead = 'd'.repeat(40);
   const next = platformSectionMerge(targetState(open, { phase: 'capturing', review: undefined, evidence: undefined, pullRequest: { ...pullRequest, head: { ref: 'feature', sha: nextHead } },
     links: viewerLinks({ repository: pullRequest.repository, headSha: nextHead, runId: '43', runAttempt: '1', configPath: '.expo-explore/config.yaml' }) }), 'duo-open').merge(body);
   assert.deepEqual(Object.keys(readCommentRecords(next).current), ['duo-open']);
+  assert.deepEqual(Object.keys(readCommentRecords(next).previous).sort(), ['android', 'duo-open', 'iphone'], 'the target still capturing had nothing to keep');
+  assert.match(visible(next).split('\n')[1], /^> \*\*New run in progress\*\* for \[dddddddd\]\(<[^>]+>\) · capturing on iPhone Duo \\\(open\\\) · \[run\]/);
+  assert.equal(subtitleOf(next), `<sub>[iPhone 17](<${reportUrl}>) · [iPhone Duo \\(open\\)](<${reportUrl}>) · [Pixel 7](<${reportUrl}>) · ${commits} · updated Sep 11, 3:07 AM UTC</sub>`);
   const history = readCommentRecords(next).history;
   assert.deepEqual(Object.keys(history[0].platforms).sort(), ['android', 'duo-closed', 'duo-open', 'iphone']);
   assert.match(next, /\n- \[bbbbbbbb\]\(<[^>]+>\) · iPhone 17 🟩 3 changes \(.*?\) · iPhone Duo \\\(closed\\\) ⏳ did not finish \(.*?\) · iPhone Duo \\\(open\\\) 🟩 3 changes \(.*?\) · Pixel 7 🟩 3 changes /);
@@ -587,6 +638,8 @@ test('a comment written by a per-platform version keeps parsing, and malformed t
   assert.deepEqual(parse(line('duo-open', { ...valid, order: 8 })), []);
   const many = Array.from({ length: 10 }, (_, index) => line(`t${index}`, { ...valid, target: `t${index}` }));
   assert.equal(parse(...many).length, 8, 'a comment holds at most one record per configurable target');
+  const previous = readCommentRecords([CI_COMMENT_MARKER, line('duo-open', valid), `<!-- expo-explore-previous:iphone:${encodeRecordPayload({ ...valid, target: 'iphone' })} -->`, '<!-- expo-explore-previous:iphone:AAAA -->'].join('\n')).previous;
+  assert.deepEqual(Object.keys(previous), ['iphone'], 'previous records parse the same way');
 });
 
 test('with report.comment.map, the map draws the added, removed and visually changed screens, the screens one step before them, and tabs as a group', async () => {
@@ -604,13 +657,13 @@ test('with report.comment.map, the map draws the added, removed and visually cha
   assert.ok(!/<summary>Map/.test(renderPublicComment(state({ artifactOnly: true, review: withNavigation }))));
   assert.equal(platformRecordOf(state({ review: withNavigation })).navigation, undefined);
   const body = renderPublicComment(state({ artifactOnly: true, map: true, review: withNavigation }));
-  assert.deepEqual(summaries(body), ['🟩 Added (1)', '🟥 Removed (1)', '🟧 Modified (2)', 'Map (4 screens)', 'Validation · iOS 🟩 8/8 captured']);
+  assert.deepEqual(summaries(body), ['Map (4 screens)']);
   const map = body.slice(body.indexOf('```mermaid'), body.indexOf('```\n', body.indexOf('```mermaid')) + 3);
   assert.equal(map, ['```mermaid', 'flowchart LR', '  subgraph tabs["Tabs"]', '    n0["/cats"]', '    n3["/settings"]', '  end',
     '  n1["/cats/care-guide"]', '  n2["/cats/sweet-bee"]', '  n0 -->|push| n1', '  n0 -.->|push| n2',
     '  classDef added stroke:#1a7f37,stroke-width:3px', '  class n1 added', '  classDef modified stroke:#bc4c00,stroke-width:3px', '  class n3 modified',
     '  classDef removed stroke:#cf222e,stroke-width:2px,stroke-dasharray:5 4', '  class n2 removed', '```'].join('\n'));
-  assert.ok(body.indexOf('<summary>🟧 Modified') < body.indexOf('<summary>Map') && body.indexOf('<summary>Map') < body.indexOf('<summary>Validation'));
+  assert.ok(body.indexOf('\n- [`/settings`]') < body.indexOf('<summary>Map'), 'the map follows the list');
   assert.match(body, /<summary>Map \(4 screens\)<\/summary>\n\n```mermaid\n/, 'a blank line opens the fence inside the collapsible');
   assert.deepEqual(readCommentRecords(body).current.ios.navigation, platformRecordOf(state({ map: true, review: withNavigation })).navigation, 'the map is carried in the record');
 
@@ -624,7 +677,7 @@ test('with report.comment.map, the map draws the added, removed and visually cha
   assert.ok(!/<summary>Map/.test(renderPublicComment(state({ map: true, review: unchanged }))));
 });
 
-test('the map is dropped before the change lists shrink, and a malformed map is dropped from the record', async () => {
+test('the map is dropped before the list shrinks, and a malformed map is dropped from the record', async () => {
   const { encodeRecordPayload } = await import('../../dist/report/pr-comment-record.js');
   const { readCommentRecords, renderCommentRecords } = await import('../../dist/report/pr-comment-body.js');
   const record = { ...platformRecordOf(state()), navigation: { nodes: [{ route: '/a', group: 'modified' }, { route: '/b' }], edges: [{ from: 1, to: 0, kinds: ['push'] }] } };
@@ -632,7 +685,7 @@ test('the map is dropped before the change lists shrink, and a malformed map is 
   assert.match(renderCommentRecords(records), /<summary>Map \(2 screens\)<\/summary>/);
   const tight = renderCommentRecords(records, undefined, renderCommentRecords(records).length - 1);
   assert.ok(!tight.includes('```mermaid'));
-  assert.match(tight, /<summary>🟧 Modified \(1\)<\/summary>/);
+  assert.equal(listOf(tight).length, 3, 'the list is intact');
   const parse = navigation => readCommentRecords(`<!-- expo-explore-record:ios:${encodeRecordPayload({ ...record, navigation })} -->`).current.ios;
   assert.deepEqual(parse(record.navigation).navigation, record.navigation);
   for (const navigation of [{ ...record.navigation, edges: [{ from: 0, to: 2, kinds: ['push'] }] }, { ...record.navigation, edges: [{ from: 0, to: 1, kinds: ['teleport'] }] },

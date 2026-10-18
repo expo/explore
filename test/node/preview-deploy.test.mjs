@@ -203,8 +203,8 @@ test("ci:deploy seals the exact report, deploys it with the preview export, veri
   assert.ok(eas.requests.every(request => request.url.origin !== "https://acme-explore--1lcbdcpwn3.expo.app" || request.options.cache === "no-store"));
   const posted = eas.requests.find(request => request.options.method === "POST");
   const body = JSON.parse(posted.options.body).body;
-  assert.match(body, new RegExp(`\\| \\[Open\\]\\(<https://acme-explore--1lcbdcpwn3\\.expo\\.app/p/${token}>\\) \\|`));
-  assert.match(body, /Preview links work for anyone who has them until the deployment is deleted\./);
+  assert.match(body, new RegExp(`^### [^\\n]*\\[Review in Explore\\]\\(<https://acme-explore--1lcbdcpwn3\\.expo\\.app/p/${token}>\\)$`, 'm'));
+  assert.match(body, /Preview links work for anyone who has them until the deployment is deleted · /);
   assert.doesNotMatch(body, /explore-preview\.expo\.app\/\?/);
   assert.ok(eas.requests.indexOf(posted) > eas.requests.findIndex(request => request.url.pathname === `/p/${token}/viewer/index.html`), "publish after verification");
 });
@@ -359,11 +359,10 @@ test("ci:deploy fans several platforms' reports into one sealed deployment, veri
     "/", `/p/${wrong}`, `/p/${wrong}/manifest.json`, `/p/${token}/viewer/index.html`]);
   const posted = eas.requests.filter(request => request.options.method === "POST" || request.options.method === "PATCH").map(request => JSON.parse(request.options.body).body);
   assert.equal(posted.length, 2, "the second platform updates the comment the first created");
-  assert.match(posted[0], new RegExp(`\\| iOS \\| [^|]+\\| 🟩 [^|]+\\| \\[Open\\]\\(<https://acme-explore--1lcbdcpwn3\\.expo\\.app/p/${token}\\?platform=ios>\\)`));
-  assert.doesNotMatch(posted[0], /\| Android \|/);
-  assert.match(posted[1], new RegExp(`\\| iOS \\| [^|]+\\| 🟩 [^|]+\\| \\[Open\\]\\(<[^>]+/p/${token}\\?platform=ios>\\)`), 'the Android writer keeps the iOS row');
-  assert.match(posted[1], new RegExp(`\\| Android \\| [^|]+\\| 🟩 [^|]+\\| \\[Open\\]\\(<[^>]+/p/${token}\\?platform=android>\\)`));
-  assert.equal(posted[1].split("<summary>Validation").length, 2, 'one validation block for both platforms');
+  assert.match(posted[0], new RegExp(`^<sub>\\[iOS\\]\\(<https://acme-explore--1lcbdcpwn3\\.expo\\.app/p/${token}\\?platform=ios>\\) · \\[`, 'm'));
+  assert.doesNotMatch(posted[0], /Android/);
+  assert.match(posted[1], new RegExp(`^<sub>\\[iOS\\]\\(<[^>]+/p/${token}\\?platform=ios>\\) · \\[Android\\]\\(<[^>]+/p/${token}\\?platform=android>\\) · \\[`, 'm'), 'the Android writer keeps the iOS link');
+  assert.equal(posted[1].split("### ").length, 2, 'one heading for both platforms');
 });
 
 function captureListing(listing) {
@@ -422,7 +421,7 @@ test("a preview sets no expiry of its own: an old config's expiresAfter is noted
   assert.equal("EXPLORE_PREVIEW_EXPIRES_AT" in eas.captured.env, false);
   assert.equal(result.expiresAt, null);
   const body = JSON.parse(eas.requests.find(request => request.options.method === "PATCH" || request.options.method === "POST").options.body).body;
-  assert.match(body, /^Preview links work for anyone who has them until the deployment is deleted\. · Managed via /m);
+  assert.match(body, /^<sub>Preview links work for anyone who has them until the deployment is deleted · \[Workflow run\]/m);
   assert.doesNotMatch(body, /works until/);
   assert.ok(warnings.some(line => line.includes("report.preview.expiresAfter no longer applies: a hosted preview lasts as long as its EAS Hosting deployment")), warnings.join(""));
 

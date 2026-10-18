@@ -155,14 +155,14 @@ test("only a live uploaded final artifact becomes Ready with a central Viewer de
   const posted = calls.find(call => call.options.method === "POST");
   assert.ok(posted);
   const body = JSON.parse(posted.options.body).body;
-  assert.match(body, /\| iOS \| [^|]*\| 🟩 /);
+  assert.match(body, /^### (\d+ screens?|No screens) changed · \[Review in Explore\]\(<https:\/\/explore-preview/m);
   const viewer = new URL(result.artifactUrl);
   assert.equal(viewer.origin, "https://explore-preview.expo.app");
   assert.equal(viewer.pathname, "/");
   assert.deepEqual(Object.fromEntries(viewer.searchParams), { repo: pr.repository, run: "10", attempt: "1", artifact: "20" });
   assert.ok(body.includes(result.artifactUrl));
-  assert.match(body, new RegExp(`\\| iOS \\| [^|]+\\| 🟩 [^|]+\\| \\[Open\\]\\(<${result.artifactUrl.replace(/[.?+*]/g, "\\$&")}>\\) \\|$`, "m"), "the Report cell is the report link alone");
-  assert.match(body, new RegExp(`· Workflow \\[run\\]\\(<https://github\\.com/expo/explore-playground/actions/runs/10/attempts/1>\\) · \\[zip\\]\\(<${artifactUrl.replace(/[.?+*]/g, "\\$&")}>\\)$`, "m"), "the run and zip links sit in the footer");
+  assert.match(body, new RegExp(`^### (\\d+ screens?|No screens) changed · \\[Review in Explore\\]\\(<${result.artifactUrl.replace(/[.?+*]/g, "\\$&")}>\\)$`, "m"), "the report link is the heading");
+  assert.match(body, /^<sub>\[Workflow run\]\(<https:\/\/github\.com\/expo\/explore-playground\/actions\/runs\/10\/attempts\/1>\) · \[Config\]\(<[^>]+>\)<\/sub>$/m, "the run sits in the footer");
   assert.doesNotMatch(body, /embedded\.expo-explore\.invalid|<img|convex/);
   assert.ok(calls.some(call => call.url.pathname.endsWith("/actions/runs/10/attempts/1")));
 });
@@ -172,10 +172,10 @@ test("an uploaded diagnostic artifact with unverified landings remains Incomplet
   const { transport, calls } = transportFixture();
   await publishCiReportComment({ inputPath, artifactUrl, environment, transport });
   const body = JSON.parse(calls.find(call => call.options.method === "POST").options.body).body;
-  assert.match(body, /\| iOS \| [^|]+\| 🟨 [^|]*2 unattributed/);
-  assert.match(body, /\| Route verification \| 🟨 0\/2 verified · 2 unattributed \|/);
-  assert.match(body, /\*\*iOS\*\* · base 0\/1 verified · 1 unattributed · head 0\/1 verified · 1 unattributed/);
-  assert.doesNotMatch(body, /\| iOS \| [^|]+\| 🟩|⏳|Needs review/);
+  assert.match(body, /^iOS · 2 unattributed · \[run\]/m);
+  assert.match(body, /<summary>Capture issues \(2\)<\/summary>/);
+  assert.match(body, /\n- Base · [^\n]+ · CAPTURE\\_LANDING\\_UNVERIFIED/);
+  assert.doesNotMatch(body, /⏳|capturing|Needs review/);
 });
 
 test("report publication separates credential, permission, rate limit, and service failures", async t => {
@@ -209,7 +209,7 @@ test("stale PRs, expired artifacts, foreign artifacts, and replayed attempts can
   await publishCiReportComment({ inputPath, artifactUrl, environment, transport: moved.transport });
   const movedBody = JSON.parse(moved.calls.find(call => call.options.method === "POST").options.body).body;
   assert.match(movedBody, /Previous runs \(1\)/, "a PR that moved on still gets its report, under previous runs");
-  assert.doesNotMatch(movedBody, /^<sub>base \[/m);
+  assert.match(movedBody, /^### Explore review$/m, "nothing is presented as the current review");
   for (const configuration of [{ expired: true }, { artifactName: "explore-capture-evidence-1" },
     { artifactRun: 11 }, { attempt: 2 }]) {
     const { transport, calls } = transportFixture(configuration);

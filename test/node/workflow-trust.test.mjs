@@ -175,7 +175,7 @@ test("failure comments use actionable capture diagnostics and update only the bo
   assert.equal(writes.length, 1);
   assert.equal(writes[0].action, "update");
   assert.equal(writes[0].comment_id, 3);
-  assert.match(writes[0].body, /\| iOS \| [^|]*\| 🟥 failed · capture\\-head \|/);
+  assert.match(writes[0].body, /^\*\*iOS failed\*\* · capture\\-head · /m);
   assert.match(writes[0].body, /APP\\_INPUT\\_MISSING/);
   assert.match(writes[0].body, /Required app input is missing/);
   assert.match(writes[0].body, /Next action\\: Set APP\\_REVIEW\\_PASSWORD/);
@@ -232,7 +232,7 @@ test("closed, draft, and forked PRs receive no failure comment; a PR that moved 
   const [write] = Object.assign([], await reportFailure(t, { capture: sampleDiagnostic(), pr: moved }));
   assert.match(write.body, /<summary>Previous runs \(1\)<\/summary>/);
   assert.match(write.body, /bbbbbbbb.*iOS 🟥 failed · capture\\-head/);
-  assert.doesNotMatch(write.body, /^<sub>base \[/m);
+  assert.match(write.body, /^### Explore review$/m);
   const invalid = await reportFailure(t, { capture: sampleDiagnostic(), head: "not-a-sha" });
   assert.deepEqual([...invalid], []);
 });
@@ -249,14 +249,14 @@ test("a failed platform joins the other platform's row in a multi-platform comme
   const comments = [{ id: 7, user: { login: "github-actions[bot]" }, body: existing }];
   const [write] = await reportFailure(t, { capture: sampleDiagnostic(), platform: "android", comments });
   assert.equal(write.comment_id, 7);
-  assert.match(write.body, /\| iOS \| [^|]*\| ⏳ capturing head 1\/2 \|/);
-  assert.match(write.body, /\| Android \| [^|]*\| 🟥 failed · capture\\-head \|/);
+  assert.match(write.body, /^iOS · capturing head 1\/2 · \[run\]/m);
+  assert.match(write.body, /^\*\*Android failed\*\* · capture\\-head · /m);
   assert.match(write.body, /APP\\_INPUT\\_MISSING/);
   assert.equal(write.body.split("<!-- expo-explore-ci -->").length, 2);
   // A comment without records (a legacy layout) is replaced by the failure alone.
   const [whole] = await reportFailure(t, { capture: sampleDiagnostic(), platform: "android", comments: [{ id: 8, user: { login: "github-actions[bot]" }, body: "<!-- expo-explore-ci -->\nPrevious run" }] });
   assert.match(whole.body, /^<!-- expo-explore-ci -->\n<!-- expo-explore-record:android:/);
-  assert.doesNotMatch(whole.body, /\| iOS \|/);
+  assert.doesNotMatch(whole.body, /iOS/);
 });
 
 test("a failed target is named by its artifact and keeps the label and config order its capture record posted", async t => {
@@ -276,14 +276,13 @@ test("a failed target is named by its artifact and keeps the label and config or
   const [write] = await reportFailure(t, { capture: sampleDiagnostic(), platform: "duo-open", comments: [{ id: 7, user: { login: "github-actions[bot]" }, body: existing }] });
   assert.equal(write.comment_id, 7);
   assert.match(write.body, /^<!-- expo-explore-record:duo-open:/m);
-  const lines = write.body.split("\n"), header = lines.indexOf("| | Device | Result | Report |");
-  const rows = lines.slice(header + 2, lines.indexOf("", header));
-  assert.deepEqual(rows.map(line => line.split(" | ")[0].slice(2)), ["iPhone 17", "iPhone Duo \\(open\\)", "Pixel 7"], "config order, each target's own label");
-  assert.match(write.body, /\| iPhone Duo \\\(open\\\) \| [^|]*\| 🟥 failed · capture\\-head \|/);
+  const subtitle = write.body.split("\n").find(line => line.startsWith("<sub>"));
+  assert.deepEqual([...subtitle.matchAll(/(?:^<sub>|· )\[?(iPhone 17|iPhone Duo \\\(open\\\)|Pixel 7)/g)].map(match => match[1]), ["iPhone 17", "iPhone Duo \\(open\\)", "Pixel 7"], "config order, each target's own label");
+  assert.match(write.body, /^\*\*iPhone Duo \\\(open\\\) failed\*\* · capture\\-head · /m);
   // A target the comment has not seen yet is labelled by its id.
   const [fresh] = await reportFailure(t, { capture: sampleDiagnostic(), platform: "duo-closed" });
   assert.match(fresh.body, /^<!-- expo-explore-record:duo-closed:/m);
-  assert.match(fresh.body, /\| duo\\-closed \| [^|]*\| 🟥 failed/);
+  assert.match(fresh.body, /^\*\*duo\\-closed failed\*\* · /m);
   // Artifact directories: any valid id, never a reserved or malformed one.
   const root = await mkdtemp(join(tmpdir(), "explore-failure-targets-"));
   t.after(() => rm(root, { recursive: true, force: true }));

@@ -127,7 +127,12 @@ export type HistoryEntry = {
 };
 export type HistoryItem = { phase: RecordPhase; summary: string; run: string; report?: string; download?: string; superseded?: boolean; label?: string; order?: number };
 
-export type CommentRecords = { current: Partial<Record<CommentTarget, PlatformRecord>>; history: HistoryEntry[] };
+export type CommentRecords = {
+  current: Partial<Record<CommentTarget, PlatformRecord>>;
+  /** The last finished run's records, shown while the current run has no finished record of its own. */
+  previous?: Partial<Record<CommentTarget, PlatformRecord>>;
+  history: HistoryEntry[];
+};
 
 /** The id a record is keyed by. */
 export function recordTarget(record: Pick<PlatformRecord, "platform" | "target">): CommentTarget {
@@ -146,12 +151,22 @@ export function compareTargets(a: { id: CommentTarget; order?: number | undefine
 
 /** The current records in display order. */
 export function orderedRecords(records: CommentRecords): PlatformRecord[] {
-  return Object.values(records.current).filter((record): record is PlatformRecord => Boolean(record))
+  return ordered(records.current);
+}
+
+/** The previous run's records in display order. */
+export function orderedPrevious(records: CommentRecords): PlatformRecord[] {
+  return ordered(records.previous ?? {});
+}
+
+function ordered(records: Partial<Record<CommentTarget, PlatformRecord>>): PlatformRecord[] {
+  return Object.values(records).filter((record): record is PlatformRecord => Boolean(record))
     .sort((a, b) => compareTargets({ id: recordTarget(a), order: a.order }, { id: recordTarget(b), order: b.order }));
 }
 
 export const HISTORY_LIMIT = 5;
 const RECORD_LINE = /^<!-- expo-explore-record:([a-z][a-z0-9-]{0,31}):([A-Za-z0-9_-]+) -->$/gm;
+const PREVIOUS_LINE = /^<!-- expo-explore-previous:([a-z][a-z0-9-]{0,31}):([A-Za-z0-9_-]+) -->$/gm;
 const HISTORY_LINE = /^<!-- expo-explore-history:([A-Za-z0-9_-]+) -->$/m;
 const MAX_ENCODED = 24_000;
 const MAX_DECODED = 256_000;
@@ -174,6 +189,10 @@ function decodePayload(encoded: string): unknown {
 
 export function recordLine(record: PlatformRecord): string {
   return `<!-- expo-explore-record:${recordTarget(record)}:${encodeRecordPayload(record)} -->`;
+}
+
+export function previousLine(record: PlatformRecord): string {
+  return `<!-- expo-explore-previous:${recordTarget(record)}:${encodeRecordPayload(record)} -->`;
 }
 
 export function historyLine(history: HistoryEntry[]): string | undefined {
@@ -312,12 +331,18 @@ export function parseHistory(value: unknown): HistoryEntry[] {
 export function readCommentRecords(body: string | undefined): CommentRecords {
   const records: CommentRecords = { current: {}, history: [] };
   if (!body) return records;
-  for (const match of body.matchAll(RECORD_LINE)) {
-    const record = parsePlatformRecord(decodePayload(match[2]!));
-    const target = record && recordTarget(record);
-    if (!record || target !== match[1] || !isTargetId(target)) continue;
-    if (records.current[target] || Object.keys(records.current).length < MAX_COMMENT_TARGETS) records.current[target] = record;
-  }
+  const read = (pattern: RegExp, into: Partial<Record<CommentTarget, PlatformRecord>>) => {
+    for (const match of body.matchAll(pattern)) {
+      const record = parsePlatformRecord(decodePayload(match[2]!));
+      const target = record && recordTarget(record);
+      if (!record || target !== match[1] || !isTargetId(target)) continue;
+      if (into[target] || Object.keys(into).length < MAX_COMMENT_TARGETS) into[target] = record;
+    }
+  };
+  read(RECORD_LINE, records.current);
+  const previous: Partial<Record<CommentTarget, PlatformRecord>> = {};
+  read(PREVIOUS_LINE, previous);
+  if (Object.keys(previous).length) records.previous = previous;
   const history = body.match(HISTORY_LINE);
   if (history) records.history = parseHistory(decodePayload(history[1]!));
   return records;
@@ -371,14 +396,30 @@ export function foldRecord(existing: CommentRecords, incoming: PlatformRecord): 
   const record = withKnownTarget(incoming, existing);
   const target = recordTarget(record);
   const currentRun = current[0];
-  if (!currentRun && record.superseded) return { current: {}, history: pushHistory(existing.history, historyEntryOf([record])) };
+  const previous = existing.previous ?? {};
+  if (!currentRun && record.superseded) return { current: {}, previous, history: pushHistory(existing.history, historyEntryOf([record])) };
   if (!currentRun || currentRun.runId === record.runId) {
-    return { current: { ...existing.current, [target]: record }, history: existing.history };
+    const next = { ...existing.current, [target]: record };
+    return { current: next, previous: trimPrevious(previous, next), history: existing.history };
   }
   if (runOrder(currentRun.runId) > runOrder(record.runId) || record.superseded) {
-    return { current: existing.current, history: pushHistory(existing.history, historyEntryOf([{ ...record, superseded: true }])) };
+    return { current: existing.current, previous, history: pushHistory(existing.history, historyEntryOf([{ ...record, superseded: true }])) };
   }
-  return { current: { [target]: record }, history: pushHistory(existing.history, historyEntryOf(current)) };
+  // The finished records of the run being replaced stay readable until the new run has its own.
+  const kept = Object.fromEntries(current.filter(isFinished).map(item => [recordTarget(item), item]));
+  const next = { [target]: record };
+  return { current: next, previous: trimPrevious({ ...previous, ...kept }, next), history: pushHistory(existing.history, historyEntryOf(current)) };
+}
+
+const isFinished = (record: PlatformRecord) => record.phase === "ready" || record.phase === "failed";
+
+/** A target's previous record goes once its current one finished; all of them go once every current record has. */
+function trimPrevious(previous: Partial<Record<CommentTarget, PlatformRecord>>, current: Partial<Record<CommentTarget, PlatformRecord>>): Partial<Record<CommentTarget, PlatformRecord>> {
+  const records = Object.values(current).filter((record): record is PlatformRecord => Boolean(record));
+  if (records.every(isFinished)) return {};
+  const trimmed = { ...previous };
+  for (const record of records) if (isFinished(record)) delete trimmed[recordTarget(record)];
+  return trimmed;
 }
 
 /**
@@ -388,7 +429,7 @@ export function foldRecord(existing: CommentRecords, incoming: PlatformRecord): 
 function withKnownTarget(record: PlatformRecord, existing: CommentRecords): PlatformRecord {
   const target = recordTarget(record);
   if (!record.target || record.label !== undefined || record.order !== undefined) return record;
-  const known = existing.current[target];
+  const known = existing.current[target] ?? existing.previous?.[target];
   if (known) return { ...record, platform: known.platform, ...(known.label !== undefined ? { label: known.label } : {}), ...(known.order !== undefined ? { order: known.order } : {}) };
   const item = existing.history.find(entry => entry.platforms[target])?.platforms[target];
   return item ? { ...record, ...(item.label !== undefined ? { label: item.label } : {}), ...(item.order !== undefined ? { order: item.order } : {}) } : record;
