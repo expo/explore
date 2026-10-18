@@ -228,6 +228,17 @@ test("summary bounds retain blob identities and explicitly mark omitted source e
   assert.ok(Object.values(results).every((result) => result.summary.length <= SOURCE_CHANGE_SUMMARY_LIMITS.summaryCharacters));
 });
 
+test("a comment-only edit to an imported file leaves no source evidence and no imported impact", (t) => {
+  const repo = repository(t,
+    { "src/theme.ts": "export const tint = 'blue';\n", "src/label.ts": "export const label = 'Before';\n" },
+    { "src/theme.ts": "// Palette.\nexport const tint = 'blue';\n", "src/label.ts": "export const label = 'After';\n" });
+  const entry = surface("home", "src/home.tsx", ["src/theme.ts", "src/label.ts"]);
+  const result = summarize(repo, plan(repo, [tracked(entry, ["src/label.ts"])])).home;
+  assert.equal(result.impact, "dependency");
+  assert.deepEqual(result.files.map((file) => file.path), ["src/label.ts"]);
+  assert.equal(result.truncated, false);
+});
+
 test("unrelated surfaces remain unchanged and exact SHA validation rejects an ungrounded comparison", (t) => {
   const repo = repository(t, { "README.md": "Before\n" }, { "README.md": "After\n" });
   const entry = surface("unrelated", "src/unrelated.tsx");
