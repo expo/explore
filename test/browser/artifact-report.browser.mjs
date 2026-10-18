@@ -627,6 +627,37 @@ test("D, ⌥1–⌥8 and ` switch targets from the keyboard, and the other repor
   assert.deepEqual(errors, []);
 });
 
+test("a target switch keeps the chosen appearance when the other report was captured in it, and its own otherwise", { timeout: 60_000 }, async t => {
+  /** A report of `platform`, with every surface also captured in dark when `dark`. */
+  const report = (platform, dark) => {
+    const fixture = reportFixture();
+    fixture.review.runtime = { ...fixture.review.runtime, platform, platforms: ["ios", "android"], ...(dark ? { colorSchemes: ["light", "dark"] } : {}) };
+    if (dark) fixture.review.surfaces.push({ ...structuredClone(fixture.review.surfaces[0]), id: "home@dark", colorScheme: "dark" });
+    return fixture;
+  };
+  const preview = { token: "klmnopqrstuvwxyz2345672345672345", listing: [{ platform: "ios" }, { platform: "android" }],
+    archives: { "?platform=ios": await archive(report("ios", false)), "?platform=android": await archive(report("android", true)) } };
+  const { page, errors } = await harness(t, await archive(report("android", true)), { app: true, reportIdentity: null, preview, query: "&platform=android" });
+  const target = () => new URL(page.url()).searchParams.get("platform");
+  const appearance = page.getByRole("button", { name: /^Appearance: / });
+  await expect(appearance).toHaveText(/Light/);
+  await page.keyboard.press("Shift+KeyT");
+  await expect(appearance).toHaveText(/Dark/);
+  // iOS was captured in light only: it shows light and offers no switch.
+  await page.keyboard.press("Backquote");
+  await expect.poll(target).toBe("ios");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(appearance).toHaveCount(0);
+  // Back on Android, the choice still holds.
+  await page.keyboard.press("Backquote");
+  await expect.poll(target).toBe("android");
+  await expect(appearance).toHaveText(/Dark/);
+  // A reload of the tab keeps it as well.
+  await page.reload();
+  await expect(appearance).toHaveText(/Dark/);
+  assert.deepEqual(errors, []);
+});
+
 test("going back during a switch shows the report the page was on, and the slow one does not replace it", { timeout: 60_000 }, async t => {
   const { page, errors, switchToIos } = await slowSwitchHarness(t, "ghijklmnopqrstuvwxyz234567234567", 3000);
   await switchToIos();
