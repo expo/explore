@@ -98,6 +98,10 @@
   pointer-events: none;
 }
 .visual-swipe-before { clip-path: inset(0 calc(100% - var(--swipe-position)) 0 0); }
+/* With a moved area, each side's outlines over its own half (see ChangeOutlines). */
+.visual-swipe-outlines { position: absolute; z-index: 1; inset: 0; pointer-events: none; }
+.visual-swipe-outlines.before { --outline-before: 1; clip-path: inset(0 calc(100% - var(--swipe-position)) 0 0); }
+.visual-swipe-outlines.after { clip-path: inset(0 0 0 var(--swipe-position)); }
 .visual-swipe .visual-change-outline { background: transparent; border-style: dashed; }
 .visual-swipe-divider {
   position: absolute;
