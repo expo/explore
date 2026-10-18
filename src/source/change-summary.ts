@@ -485,18 +485,23 @@ export function createSourceChangeSummaries(options: {
         !/^(?:\.github\/|docs\/|tests?\/|scripts\/)|(?:\.md$|\.(?:test|spec)\.[jt]sx?$)/.test(path)
       ))));
     }
-    const selected = relevant.sort((left, right) => {
+    const ranked = relevant.sort((left, right) => {
       const rank = { route: 0, "declared-source": 1, dependency: 2, global: 3 };
       return rank[relation(surface, left)] - rank[relation(surface, right)] || left.path.localeCompare(right.path);
-    }).slice(0, SOURCE_CHANGE_SUMMARY_LIMITS.filesPerSurface);
-    const files = selected.flatMap((change): SourceFileChangeSummary[] => {
+    });
+    // A comment-only file leaves no evidence, so it does not take one of the surface's file slots either.
+    const files: SourceFileChangeSummary[] = [];
+    let considered = 0;
+    for (const change of ranked) {
+      if (files.length === SOURCE_CHANGE_SUMMARY_LIMITS.filesPerSurface) break;
+      considered += 1;
       let evidence = cache.get(change.path);
       if (!evidence) {
         evidence = fileEvidence({ ...options, baseSha: plan.baseSha, headSha: plan.headSha, change, budget });
         cache.set(change.path, evidence);
       }
-      return "triviaOnly" in evidence ? [] : [{ ...evidence, relation: relation(surface, change) }];
-    });
+      if (!("triviaOnly" in evidence)) files.push({ ...evidence, relation: relation(surface, change) });
+    }
     const impact: SourceChangeSummary["impact"] = files.some((file) => file.relation === "route" || file.relation === "declared-source")
       ? "direct" : files.some((file) => file.relation === "dependency") ? "dependency"
         : globalImpact || (surface.status === "modified" && plan.conservative) ? "global"
@@ -506,7 +511,7 @@ export function createSourceChangeSummaries(options: {
       baseSha: plan.baseSha, headSha: plan.headSha, impact,
       summary: summaryText(surface, impact, files),
       files,
-      truncated: relevant.length > selected.length || files.some((file) => file.truncated),
+      truncated: ranked.length > considered || files.some((file) => file.truncated),
     };
   }
   return summaries;

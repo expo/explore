@@ -239,6 +239,18 @@ test("a comment-only edit to an imported file leaves no source evidence and no i
   assert.equal(result.truncated, false);
 });
 
+test("comment-only files do not take the file slots of a real change", (t) => {
+  const comments = Array.from({ length: SOURCE_CHANGE_SUMMARY_LIMITS.filesPerSurface }, (_, index) => `src/a${index}.ts`);
+  const repo = repository(t,
+    { ...Object.fromEntries(comments.map((path) => [path, "export const value = 1;\n"])), "src/z-theme.ts": "export const tint = 'blue';\n" },
+    { ...Object.fromEntries(comments.map((path) => [path, "// Note.\nexport const value = 1;\n"])), "src/z-theme.ts": "export const tint = 'red';\n" });
+  const entry = surface("home", "src/home.tsx", [...comments, "src/z-theme.ts"]);
+  const result = summarize(repo, plan(repo, [tracked(entry, ["src/z-theme.ts"])])).home;
+  assert.equal(result.impact, "dependency");
+  assert.deepEqual(result.files.map((file) => file.path), ["src/z-theme.ts"]);
+  assert.equal(result.truncated, false);
+});
+
 test("unrelated surfaces remain unchanged and exact SHA validation rejects an ungrounded comparison", (t) => {
   const repo = repository(t, { "README.md": "Before\n" }, { "README.md": "After\n" });
   const entry = surface("unrelated", "src/unrelated.tsx");

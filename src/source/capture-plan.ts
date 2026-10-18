@@ -122,7 +122,12 @@ export function createSourceCapturePlan(options: CapturePlanOptions): SourceCapt
   const base = surfaceDependencies(baseRoutes, options.baseFiles, options.platform);
   const head = surfaceDependencies(headRoutes, options.headFiles, options.platform);
   // A file whose two versions differ only in comments or whitespace compiles to the same program, so it changes no screen.
-  const triviaOnly = (path: string) => sameCodeIgnoringTrivia(path, options.baseFiles.get(path), options.headFiles.get(path));
+  // Parsed once per path: every surface that imports a shared file asks about it.
+  const trivia = new Map<string, boolean>();
+  const triviaOnly = (path: string) => {
+    if (!trivia.has(path)) trivia.set(path, sameCodeIgnoringTrivia(path, options.baseFiles.get(path), options.headFiles.get(path)));
+    return trivia.get(path)!;
+  };
   const changes = canonicalizeSourceChanges(options.changedFiles).filter(change => !/(?:^|\/)surfaces?\.json$/.test(change.path)
     && !(change.status === "modified" && triviaOnly(change.path)));
   const changedPaths = new Set(changes.flatMap(change => [change.path, ...("previousPath" in change ? [change.previousPath] : [])]));
