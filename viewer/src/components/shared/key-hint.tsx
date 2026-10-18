@@ -12,8 +12,3 @@ export function KeyHint({ shortcut }: { shortcut: Shortcut }) {
   if (!key) return null;
   return <kbd className="key-hint" aria-hidden="true">{key}</kbd>;
 }
-
-/** Whether a hint would show for `shortcut` now, for a control that must make room for it. */
-export function useKeyHint(shortcut: Shortcut): string | undefined {
-  return heldKeyHint(shortcut, useHeldModifiers());
-}

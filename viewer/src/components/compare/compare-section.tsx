@@ -6,7 +6,7 @@ import type { MapIndex } from "../../utils/model";
 import type { ChangedScreen } from "../../utils/changed-screens";
 import { groupVisualRegions, layoutShiftSummary, type VisualChange } from "../../utils/visual-diff";
 import { formatShortcut, matchesShortcut, SHORTCUTS, shortcutsLive } from "../../utils/shortcuts";
-import { createKeyHold } from "../../utils/key-hold";
+import { createKeyHold, glideWhileHeld, HOLD_INITIAL_DELAY_MS, type KeyHold } from "../../utils/key-hold";
 import { optionalStorage } from "../../utils/embedded-report";
 import { usePhoneLayout } from "../../utils/phone-layout";
 import { ToggleGroup } from "../shared/toggle-group";
@@ -163,9 +163,9 @@ export function useCompareController(options: CompareControllerOptions) {
   const keyState = useRef({ previous, next, mode, activeArea, options, swipePosition });
   keyState.current = { previous, next, mode, activeArea, options, swipePosition };
 
-  // Stepping to the previous or next changed screen, or nudging the Swipe divider; a held key keeps
-  // stepping, accelerating, until it is released, the window loses focus, or the end is reached.
-  // Reads the latest state on each step.
+  // Stepping to the previous or next changed screen; a held key keeps stepping, accelerating, until
+  // it is released, the window loses focus, or the end is reached. The Swipe divider is continuous,
+  // so a tap of [ or ] nudges it one step and a held one glides. Both read the latest state.
   const stepScreen = (direction: 1 | -1): boolean => {
     const state = keyState.current;
     const target = direction === 1 ? state.next : state.previous;
@@ -173,30 +173,38 @@ export function useCompareController(options: CompareControllerOptions) {
     state.options.onSelectScreen(target.id);
     return true;
   };
-  const stepDivider = (direction: 1 | -1): boolean => {
+  const moveDivider = (direction: 1 | -1, steps = 1): boolean => {
     const state = keyState.current;
     if (state.mode !== "swipe") return false;
-    const position = Math.max(0, Math.min(100, state.swipePosition + direction * SWIPE_STEP));
+    const position = Math.max(0, Math.min(100, state.swipePosition + direction * SWIPE_STEP * steps));
     if (position === state.swipePosition) return false;
     state.swipePosition = position;
     setSwipePosition(position);
     return true;
   };
-  const hold = useRef(createKeyHold());
-  useEffect(() => hold.current.end, []);
+  const holdRef = useRef<KeyHold>(undefined);
+  holdRef.current ??= createKeyHold();
+  const hold = holdRef.current;
+  useEffect(() => hold.end, [hold]);
+  // The hold only tracks the key; the glide reads it every frame and stops with it.
+  const glideDivider = (code: string, direction: 1 | -1) => {
+    hold.begin(code, () => true);
+    glideWhileHeld(hold, code, HOLD_INITIAL_DELAY_MS, (steps) => moveDivider(direction, steps));
+  };
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      hold.interrupt(event);
       // The browser's own repeat of the held key is not a step; it must not scroll either.
-      if (event.repeat && hold.current.holding(event.code)) { event.preventDefault(); return; }
+      if (event.repeat && hold.holding(event.code)) { event.preventDefault(); return; }
       if (event.defaultPrevented || !shortcutsLive(event)) return;
       const state = keyState.current;
       const keys = SHORTCUTS.compare;
       const stepScreens = state.options.stepScreens !== false;
       if (stepScreens && matchesShortcut(event, keys.previousScreen)) {
-        if (stepScreen(-1)) hold.current.begin(event.code, () => stepScreen(-1));
+        if (stepScreen(-1)) hold.begin(event.code, () => stepScreen(-1));
       } else if (stepScreens && matchesShortcut(event, keys.nextScreen)) {
-        if (stepScreen(1)) hold.current.begin(event.code, () => stepScreen(1));
+        if (stepScreen(1)) hold.begin(event.code, () => stepScreen(1));
       } else if (matchesShortcut(event, keys.nextArea)) {
         stepArea(1);
       } else if (matchesShortcut(event, keys.previousArea)) {
@@ -217,10 +225,10 @@ export function useCompareController(options: CompareControllerOptions) {
         flip();
       } else if (matchesShortcut(event, keys.dividerLeft)) {
         if (state.mode !== "swipe") return;
-        if (stepDivider(-1)) hold.current.begin(event.code, () => stepDivider(-1));
+        if (moveDivider(-1)) glideDivider(event.code, -1);
       } else if (matchesShortcut(event, keys.dividerRight)) {
         if (state.mode !== "swipe") return;
-        if (stepDivider(1)) hold.current.begin(event.code, () => stepDivider(1));
+        if (moveDivider(1)) glideDivider(event.code, 1);
       } else if (matchesShortcut(event, keys.outlines)) {
         toggleOutlines();
       } else if (matchesShortcut(event, keys.whatChanged)) {
@@ -231,16 +239,15 @@ export function useCompareController(options: CompareControllerOptions) {
       event.preventDefault();
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (hold.current.holding(event.code)) hold.current.end();
+      if (hold.holding(event.code)) hold.end();
     };
-    const endHold = hold.current.end;
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", endHold);
+    window.addEventListener("blur", hold.end);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", endHold);
+      window.removeEventListener("blur", hold.end);
     };
   });
 

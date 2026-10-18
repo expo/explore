@@ -3,6 +3,13 @@ import type { ConnectionGroup } from "./graph-model";
 export type MapKeyDirection = "up" | "down" | "left" | "right";
 type Point = { x: number; y: number };
 
+const ARROW_WIDGETS = '[role="menu"], [role="menubar"], [role="listbox"], [role="tree"], [role="tablist"], [role="radiogroup"], [role="slider"]';
+
+/** Whether the key's target is a widget whose arrows are its own (a menu item, a list, tabs); the map leaves those keys to it. */
+export function arrowsOwnedBy(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(ARROW_WIDGETS) !== null;
+}
+
 /** Arrow keys and their Vim twins; anything else is not a map move. */
 export function mapKeyDirection(event: Pick<KeyboardEvent, "key" | "altKey" | "ctrlKey" | "metaKey" | "shiftKey">): MapKeyDirection | undefined {
   if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return undefined;

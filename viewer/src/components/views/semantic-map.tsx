@@ -27,7 +27,7 @@ import type { FocusBehavior, FocusRequest, FocusStatus, MapDirection } from "../
 import { focusStatusOf } from "../../utils/changed-screens";
 import { displayPathForScreen } from "../../utils/screen-path";
 import { shortcutsLive } from "../../utils/shortcuts";
-import { mapKeyDirection, mapKeyEntry, mapKeyTarget, type MapKeyDirection } from "../../utils/map-keyboard";
+import { arrowsOwnedBy, mapKeyDirection, mapKeyEntry, mapKeyTarget, type MapKeyDirection } from "../../utils/map-keyboard";
 import { createKeyHold } from "../../utils/key-hold";
 
 const HOVER_CLEAR_DELAY = 180;
@@ -567,8 +567,9 @@ function ConnectionCanvas(props: MapViewProps) {
       return from ? mapKeyTarget(structure, from, direction) : mapKeyEntry(structure, direction);
     };
     const onKeyDown = (event: KeyboardEvent) => {
+      hold.interrupt(event);
       if (event.repeat && hold.holding(event.code)) { event.preventDefault(); return; }
-      if (event.defaultPrevented || !shortcutsLive(event)) return;
+      if (event.defaultPrevented || !shortcutsLive(event) || arrowsOwnedBy(event.target)) return;
       const direction = mapKeyDirection(event);
       if (!direction) return;
       if (!structureRef.current) return;

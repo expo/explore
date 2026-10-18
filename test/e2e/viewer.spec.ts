@@ -1519,6 +1519,67 @@ test("Esc closes the Inspector first, then deselects; arrows and hjkl walk the m
   await expect(selected).toHaveAttribute("data-id", child!);
 });
 
+test("a held key stops when Esc, another key or a dialog takes the keyboard; a menu keeps its own arrows", async ({ page }) => {
+  await page.goto("/map");
+  const selected = page.locator(".map-canvas .react-flow__node-screen.selected");
+  const inspector = page.locator(".right-panel");
+  const search = page.getByRole("dialog", { name: "Search Explore" });
+  const viewport = page.locator(".map-canvas .react-flow__viewport");
+  const mod = process.platform === "darwin" ? "Meta" : "Control";
+
+  // Nothing selected and a menu open: ← and → on its item are the menu's, not the map's.
+  await expect(selected).toHaveCount(0);
+  await page.locator(".zoom-button").click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowRight");
+  await expect(selected).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+
+  // Esc mid-walk closes the Inspector, and the walk does not reopen it on its next step.
+  await page.locator(".map-canvas .react-flow__node-screen .screen-screenshot-target").first().click();
+  await expect(inspector).toBeVisible();
+  await page.keyboard.down("ArrowDown");
+  await page.keyboard.press("Escape");
+  await expect(inspector).toHaveCount(0);
+  await page.waitForTimeout(800);
+  await expect(inspector).toHaveCount(0);
+  await page.keyboard.up("ArrowDown");
+
+  // ⌘K mid-walk opens Search, and the selection behind it stays where it was.
+  await page.keyboard.down("ArrowDown");
+  await page.keyboard.press(`${mod}+k`);
+  await expect(search).toBeVisible();
+  const behind = await selected.getAttribute("data-id");
+  await page.waitForTimeout(800);
+  await expect(selected).toHaveAttribute("data-id", behind!);
+  await page.keyboard.up("ArrowDown");
+  await page.keyboard.press("Escape");
+  await expect(search).toHaveCount(0);
+
+  // A held + glides past the tap's one step and stops where it is on release.
+  const zoomNow = async () => (await readCanvasCamera(viewport)).zoom;
+  const before = await zoomNow();
+  await page.keyboard.down("Equal");
+  await expect.poll(zoomNow, { timeout: 4000 }).toBeGreaterThan(before * 1.2 * 1.2);
+  await page.keyboard.up("Equal");
+  const released = await zoomNow();
+  await page.waitForTimeout(300);
+  expect(await zoomNow()).toBeCloseTo(released, 3);
+
+  // Held −, then a click opens Search: the glide stops rather than zoom behind the dialog.
+  await page.keyboard.down("Minus");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(search).toBeVisible();
+  await page.waitForTimeout(400);
+  const atOpen = await zoomNow();
+  await page.waitForTimeout(800);
+  expect(await zoomNow()).toBeCloseTo(atOpen, 3);
+  await page.keyboard.up("Minus");
+});
+
 test("a drag that starts on a transition edge pans the map", async ({ page }) => {
   await page.goto("/map");
   const viewport = page.locator(".map-canvas .react-flow__viewport");
@@ -2722,6 +2783,15 @@ test("drives the shell from the keyboard, and says so on hover", async ({ page }
   await expect(page.getByRole("button", { name: "Fit canvas" }).locator(".key-hint")).toHaveCount(0);
   await page.keyboard.up(mod);
   await expect(hints).toHaveCount(0);
+  // Focus that moves into a field by mouse, with ⇧ still down, takes the hints with it.
+  await page.keyboard.down("Shift");
+  await expect(page.getByRole("button", { name: "Fit canvas" }).locator(".key-hint")).toHaveText("1");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Search Explore" })).toBeVisible();
+  await expect(hints).toHaveCount(0);
+  await page.keyboard.up("Shift");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Search Explore" })).toHaveCount(0);
 
   // ⌘B opens and closes the Changes menu.
   await page.keyboard.press(`${mod}+b`);

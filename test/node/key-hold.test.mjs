@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { tsImport } = await import("tsx/esm/api");
-const keyHold = await tsImport("../../viewer/src/utils/key-hold.ts", import.meta.url);
-const { HOLD_INITIAL_DELAY_MS, HOLD_FIRST_INTERVAL_MS, HOLD_FLOOR_INTERVAL_MS, holdIntervalMs, holdSchedule } = keyHold;
-const await_import_cache = { keyHold };
+const { HOLD_INITIAL_DELAY_MS, HOLD_FIRST_INTERVAL_MS, HOLD_FLOOR_INTERVAL_MS, createKeyHold, glideRate, holdIntervalMs, holdSchedule } =
+  await tsImport("../../viewer/src/utils/key-hold.ts", import.meta.url);
 
 test("a held paging key waits, then steps sooner and sooner down to a floor", () => {
   assert.equal(holdIntervalMs(1), HOLD_FIRST_INTERVAL_MS);
@@ -20,7 +19,6 @@ test("a held paging key waits, then steps sooner and sooner down to a floor", ()
 
 test("a held key steps on the schedule from its first step, and ends when a step finds nothing", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const { createKeyHold } = await_import_cache.keyHold;
   const hold = createKeyHold();
   let steps = 0;
   hold.begin("ArrowRight", () => (steps += 1) < 3);
@@ -41,7 +39,6 @@ test("a held key steps on the schedule from its first step, and ends when a step
 
 test("ending a hold, or beginning another key, stops the first", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const { createKeyHold } = await_import_cache.keyHold;
   const hold = createKeyHold();
   let right = 0;
   let left = 0;
@@ -61,4 +58,28 @@ test("ending a hold, or beginning another key, stops the first", (t) => {
   t.mock.timers.tick(holdIntervalMs(2));
   t.mock.timers.tick(1000);
   assert.equal(left, 2);
+});
+
+test("another key ends a hold, as the OS's own repeat stops; its own repeats and a modifier do not", () => {
+  const key = (code, key = code, repeat = false) => ({ code, key, repeat });
+  const hold = createKeyHold();
+  hold.begin("ArrowDown", () => true);
+  hold.interrupt(key("ArrowDown", "ArrowDown", true));
+  hold.interrupt(key("ShiftLeft", "Shift"));
+  hold.interrupt(key("MetaLeft", "Meta"));
+  assert.ok(hold.holding("ArrowDown"), "its own repeat and a modifier leave it held");
+  hold.interrupt(key("Escape"));
+  assert.ok(!hold.holding("ArrowDown"), "Esc ends it");
+  hold.begin("ArrowDown", () => true);
+  hold.interrupt(key("KeyK", "k"));
+  assert.ok(!hold.holding("ArrowDown"), "so does the K of ⌘K");
+  hold.end();
+});
+
+test("a glide picks up from rest, then eases from the stepped hold's first speed up to its top speed", () => {
+  assert.equal(glideRate(0), 0, "it starts at rest, where the tap's step ended");
+  assert.ok(Math.abs(glideRate(80) - 1000 / HOLD_FIRST_INTERVAL_MS) < 0.2, "within a few frames it moves a step per first interval");
+  for (let at = 10; at <= 1200; at += 10) assert.ok(glideRate(at) >= glideRate(at - 10), `never slows, at ${at}ms`);
+  assert.equal(glideRate(1000), 1000 / HOLD_FLOOR_INTERVAL_MS, "after a second, a step per floor interval");
+  assert.equal(glideRate(5000), glideRate(1000), "and no faster");
 });

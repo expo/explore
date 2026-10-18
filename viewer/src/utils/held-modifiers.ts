@@ -7,6 +7,10 @@ import { APPLE, isTyping, type Shortcut } from "./shortcuts";
 export type HeldModifiers = { shift: boolean; ctrl: boolean; meta: boolean; alt: boolean };
 
 const NONE: HeldModifiers = { shift: false, ctrl: false, meta: false, alt: false };
+// The modifiers physically down, and the ones the hints show: none while focus is in a field,
+// where a held Shift is for a capital letter, not for a chord. Focus can move by mouse with a
+// modifier still down, so the shown set is worked out again on every focus change too.
+let physical: HeldModifiers = NONE;
 let held: HeldModifiers = NONE;
 const listeners = new Set<() => void>();
 
@@ -14,24 +18,21 @@ function same(left: HeldModifiers, right: HeldModifiers): boolean {
   return left.shift === right.shift && left.ctrl === right.ctrl && left.meta === right.meta && left.alt === right.alt;
 }
 
-function update(next: HeldModifiers) {
+function publish() {
+  const next = isTyping(document.activeElement) ? NONE : physical;
   if (same(held, next)) return;
   held = same(next, NONE) ? NONE : next;
   for (const listener of listeners) listener();
 }
 
-function fromEvent(event: KeyboardEvent): HeldModifiers {
-  // While typing, a held Shift is for a capital letter, not for a chord.
-  if (isTyping(event.target)) return NONE;
-  return { shift: event.shiftKey, ctrl: event.ctrlKey, meta: event.metaKey, alt: event.altKey };
-}
-
 function onKey(event: KeyboardEvent) {
-  update(fromEvent(event));
+  physical = { shift: event.shiftKey, ctrl: event.ctrlKey, meta: event.metaKey, alt: event.altKey };
+  publish();
 }
 
 function clear() {
-  update(NONE);
+  physical = NONE;
+  publish();
 }
 
 function subscribe(listener: () => void) {
@@ -41,6 +42,8 @@ function subscribe(listener: () => void) {
     // A chord that leaves the page (⌘Tab, a browser shortcut) never sends its key up here.
     window.addEventListener("blur", clear);
     document.addEventListener("visibilitychange", clear);
+    document.addEventListener("focusin", publish);
+    document.addEventListener("focusout", publish);
   }
   listeners.add(listener);
   return () => {
@@ -50,6 +53,9 @@ function subscribe(listener: () => void) {
     window.removeEventListener("keyup", onKey, true);
     window.removeEventListener("blur", clear);
     document.removeEventListener("visibilitychange", clear);
+    document.removeEventListener("focusin", publish);
+    document.removeEventListener("focusout", publish);
+    physical = NONE;
     held = NONE;
   };
 }

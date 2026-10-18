@@ -405,6 +405,7 @@ export function ScreensView(props: ScreensViewProps) {
       });
     };
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      hold.interrupt(event);
       const arrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.code);
       if (!arrow && event.key !== "Enter") return;
       // The browser's own repeat of a held arrow would scroll the page under the hold.

@@ -3,7 +3,7 @@ import { useReactFlow, useStore } from "@xyflow/react";
 import { publishZoom, registerZoomApi, runCanvasZoomCommand } from "../../utils/canvas-zoom";
 import { isTyping, matchesShortcut, SHORTCUTS } from "../../utils/shortcuts";
 import { useCanvasVisibleFrame } from "./visible-frame-provider";
-import { createKeyHold, type KeyHold } from "../../utils/key-hold";
+import { createKeyHold, glideWhileHeld, type KeyHold } from "../../utils/key-hold";
 import {
   canvasBoundsViewport,
   canvasPriorityProjectionBounds,
@@ -16,7 +16,7 @@ import {
 } from "./camera";
 
 const DURATION = 160;
-/** React Flow's zoomIn/zoomOut step; a held key keeps stepping by it on the hold schedule. */
+/** React Flow's zoomIn/zoomOut step, which a tap of + or − takes. */
 const KEY_ZOOM_STEP = 1.2;
 const PIXEL_WHEEL_ZOOM_RATE = 0.002;
 const LINE_WHEEL_ZOOM_RATE = 0.05;
@@ -216,23 +216,37 @@ export function ZoomBridge(props: {
     };
     registerZoomApi(api);
 
-    // A held + or − zooms on the shared hold schedule rather than the OS key repeat: each repeat
-    // restarting the 160ms easing made holding the key slower than tapping it.
-    const zoomBy = (direction: 1 | -1, duration: number): boolean => {
+    // A tap of + or − takes one eased step. Held, the OS key repeat is ignored (each repeat
+    // restarting the easing made holding slower than tapping); once the tap's step has landed the
+    // camera glides instead, frame by frame about the pane's centre, as zoomIn does, until the key
+    // is released, the hold is interrupted, or the zoom reaches its limit.
+    const zoomStep = (direction: 1 | -1): boolean => {
       const viewport = getViewport();
       const next = Math.min(maxZoom, Math.max(minZoom, viewport.zoom * KEY_ZOOM_STEP ** direction));
       if (next === viewport.zoom) return false;
-      if (direction === 1) void zoomIn({ duration });
-      else void zoomOut({ duration });
+      if (direction === 1) void zoomIn({ duration: DURATION });
+      else void zoomOut({ duration: DURATION });
+      return true;
+    };
+    const zoomGlide = (direction: 1 | -1) => (steps: number): boolean => {
+      const viewport = getViewport();
+      const zoom = Math.min(maxZoom, Math.max(minZoom, viewport.zoom * KEY_ZOOM_STEP ** (direction * steps)));
+      if (zoom === viewport.zoom) return false;
+      const scale = zoom / viewport.zoom;
+      const centerX = canvasWidth / 2;
+      const centerY = canvasHeight / 2;
+      void setViewport({ zoom, x: centerX - (centerX - viewport.x) * scale, y: centerY - (centerY - viewport.y) * scale });
       return true;
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
+      hold.interrupt(event);
+      // Typing comes first: a held key's repeats belong to a field that took focus mid-hold.
+      if (isTyping(event.target)) return;
       if (event.repeat && hold.holding(event.code)) {
         event.preventDefault();
         return;
       }
-      if (isTyping(event.target)) return;
 
       // Browser zoom and canvas zoom use the same familiar chord. The pointer/focus boundary
       // decides who owns it: canvas-owned events reset its camera; a focused panel or field keeps
@@ -259,8 +273,11 @@ export function ZoomBridge(props: {
       if (!direction) return;
       event.preventDefault();
       onCameraGestureStart.current?.();
-      if (!zoomBy(direction, DURATION)) return;
-      hold.begin(event.code, (nextIntervalMs) => zoomBy(direction, nextIntervalMs));
+      if (!zoomStep(direction)) return;
+      // The hold only tracks the key (released, interrupted, a field or dialog taking over); the
+      // glide reads it every frame and stops with it.
+      hold.begin(event.code, () => true);
+      glideWhileHeld(hold, event.code, DURATION, zoomGlide(direction));
     };
     const onKeyUp = (event: KeyboardEvent) => {
       if (hold.holding(event.code)) hold.end();
@@ -347,6 +364,7 @@ export function ZoomBridge(props: {
     getNodes,
     getNodesBounds,
     getViewport,
+    hold,
     maxZoom,
     minZoom,
     props.fitPadding,

@@ -1064,12 +1064,9 @@ code {
     opacity 170ms ease-in-out calc(var(--toolbar-motion) * 0.35),
     filter 170ms ease-in-out calc(var(--toolbar-motion) * 0.35);
 }
-/* Compare's count of changed screens rides on its button's corner. */
-.toolbar-button:has(> .key-hint) { position: relative; }
-.camera-action-button:has(> .key-hint), .collapsed-platform:has(> .key-hint), .compare-nav-picker:has(> .key-hint) { position: relative; }
-
 /* The key that completes a chord, on a button's corner while its modifier is held: hold ⌃ and
-   the toolbar's sections show 1, 2 and 3. Quiet: the badge's shape in the element colour. */
+   the toolbar's sections show 1, 2 and 3. Quiet: a small key in the element colour. */
+.toolbar-button:has(> .key-hint), .camera-action-button:has(> .key-hint), .collapsed-platform:has(> .key-hint), .compare-nav-picker:has(> .key-hint) { position: relative; }
 .key-hint {
   position: absolute;
   top: -6px;
@@ -1097,7 +1094,6 @@ code {
   to { opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) { .key-hint { animation: none; } }
-
 /* Reduced motion: the bar takes its new width at once; only the names fade, without the blur. */
 @media (prefers-reduced-motion: reduce) {
   .toolbar-view-label,
