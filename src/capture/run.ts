@@ -748,13 +748,16 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     // Every pass sets the appearance explicitly, so a capture does not inherit whatever the simulator last used.
     const passes: CaptureBundle["outcomes"][] = [];
     const recordingTools = launchSetting === "off" ? undefined : options.recordingTools === undefined ? ffmpegRecordingTools() : options.recordingTools ?? undefined;
-    for (const [index, colorScheme] of colorSchemes.entries()) {
-      // Argent cannot switch the appearance yet (software-mansion/argent#1509): on EAS its single pass runs as the device
-      // starts, and on this machine the host switches it.
-      if (controller !== "argent") runner({ command: controllerCommand, args: [...appearanceArgs(colorScheme), "--session", CONTROLLER_SESSION, ...deviceArgs(runtime), "--platform", options.platform],
+    // Argent cannot switch the appearance yet (software-mansion/argent#1509): on EAS its single pass runs as the device
+    // starts, and on this machine the host switches it.
+    const applyAppearance = (colorScheme: ColorScheme): void => {
+      if (controller !== "argent") runner({ command: controllerCommand, args: [...appearanceArgs(colorScheme), "--session", CONTROLLER_SESSION, ...deviceArgs(runtime!), "--platform", options.platform],
         cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
       else if (localSimulator) setLocalSimulatorAppearance({ runner, udid: localSimulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
       else if (localEmulator) setLocalEmulatorAppearance({ runner, serial: localEmulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
+    };
+    for (const [index, colorScheme] of colorSchemes.entries()) {
+      applyAppearance(colorScheme);
       // A scheme change recreates the Android activity in place, and the sheets it re-presents lose their inset; a
       // relaunch starts the app in the new scheme, the same way the first pass did.
       if (launchSetting !== "off") {
@@ -785,6 +788,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     Object.assign(outcomes, mergeSchemeOutcomes(passes, colorSchemes));
     if (options.flows) {
       runtimeStage = "flows";
+      // The flows run in the primary appearance, which the last route pass may have left.
+      if (colorSchemes.length > 1) applyAppearance(colorSchemes[0]!);
       // The flows share the deadline the routes had; a flow that fails or runs out of time keeps the frames it took.
       const remainingMs = Math.max(60_000, options.maxDurationMinutes * 60_000 - ((options.now ?? Date.now)() - captureStartedAt));
       // A daemon lets one agent-device session hold the device, and e2e names its own (`<session>-<slot>`): Explore
