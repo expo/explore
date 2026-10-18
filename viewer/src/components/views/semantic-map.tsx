@@ -115,6 +115,8 @@ function ScreenNodeCard({ data, selected }: NodeProps<ScreenGraphNode>) {
       imageHeight={data.screenshotSize?.imageHeight ?? data.frame.screen.height}
       placeholderSize={data.frame.screen}
       loading="lazy"
+      // The route heads the card, so the tooltip goes below it.
+      tooltipPlacement="bottom"
       leading={<Handle type="target" position={horizontal ? Position.Left : Position.Top} className="graph-handle" />}
       trailing={<Handle type="source" position={horizontal ? Position.Right : Position.Bottom} className="graph-handle" />}
       onMouseEnter={() => data.onHover(data.screen.id)}
@@ -618,13 +620,16 @@ function ConnectionCanvas(props: MapViewProps) {
   }, [hoverScreen, props.diff, props.direction, props.focus, props.selectedScreenId, selectScreen, structure]);
 
   const focusTarget = useMemo(() => screenFocus(props.focusRequest), [props.focusRequest]);
+  // The card size places the cards too: a hosted preview's other target, with the same screens in another shape, is a new
+  // layout, not the old positions under bigger cards.
   const layoutIdentity = useMemo(() => [
     MAP_LAYOUT_REVISION,
     props.map.run.id,
     props.direction,
+    `${structure.frame.width}x${structure.frame.height}`,
     projection.nodes.map((node) => node.id).join(","),
     projection.groups.map((group) => `${group.from}>${group.to}`).join(","),
-  ].join(":"), [projection.groups, projection.nodes, props.direction, props.map.run.id]);
+  ].join(":"), [projection.groups, projection.nodes, props.direction, props.map.run.id, structure.frame]);
   // Screens closest to the start load first; within a layer, in reading order.
   const priorityNodeIds = useMemo(() => layout.nodes
     .map((node, index) => ({ id: node.id, depth: node.data.screen.depth, y: node.position.y, x: node.position.x, index }))

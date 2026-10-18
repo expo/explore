@@ -88,6 +88,8 @@ async function harness(t, bytes, { app = false, open = true, name = fileName, re
           preview.requests = (preview.requests ?? 0) + 1;
           preview.queries = [...(preview.queries ?? []), url.search];
           if (preview.status && preview.status !== 200) { response.statusCode = preview.status; return response.end(preview.body ?? "Not found"); }
+          // A target the Worker cannot read (`failures` by query) answers with that status.
+          if (preview.failures?.[url.search]) { response.statusCode = preview.failures[url.search]; return response.end("Unavailable"); }
           response.setHeader("content-type", "application/json");
           // A slow target (`delays` by query) keeps its manifest in flight while the reviewer moves on.
           // `padding` makes the manifest larger than the Viewer reads.
@@ -545,6 +547,30 @@ test("switching back to a prefetched target shows the screenshots it showed befo
   assert.deepEqual(errors, []);
 });
 
+test("a target whose download fails leaves the report on screen and its link, and a toast says why", { timeout: 60_000 }, async t => {
+  const report = reportFixture();
+  report.review.runtime = { ...report.review.runtime, platform: "android", platforms: ["ios", "android"] };
+  const preview = { token: "mnopqrstuvwxyz234567234567234567", listing: [{ platform: "ios" }, { platform: "android" }],
+    failures: { "?platform=ios": 500 } };
+  const { page, errors } = await harness(t, await archive(report), { app: true, reportIdentity: null, preview, query: "&platform=android" });
+  const trigger = page.getByRole("button", { name: "Platform: Android. Open another platform's report" });
+  await expect(trigger).toBeVisible();
+  await page.evaluate(() => { window.__samePage = true; });
+  const place = new URL(page.url()).hash;
+  await trigger.click();
+  await page.getByRole("menu", { name: "Platform" }).getByRole("menuitemradio").nth(0).click();
+  await expect(page.locator(".app-toast")).toContainText("Couldn’t open iOS");
+  await expect(page.locator(".app-toast")).toContainText("The report could not be downloaded (HTTP 500).");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(page.locator(".report-loading-shell")).toHaveCount(0);
+  await expect(trigger).not.toHaveAttribute("aria-busy", /.*/);
+  // The link is the Android report's again, at the place it was.
+  await expect.poll(() => new URL(page.url()).searchParams.get("platform")).toBe("android");
+  assert.equal(new URL(page.url()).hash, place);
+  assert.equal(await page.evaluate(() => window.__samePage), true, "the failed switch stays on the page");
+  assert.deepEqual(errors, []);
+});
+
 test("Forward onto a target still downloading keeps the preview link and its place in history", { timeout: 60_000 }, async t => {
   const { page, errors, switchToIos } = await slowSwitchHarness(t, "jklmnopqrstuvwxyz234567234567234", 3000);
   await page.evaluate(() => { window.location.hash = "#/map?inspect=diff"; });
@@ -564,6 +590,60 @@ test("Forward onto a target still downloading keeps the preview link and its pla
   await page.goBack();
   await page.waitForTimeout(200);
   assert.equal(page.url(), androidUrl, "Back restores the Android entry as it was");
+  assert.deepEqual(errors, []);
+});
+
+test("a switch to a target whose screenshots have another shape lays the map out again for its cards, so none overlap", { timeout: 60_000 }, async t => {
+  const targets = [
+    { id: "iphone", platform: "ios", label: "iPhone 17" },
+    { id: "duo-open", platform: "ios", label: "iPhone Duo (open)" },
+  ];
+  // Home leads to Settings and About, Settings on to Profile: three layers, so the map runs left to right with
+  // Settings and About stacked, a card's height plus a gap apart. A Duo card is shorter than a phone's.
+  const shaped = async (target, width, height) => {
+    const picture = new PNG({ width, height });
+    picture.data.fill(255);
+    const capture = PNG.sync.write(picture);
+    const report = reportFixture();
+    const home = report.review.surfaces[0];
+    for (const side of ["baseImage", "headImage"]) {
+      Object.assign(home[side], { width, height, sha256: createHash("sha256").update(capture).digest("hex") });
+    }
+    const route = id => {
+      const side = { ...home.head, id, route: `/${id}`, path: `/${id}`, routeFile: `app/${id}.tsx`, logicalPath: `app/${id}.tsx` };
+      return { id, status: "unchanged", base: { ...side }, head: side, baseImage: { ...home.baseImage }, headImage: { ...home.headImage },
+        baseOutcome: { ...home.baseOutcome }, headOutcome: { ...home.headOutcome } };
+    };
+    report.review.surfaces.push(route("settings"), route("about"), route("profile"));
+    const edge = (from, to) => ({ from, to, kind: "push", provenance: "source", sourceFile: `app/${from}.tsx` });
+    const graph = { contract: "explore.navigation", edges: [edge("home", "settings"), edge("home", "about"), edge("settings", "profile")],
+      modalSurfaceIds: [], unresolved: [] };
+    report.review.navigation = { base: structuredClone(graph), head: graph };
+    report.review.runtime = { ...report.review.runtime, platform: "ios", platforms: ["ios"], target: targets.find(entry => entry.id === target), targets };
+    return Buffer.from((await imageArchive([capture], 0, report)).bytes);
+  };
+  const preview = { token: "klmnopqrstuvwxyz2345672345672345",
+    listing: targets.map(({ id, platform, label }) => ({ target: id, platform, label })),
+    archives: { "?target=iphone": await shaped("iphone", 130, 282) } };
+  const { page, errors } = await harness(t, await shaped("duo-open", 233, 339), { app: true, reportIdentity: null, preview,
+    query: "&target=duo-open" });
+  const nodes = page.locator(".map-canvas .react-flow__node");
+  await expect(nodes).toHaveCount(4);
+  /** Overlaps between the cards' boxes on screen, and how tall the cards stand against their width. */
+  const layout = () => nodes.evaluateAll(elements => {
+    const boxes = elements.map(element => element.getBoundingClientRect());
+    let overlaps = 0;
+    for (const [index, a] of boxes.entries()) for (const b of boxes.slice(index + 1)) {
+      if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) overlaps += 1;
+    }
+    return { overlaps, shape: Math.round(boxes[0].height / boxes[0].width * 10) / 10 };
+  });
+  await expect.poll(layout).toEqual({ overlaps: 0, shape: 1.6 });
+
+  await page.getByRole("button", { name: "Device: iPhone Duo (open). Open another device's report" }).click();
+  await page.getByRole("menu", { name: "Device" }).getByRole("menuitemradio").nth(0).click();
+  await expect(page.locator(".collapsed-platform").first()).toHaveText("iPhone 17");
+  await expect.poll(layout, { timeout: 10_000 }).toEqual({ overlaps: 0, shape: 2.3 });
   assert.deepEqual(errors, []);
 });
 
@@ -592,11 +672,13 @@ test("D, ⌥1–⌥8 and ` switch targets from the keyboard, and the other repor
   const place = new URL(page.url()).hash;
   await page.evaluate(() => { window.__samePage = true; });
   const target = () => new URL(page.url()).searchParams.get("platform");
+  // The other report swaps into the running Viewer (no loading screen between): the pill names it once it is up.
+  const shown = async (label) => expect(page.locator(".collapsed-platform").first()).toHaveText(label);
 
   // ` returns to the last target; before there is one, it opens the next in the menu.
   await page.keyboard.press("Backquote");
   await expect.poll(target).toBe("ios");
-  await expect(page.locator(".app-shell")).toBeVisible();
+  await shown("iOS");
   const carried = new URL(page.url()).hash;
   assert.equal(carried.split("?")[0], place.split("?")[0], "the other report opens at the same canvas and route");
   assert.equal(new URLSearchParams(carried.split("?")[1]).get("inspect"), "diff");
@@ -604,9 +686,9 @@ test("D, ⌥1–⌥8 and ` switch targets from the keyboard, and the other repor
   await expect(page.locator(".map-canvas .is-selected")).toHaveCount(1);
   await page.keyboard.press("Backquote");
   await expect.poll(target).toBe("android");
+  await shown("Android");
 
   // D opens the menu, which prints each target's ⌥ key.
-  await expect(page.locator(".app-shell")).toBeVisible();
   await page.keyboard.press("KeyD");
   const items = page.getByRole("menu", { name: "Platform" }).getByRole("menuitemradio");
   await expect(items).toHaveCount(2);
@@ -616,11 +698,12 @@ test("D, ⌥1–⌥8 and ` switch targets from the keyboard, and the other repor
 
   await page.keyboard.press("Alt+Digit1");
   await expect.poll(target).toBe("ios");
-  await expect(page.locator(".app-shell")).toBeVisible();
+  await shown("iOS");
   // The shown target's own key does nothing.
   await page.keyboard.press("Alt+Digit1");
   await page.keyboard.press("Alt+Digit2");
   await expect.poll(target).toBe("android");
+  await shown("Android");
   assert.equal(await page.evaluate(() => window.__samePage), true, "every switch stays on the page");
 
   await page.keyboard.press("Shift+Slash");
