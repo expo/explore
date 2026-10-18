@@ -17,6 +17,7 @@ function element(options = {}) {
     label: options.label ?? "Continue",
     ...(options.visible === undefined ? { visible: true } : { visible: options.visible }),
     ...(options.selector === undefined ? {} : { selector: options.selector }),
+    ...(options.bounds === undefined ? {} : { bounds: options.bounds }),
     occurrence: options.occurrence ?? 0,
     controller: "agent-device",
     actions: options.actions ?? ["press"],
@@ -320,8 +321,9 @@ test("keeps an unannotated label delta in the accessibility category", () => {
   );
 });
 
-test("a label that also differs between the same build's own captures is runtime state, not a text change", () => {
+test("a label that varies within both builds, in the words that differ between them, is runtime state", () => {
   const stamp = (label) => [element({ elementId: "stamp", identifier: "stamp", role: "text", label, actions: [], actionable: false })];
+  const sibling = (base, head) => ({ base: side("base", base), head: side("head", head) });
   const input = {
     impact: impact(),
     base: side("base", stamp("edited 2m ago")),
@@ -331,7 +333,7 @@ test("a label that also differs between the same build's own captures is runtime
   const plain = supportedChanges(compareSurfaceEvidence(input));
   assert.ok(plain.some((change) => change.kind === "accessibility-label-changed"), "without a sibling capture the label difference is a change");
 
-  const result = compareSurfaceEvidence({ ...input, headSiblings: [side("head", stamp("edited 4m ago"))] });
+  const result = compareSurfaceEvidence({ ...input, siblings: [sibling(stamp("edited 1m ago"), stamp("edited 4m ago"))] });
   const changes = supportedChanges(result);
   assert.deepEqual(changes.map((change) => change.kind), ["unstable-text"]);
   assert.deepEqual(changes[0], { kind: "unstable-text", subjectRole: "text", before: "edited 2m ago", after: "edited 3m ago", within: "edited 4m ago" });
@@ -340,17 +342,81 @@ test("a label that also differs between the same build's own captures is runtime
     [["visible-text.unstable-within-build", "Text varies between captures of the same build: \u201cedited 2m ago\u201d / \u201cedited 4m ago\u201d / \u201cedited 3m ago\u201d."]]);
   assert.equal(summary.needsReview, false);
 
-  // The base's other appearance is evidence too, and a stable label beside it is still a change.
+  // A stable label beside it is still a change.
+  const save = (label) => element({ identifier: "save", label });
   const mixed = compareSurfaceEvidence({
     ...input,
-    base: side("base", [...stamp("edited 2m ago"), element({ identifier: "save", label: "Submit" })]),
-    head: side("head", [...stamp("edited 3m ago"), element({ identifier: "save", label: "Save" })]),
-    baseSiblings: [side("base", stamp("edited 1m ago"))],
+    base: side("base", [...stamp("edited 2m ago"), save("Submit")]),
+    head: side("head", [...stamp("edited 3m ago"), save("Save")]),
+    siblings: [sibling([...stamp("edited 1m ago"), save("Submit")], [...stamp("edited 4m ago"), save("Save")])],
   });
   assert.deepEqual(supportedChanges(mixed).map((change) => change.kind).sort(), ["accessibility-label-changed", "unstable-text"]);
   // Pixels that only an unstable label explains still get the generic styling line.
-  const pixels = compareSurfaceEvidence({ ...input, visualAssessment: visual("modified"), headSiblings: [side("head", stamp("edited 4m ago"))] });
+  const pixels = compareSurfaceEvidence({ ...input, visualAssessment: visual("modified"), siblings: [sibling(stamp("edited 1m ago"), stamp("edited 4m ago"))] });
   assert.deepEqual(supportedChanges(pixels).map((change) => change.kind), ["unstable-text", "visual-changed"]);
+});
+
+test("a label that follows the appearance, or changed in a word that does not vary, is still a change", () => {
+  const label = (text) => [element({ identifier: "toggle", label: text })];
+  const compare = ([baseLight, baseDark], [headLight, headDark], options = {}) => supportedChanges(compareSurfaceEvidence({
+    impact: impact(),
+    base: side("base", label(baseLight), options.base),
+    head: side("head", label(headLight), options.head),
+    visualAssessment: visual(),
+    siblings: [{ base: side("base", label(baseDark)), head: side("head", label(headDark), options.headSibling) }],
+  })).map((change) => change.kind);
+  // The theme toggle's label follows the appearance; the head broke it in light only.
+  assert.deepEqual(compare(["Switch to dark mode", "Switch to light mode"], ["Switch to light mode", "Switch to light mode"]), ["accessibility-label-changed"]);
+  assert.deepEqual(compare(["Switch to dark mode", "Switch to light mode"], ["Enable dark mode", "Switch to light mode"]), ["accessibility-label-changed"]);
+  // The base varies, the head does not.
+  assert.deepEqual(compare(["Save", "Save draft"], ["Submit", "Submit"]), ["accessibility-label-changed"]);
+  // The time varies; the name beside it changed.
+  assert.deepEqual(compare(["Posted by Alice · 2m", "Posted by Alice · 3m"], ["Posted by Bob · 4m", "Posted by Bob · 5m"]), ["accessibility-label-changed"]);
+  // A sibling capture that did not resolve cleanly is no evidence.
+  assert.deepEqual(compare(["Saved 2m ago", "Saved 3m ago"], ["Saved 4m ago", "Saved 5m ago"], { headSibling: { capturedSamples: 1 } }), ["accessibility-label-changed"]);
+  assert.deepEqual(compare(["Saved 2m ago", "Saved 3m ago"], ["Saved 4m ago", "Saved 5m ago"]), ["unstable-text"]);
+
+  // Provenance on one side only stays inconclusive.
+  const annotation = [{ identifier: "toggle", role: "button", textSource: "visible-title" }];
+  const result = compareSurfaceEvidence({
+    impact: impact(),
+    base: side("base", label("Saved 2m ago"), { annotations: annotation }),
+    head: side("head", label("Saved 4m ago")),
+    visualAssessment: visual(),
+    siblings: [{ base: side("base", label("Saved 3m ago"), { annotations: annotation }), head: side("head", label("Saved 5m ago")) }],
+  });
+  assert.equal(result.needsReview, true);
+  assert.ok(result.reviewReasons.some((reason) => /provenance.*one side/i.test(reason)));
+  assert.equal(supportedChanges(result).some((change) => change.kind === "unstable-text"), false);
+});
+
+test("text without an identifier that varies within both builds is matched by its place, not its label", () => {
+  const bounds = { x: 0, y: 120, width: 390, height: 64 };
+  // A pattern row: a pressable with one accessibility label and no testID, exposed again by its container on iOS.
+  const row = (label) => [
+    element({ elementId: "row", role: "button", label, selector: `label=${label}`, bounds }),
+    element({ elementId: "row-cell", role: "other", label, selector: `label=${label}`, bounds, actions: [], actionable: false }),
+  ];
+  const compare = (baseLabels, headLabels) => compareSurfaceEvidence({
+    impact: impact(),
+    base: side("base", row(baseLabels[0])),
+    head: side("head", row(headLabels[0])),
+    visualAssessment: visual(),
+    ...(baseLabels[1] ? { siblings: [{ base: side("base", row(baseLabels[1])), head: side("head", row(headLabels[1])) }] } : {}),
+  });
+  assert.deepEqual(supportedChanges(compare(["Velvet Tresillo, 4 lanes, edited 2m ago"], ["Velvet Tresillo, 4 lanes, edited 4m ago"])).map((change) => change.kind).sort(),
+    ["element-added", "element-removed"], "without a sibling capture the row left and arrived");
+
+  const result = compare(["Velvet Tresillo, 4 lanes, edited 2m ago", "Velvet Tresillo, 4 lanes, edited 3m ago"],
+    ["Velvet Tresillo, 4 lanes, edited 4m ago", "Velvet Tresillo, 4 lanes, edited 5m ago"]);
+  assert.deepEqual(supportedChanges(result), [{ kind: "unstable-text", subjectRole: "button",
+    before: "Velvet Tresillo, 4 lanes, edited 2m ago", after: "Velvet Tresillo, 4 lanes, edited 4m ago", within: "Velvet Tresillo, 4 lanes, edited 5m ago" }]);
+  assert.equal(result.needsReview, false);
+  // A random name is runtime state the same way.
+  assert.deepEqual(supportedChanges(compare(["Velvet Tresillo", "Copper Pulse"], ["Hollow Echo", "Ghost Relay"])).map((change) => change.kind), ["unstable-text"]);
+  // A real change in the same row is still a change.
+  assert.deepEqual(supportedChanges(compare(["Velvet Tresillo, 4 lanes, edited 2m ago", "Velvet Tresillo, 4 lanes, edited 3m ago"],
+    ["Velvet Tresillo, 5 lanes, edited 4m ago", "Velvet Tresillo, 5 lanes, edited 5m ago"])).map((change) => change.kind).sort(), ["element-added", "element-removed"]);
 });
 
 test("fails closed when visible-title provenance exists on only one side", () => {

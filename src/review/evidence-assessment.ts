@@ -318,7 +318,7 @@ export function decideReview(scope: SurfaceSourceScope, visual: PublicVisualVerd
   if (scope === "none") {
     if (!differs) return { status: "unchanged", description: "No visible change" };
     // The comparator's generic visual fact reads as a styling change; a variant names what differs.
-    const state = facts.find((fact) => fact.category !== "visual")?.bullet
+    const state = [...changes, ...facts].find((fact) => fact.category !== "visual")?.bullet
       ?? `${percentage(visual.mismatchPercentage)}${visual.regions?.[0]?.location ? ` · ${visual.regions[0].location}` : ""}`;
     return { status: "variant", description: truncate(`Runtime state differs: ${state}`), ...(facts.length ? { facts } : {}) };
   }
@@ -442,9 +442,16 @@ export async function assessPublicEvidence(options: {
       || (!surface.baseCapture && !surface.headCapture)) continue;
     // Every appearance the capture rendered is compared like-for-like: `<id>@<scheme>` frames against each other.
     const pairs = appearancePairs(surface.id, colorSchemes, baseColorSchemes);
-    // The same build's other appearances of this screen: a label that differs between them is runtime state.
-    const siblings = (sideName: "base" | "head", evidence: PublicEvidenceSide, route: SourceRoute, ids: string[]) => ids.flatMap((sibling) => {
-      try { return [matchedSide(sideName, evidence, { ...route, id: sibling }, options.profile)]; } catch { return []; }
+    // The screen's other appearances, rendered by both builds and verified on both: a label that varies between a
+    // build's own appearances is runtime state. An unverified capture may show another screen, so it is no evidence.
+    const baseRoute = surface.baseSurface, headRoute = surface.headSurface;
+    const siblings = (current: string) => pairs.flatMap((pair) => {
+      if (pair.id === current || pair.baseId === null || captureDiagnostic(surface, "base", options.base, pair.baseId)
+        || captureDiagnostic(surface, "head", options.head, pair.id)) return [];
+      try {
+        return [{ base: matchedSide("base", options.base, { ...baseRoute, id: pair.baseId }, options.profile),
+          head: matchedSide("head", options.head, { ...headRoute, id: pair.id }, options.profile) }];
+      } catch { return []; }
     });
     for (const { id, scheme, baseId } of pairs) {
       // An appearance the base never rendered has nothing to compare against: the head frame is new evidence.
@@ -522,8 +529,7 @@ export async function assessPublicEvidence(options: {
             base: matchedSide("base", options.base, { ...surface.baseSurface, id: baseId }, options.profile),
             head: matchedSide("head", options.head, { ...surface.headSurface, id }, options.profile),
             visualAssessment: assessment,
-            baseSiblings: siblings("base", options.base, surface.baseSurface, pairs.flatMap((pair) => pair.baseId && pair.baseId !== baseId ? [pair.baseId] : [])),
-            headSiblings: siblings("head", options.head, surface.headSurface, pairs.flatMap((pair) => pair.id !== id ? [pair.id] : [])),
+            siblings: siblings(id),
           });
           const summary = summarizeReviewerChanges({ changes: result.reviewerChanges });
           accessibilityCounts.compared += 1;
