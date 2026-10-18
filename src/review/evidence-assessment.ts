@@ -309,10 +309,12 @@ function localEvidencePath(side: PublicEvidenceSide, relativePath: string): stri
  */
 export function decideReview(scope: SurfaceSourceScope, visual: PublicVisualVerdict, summary?: WhatChangedSummary): PublicSurfaceReview {
   const facts = summary?.facts.map((fact) => ({ category: fact.category, templateId: fact.templateId, bullet: truncate(fact.bullet) })) ?? [];
-  const differs = visual.verdict === "modified" || facts.length > 0;
+  // Text that also differs between two captures of the same build is runtime state: listed, never what makes a change.
+  const changes = facts.filter((fact) => fact.templateId !== "visible-text.unstable-within-build");
+  const differs = visual.verdict === "modified" || changes.length > 0;
   const inconclusive = !differs && (visual.verdict === "needs-review" || Boolean(summary?.needsReview));
   const issue = summary?.reviewIssues[0]?.reason;
-  const evidenceText = facts[0]?.bullet ?? visualDescription(visual);
+  const evidenceText = changes[0]?.bullet ?? visualDescription(visual);
   if (scope === "none") {
     if (!differs) return { status: "unchanged", description: "No visible change" };
     // The comparator's generic visual fact reads as a styling change; a variant names what differs.
@@ -321,7 +323,7 @@ export function decideReview(scope: SurfaceSourceScope, visual: PublicVisualVerd
     return { status: "variant", description: truncate(`Runtime state differs: ${state}`), ...(facts.length ? { facts } : {}) };
   }
   if (differs) {
-    const description = !facts.length && issue ? `${visualDescription(visual)} · ${issue}` : evidenceText;
+    const description = !changes.length && issue ? `${visualDescription(visual)} · ${issue}` : evidenceText;
     return { status: "modified", description: truncate(description), ...(facts.length ? { facts } : {}) };
   }
   if (inconclusive) {
@@ -439,7 +441,12 @@ export async function assessPublicEvidence(options: {
     if (surface.baseSurface?.kind !== "screen" || surface.headSurface?.kind !== "screen"
       || (!surface.baseCapture && !surface.headCapture)) continue;
     // Every appearance the capture rendered is compared like-for-like: `<id>@<scheme>` frames against each other.
-    for (const { id, scheme, baseId } of appearancePairs(surface.id, colorSchemes, baseColorSchemes)) {
+    const pairs = appearancePairs(surface.id, colorSchemes, baseColorSchemes);
+    // The same build's other appearances of this screen: a label that differs between them is runtime state.
+    const siblings = (sideName: "base" | "head", evidence: PublicEvidenceSide, route: SourceRoute, ids: string[]) => ids.flatMap((sibling) => {
+      try { return [matchedSide(sideName, evidence, { ...route, id: sibling }, options.profile)]; } catch { return []; }
+    });
+    for (const { id, scheme, baseId } of pairs) {
       // An appearance the base never rendered has nothing to compare against: the head frame is new evidence.
       if (baseId === null) {
         if (localImagePath(options.head, id)) {
@@ -515,6 +522,8 @@ export async function assessPublicEvidence(options: {
             base: matchedSide("base", options.base, { ...surface.baseSurface, id: baseId }, options.profile),
             head: matchedSide("head", options.head, { ...surface.headSurface, id }, options.profile),
             visualAssessment: assessment,
+            baseSiblings: siblings("base", options.base, surface.baseSurface, pairs.flatMap((pair) => pair.baseId && pair.baseId !== baseId ? [pair.baseId] : [])),
+            headSiblings: siblings("head", options.head, surface.headSurface, pairs.flatMap((pair) => pair.id !== id ? [pair.id] : [])),
           });
           const summary = summarizeReviewerChanges({ changes: result.reviewerChanges });
           accessibilityCounts.compared += 1;

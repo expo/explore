@@ -70,6 +70,12 @@ export type CommonSurfaceComparatorInput = {
   visualAssessment: VisualEvidenceAssessment;
   /** Explicit stable runtime scope; semantic meaning is never inferred from diff pixels. */
   visualScope?: VisualReviewerChange["scope"];
+  /**
+   * Other captures of the same screen from the same build (its other appearances). A label that differs between them
+   * is runtime state, and its difference between the builds is reported as such, not as a text change.
+   */
+  baseSiblings?: readonly MatchedSurfaceSide[];
+  headSiblings?: readonly MatchedSurfaceSide[];
 };
 
 export type EvidenceComparatorInput =
@@ -139,6 +145,7 @@ const CHANGE_PRIORITY: Record<SupportedReviewerChange["kind"], number> = {
   "element-added": 20,
   "element-removed": 20,
   "visible-text-changed": 30,
+  "unstable-text": 35,
   "action-target-changed": 40,
   "accessibility-label-changed": 50,
   "accessibility-role-changed": 50,
@@ -772,10 +779,33 @@ function actionTarget(side: ResolvedSide, element: ObservedElement): ActionTarge
   return target ? { kind: "target", target } : { kind: "none", evidenceRefs: [] };
 }
 
+/** Labels one build shows differently in two captures of the same screen, by element id, with the other capture's text. */
+type UnstableLabels = Map<string, string>;
+
+function unstableLabels(
+  side: ResolvedSide,
+  siblings: readonly MatchedSurfaceSide[] | undefined,
+  impact: ComparatorSurfaceImpact,
+  requiredSamples: 1 | 3,
+): UnstableLabels {
+  const unstable: UnstableLabels = new Map();
+  for (const sibling of siblings ?? []) {
+    const resolution = resolveSide(side.side, sibling, impact, requiredSamples);
+    if (resolution.kind !== "resolved") continue;
+    for (const pair of matchElements(side, resolution.side).pairs) {
+      const label = compact(pair.base.label);
+      const other = compact(pair.head.label);
+      if (label && other && label !== other && !unstable.has(pair.base.elementId)) unstable.set(pair.base.elementId, other);
+    }
+  }
+  return unstable;
+}
+
 function comparePair(
   pair: ElementPair,
   base: ResolvedSide,
   head: ResolvedSide,
+  unstable: { base: UnstableLabels; head: UnstableLabels } = { base: new Map(), head: new Map() },
 ): { facts: SupportedInput[]; issues: IssueInput[] } {
   const facts: SupportedInput[] = [];
   const issues: IssueInput[] = [];
@@ -784,8 +814,17 @@ function comparePair(
   const headLabel = compact(pair.head.label);
   const baseAnnotation = base.annotationsByElementId.get(pair.base.elementId);
   const headAnnotation = head.annotationsByElementId.get(pair.head.elementId);
+  const within = unstable.head.get(pair.head.elementId) ?? unstable.base.get(pair.base.elementId);
 
-  if (baseLabel !== headLabel) {
+  if (baseLabel !== headLabel && within && baseLabel && headLabel) {
+    facts.push(supported({
+      kind: "unstable-text",
+      subjectRole: reviewerRole(pair.head.role),
+      before: baseLabel,
+      after: headLabel,
+      within,
+    }, refs));
+  } else if (baseLabel !== headLabel) {
     if (baseAnnotation && headAnnotation) {
       const subject = visibleTextSubject(pair, baseAnnotation, headAnnotation);
       if ("assessment" in subject) {
@@ -1131,8 +1170,12 @@ function commonResult(input: CommonSurfaceComparatorInput): EvidenceComparatorRe
       }, [elementRef("head", element)]));
     }
   }
+  const unstable = {
+    base: unstableLabels(base, input.baseSiblings, input.impact, input.impact.baseSamples),
+    head: unstableLabels(head, input.headSiblings, input.impact, input.impact.headSamples),
+  };
   for (const pair of pairing.pairs) {
-    const comparison = comparePair(pair, base, head);
+    const comparison = comparePair(pair, base, head, unstable);
     facts.push(...comparison.facts);
     issues.push(...comparison.issues);
   }
@@ -1145,7 +1188,7 @@ function commonResult(input: CommonSurfaceComparatorInput): EvidenceComparatorRe
   const visual = visualFact(input, base, head);
   // Pixels always move when an element appears or its text changes. The generic styling line
   // only informs when nothing in the accessibility tree accounts for the difference.
-  const explained = facts.length > 0 && input.visualScope?.kind !== "landmark";
+  const explained = facts.some((fact) => fact.change.kind !== "unstable-text") && input.visualScope?.kind !== "landmark";
   if (visual.fact && !explained) facts.push(visual.fact);
   if (visual.issue) issues.push(visual.issue);
 

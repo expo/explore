@@ -320,6 +320,39 @@ test("keeps an unannotated label delta in the accessibility category", () => {
   );
 });
 
+test("a label that also differs between the same build's own captures is runtime state, not a text change", () => {
+  const stamp = (label) => [element({ elementId: "stamp", identifier: "stamp", role: "text", label, actions: [], actionable: false })];
+  const input = {
+    impact: impact(),
+    base: side("base", stamp("edited 2m ago")),
+    head: side("head", stamp("edited 3m ago")),
+    visualAssessment: visual(),
+  };
+  const plain = supportedChanges(compareSurfaceEvidence(input));
+  assert.ok(plain.some((change) => change.kind === "accessibility-label-changed"), "without a sibling capture the label difference is a change");
+
+  const result = compareSurfaceEvidence({ ...input, headSiblings: [side("head", stamp("edited 4m ago"))] });
+  const changes = supportedChanges(result);
+  assert.deepEqual(changes.map((change) => change.kind), ["unstable-text"]);
+  assert.deepEqual(changes[0], { kind: "unstable-text", subjectRole: "text", before: "edited 2m ago", after: "edited 3m ago", within: "edited 4m ago" });
+  const summary = summarizeReviewerChanges({ changes: result.reviewerChanges });
+  assert.deepEqual(summary.facts.map((fact) => [fact.templateId, fact.bullet]),
+    [["visible-text.unstable-within-build", "Text varies between captures of the same build: \u201cedited 2m ago\u201d / \u201cedited 4m ago\u201d / \u201cedited 3m ago\u201d."]]);
+  assert.equal(summary.needsReview, false);
+
+  // The base's other appearance is evidence too, and a stable label beside it is still a change.
+  const mixed = compareSurfaceEvidence({
+    ...input,
+    base: side("base", [...stamp("edited 2m ago"), element({ identifier: "save", label: "Submit" })]),
+    head: side("head", [...stamp("edited 3m ago"), element({ identifier: "save", label: "Save" })]),
+    baseSiblings: [side("base", stamp("edited 1m ago"))],
+  });
+  assert.deepEqual(supportedChanges(mixed).map((change) => change.kind).sort(), ["accessibility-label-changed", "unstable-text"]);
+  // Pixels that only an unstable label explains still get the generic styling line.
+  const pixels = compareSurfaceEvidence({ ...input, visualAssessment: visual("modified"), headSiblings: [side("head", stamp("edited 4m ago"))] });
+  assert.deepEqual(supportedChanges(pixels).map((change) => change.kind), ["unstable-text", "visual-changed"]);
+});
+
 test("fails closed when visible-title provenance exists on only one side", () => {
   const annotation = [{
     identifier: "primary-cta",

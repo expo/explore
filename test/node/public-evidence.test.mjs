@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { assessPublicEvidence, presenceDescription, ignoreStatusBar, ignoreSystemBands, readExportedMap } from "../../dist/review/evidence-assessment.js";
+import { assessPublicEvidence, decideReview, presenceDescription, ignoreStatusBar, ignoreSystemBands, readExportedMap } from "../../dist/review/evidence-assessment.js";
 import { STATUS_BAR_BAND_PERCENT } from "../../dist/shared/png-evidence.js";
 import { homeIndicatorBandPercent, statusBarBandPercent } from "../../dist/contracts/capture.js";
 import { AGENT_DEVICE_VERSION } from "../../dist/capture/run.js";
@@ -496,4 +496,17 @@ test("a presence verdict for a long route (an encoded share link) stays within t
     assert.ok(description.startsWith(`${prefix}/p/AAA`) && description.endsWith(`\u2026${suffix}`));
   }
   assert.equal(presenceDescription("Added ", "/home", " screen."), "Added /home screen.");
+});
+
+test("unstable text never makes a screen Modified, and names a variant's runtime state", () => {
+  const unstable = { category: "visible-text", templateId: "visible-text.unstable-within-build", bullet: 'Text varies between captures of the same build: "2m" / "4m" / "3m".' };
+  const summary = (facts) => ({ facts, needsReview: false, reviewIssues: [] });
+  const unchanged = { verdict: "unchanged", reason: "matched", mismatchPercentage: 0, threshold: 0.1, tool: "t" };
+  const modified = { ...unchanged, verdict: "modified", reason: "repeated-cross-build-delta", mismatchPercentage: 0.4, regions: [{ location: "center" }] };
+  assert.deepEqual(decideReview("screen", unchanged, summary([unstable])), { status: "unchanged", description: "No visible change" });
+  const pixels = decideReview("screen", modified, summary([unstable]));
+  assert.deepEqual([pixels.status, pixels.description, pixels.facts.length], ["modified", "Visual change · 0.4% · center", 1]);
+  const real = decideReview("screen", modified, summary([{ category: "accessibility", templateId: "accessibility.label-changed", bullet: 'Changed accessibility label from "Submit" to "Save".' }, unstable]));
+  assert.equal(real.description, 'Changed accessibility label from "Submit" to "Save".');
+  assert.equal(decideReview("none", modified, summary([unstable])).description, 'Runtime state differs: Text varies between captures of the same build: "2m" / "4m" / "3m".');
 });
