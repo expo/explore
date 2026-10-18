@@ -196,7 +196,9 @@ function previewExpiry(expiresAt: number): string {
  */
 /** "Flow Send money: passed, 4 frames, 1 changed" — one line per e2e flow the capture ran. */
 function flowLines(review: PublicReview): string[] {
-  return (Array.isArray(review.flows) ? review.flows : []).map(entry => {
+  const notRun = ((["head", "base"] as const).filter(side => review.flowsFailure?.[side]))
+    .map(side => `Flows did not run on ${side}: ${plainText(review.flowsFailure![side]!.message, 200)}.`);
+  return [...notRun, ...(Array.isArray(review.flows) ? review.flows : []).map(entry => {
     const side = (name: "base" | "head") => {
       const flow = entry[name];
       if (!flow) return `not run on ${name}`;
@@ -207,7 +209,7 @@ function flowLines(review: PublicReview): string[] {
     const changed = compared.filter(frame => frame.visual?.verdict === "modified").length;
     const frames = entry.frames.length ? `${plural(entry.frames.length, "frame")}${compared.length ? `, ${changed ? `${changed} changed` : "none changed"}` : ""}` : "no frames";
     return `Flow ${plainText(entry.title, 80)}: ${side("head")}; ${frames}${entry.base && entry.head && entry.base.status === "passed" && entry.head.status !== "passed" ? ` (was ${side("base")})` : ""}.`;
-  });
+  })];
 }
 /** "Launch: splash unchanged for 3.1 s" — the app launch per appearance, kept apart from the screen rows. */
 function launchLine(review: PublicReview): string | undefined {

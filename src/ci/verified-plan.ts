@@ -91,6 +91,8 @@ export async function buildVerifiedPlan(options: {
     changedFiles: internal,
     externalChanges: external,
     mode: options.scope ?? config.exploration.scope,
+    // Flows mode keeps the route inventory for the map and the navigation context, and captures none of it.
+    ...(config.mode === "flows" ? { captureRoutes: false } : {}),
     ...(config.exploration.exclude ? { exclude: config.exploration.exclude } : {}),
     provider: config.navigation.provider,
     ...(config.navigation.entry ? { entry: config.navigation.entry } : {}),

@@ -357,3 +357,14 @@ test('a head that gained a dark appearance reviews <id>@dark with its own digest
   assert.equal(secondary.headOutcome.status, 'captured');
   assert.equal(secondary.headImage.url, `https://embedded.expo-explore.invalid/${darkSha}.png`);
 });
+
+test('a flows failure is published per side and validated as a code and a bounded message', async t => {
+  const f = await captureFixture(t);
+  const result = await prepareCaptureReview({ ...f.options });
+  const failure = { code: 'FLOWS_NOT_RUN', message: 'The e2e worker wrote no result.' };
+  assertPublicReview({ ...result.review, flowsFailure: { head: failure } });
+  assertPublicReview({ ...result.review, flowsFailure: { base: failure, head: failure } });
+  for (const invalid of [{}, { head: {} }, { head: { code: 1, message: 'x' } }, { head: { ...failure, extra: true } }, { other: failure }, { head: { ...failure, message: 'x'.repeat(4_001) } }]) {
+    assert.throws(() => assertPublicReview({ ...result.review, flowsFailure: invalid }), /Public flows failure is invalid/);
+  }
+});

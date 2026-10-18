@@ -1184,7 +1184,7 @@ function ViewerApp() {
       ? { ...presentedMap, run: { ...presentedMap.run, name: workspace.catalog.name } }
       : presentedMap
   ), [presentedMap, workspace]);
-  const hasFlows = Array.isArray(loadedPublicReview?.flows) && loadedPublicReview!.flows!.length > 0;
+  const hasFlows = (Array.isArray(loadedPublicReview?.flows) && loadedPublicReview!.flows!.length > 0) || loadedPublicReview?.flowsFailure !== undefined;
   // A flows-only review has no routes: the Map and Screens would be empty, so the Flows view is the home.
   const flowsOnly = hasFlows && map !== undefined && map.screens.length > 0 && map.screens.every((screen) => isFlowScreen(screen));
   useEffect(() => {

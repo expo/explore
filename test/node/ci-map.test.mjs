@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
@@ -103,10 +103,16 @@ async function fixture(t, settings = {}) {
   await writeCaptureObserverPackages(project);
   await writeFile(join(project, 'package.json'), '{"name":"example","main":"index.js"}\n');
   await writeFile(join(project, 'app.json'), JSON.stringify({ expo: { name: 'Example', slug: 'example' } }));
+  if (settings.flowFiles) {
+    // The app resolves `e2e` from its own node_modules, as a real app does.
+    await mkdir(join(project, 'e2e')); await mkdir(join(project, 'node_modules'), { recursive: true });
+    symlinkSync(new URL('../../node_modules/e2e', import.meta.url).pathname, join(project, 'node_modules', 'e2e'), 'dir');
+    for (const [name, source] of Object.entries(settings.flowFiles)) await writeFile(join(project, 'e2e', name), source);
+  }
   const routes = settings.routes ?? [route('home'), route('settings')];
   const files = new Map(routes.map(item => [item.routeFile, 'export default function Screen(){return null;}']));
   const plan = createSourceCapturePlan({ baseSha: SHA, headSha: HEAD, baseFiles: files, headFiles: files,
-    changedFiles: [], mode: 'all', provider: 'expo-router' });
+    changedFiles: [], mode: 'all', provider: 'expo-router', ...(settings.flows?.only ? { captureRoutes: false } : {}) });
   const ids = Object.fromEntries(routes.map(item => [item.id, plan.surfaces.find(row => row.baseSurface.routeFile === item.routeFile).id]));
   const planPath = join(root, 'plan.json'); await writeFile(planPath, JSON.stringify(plan));
   const requests = [];
@@ -125,6 +131,12 @@ async function fixture(t, settings = {}) {
   const runner = request => {
     requests.push(request);
     const command = request.args[0];
+    // The flows worker is a real child process: e2e runs the app's test files against the fake engine.
+    if (request.command === process.execPath) {
+      const child = spawnSync(request.command, request.args, { cwd: request.cwd, env: request.environment, encoding: 'utf8', timeout: request.timeoutMs });
+      if (child.status !== 0 && !request.allowFailure) throw new Error(`worker exited ${child.status}: ${child.stderr}`);
+      return { stdout: child.stdout ?? '', stderr: child.stderr ?? '' };
+    }
     if (request.command === 'git') {
       if (command === 'ls-files') return { stdout: readdirSync(project, { recursive: true, withFileTypes: true })
         .filter(entry => entry.isFile() && !relative(project, entry.parentPath).split(sep).includes('node_modules'))
@@ -378,7 +390,7 @@ async function fixture(t, settings = {}) {
     buildId: 'source-capture', buildVersion: '1', gitCommit: SHA, bundleId: 'com.example.app',
     ...(settings.noScheme ? {} : { scheme: 'sample' }), device: deviceName, easProfile: 'capture', expoToken: 'expo-private', ...(settings.android ? { platform: 'android' } : {}),
     planPath, maxScreens: 120, maxActions: 500, maxDurationMinutes: 30, forceFreshBuild: false,
-    confirmExternalRun: true, confirmTrustedSource: true, easCommand: 'fake-eas', repackCommand: 'fake-repack', agentDeviceCommand: 'fake-controller', ...(settings.argent ? { controller: 'argent' } : {}), ...(settings.devicePose ? { devicePose: settings.devicePose } : {}), ...(settings.launch ? { launch: settings.launch, recordingTools: settings.recordingTools ?? null } : {}), ...(settings.repack ? { repack: settings.repack } : {}), ...(settings.local ? { simulator: 'local' } : {}),
+    confirmExternalRun: true, confirmTrustedSource: true, easCommand: 'fake-eas', repackCommand: 'fake-repack', agentDeviceCommand: 'fake-controller', ...(settings.argent ? { controller: 'argent' } : {}), ...(settings.devicePose ? { devicePose: settings.devicePose } : {}), ...(settings.launch ? { launch: settings.launch, recordingTools: settings.recordingTools ?? null } : {}), ...(settings.repack ? { repack: settings.repack } : {}), ...(settings.local ? { simulator: 'local' } : {}), ...(settings.flows ? { flows: settings.flows } : {}),
     environment: { PATH: process.env.PATH, HOME: root, ...(settings.local && settings.android ? { ANDROID_HOME: sdk, TMPDIR: root } : {}), GITHUB_TOKEN: 'github-private', ANTHROPIC_API_KEY: 'must-not-be-used', AGENT_DEVICE_DAEMON_AUTH_TOKEN: 'wrong-token', ...settings.environment },
     // Every controller round trip advances the fixture clock by one poll interval, as a device snapshot would.
     runner: request => { clockMs += 600; return runner(request); }, now: () => clockMs, sleep: milliseconds => { clockMs += milliseconds; }, fetch: catalog };
@@ -3351,4 +3363,42 @@ test('a verified label is located on the image\'s axes when the screenshot is th
   assert.deepEqual(verifiedCaptureLabels(nodes, ['Done'])[0].rect, { x: 10, y: 900, width: 100, height: 40 });
   // A 669 x 951 portrait panel captured upright as a 951 x 669 image: the button near its bottom-left is near the image's top-left.
   assert.deepEqual(verifiedCaptureLabels(nodes, ['Done'], { height: 951 })[0].rect, { x: 11, y: 10, width: 40, height: 100 });
+});
+
+const FAKE_ENGINE = new URL('../fixtures/flows/fake-engine.mjs', import.meta.url).pathname;
+const FLOW_FILE = `import { test, expect } from "e2e";
+test("home shows the balance", async ({ app, screen }) => {
+  await app.screenshot("home");
+  await screen.getByTestId("home-send").tap();
+  await expect(screen.getByRole("heading", "Your contacts")).toBeVisible();
+  await app.screenshot("contacts");
+});
+`;
+
+test('flows mode runs the app\'s e2e files after the routes, hands the device over, and exports their frames with the map', async t => {
+  const f = await fixture(t, { flows: { tests: ['e2e/*.e2e.ts'], only: true }, flowFiles: { 'home.e2e.ts': FLOW_FILE }, environment: { EXPLORE_FLOWS_ENGINE_MODULE: FAKE_ENGINE } });
+  const result = await runCiMap(f.options);
+  const bundle = JSON.parse(await readFile(join(f.options.outputDirectory, 'bundle.json'), 'utf8'));
+  assert.equal(bundle.flowsFailure, undefined);
+  const flow = bundle.flows['home/home-shows-the-balance'];
+  assert.equal(flow.status, 'passed');
+  assert.deepEqual(Object.keys(flow.frames), ['home', 'contacts']);
+  for (const frame of Object.values(flow.frames)) {
+    const png = await readFile(join(f.options.outputDirectory, frame.path));
+    assert.equal(createHash('sha256').update(png).digest('hex'), frame.sha256, 'the exported frame is the one the flow took');
+  }
+  assert.deepEqual(Object.keys(bundle.images), [], 'flows mode captures no routes');
+  assert.deepEqual((await readdir(f.options.project)).filter(name => name.startsWith('.expo-explore')), [], "e2e's output leaves the app directory");
+  assert.ok(f.operations().lastIndexOf('close') < f.requests.findIndex(request => request.command === process.execPath), 'Explore closes its session before e2e opens the app');
+  assert.equal(result.runStatus, 'complete', 'no route was planned, so none is missing');
+});
+
+test('a flows worker that cannot start leaves a flows failure in the bundle instead of failing the capture', async t => {
+  const f = await fixture(t, { flows: { tests: ['e2e/*.e2e.ts'], only: true }, flowFiles: { 'home.e2e.ts': FLOW_FILE }, environment: { EXPLORE_FLOWS_ENGINE_MODULE: join(tmpdir(), 'missing-engine.mjs') } });
+  await runCiMap(f.options);
+  const bundle = JSON.parse(await readFile(join(f.options.outputDirectory, 'bundle.json'), 'utf8'));
+  assert.equal(bundle.flows, undefined);
+  assert.equal(bundle.flowsFailure.code, 'FLOWS_NOT_RUN');
+  assert.match(bundle.flowsFailure.message, /missing-engine/);
+  assert.deepEqual((await readdir(f.options.project)).filter(name => name.startsWith('.expo-explore')), []);
 });

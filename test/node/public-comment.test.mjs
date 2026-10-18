@@ -588,3 +588,12 @@ test('a comment written by a per-platform version keeps parsing, and malformed t
   const many = Array.from({ length: 10 }, (_, index) => line(`t${index}`, { ...valid, target: `t${index}` }));
   assert.equal(parse(...many).length, 8, 'a comment holds at most one record per configurable target');
 });
+
+test('a side whose flows did not run is named with e2e\'s reason, ahead of the flow lines', () => {
+  const flowsFailure = { head: { code: 'FLOWS_NOT_RUN', message: 'Cannot find module "e2e/runner"' } };
+  const body = renderPublicComment(reviewOnlyState({ ...review([surface('home', 'unchanged')]), flowsFailure }));
+  assert.match(visible(body), /Flows did not run on head: Cannot find module "e2e\/runner"\./);
+  const both = renderPublicComment(reviewOnlyState({ ...review([surface('home', 'unchanged')]), flowsFailure: { ...flowsFailure, base: { code: 'FLOWS_NOT_RUN', message: 'timed out' } } }));
+  assert.match(visible(both), /Flows did not run on head: Cannot find module/);
+  assert.match(visible(both), /Flows did not run on base: timed out\./);
+});

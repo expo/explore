@@ -262,7 +262,7 @@ async function uploadSide(store: ScreenshotStore, directory: string, expectedCom
     const { path: _, ...metadata } = bundle.appIcon;
     appIcon = { ...metadata, url: await store.put(`${prefix}/${APP_ICON_FILE}`, bytes, "image/png") };
   }
-  return { bundle, images, appIcon, launch, flows };
+  return { bundle, images, appIcon, launch, flows, ...(bundle.flowsFailure ? { flowsFailure: bundle.flowsFailure } : {}) };
 }
 /** Every flow either side ran, head's order first; a frame row for each key a side took, in head's step order. */
 function publicFlows(base: { bundle: CaptureBundle; flows: Record<string, PublicFlowSide> }, head: { bundle: CaptureBundle; flows: Record<string, PublicFlowSide> },
@@ -350,6 +350,7 @@ async function constructCaptureReview(options: CaptureReviewOptions, store: Scre
           ...(assessment?.visual ? { visual: assessment.visual } : {}) };
       }) } : {}),
     ...(Object.keys(head.flows).length || Object.keys(base.flows).length ? { flows: publicFlows(base, head, options.assessments) } : {}),
+    ...(base.flowsFailure || head.flowsFailure ? { flowsFailure: { ...(base.flowsFailure ? { base: base.flowsFailure } : {}), ...(head.flowsFailure ? { head: head.flowsFailure } : {}) } } : {}),
     surfaces: plan.surfaces.flatMap(s => appearancePairs(s.id, colorSchemes, baseColorSchemes).map(({ id, scheme, baseId }) => {
       const assessment = options.assessments?.[id];
       // The bundle records one outcome per route; a secondary appearance's surface carries that outcome only when the

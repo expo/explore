@@ -146,7 +146,14 @@ function validFlowSide(value: unknown): value is PublicFlowSide {
     && side.frames !== null && typeof side.frames === "object" && Object.entries(side.frames).every(([key, frame]) => /^[a-z0-9-]+$/.test(key) && validFlowFrame(frame));
 }
 /** Flow evidence is one entry per flow either side ran, with a verdict only for frames both sides took. */
+const validFlowsFailure = (value: unknown): boolean => Boolean(value) && typeof value === "object" && Object.keys(value as object).every(key => key === "code" || key === "message")
+  && typeof (value as { code: unknown }).code === "string" && typeof (value as { message: unknown }).message === "string" && (value as { message: string }).message.length <= 4_000;
 function assertFlowEvidence(review: PublicReview, enforceComparisonEvidence: boolean): void {
+  if (review.flowsFailure !== undefined) {
+    const failure = review.flowsFailure;
+    if (!failure || typeof failure !== "object" || !Object.keys(failure).length || Object.keys(failure).some(key => key !== "base" && key !== "head")
+      || Object.values(failure).some(value => !validFlowsFailure(value))) throw new Error("Public flows failure is invalid");
+  }
   const flows = review.flows;
   // Reports from before flow evidence carry a structural `flows` object (source-derived groups); it is not evidence.
   if (flows === undefined || (flows !== null && typeof flows === "object" && !Array.isArray(flows))) return;

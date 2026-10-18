@@ -104,7 +104,13 @@ export function FlowsView(props: { review: PublicReview; phone?: boolean; onOpen
   const flows = Array.isArray(props.review.flows) ? props.review.flows : [];
   return (
     <main className={`flows-page${props.phone ? " phone" : ""}`} aria-label="Flows">
-      {flows.length === 0 ? <p className="flows-empty">This review ran no flows.</p> : null}
+      {(["head", "base"] as const).filter(side => props.review.flowsFailure?.[side]).map(side => (
+        <section key={side} className="flow-card tone-failed flows-not-run" role="alert">
+          <header className="flow-header"><div><h2>The flows did not run</h2></div><div className="flow-outcomes"><span className="flow-outcome"><span className="flow-outcome-side">{SIDE_LABEL[side]}</span><span className="flow-status tone-failed">{props.review.flowsFailure![side]!.code}</span></span></div></header>
+          <p className="flow-failure">{props.review.flowsFailure![side]!.message}</p>
+        </section>
+      ))}
+      {flows.length === 0 && !props.review.flowsFailure ? <p className="flows-empty">This review ran no flows.</p> : null}
       {flows.map(entry => {
         const head = entry.head; const base = entry.base;
         const headStop = head ? stoppedAt(head) : undefined;

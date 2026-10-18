@@ -226,6 +226,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   // Launch evidence waits in a work directory until the export directory exists.
   const launch: Record<string, { root: string; record: BundleLaunchCapture }> = {};
   const launchWorkDirectory = await mkdtemp(join(tmpdir(), "expo-explore-launch-"));
+  // Flow frames land here first: the export directory must not exist until the map is exported into it.
+  const flowsWorkDirectory = await mkdtemp(join(tmpdir(), "expo-explore-flows-"));
   const acceptedFrames: Record<string, AgentAcceptedFrame> = {};
   if (options.reuseDirectory) {
     const cacheRoot = await realpath(options.reuseDirectory);
@@ -328,6 +330,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     + (missingRoutes.length ? `, ${missingRoutes.length} to capture` : ""));
   let captureFailure: unknown;
   let flowRecords: CaptureBundle["flows"] | undefined;
+  let flowsFailure: CaptureBundle["flowsFailure"] | undefined;
   const captureStartedAt = (options.now ?? Date.now)();
   const finish = async (): Promise<CiMapResult> => {
     if (!(await store.exists())) await store.initialize(map, false);
@@ -387,6 +390,16 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       launchRecords[scheme] = record;
     }
     await rm(launchWorkDirectory, { recursive: true, force: true });
+    for (const flow of Object.values(flowRecords ?? {})) {
+      for (const frame of Object.values(flow.frames)) {
+        const source = join(flowsWorkDirectory, frame.path);
+        await assertNoSymlinkAncestors(flowsWorkDirectory, source, "flow frame");
+        await mkdir(join(outputDirectory, dirname(frame.path)), { recursive: true });
+        await copyFile(source, join(outputDirectory, frame.path));
+        if (createHash("sha256").update(await readFile(join(outputDirectory, frame.path))).digest("hex") !== frame.sha256) throw new Error(`Exported flow frame ${frame.path} does not match the captured file`);
+      }
+    }
+    await rm(flowsWorkDirectory, { recursive: true, force: true });
     const storedIcon = appIcon ? await storeAppIcon(outputDirectory, appIcon) : undefined;
     const bundle: CaptureBundle = { contract: "explore.bundle", side, gitCommit: options.gitCommit, easBuildId: frameBuildId, completedAt: map.run.completedAt,
       easProjectId: projectId, platform: options.platform, profile: options.easProfile, appName: app.name, ...(controller === "argent" ? { controller } : {}), ...(storedIcon ? { appIcon: storedIcon } : {}),
@@ -394,7 +407,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       runtimeProfile: metadata ? { deviceModel: metadata.deviceModel, osVersion: metadata.osVersion, locale: metadata.locale,
         orientation: metadata.orientation, colorScheme: metadata.colorScheme, ...(metadata.colorSchemes ? { colorSchemes: metadata.colorSchemes.join(",") } : {}) } : null, images, outcomes, procedure: { reset: options.reset ?? "root-link", readinessSeconds: options.readinessSeconds ?? defaultReadinessSeconds(options.platform) },
       ...(Object.keys(launchRecords).length ? { launch: launchRecords } : {}),
-      ...(flowRecords ? { flows: flowRecords } : {}),
+      ...(flowRecords && Object.keys(flowRecords).length ? { flows: flowRecords } : {}),
+      ...(flowsFailure ? { flowsFailure } : {}),
       ...(options.agent ? { captureContexts: Object.fromEntries(selectedIds.filter(id => outcomes[id]?.status === "captured" && options.agent!.contexts[id])
         .map(id => [id, options.agent!.contexts[id]!])), agentAcceptance: { policy: AGENT_ACCEPTANCE_POLICY,
           frames: Object.fromEntries(Object.keys(images).map(id => [id, acceptedFrames[id]!])) } } : {}) };
@@ -779,9 +793,10 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         environment: controllerEnvironment, timeoutMs: 60_000, allowFailure: true });
       const result = await runFlows({ project, tests: options.flows.tests, platform: options.platform, bundleId: options.bundleId, connection,
         ...(connection ? {} : { stateDir: join(simulatorProject, "agent-device-state") }), deviceId: runtime.controllerDeviceId,
-        workDirectory: simulatorProject, outputDirectory, runner, environment: controllerEnvironment, timeoutMs: remainingMs,
+        workDirectory: simulatorProject, outputDirectory: flowsWorkDirectory, runner, environment: controllerEnvironment, timeoutMs: remainingMs,
         agent: options.flows.agent, progress: say, ...(options.environment?.EXPLORE_FLOWS_ENGINE_MODULE ? { engineModule: options.environment.EXPLORE_FLOWS_ENGINE_MODULE } : {}) });
       flowRecords = result.flows;
+      flowsFailure = result.failure;
     }
   } catch (error) { primaryError = toCiError(error, { code: `CAPTURE_${runtimeStage.toUpperCase()}_FAILED`, stage: runtimeStage,
     nextAction: "Inspect the capture diagnostic, correct the failing prerequisite, and rerun Explore." }); }

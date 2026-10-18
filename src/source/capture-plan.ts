@@ -21,6 +21,8 @@ export type CapturePlanOptions = DiscoverRouteOptions & {
   changedFiles: SourceChange[];
   externalChanges?: SourceChange[];
   mode?: CaptureMode;
+  /** False when the capture runs flows only: every route stays in the inventory and the navigation context, none is captured. */
+  captureRoutes?: boolean;
   /** Routes named in exploration.exclude: kept in the map and its navigation context, never captured. */
   exclude?: string[];
   navigation?: Pick<DiscoverRouteOptions, "provider" | "entry">;
@@ -31,6 +33,8 @@ export type SourceCapturePlan = {
   baseSha: string;
   headSha: string;
   mode: CaptureMode;
+  /** Present, as false, when the plan captures no route (flows mode): the inventory and navigation are kept, no surface is captured. */
+  captureRoutes?: false;
   conservative: boolean;
   unresolved: string[];
   diagnostics: { base: string[]; head: string[] };
@@ -159,11 +163,12 @@ export function createSourceCapturePlan(options: CapturePlanOptions): SourceCapt
   const seeds = definitions.filter(route => route.status !== "unchanged").map(route => route.id);
   const selected = { base: new Set(navigationCaptureContext(navigation.base, seeds, baseRoutes)), head: new Set(navigationCaptureContext(navigation.head, seeds, headRoutes)) };
   const excluded = excludedSurfaceIds(definitions, options.exclude ?? []);
+  const captureRoutes = options.captureRoutes ?? true;
   const surfaces = definitions.map(route => ({ ...route,
-    baseCapture: Boolean(route.baseSurface && route.baseSurface.kind !== "redirect" && !excluded.includes(route.id) && (mode === "all" || selected.base.has(route.id))),
-    headCapture: Boolean(route.headSurface && route.headSurface.kind !== "redirect" && !excluded.includes(route.id) && (mode === "all" || selected.head.has(route.id))),
+    baseCapture: Boolean(captureRoutes && route.baseSurface && route.baseSurface.kind !== "redirect" && !excluded.includes(route.id) && (mode === "all" || selected.base.has(route.id))),
+    headCapture: Boolean(captureRoutes && route.headSurface && route.headSurface.kind !== "redirect" && !excluded.includes(route.id) && (mode === "all" || selected.head.has(route.id))),
   }));
-  return { contract: "explore.plan", baseSha: options.baseSha, headSha: options.headSha, mode, conservative, unresolved, surfaces, navigation,
+  return { contract: "explore.plan", baseSha: options.baseSha, headSha: options.headSha, mode, ...(captureRoutes ? {} : { captureRoutes: false as const }), conservative, unresolved, surfaces, navigation,
     diagnostics: { base: baseInventory.diagnostics, head: headInventory.diagnostics },
     inventorySurfaceIds: surfaces.map(route => route.id), baseCaptureSurfaceIds: surfaces.filter(route => route.baseCapture).map(route => route.id), headCaptureSurfaceIds: surfaces.filter(route => route.headCapture).map(route => route.id),
     ...(excluded.length ? { excludedSurfaceIds: excluded } : {}),

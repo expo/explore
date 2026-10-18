@@ -4,7 +4,7 @@
  * took before failing, and the capture goes on: flows are review evidence, not a gate.
  */
 import { createHash } from "node:crypto";
-import { copyFile, lstat, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readFile, realpath, rm, writeFile, mkdtemp, rmdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BundleFlow, FlowFrame } from "../../contracts/capture.js";
@@ -58,14 +58,18 @@ export async function runFlows(options: RunFlowsOptions): Promise<FlowsOutcome> 
   await mkdir(work, { recursive: true, mode: 0o700 });
   // e2e keeps its report and screenshots inside the project it tests, so they live in the app directory while the
   // flows run and leave with the frames copied out: the capture's checkout must be clean again when it ends.
-  const output = join(options.project, FLOWS_OUTPUT_DIRECTORY);
-  try { await mkdir(output, { mode: 0o700 }); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") return { flows: {}, failure: { code: "FLOWS_OUTPUT_EXISTS", message: `${FLOWS_OUTPUT_DIRECTORY} already exists in the app directory; remove it and rerun.` } };
-    throw error;
-  }
+  // The sides of one commit share a checkout across platforms, so each run gets its own directory under it.
+  const root = join(options.project, FLOWS_OUTPUT_DIRECTORY);
+  const existing = await lstat(root).catch(() => undefined);
+  if (existing && !existing.isDirectory()) return { flows: {}, failure: { code: "FLOWS_OUTPUT_EXISTS", message: `${FLOWS_OUTPUT_DIRECTORY} exists in the app directory and is not a directory; remove it and rerun.` } };
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  const output = await mkdtemp(join(root, `${options.platform}-`));
   try { return await executeFlows(options, work, output, say); }
-  finally { await rm(output, { recursive: true, force: true }); }
+  finally {
+    await rm(output, { recursive: true, force: true });
+    // The last run out removes the directory; a concurrent run's files keep it (ENOTEMPTY).
+    await rmdir(root).catch(() => undefined);
+  }
 }
 
 async function executeFlows(options: RunFlowsOptions, work: string, output: string, say: (message: string) => void): Promise<FlowsOutcome> {
@@ -87,7 +91,8 @@ async function executeFlows(options: RunFlowsOptions, work: string, output: stri
   let summary: FlowsResult;
   try { summary = JSON.parse(await readFile(join(output, "explore-flows.json"), "utf8")) as FlowsResult; }
   catch {
-    const message = (result.stderr || result.stdout).trim().split("\n").slice(-5).join("\n").slice(0, 2_000);
+    // The worker prints the error and its stack; the message is the error lines, not the frames.
+    const message = (result.stderr || result.stdout).trim().split("\n").filter(line => line.trim() && !/^\s+at /.test(line)).slice(0, 4).join("\n").slice(0, 2_000);
     say(`the flows did not run: ${message || "the e2e worker wrote no result"}`);
     return { flows: {}, failure: { code: "FLOWS_NOT_RUN", message: message || "The e2e worker wrote no result." } };
   }

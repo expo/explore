@@ -64,6 +64,8 @@ export type BundleLaunchCapture = {
 
 /** A frame a flow took with `app.screenshot(label)`; stored and verified like a launch frame. */
 export type FlowFrame = LaunchFrame;
+/** A flows run that produced no flow records: the e2e worker failed before any test ran. */
+export type FlowsFailure = { code: string; message: string };
 export type FlowStatus = "passed" | "failed" | "skipped" | "flaky" | "timed-out" | "interrupted" | "blocked";
 export type FlowStepStatus = "passed" | "failed" | "blocked" | "timed-out" | "cancelled";
 export type BundleFlowStep = {
@@ -110,6 +112,8 @@ export type CaptureBundle = {
   launch?: Record<string, BundleLaunchCapture>;
   /** The app's e2e flows run on this revision, by flow id, when the config names flows. */
   flows?: Record<string, BundleFlow>;
+  /** Why the flows produced no records at all (the e2e worker did not run, or collected no test), when the config names flows. */
+  flowsFailure?: FlowsFailure;
   /** How route frames were produced; absent in bundles from before `capture.reset` existed (root-link was not applied). */
   procedure?: { reset: "root-link" | "none"; readinessSeconds?: number };
   /** Committed destination goals used for this capture, including cached evidence. */
@@ -302,6 +306,8 @@ export type PublicReview = {
   launch?: PublicLaunchEvidence[];
   /** The app's e2e flows the capture ran, kept apart from source routes like the launch. */
   flows?: PublicFlowEvidence[];
+  /** A side whose flows did not run at all, with e2e's reason; the review still carries the other side's flows. */
+  flowsFailure?: { base?: FlowsFailure; head?: FlowsFailure };
   surfaces: Array<{
     id: string; status: "added" | "modified" | "removed" | "unchanged";
     base: SourceRoute | null; head: SourceRoute | null;
@@ -324,7 +330,7 @@ export function validateCapturePlan(value: unknown): SourceCapturePlan {
   const p = value as SourceCapturePlan;
   if (!p || p.contract !== "explore.plan"
     || !/^[a-f0-9]{40}$/.test(p.baseSha) || !/^[a-f0-9]{40}$/.test(p.headSha)
-    || !["all", "changes"].includes(p.mode)
+    || !["all", "changes"].includes(p.mode) || (p.captureRoutes !== undefined && p.captureRoutes !== false)
     || !Array.isArray(p.surfaces) || p.surfaces.length > 5000) throw new Error("Invalid source capture plan");
   const ids = new Set<string>();
   for (const s of p.surfaces) {
@@ -355,7 +361,7 @@ export function validateCapturePlan(value: unknown): SourceCapturePlan {
     const context = graph ? new Set(navigationCaptureContext(graph, seeds, routes)) : undefined;
     for (const surface of p.surfaces) {
       const entry = surface[`${side}Surface`];
-      const selected = Boolean(entry && entry.kind !== "redirect" && !excluded.has(surface.id)
+      const selected = Boolean(p.captureRoutes !== false && entry && entry.kind !== "redirect" && !excluded.has(surface.id)
         && (p.mode === "all" || (context ? context.has(surface.id) : surface.status !== "unchanged")));
       if (surface[`${side}Capture`] !== selected) throw new Error("Capture selection disagrees with source and navigation context");
     }
