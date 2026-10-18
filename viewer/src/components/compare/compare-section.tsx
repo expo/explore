@@ -6,7 +6,7 @@ import type { MapIndex } from "../../utils/model";
 import type { ChangedScreen } from "../../utils/changed-screens";
 import { groupVisualRegions, layoutShiftSummary, type VisualChange } from "../../utils/visual-diff";
 import { formatShortcut, matchesShortcut, SHORTCUTS, shortcutsLive } from "../../utils/shortcuts";
-import { createKeyHold, glideWhileHeld, HOLD_INITIAL_DELAY_MS, type KeyHold } from "../../utils/key-hold";
+import { createKeyHold, DIVIDER_GLIDE, glideWhileHeld, type KeyHold } from "../../utils/key-hold";
 import { optionalStorage } from "../../utils/embedded-report";
 import { usePhoneLayout } from "../../utils/phone-layout";
 import { ToggleGroup } from "../shared/toggle-group";
@@ -186,10 +186,11 @@ export function useCompareController(options: CompareControllerOptions) {
   holdRef.current ??= createKeyHold();
   const hold = holdRef.current;
   useEffect(() => hold.end, [hold]);
-  // The hold only tracks the key; the glide reads it every frame and stops with it.
+  // A tap of [ or ] moves the divider one step; held, it keeps going from the same motion. The hold only
+  // tracks the key; the glide reads it every frame and stops with it.
   const glideDivider = (code: string, direction: 1 | -1) => {
     hold.begin(code, () => true);
-    glideWhileHeld(hold, code, HOLD_INITIAL_DELAY_MS, (steps) => moveDivider(direction, steps));
+    glideWhileHeld(hold, code, (steps) => moveDivider(direction, steps), DIVIDER_GLIDE);
   };
 
   useEffect(() => {
@@ -225,10 +226,10 @@ export function useCompareController(options: CompareControllerOptions) {
         flip();
       } else if (matchesShortcut(event, keys.dividerLeft)) {
         if (state.mode !== "swipe") return;
-        if (moveDivider(-1)) glideDivider(event.code, -1);
+        glideDivider(event.code, -1);
       } else if (matchesShortcut(event, keys.dividerRight)) {
         if (state.mode !== "swipe") return;
-        if (moveDivider(1)) glideDivider(event.code, 1);
+        glideDivider(event.code, 1);
       } else if (matchesShortcut(event, keys.outlines)) {
         toggleOutlines();
       } else if (matchesShortcut(event, keys.whatChanged)) {

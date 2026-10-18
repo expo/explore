@@ -592,11 +592,13 @@ test("D, ⌥1–⌥8 and ` switch targets from the keyboard, and the other repor
   const place = new URL(page.url()).hash;
   await page.evaluate(() => { window.__samePage = true; });
   const target = () => new URL(page.url()).searchParams.get("platform");
+  // The other report swaps into the running Viewer (no loading screen between): the pill names it once it is up.
+  const shown = async (label) => expect(page.locator(".collapsed-platform").first()).toHaveText(label);
 
   // ` returns to the last target; before there is one, it opens the next in the menu.
   await page.keyboard.press("Backquote");
   await expect.poll(target).toBe("ios");
-  await expect(page.locator(".app-shell")).toBeVisible();
+  await shown("iOS");
   const carried = new URL(page.url()).hash;
   assert.equal(carried.split("?")[0], place.split("?")[0], "the other report opens at the same canvas and route");
   assert.equal(new URLSearchParams(carried.split("?")[1]).get("inspect"), "diff");
@@ -604,9 +606,9 @@ test("D, ⌥1–⌥8 and ` switch targets from the keyboard, and the other repor
   await expect(page.locator(".map-canvas .is-selected")).toHaveCount(1);
   await page.keyboard.press("Backquote");
   await expect.poll(target).toBe("android");
+  await shown("Android");
 
   // D opens the menu, which prints each target's ⌥ key.
-  await expect(page.locator(".app-shell")).toBeVisible();
   await page.keyboard.press("KeyD");
   const items = page.getByRole("menu", { name: "Platform" }).getByRole("menuitemradio");
   await expect(items).toHaveCount(2);
@@ -616,11 +618,12 @@ test("D, ⌥1–⌥8 and ` switch targets from the keyboard, and the other repor
 
   await page.keyboard.press("Alt+Digit1");
   await expect.poll(target).toBe("ios");
-  await expect(page.locator(".app-shell")).toBeVisible();
+  await shown("iOS");
   // The shown target's own key does nothing.
   await page.keyboard.press("Alt+Digit1");
   await page.keyboard.press("Alt+Digit2");
   await expect.poll(target).toBe("android");
+  await shown("Android");
   assert.equal(await page.evaluate(() => window.__samePage), true, "every switch stays on the page");
 
   await page.keyboard.press("Shift+Slash");

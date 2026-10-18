@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { tsImport } = await import("tsx/esm/api");
-const { HOLD_INITIAL_DELAY_MS, HOLD_FIRST_INTERVAL_MS, HOLD_FLOOR_INTERVAL_MS, createKeyHold, glideRate, holdIntervalMs, holdSchedule } =
+const { HOLD_INITIAL_DELAY_MS, HOLD_FIRST_INTERVAL_MS, HOLD_FLOOR_INTERVAL_MS, createKeyHold, glideRate, glideWhileHeld, holdIntervalMs, holdSchedule } =
   await tsImport("../../viewer/src/utils/key-hold.ts", import.meta.url);
 
 test("a held paging key waits, then steps sooner and sooner down to a floor", () => {
@@ -76,10 +76,69 @@ test("another key ends a hold, as the OS's own repeat stops; its own repeats and
   hold.end();
 });
 
-test("a glide picks up from rest, then eases from the stepped hold's first speed up to its top speed", () => {
-  assert.equal(glideRate(0), 0, "it starts at rest, where the tap's step ended");
-  assert.ok(Math.abs(glideRate(80) - 1000 / HOLD_FIRST_INTERVAL_MS) < 0.2, "within a few frames it moves a step per first interval");
-  for (let at = 10; at <= 1200; at += 10) assert.ok(glideRate(at) >= glideRate(at - 10), `never slows, at ${at}ms`);
-  assert.equal(glideRate(1000), 1000 / HOLD_FLOOR_INTERVAL_MS, "after a second, a step per floor interval");
-  assert.equal(glideRate(5000), glideRate(1000), "and no faster");
+test("a glide moves at its start speed from the key down, then eases up to its top speed", () => {
+  const profile = { startRate: 8, topRate: 20, rampMs: 700 };
+  assert.equal(glideRate(0, profile), 8, "no pause: it moves at full start speed on the first frame");
+  for (let at = 10; at <= 1200; at += 10) assert.ok(glideRate(at, profile) >= glideRate(at - 10, profile), `never slows, at ${at}ms`);
+  assert.equal(glideRate(700, profile), 20, "at the end of the ramp, the top speed");
+  assert.equal(glideRate(5000, profile), 20, "and no faster");
+});
+
+/** Frames on demand: `tick` advances the clock and runs the frame callbacks queued so far. */
+function fakeFrames(t) {
+  let clock = 0;
+  let queue = [];
+  t.mock.method(performance, "now", () => clock);
+  const previous = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (callback) => { queue.push(callback); return queue.length; };
+  t.after(() => { globalThis.requestAnimationFrame = previous; });
+  return {
+    tick(ms) {
+      clock += ms;
+      const due = queue;
+      queue = [];
+      for (const callback of due) callback(clock);
+    },
+    get pending() { return queue.length; },
+  };
+}
+
+test("a glide starts on the first frame after key down; a tap completes one step, a hold stops where it is released", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const frames = fakeFrames(t);
+  const profile = { startRate: 10, topRate: 10, rampMs: 1 };
+  const hold = createKeyHold();
+  let moved = 0;
+  const move = (steps) => { moved += steps; return true; };
+
+  // A tap: released a third of the way into its step, it goes on to exactly one step at the same speed.
+  hold.begin("BracketRight", () => true);
+  glideWhileHeld(hold, "BracketRight", move, profile);
+  frames.tick(0);
+  frames.tick(16);
+  assert.ok(Math.abs(moved - 0.16) < 1e-9, `moves on the first frame, with no initial delay (${moved})`);
+  frames.tick(16);
+  hold.end();
+  for (let frame = 0; frame < 20 && frames.pending; frame += 1) frames.tick(16);
+  assert.ok(Math.abs(moved - 1) < 1e-9, `a tap covers one step (${moved})`);
+  assert.equal(frames.pending, 0, "and the glide is over");
+
+  // A hold: a second in it is well past one step, and it stops on the frame the key is released.
+  moved = 0;
+  hold.begin("BracketRight", () => true);
+  glideWhileHeld(hold, "BracketRight", move, profile);
+  for (let frame = 0; frame < 61; frame += 1) frames.tick(16);
+  assert.ok(moved > 9 && moved < 11, `ten steps a second (${moved})`);
+  hold.end();
+  const released = moved;
+  for (let frame = 0; frame < 10 && frames.pending; frame += 1) frames.tick(16);
+  assert.equal(moved, released, "nothing after release");
+  assert.equal(frames.pending, 0);
+
+  // A limit ends the hold.
+  hold.begin("BracketLeft", () => true);
+  glideWhileHeld(hold, "BracketLeft", () => false, profile);
+  frames.tick(16);
+  assert.ok(!hold.holding("BracketLeft"), "a move that finds nothing ends the hold");
+  assert.equal(frames.pending, 0);
 });

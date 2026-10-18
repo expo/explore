@@ -287,11 +287,11 @@ export function App() {
       {...(droppable ? { onOpenFile: openFile } : {})}
       {...(droppable && source.status === "failed" ? { onRetry: retry } : {})} />;
   }
-  // A hosted preview switches targets in place; the new report gets a fresh Viewer.
-  return <ViewerApp key={source.reportKey} />;
+  // A hosted preview switches targets in place; the running Viewer swaps in the new report.
+  return <ViewerApp reportKey={source.reportKey} />;
 }
 
-function ViewerApp() {
+function ViewerApp({ reportKey }: { reportKey: number }) {
   const [payload, setPayload] = useState<ViewerPayload>();
   const [workspace, setWorkspace] = useState<ViewerWorkspace>();
   const [loadedPublicReview, setLoadedPublicReview] = useState<PublicReview>();
@@ -616,6 +616,15 @@ function ViewerApp() {
     }, 5_000);
     return () => window.clearInterval(interval);
   }, [load, poll]);
+
+  // Another report took the page (a hosted preview switched targets): reload it in place, so the chrome, the camera
+  // and the view stay instead of a fresh Viewer flashing its loading screen and an empty canvas.
+  const loadedReportKey = useRef(reportKey);
+  useEffect(() => {
+    if (loadedReportKey.current === reportKey) return;
+    loadedReportKey.current = reportKey;
+    void load();
+  }, [load, reportKey]);
 
   useEffect(() => {
     const preference = window.matchMedia("(prefers-color-scheme: dark)");
