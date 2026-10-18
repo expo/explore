@@ -150,7 +150,8 @@ async function prepareCiRun(options: Pick<PublicCiOptions, "baseProject" | "head
     links: viewerLinks({ repository: presentation.repository, headSha: presentation.head.sha, runId: environment.GITHUB_RUN_ID!,
       runAttempt: environment.GITHUB_RUN_ATTEMPT!, configPath: repositoryConfigPath }),
     startedAt: now(), updatedAt: now(), build: { platform: config.app.platform, easProfile: config.app.easProfile }, artifactOnly: true,
-    ...(config.target ? { target: config.target } : {}), ...(options.targets && options.targets.length > 1 ? { targets: options.targets } : {}) };
+    ...(config.target ? { target: config.target } : {}), ...(options.targets && options.targets.length > 1 ? { targets: options.targets } : {}),
+    ...(config.report?.comment?.map ? { map: true } : {}) };
   return { projects, output, state };
 }
 

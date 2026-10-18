@@ -31,8 +31,10 @@ for (const provider of ['expo-router', 'react-navigation']) {
     const before = f.requests.length;
     const output = join(f.root, 'review');
     const result = await runPublicCi({ baseProject: f.baseProject, headProject: f.headProject, pullRequestPath: f.pullRequestPath, output,
-      config: f.config, environment: { ...f.environment, EXPLORE_CAPTURE_CACHE: baseline.directory }, transport: f.transport, runner: f.runner, now: f.now, sleep: f.sleep });
+      config: { ...f.config, report: { comment: { map: true } } }, environment: { ...f.environment, EXPLORE_CAPTURE_CACHE: baseline.directory },
+      transport: f.transport, runner: f.runner, now: f.now, sleep: f.sleep });
     const plan = JSON.parse(await readFile(join(output, 'execution-plan.json'), 'utf8'));
+    assert.equal(JSON.parse(await readFile(result.inputPath, 'utf8')).commentState.map, true, 'report.comment.map reaches the comment the publish job renders');
     assert.equal(result.review.contract, 'explore.review');
     assert.equal(result.review.runtime.appVersion, '3.0.0', 'the Viewer header shows the captured app version');
     assert.equal(result.review.runtime.appBuildNumber, '7', 'the Viewer header shows the captured build number');
@@ -122,6 +124,7 @@ test('unreachable screens do not fail CI: both revisions, the report and an Inco
       .map(line => line.replace('(home)', `(${result.review.surfaces.find(surface => surface.head?.route === '/home')?.id})`)).sort());
   assert.ok(progress.includes('2 screens are unavailable in this report'));
   const reportInput = JSON.parse(await readFile(join(output, 'report-input.json'), 'utf8'));
+  assert.equal(reportInput.commentState.map, undefined, 'the comment draws no map unless the config asks for one');
   assert.equal(reportInput.publicReview.surfaces.filter(surface => surface.headOutcome && surface.headOutcome.status !== 'captured').length, 0);
   assert.equal(reportInput.publicReview.surfaces.filter(surface => surface.headOutcome?.landing === 'unverified' && surface.headImage).length, 1);
   assert.equal(reportInput.publicReview.surfaces.filter(surface => surface.baseOutcome && surface.baseOutcome.status !== 'captured').length, 1);

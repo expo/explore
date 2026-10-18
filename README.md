@@ -9,23 +9,23 @@ Explore maps your app: a screenshot of every screen, connected by the taps betwe
 
 **See a real report:** [euxy](https://explore-example--euxy.expo.app/p/rfcoic27ccgnrmzgijubxkmuzmptcrva?platform=ios), a MIDI sequencer, reviewed by Explore. It is redeployed with the current Viewer on every merge to main.
 
-<table>
-<tr>
-<td width="33%" valign="top">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-compare-dark.svg">
-  <img width="100%" alt="The euxy Patterns screen wiping from its capture before the pull request to its capture after it: each pattern row's tempo moves out of the subtitle into its own column on the right, then the changed subtitles are outlined" src="docs/screenshots/readme-compare-light.svg">
+  <img alt="The euxy Patterns screen wiping from its capture before the pull request to its capture after it: each pattern row's tempo moves out of the subtitle into its own column on the right, then the changed subtitles are outlined" src="docs/screenshots/readme-compare-light.svg">
 </picture>
-<strong>Compare</strong>: each changed screen before and after, with the changed regions outlined.
-</td>
-<td width="33%" valign="top">
+
+**Compare**: each changed screen before and after, with the changed regions outlined.
+
+<table>
+<tr>
+<td width="50%" valign="top">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-screens-dark.png">
   <img width="100%" alt="The Screens view of a euxy review: the app/ route tree on the left under Changed 9 and All 19, and a grid of screen cards beside it in the same order, each with its route below the screenshot and a dot before it: green for the new /about, orange for modified screens such as /activity-log, /settings and /patterns, red for the removed /channel-surf" src="docs/screenshots/readme-screens-light.png">
 </picture>
 <strong>Screens</strong>: every capture in one grid, beside the route tree, with a dot for what changed.
 </td>
-<td width="33%" valign="top">
+<td width="50%" valign="top">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-pr-comment-dark.png">
   <img width="100%" alt="Explore's GitHub PR comment on a euxy PR: the heading links to the iOS and Android reports, a table with one row per platform giving device, result and an Open link, the Added, Removed, Modified, Needs review and Source-affected screens as collapsed lists, fading out below them" src="docs/screenshots/readme-pr-comment-light.png">

@@ -362,6 +362,16 @@ Capture uses the automatic GitHub token with `pull-requests: write`, so it can k
 
 The sticky comment is one comment for the whole run: a header with the base and head commits, one row per captured platform (device, result, **Open** / **zip** / **run** links), every changed screen listed once with a link per platform, and a collapsed validation table with one column per platform. Each platform's job updates only its own hidden record in the comment, so iOS and Android jobs never overwrite each other. When a new run starts (a push, a rerun), the earlier run moves to a collapsed **Previous runs** list that keeps its head commit, result, report and run links; the last five runs are kept. A run that finishes after the PR moved on is still published, under previous runs, instead of failing. The failure job posts through the same renderer (`ci:failure`), so a crash before the pipeline's own comment still lands in that platform's row.
 
+The comment can also draw a map of the change: the added, removed and visually changed screens, the screens one step before them, and the transitions among them, as a collapsed Mermaid flowchart that GitHub draws in place. It is off by default; turn it on with:
+
+```yaml
+report:
+  comment:
+    map: true   # default false
+```
+
+The map leaves out screens whose source changed but whose captures match, and it is skipped when more than 30 routes changed or when the comment would be over GitHub's size limit.
+
 PR review links always use [explore-preview.expo.app](https://explore-preview.expo.app/); no viewer-origin variable is needed or accepted by the CI publisher. Reports stay in GitHub Actions: the comment's **zip** link fetches the `explore-review-<run>-<attempt>.zip` artifact (GitHub asks for sign-in and repository read access), and the page that **Open** opens takes that ZIP by drag-and-drop or **Choose file**. Nothing is enabled per repository on Expo's side. See [report access](private-review.md).
 
 Credentialed capture accepts open, non-draft, same-repository PRs whose authors have current write access, or are listed under `ci.trustedAuthors` in the default branch's `.expo-explore/config.yaml` (for bots such as `devin-ai-integration[bot]`). Fork PRs cannot receive capture credentials. Tools are loaded from the pinned reviewed commit, not the PR checkout. Build execution still runs the authorized application's code.
