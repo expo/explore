@@ -825,3 +825,21 @@ test("a target's review carries its target and the run's targets into the map; a
   assert.equal(oddRun.target, undefined, "a malformed target is dropped, and the report reads as its platform's");
   assert.equal(oddRun.targets, undefined);
 });
+
+test("an excluded route leaves the map with an accepted gap, like a redirect", () => {
+  const review = navigationReview();
+  const excluded = review.surfaces.find(surface => surface.id === "games-pro");
+  excluded.status = "modified";
+  excluded.excluded = true;
+  for (const side of ["base", "head"]) { delete excluded[`${side}Image`]; delete excluded[`${side}Outcome`]; }
+  const { current } = workspaceSides(publicReviewToWorkspace(review));
+  const graph = buildViewerGraph(current.map, indexMap(current.map));
+  assert.equal(graph.screens.some(screen => screen.id === "games-pro"), false, "never captured, so not a card on the map");
+  assert.ok(current.map.screens.some(screen => screen.id === "games-pro"), "the inventory still knows the route");
+  const gap = current.map.gaps.find(gap => gap.screenId === "games-pro");
+  assert.equal(gap.status, "accepted");
+  assert.equal(gap.message, "Excluded by exploration.exclude; never captured");
+  const projection = publicReviewProjection(review);
+  assert.equal(projection.runtimeEvidence["public:games-pro"].current.groups.capture.find((row) => row.label === "Capture").value,
+    "Excluded by exploration.exclude; never captured");
+});

@@ -277,6 +277,8 @@ export type PublicReview = {
     note?: PublicChangeNote;
     /** The appearance this surface rendered in; a secondary appearance is its own surface, `<id>@<scheme>`. */
     colorScheme?: "light" | "dark";
+    /** Named in `exploration.exclude`: kept for its neighbors' navigation context, never captured on either side. */
+    excluded?: true;
   }>;
 };
 export function validateCapturePlan(value: unknown): SourceCapturePlan {

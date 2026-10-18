@@ -215,7 +215,7 @@ exploration:
     - /c/[channel]
 ```
 
-An excluded route stays in the map and in its neighbors' navigation context, but neither revision captures it, and a change to it gets no before/after comparison. A name that matches no route at either compared revision fails the plan with `EXCLUDE_ROUTE_UNKNOWN`; `doctor` warns about it first. Prefer `parameters` or `setup` when a route does show a screen.
+An excluded route stays in its neighbors' navigation context (a screen that links to it is still captured when it changes), but neither revision captures it, it is left off the map and the screen counts, and a change to it gets no before/after comparison. A name that matches no route at either compared revision fails the plan with `EXCLUDE_ROUTE_UNKNOWN`; `doctor` warns about it first. Prefer `parameters` or `setup` when a route does show a screen.
 
 Capture handles iOS's confirmation to open a link in the expected app. After a form submits a password, iOS may offer to save or update it depending on the simulator's AutoFill state; capture declines that prompt with Not Now in both modes, never stores the credential, and records each decision in `capture-diagnostics/system-prompts.jsonl`. Do not script that tap in setup. Include required system-alert handling in setup or app instructions; Explore does not automatically grant application permissions.
 

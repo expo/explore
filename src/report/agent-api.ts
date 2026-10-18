@@ -176,7 +176,8 @@ const edgeItem = (edge: Json): Json => defined({ from: str(edge.from), to: str(e
  * means a visible change. A screen whose source changed but whose captures match is unchanged, including in reports
  * from before 0.19.1, which called it "needs review". A modified screen whose screenshots match changed only in what
  * assistive technology reads: `accessibility-only`. A screen whose capture failed is `unavailable`, and one whose
- * source changed but that has no verdict was not compared: `not-compared`.
+ * source changed but that has no verdict was not compared: `not-compared`. A route named in `exploration.exclude` is
+ * `excluded`: never captured on either side.
  */
 /** Both sides captured at their verified destination route, as a verdict requires (isAccessibilityOnlyChange in the contract). */
 function verifiedPair(surface: Json): boolean {
@@ -194,6 +195,8 @@ function captureUnavailable(surface: Json, side: "base" | "head"): boolean {
 }
 
 function verdictOf(surface: Json): string | undefined {
+  // Named in exploration.exclude: never captured, so there is nothing to compare or to miss.
+  if (surface.excluded === true) return "excluded";
   // A capture that failed is unavailable, as the Viewer says, whatever the source or an older verdict claims.
   if (str(surface.status) !== "removed" && captureUnavailable(surface, "head")) return "unavailable";
   if (["modified", "unchanged"].includes(str(surface.status) ?? "") && captureUnavailable(surface, "base")) return "unavailable";
@@ -206,9 +209,9 @@ function verdictOf(surface: Json): string | undefined {
   return status ?? str(surface.status);
 }
 
-const STATUS_ORDER = ["modified", "accessibility-only", "added", "removed", "needs-review", "unavailable", "not-compared", "unchanged", "variant"];
+const STATUS_ORDER = ["modified", "accessibility-only", "added", "removed", "needs-review", "unavailable", "not-compared", "excluded", "unchanged", "variant"];
 const STATUS_WORDS: Record<string, string> = { "accessibility-only": "accessibility only (screenshots match, the accessibility tree does not)",
-  "needs-review": "need review", "not-compared": "not compared", variant: "screen variants" };
+  "needs-review": "need review", "not-compared": "not compared", excluded: "excluded by config (exploration.exclude), never captured", variant: "screen variants" };
 
 /** "3 modified, 1 added, 1 removed, 30 unchanged": every status counted, so the parts add up to the total. */
 function screenCounts(screens: Json): string {
