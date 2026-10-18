@@ -104,7 +104,9 @@ export type ExploreConfig = {
   setup?: ExploreSetupAction[];
   agent?: { provider: "openai" | "anthropic"; model: string; instructions?: string };
   /** Hosted previews: one token-gated EAS Hosting deployment per review, see docs/private-review.md. */
-  report?: { preview?: { hosting: "eas"; /** `expiresAfter` was set; it no longer applies (see IGNORED_EXPIRY). */ expiresAfterIgnored?: true; owner?: string; project?: string } };
+  report?: { preview?: { hosting: "eas"; /** `expiresAfter` was set; it no longer applies (see IGNORED_EXPIRY). */ expiresAfterIgnored?: true; owner?: string; project?: string };
+    /** `map`: the PR comment draws a Mermaid map of the changed screens and the screens that lead to them. Off by default. */
+    comment?: { map: boolean } };
   /**
    * `trustedAuthors`: GitHub logins (e.g. `devin-ai-integration[bot]`) whose same-repository pull
    * requests the review workflow captures although they lack write access. The workflow reads this
@@ -579,9 +581,23 @@ function trustedAuthorList(value: unknown): string[] {
 function reportConfig(value: unknown): ExploreConfig["report"] {
   if (value === undefined) return undefined;
   const report = record(value, "report");
-  exactKeys(report, ["preview"], "report");
-  if (report.preview === undefined) return {};
-  const preview = record(report.preview, "report.preview");
+  exactKeys(report, ["preview", "comment"], "report");
+  const comment = commentConfig(report.comment);
+  const preview = previewConfig(report.preview);
+  return { ...(preview ? { preview } : {}), ...(comment ? { comment } : {}) };
+}
+
+function commentConfig(value: unknown): NonNullable<ExploreConfig["report"]>["comment"] {
+  if (value === undefined) return undefined;
+  const comment = record(value, "report.comment");
+  exactKeys(comment, ["map"], "report.comment");
+  if (typeof comment.map !== "boolean") fail("report.comment.map must be true or false", "report.comment.map");
+  return { map: comment.map };
+}
+
+function previewConfig(value: unknown): NonNullable<ExploreConfig["report"]>["preview"] {
+  if (value === undefined) return undefined;
+  const preview = record(value, "report.preview");
   exactKeys(preview, ["hosting", "expiresAfter", "owner", "project"], "report.preview");
   const owner = optionalText(preview.owner, "report.preview.owner", 64);
   if (owner !== undefined && !/^[a-z0-9][a-z0-9_-]*$/.test(owner)) {
@@ -591,13 +607,13 @@ function reportConfig(value: unknown): ExploreConfig["report"] {
   if (project !== undefined && !/^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(project)) {
     fail("report.preview.project must be a lowercase EAS project slug", "report.preview.project");
   }
-  return { preview: {
+  return {
     hosting: literal(preview.hosting, ["eas"] as const, "report.preview.hosting"),
     // Accepted from configs written before Explore stopped setting an expiry; the commands that host say it is ignored.
     ...(preview.expiresAfter === undefined ? {} : { expiresAfterIgnored: true as const }),
     ...(owner === undefined ? {} : { owner }),
     ...(project === undefined ? {} : { project }),
-  } };
+  };
 }
 
 /**
