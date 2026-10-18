@@ -463,7 +463,8 @@ function title(records: PlatformRecord[], rows: ChangeRow[]): string {
     const verb = active.some(record => record.phase === "capturing") ? "capturing" : "starting";
     return `### Explore review · ${verb}${records.length > 1 ? ` on ${plural(active.length, targetNoun(records))}` : ""}`;
   }
-  const summary = rows.length ? `${plural(rows.length, "screen")} changed` : "No screens changed";
+  // With screens left uncompared, nothing changed only among the ones compared.
+  const summary = rows.length ? `${plural(rows.length, "screen")} changed` : ready.some(record => gaps(record).length) ? "No compared screens changed" : "No screens changed";
   const report = firstReport(ready);
   const open = report ? link("Review in Explore", report) : ready.some(record => record.links.deploying) ? "report deploying…" : undefined;
   return `### ${summary}${open ? ` · ${open}` : ""}`;
@@ -490,14 +491,20 @@ function statusLine(record: PlatformRecord): string | undefined {
     case "failed": return [`**${label} failed**`, inlineText(record.failure?.step ?? "capture", 48), record.failure?.message ? inlineText(record.failure.message, MAX_FAILURE_MESSAGE) : undefined,
       run, link("evidence", record.links.artifacts)].filter(Boolean).join(" · ");
     case "ready": {
-      const unavailable = record.health ? record.health.base.unavailable + record.health.head.unavailable : 0;
-      const unverified = record.health ? record.health.base.unverified + record.health.head.unverified : 0;
-      const failed = (record.validation?.visual?.failed ?? 0) + (record.validation?.accessibility?.failed ?? 0);
-      const parts = [unavailable ? `${plural(unavailable, "capture")} unavailable` : undefined, unverified ? `${unverified} unattributed` : undefined,
-        record.notCompared ? `${record.notCompared} not compared` : undefined, failed ? `${plural(failed, "comparison")} failed` : undefined].filter(Boolean);
+      const parts = gaps(record);
       return parts.length ? `${label} · ${parts.join(" · ")} · ${run}` : undefined;
     }
   }
+}
+
+/** What a finished target has no verdict on: captures missing or unattributed, comparisons that did not run or failed. */
+function gaps(record: PlatformRecord): string[] {
+  const unavailable = record.health ? record.health.base.unavailable + record.health.head.unavailable : 0;
+  const unverified = record.health ? record.health.base.unverified + record.health.head.unverified : 0;
+  const failed = (record.validation?.visual?.failed ?? 0) + (record.validation?.accessibility?.failed ?? 0);
+  return [unavailable ? `${plural(unavailable, "capture")} unavailable` : undefined, unverified ? `${unverified} unattributed` : undefined,
+    record.notCompared ? `${record.notCompared} not compared` : undefined, failed ? `${plural(failed, "comparison")} failed` : undefined]
+    .filter((part): part is string => Boolean(part));
 }
 
 /** The per-screen capture problems, collapsed: the status line already counts them. */
@@ -520,7 +527,7 @@ function diagnosticsSection(records: PlatformRecord[]): string[] {
 
 type ChangeRow = { id: string; route: string; scheme?: string; group: ReviewGroup; description: string; href?: string; targets: PlatformRecord[] };
 
-/** Every changed screen once, in group order (added, removed, modified, …), linking the first target in config order that has it. */
+/** Every changed screen once, in group order (added, removed, modified, …), linking the first target in config order that shows its group. */
 function changeRows(ready: PlatformRecord[]): ChangeRow[] {
   const rows = new Map<string, ChangeRow>();
   for (const record of ready) {
@@ -528,8 +535,9 @@ function changeRows(ready: PlatformRecord[]): ChangeRow[] {
       const href = record.links.report ? surfaceLink(record.links.report, change.id) : undefined;
       const row = rows.get(change.id) ?? { id: change.id, route: change.route, group: change.group, description: change.description, targets: [], ...(change.scheme ? { scheme: change.scheme } : {}) };
       // A screen accessibility-only on one target and visibly changed on another is listed as the visible change.
-      if (strongerGroup(row.group, change.group) !== row.group) Object.assign(row, { group: change.group, description: change.description });
-      if (!row.href && href) row.href = href;
+      // The link opens the target the row describes.
+      if (strongerGroup(row.group, change.group) !== row.group) Object.assign(row, { group: change.group, description: change.description, href });
+      else if (!row.href && href && change.group === row.group) row.href = href;
       row.targets.push(record);
       rows.set(change.id, row);
     }
@@ -550,7 +558,9 @@ function renderChangeRow(row: ChangeRow, ready: PlatformRecord[]): string {
     text = `${route} · ${description}`;
   }
   const tag = row.group === "accessibility-only" ? "accessibility only" : row.group === "needs-review" ? "needs review" : undefined;
-  const where = targetsNote(row.targets, ready);
+  // A target with screens it has no verdict on may have changed this one too: name where it changed, not where it did not.
+  const where = ready.some(record => !row.targets.includes(record) && gaps(record).length)
+    ? `on ${row.targets.map(labelOf).join(", ")}` : targetsNote(row.targets, ready);
   return `- ${[text, tag, where].filter(Boolean).join(" · ")}`;
 }
 
@@ -657,9 +667,11 @@ export function renderCommentRecords(records: CommentRecords, existing?: string,
     lines.push(footer(shown));
     return lines.join("\n");
   };
-  // The map goes first when the body is over budget, then the list shrinks, then the previous run's records go.
+  // The map goes first when the body is over budget, then the list shrinks, then the previous run's records go; once the
+  // current run shows, nothing renders them, so they go first.
   let rowCap = ROW_LIMIT;
   let body = render(rowCap, true);
+  if (body.length > budget && shown === current && previous.length) return renderCommentRecords({ ...records, previous: {} }, existing, budget);
   if (body.length > budget) body = render(rowCap, false);
   while (body.length > budget && rowCap > 1) { rowCap = Math.max(1, Math.floor(rowCap / 2)); body = render(rowCap, false); }
   if (body.length > budget && previous.length) return renderCommentRecords({ ...records, previous: {} }, existing, budget);

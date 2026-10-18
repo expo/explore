@@ -390,6 +390,12 @@ test('a screen that changed on some devices only says which, the shorter way', a
   assert.match(body, /\n- \[`\/settings`\]\(<[^>]+>\) · Changed button title from “Share” to “Share Example”\n/, 'a screen changed everywhere names no device');
   const two = platformSectionMerge(targetState(android, { review: settingsOnly }), 'android').merge(platformSectionMerge(targetState(iphone), 'iphone').merge(undefined));
   assert.match(two, /\n- Added \[`\/cats\/care-guide`\]\(<[^>]+>\) · iPhone 17 only\n/);
+  // A device missing a capture may have changed the screen too: the row says where it changed, not where it did not.
+  const missing = platformSectionMerge(targetState(android, { review: settingsOnly, capture: { planned: { base: 3, head: 3 }, done: { base: 3, head: 2 }, baseFromCache: false } }), 'android')
+    .merge(platformSectionMerge(targetState(iphone), 'iphone').merge(undefined));
+  assert.match(missing, /\nPixel 7 · 1 capture unavailable · /);
+  assert.match(missing, /\n- Added \[`\/cats\/care-guide`\]\(<[^>]+>\) · on iPhone 17\n/);
+  assert.doesNotMatch(missing, / only\n|not on /);
 });
 
 test('a new run keeps the last finished review up, under a line saying it is working, until it has a finished target; the old run joins Previous runs', async () => {
@@ -454,6 +460,44 @@ test('a new run keeps the last finished review up, under a line saying it is wor
   assert.match(replaced, /Previous runs \(1\)/);
 });
 
+test('the review a new run keeps up comes from one run: a target the last run never finished does not bring back an older run', async () => {
+  const { platformSectionMerge, readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
+  const androidOf = overrides => state({ artifactOnly: true, build: { ...state().build, platform: 'android' }, runtime: { ...state().runtime, platform: 'android', deviceModel: 'Pixel 9' }, ...overrides });
+  const run = (runId, head, artifact) => ({ pullRequest: { ...pullRequest, head: { ref: 'feature', sha: head } },
+    links: viewerLinks({ ...(artifact ? { artifactUrl: `https://github.com/expo/explore-playground/actions/runs/${runId}/artifacts/${artifact}` } : {}),
+      repository: pullRequest.repository, headSha: head, runId, runAttempt: '1', configPath: '.expo-explore/config.yaml' }) });
+  const working = { phase: 'capturing', review: undefined, evidence: undefined };
+  const [c, d] = ['c'.repeat(40), 'd'.repeat(40)];
+  let body = platformSectionMerge(state({ artifactOnly: true }), 'ios').merge(undefined);
+  body = platformSectionMerge(androidOf({}), 'android').merge(body);
+  // Run 43 finishes Android only; its iOS job never reports (cancelled).
+  body = platformSectionMerge(state({ ...working, ...run('43', c) }), 'ios').merge(body);
+  body = platformSectionMerge(androidOf({ ...run('43', c, '7800'), review: review([evidenceReview().surfaces[2]]) }), 'android').merge(body);
+  body = platformSectionMerge(state({ ...working, ...run('44', d) }), 'ios').merge(body);
+  const previous = readCommentRecords(body).previous;
+  assert.deepEqual(Object.keys(previous), ['android']);
+  assert.equal(previous.android.runId, '43');
+  assert.match(subtitleOf(body), /^<sub>\[Android\]\(<[^>]+artifact=7800>\) · \[cccccccc\]/);
+  assert.equal(titleOf(body), '### 1 screen changed · [Review in Explore](<https://explore-preview.expo.app/?repo=expo%2Fexplore-playground&run=43&attempt=1&artifact=7800>)');
+  assert.doesNotMatch(visible(body).split('<details>')[0], /artifact=7654/, 'run 42 is only under Previous runs');
+});
+
+test('a rerun keeps the attempt it replaces up until the new attempt finishes', async () => {
+  const { platformSectionMerge, readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
+  const ready = platformSectionMerge(state({ artifactOnly: true }), 'ios').merge(undefined);
+  const attempt3 = viewerLinks({ repository: pullRequest.repository, headSha, runId: '42', runAttempt: '3', configPath: '.expo-explore/config.yaml' });
+  const rerun = platformSectionMerge(state({ phase: 'capturing', review: undefined, evidence: undefined, links: attempt3 }), 'ios').merge(ready);
+  assert.equal(visible(rerun).split('\n')[1], `> **New run in progress** for [bbbbbbbb](<https://github.com/expo/explore-playground/commit/${headSha}>) · capturing · [run](<https://github.com/expo/explore-playground/actions/runs/42/attempts/3>)`);
+  assert.equal(titleOf(rerun), titleOf(ready));
+  assert.deepEqual(listOf(rerun), listOf(ready));
+  assert.equal(readCommentRecords(rerun).previous.ios.runAttempt, '2');
+  // The same attempt writing again (capture progress, a republish) keeps nothing.
+  assert.equal(readCommentRecords(platformSectionMerge(state({ phase: 'capturing', review: undefined, evidence: undefined }), 'ios').merge(ready)).previous, undefined);
+  const done = platformSectionMerge(state({ artifactOnly: true, links: { ...attempt3, viewer: state().links.viewer } }), 'ios').merge(rerun);
+  assert.equal(readCommentRecords(done).previous, undefined);
+  assert.doesNotMatch(done, /New run in progress/);
+});
+
 test('over budget, the previous run\'s records go before the hidden state is cut', async () => {
   const { readCommentRecords, renderCommentRecords } = await import('../../dist/report/pr-comment-body.js');
   const previous = platformRecordOf(state({ artifactOnly: true }));
@@ -466,6 +510,17 @@ test('over budget, the previous run\'s records go before the hidden state is cut
   assert.deepEqual(Object.keys(readCommentRecords(full).previous), ['ios']);
   const without = renderCommentRecords({ current: { ios: current }, history: [] });
   assert.equal(renderCommentRecords(records, undefined, without.length + 10), without);
+  // Once the new run shows a finished target, the previous records it still carries are hidden: they go before the list shrinks.
+  const twelve = review(Array.from({ length: 12 }, (_, index) => surface(`screen-${index}`, 'modified', { extra: {
+    review: { status: 'modified', description: `Changed ${index} in a way that takes a sentence to describe for the budget check.` },
+    visual: { verdict: 'modified', reason: 'repeated-cross-build-delta', mismatchPercentage: 1, threshold: 0.1, tool: 'agent-device@0.20.2' } } })));
+  const finished = platformRecordOf(state({ artifactOnly: true, review: twelve, pullRequest: { ...pullRequest, head: { ref: 'feature', sha: nextHead } },
+    links: viewerLinks({ artifactUrl: 'https://github.com/expo/explore-playground/actions/runs/43/artifacts/7700', repository: pullRequest.repository, headSha: nextHead, runId: '43', runAttempt: '1', configPath: '.expo-explore/config.yaml' }) }));
+  const android = { ...current, platform: 'android' };
+  const hidden = { current: { ios: finished, android }, previous: { android: { ...previous, platform: 'android' } }, history: [] };
+  const lean = renderCommentRecords({ ...hidden, previous: {} });
+  assert.equal(renderCommentRecords(hidden, undefined, lean.length + 10), lean);
+  assert.equal(listOf(lean).length, 11, 'ten screens and the link to the rest');
 });
 
 test('the deployments line names every hosted preview the comment links right now, current and previous', async () => {
@@ -546,17 +601,21 @@ test('a screen accessibility-only on iOS and visibly modified on Android is list
   };
   const androidState = overrides => state({ artifactOnly: true, build: { ...state().build, platform: 'android' },
     runtime: { ...state().runtime, platform: 'android', deviceModel: 'EasAndroidDevice01', osVersion: '15.0' }, ...overrides });
+  const androidLinks = viewerLinks({ artifactUrl: 'https://github.com/expo/explore-playground/actions/runs/42/artifacts/7700', repository: pullRequest.repository, headSha, runId: '42', runAttempt: '2', configPath: '.expo-explore/config.yaml' });
   const ios = renderPublicComment(state({ review: settings('unchanged'), artifactOnly: true }));
   assert.match(ios, /\n- \[`\/settings`\]\(<[^>]+>\) · [^\n]+ · accessibility only\n/, 'iOS alone: the screenshots match');
-  const both = platformSectionMerge(androidState({ review: settings('modified') }), 'android').merge(ios);
-  assert.match(both, /\n- \[`\/settings`\]\(<[^>]+>\) · Changed button title from “Share” to “Share Example”\n/);
+  const both = platformSectionMerge(androidState({ review: settings('modified'), links: androidLinks }), 'android').merge(ios);
+  assert.match(both, /\n- \[`\/settings`\]\(<[^>]+artifact=7700&view=compare&screen=settings>\) · Changed button title from “Share” to “Share Example”\n/, 'the link opens Android, where it changed visibly');
   assert.doesNotMatch(both, /accessibility only/);
+  const androidFirst = platformSectionMerge(state({ review: settings('unchanged'), artifactOnly: true }), 'ios')
+    .merge(platformSectionMerge(androidState({ review: settings('modified'), links: androidLinks }), 'android').merge(undefined));
+  assert.match(androidFirst, /\n- \[`\/settings`\]\(<[^>]+artifact=7700&view=compare&screen=settings>\) · Changed button title from “Share” to “Share Example”\n/);
 });
 
 test('screens whose comparison did not run are counted as not compared, never as a green "no change"', () => {
   const uncompared = review([surface('settings', 'modified'), surface('tempo', 'modified')]);
   const body = renderPublicComment(state({ review: uncompared, artifactOnly: true }));
-  assert.equal(titleOf(body), `### No screens changed · [Review in Explore](<${reportUrl}>)`);
+  assert.equal(titleOf(body), `### No compared screens changed · [Review in Explore](<${reportUrl}>)`);
   assert.equal(statusOf(body, 'iOS'), `iOS · 2 not compared · ${runLink}`);
   // A screen that was never captured (outside the capture scope) stays out of the count.
   const outOfScope = surface('channel', 'modified');

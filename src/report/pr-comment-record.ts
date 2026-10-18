@@ -400,18 +400,26 @@ export function foldRecord(existing: CommentRecords, incoming: PlatformRecord): 
   if (!currentRun && record.superseded) return { current: {}, previous, history: pushHistory(existing.history, historyEntryOf([record])) };
   if (!currentRun || currentRun.runId === record.runId) {
     const next = { ...existing.current, [target]: record };
-    return { current: next, previous: trimPrevious(previous, next), history: existing.history };
+    // A rerun's new attempt replaces a finished record with one still working; the finished one stays readable meanwhile.
+    const replaced = existing.current[target];
+    const rerun = replaced && isFinished(replaced) && !isFinished(record) && Number(record.runAttempt) > Number(replaced.runAttempt);
+    return { current: next, previous: trimPrevious(rerun ? { ...ofRun(previous, record.runId), [target]: replaced } : previous, next), history: existing.history };
   }
   if (runOrder(currentRun.runId) > runOrder(record.runId) || record.superseded) {
     return { current: existing.current, previous, history: pushHistory(existing.history, historyEntryOf([{ ...record, superseded: true }])) };
   }
-  // The finished records of the run being replaced stay readable until the new run has its own.
+  // The finished records of the run being replaced stay readable until the new run has its own. They replace older
+  // previous records rather than joining them: what the comment shows as one review comes from one run.
   const kept = Object.fromEntries(current.filter(isFinished).map(item => [recordTarget(item), item]));
   const next = { [target]: record };
-  return { current: next, previous: trimPrevious({ ...previous, ...kept }, next), history: pushHistory(existing.history, historyEntryOf(current)) };
+  return { current: next, previous: trimPrevious(Object.keys(kept).length ? kept : previous, next), history: pushHistory(existing.history, historyEntryOf(current)) };
 }
 
 const isFinished = (record: PlatformRecord) => record.phase === "ready" || record.phase === "failed";
+
+function ofRun(records: Partial<Record<CommentTarget, PlatformRecord>>, runId: string): Partial<Record<CommentTarget, PlatformRecord>> {
+  return Object.fromEntries(Object.entries(records).filter(([, record]) => record?.runId === runId));
+}
 
 /** A target's previous record goes once its current one finished; all of them go once every current record has. */
 function trimPrevious(previous: Partial<Record<CommentTarget, PlatformRecord>>, current: Partial<Record<CommentTarget, PlatformRecord>>): Partial<Record<CommentTarget, PlatformRecord>> {
