@@ -4,7 +4,7 @@ import { basename, join } from 'node:path';
 import { parseArgs } from 'node:util';
 
 export const MATRIX_USAGE = 'Usage: npm run ci:local:matrix -- --app APP (--cells SCENARIO:MODE:SCOPE,... | --scenarios A,B [--modes deterministic,agent] [--scopes all,changes]) [--parallel N] [--prefix NAME] [--plan-only]';
-const MODES = ['deterministic', 'agent'];
+const MODES = ['deterministic', 'agent', 'flows'];
 const SCOPES = ['all', 'changes'];
 const list = value => (value ?? '').split(',').map(item => item.trim()).filter(Boolean);
 
@@ -33,7 +33,7 @@ export function parseMatrixArguments(args, now = new Date()) {
   const cells = requested.map(({ scenario, mode, scope }) => {
     if (!MODES.includes(mode)) throw new Error(`Unknown mode in matrix: ${mode}`);
     if (!SCOPES.includes(scope)) throw new Error(`Unknown scope in matrix: ${scope}`);
-    const name = `${basename(scenario)}-${mode === 'deterministic' ? 'det' : 'agent'}-${scope}`;
+    const name = `${basename(scenario)}-${mode === 'deterministic' ? 'det' : mode}-${scope}`;
     if (seen.has(name)) throw new Error(`Duplicate matrix cell: ${name}`);
     seen.add(name);
     return { name, scenario: scenarioPath(values.app, scenario), mode, scope, runId: `${prefix}-${name}` };

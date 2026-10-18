@@ -74,7 +74,7 @@ npm run ci:local -- \
   --scope all
 ```
 
-`--mode` (default `deterministic`) selects `deterministic.yaml` or `agent.yaml`; `--scope`
+`--mode` (default `deterministic`) selects `deterministic.yaml`, `agent.yaml` or `flows.yaml`; `--scope`
 overrides the config's `exploration.scope`. `--run-id NAME` selects a readable ID and refuses
 overwrite. `--plan-only` runs the production planner, checks the expectations at plan level, and
 validates each setup step's `requiresRoute` against both revisions, without installation,

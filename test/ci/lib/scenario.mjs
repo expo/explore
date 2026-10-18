@@ -6,7 +6,7 @@ import { lstat, readFile, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 import { parse, stringify } from 'yaml';
 
-const MODES = ['deterministic', 'agent'];
+const MODES = ['deterministic', 'agent', 'flows'];
 const SCOPES = ['all', 'changes'];
 const STATUSES = ['added', 'removed', 'modified', 'needs-review', 'unchanged', 'variant'];
 

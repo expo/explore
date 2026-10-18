@@ -1,0 +1,44 @@
+{
+  "contract": "explore.local-run.v1",
+  "runId": "20261018003732-5fb99c9f",
+  "status": "planned",
+  "startedAt": "2026-10-18T00:37:32.994Z",
+  "requested": {
+    "app": "test/ci/apps/wallet",
+    "scenario": "test/ci/scenarios/wallet/identical",
+    "mode": "flows",
+    "planOnly": true
+  },
+  "report": null,
+  "node": "v24.12.0",
+  "scenario": {
+    "path": "test/ci/scenarios/wallet/identical",
+    "description": "Head is identical to base: nothing is selected and no capture runs.",
+    "config": "test/ci/scenarios/wallet/flows.yaml",
+    "removed": 0,
+    "overlay": 0
+  },
+  "commits": {
+    "base": "04a838a0a15e0e292dcddb214ce910476ecf7c4c",
+    "head": "14f53fc0e441bd18a040ed3e2a95c94d35b6b85a"
+  },
+  "toolsCommit": "9b75cc47f1a2cec04a95057e0e04180eb965634f",
+  "toolsSourceDigest": "5e2c7495c6f3c5d5dcaf8b951aefd2694b8a328f063d42eda3be469452cb20b8",
+  "toolsDiffDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "cliVersions": {
+    "claude": "unavailable",
+    "codex": "unavailable"
+  },
+  "phase": "plan-complete",
+  "plan": {
+    "baseCaptures": 0,
+    "headCaptures": 0
+  },
+  "expectations": {
+    "status": "passed",
+    "level": "plan",
+    "checked": 31,
+    "mismatches": []
+  },
+  "completedAt": "2026-10-18T00:37:36.828Z"
+}

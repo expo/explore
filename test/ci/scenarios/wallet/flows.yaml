@@ -16,7 +16,7 @@ capture:
   maxActions: 300
 flows:
   tests:
-    - flows/*.e2e.ts
+    - e2e/*.e2e.ts
 setup:
   - action: open
     url: explore-example-wallet://onboarding/currency

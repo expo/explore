@@ -346,13 +346,13 @@ export async function runLocalCi(input) {
   return { run, metadata };
 }
 
-export const USAGE = 'Usage: npm run ci:local -- --app APP --scenario SCENARIO [--mode deterministic|agent] [--scope all|changes] [--run-id ID] [--plan-only]';
+export const USAGE = 'Usage: npm run ci:local -- --app APP --scenario SCENARIO [--mode deterministic|agent|flows] [--scope all|changes] [--run-id ID] [--plan-only]';
 
 export function parseRunArguments(args) {
   const { values } = parseArgs({ args, options: { app: { type: 'string' }, scenario: { type: 'string' }, mode: { type: 'string' }, scope: { type: 'string' },
     'run-id': { type: 'string' }, 'plan-only': { type: 'boolean' } } });
   if (!values.app || !values.scenario) throw new Error(USAGE);
-  if (values.mode && !['deterministic', 'agent'].includes(values.mode)) throw new Error('--mode must be deterministic or agent');
+  if (values.mode && !['deterministic', 'agent', 'flows'].includes(values.mode)) throw new Error('--mode must be deterministic, agent or flows');
   if (values.scope && !['all', 'changes'].includes(values.scope)) throw new Error('--scope must be all or changes');
   return { app: values.app, scenario: values.scenario, mode: values.mode ?? 'deterministic', ...(values.scope ? { scope: values.scope } : {}),
     runId: values['run-id'], planOnly: values['plan-only'] };

@@ -1,5 +1,5 @@
-// A flow Explore runs on both revisions after setup signed the review account in. Each app.screenshot is a frame
-// the review compares; a failing step keeps the frames before it and names itself in the report.
+// The wallet app's e2e flow. Explore runs it on both revisions after setup signed the review account in;
+// each app.screenshot is a frame the review compares, and a failing step keeps the frames before it.
 import { expect, test } from "e2e";
 
 test("send money to a contact", async ({ app, device, screen }) => {
