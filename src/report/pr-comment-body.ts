@@ -194,6 +194,21 @@ function previewExpiry(expiresAt: number): string {
  * (source-unchanged screens captured in another runtime state) and app-wide source changes that
  * left some screens without a visible difference.
  */
+/** "Flow Send money: passed, 4 frames, 1 changed" — one line per e2e flow the capture ran. */
+function flowLines(review: PublicReview): string[] {
+  return (review.flows ?? []).map(entry => {
+    const side = (name: "base" | "head") => {
+      const flow = entry[name];
+      if (!flow) return `not run on ${name}`;
+      const failed = flow.steps.find(step => step.status !== "passed");
+      return `${flow.status} on ${name}${failed && flow.status !== "passed" ? ` at step ${flow.steps.indexOf(failed) + 1} (${plainText(failed.api, 40)} ${plainText(failed.label, 80)})` : ""}`;
+    };
+    const compared = entry.frames.filter(frame => frame.visual);
+    const changed = compared.filter(frame => frame.visual?.verdict === "modified").length;
+    const frames = entry.frames.length ? `${plural(entry.frames.length, "frame")}${compared.length ? `, ${changed ? `${changed} changed` : "none changed"}` : ""}` : "no frames";
+    return `Flow ${plainText(entry.title, 80)}: ${side("head")}; ${frames}${entry.base && entry.head && entry.base.status === "passed" && entry.head.status !== "passed" ? ` (was ${side("base")})` : ""}.`;
+  });
+}
 /** "Launch: splash unchanged for 3.1 s" — the app launch per appearance, kept apart from the screen rows. */
 function launchLine(review: PublicReview): string | undefined {
   const launch = review.launch ?? [];
@@ -225,6 +240,7 @@ function contextLines(review: PublicReview): string[] {
   const lines: string[] = [];
   const launch = launchLine(review);
   if (launch) lines.push(launch);
+  lines.push(...flowLines(review));
   if (variants > 0) lines.push(`${plural(variants, "screen")} ${variants === 1 ? "differs" : "differ"} only in runtime state (screen variants); no source change reaches ${variants === 1 ? "it" : "them"}.`);
   if (appWide.length > 0) {
     const named = files.length ? ` (${files.slice(0, 5).map(path => `\`${plainText(path, 120).replace(/`/g, "")}\``).join(", ")}${files.length > 5 ? ", …" : ""})` : "";

@@ -451,6 +451,10 @@ jobs:
 
 </details>
 
+## Flows: capture what a user does, not only where a link lands
+
+When one frame per route is not enough (a payment, a sign-up, a wizard), give Explore the app's own [`e2e`](https://e2e.tester.army) tests and set `mode: flows` (or add `flows:` beside deterministic capture). Explore runs them on its simulator session on both revisions; every `app.screenshot("label")` in a test is a frame the review compares, each flow is a journey in the Viewer, and a flow that fails keeps the frames it took and names the step that failed. There is no Explore flow language to learn: see [Flows](docs/quickstart-ci.md#flows-the-apps-e2e-tests-as-capture).
+
 ## Sign-in and other app state
 
 Each run starts on a fresh install. Tell Explore how to get past what the app needs: with `--hints` when running without source, or with [setup steps or agent instructions](docs/quickstart-ci.md#when-the-config-needs-setup-steps) in CI.

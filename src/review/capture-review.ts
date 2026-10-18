@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { assertDecodedPng } from "../shared/png-evidence.js";
-import { assertAgentAcceptance, validateCapturePlan, type AppIconImage, type BundleLaunchCapture, type CaptureBundle, type CaptureOutcome, type CapturedImage, type LaunchFilmstrip, type LaunchFrame, type PublicLaunchSide, type PublicReview, homeIndicatorBandPercent, launchSurfaceId, statusBarBandPercent } from "../contracts/capture.js";
+import { assertAgentAcceptance, validateCapturePlan, type AppIconImage, type BundleLaunchCapture, type CaptureBundle, type CaptureOutcome, type CapturedImage, type LaunchFilmstrip, type LaunchFrame, type PublicFlowEvidence, type PublicFlowSide, type PublicLaunchSide, type PublicReview, flowSurfaceId, homeIndicatorBandPercent, launchSurfaceId, statusBarBandPercent } from "../contracts/capture.js";
 import { COLOR_SCHEMES } from "../capture/appearance.js";
 import { launchDirectory } from "../capture/launch-capture.js";
 import { APP_ICON_FILE, APP_ICON_MAX_SIZE } from "../capture/app-icon.js";
@@ -235,6 +235,21 @@ async function uploadSide(store: ScreenshotStore, directory: string, expectedCom
     launch[scheme] = { ...rest, ...(splash ? { splash: await frame(splash, "splash") } : {}), settled: await frame(settled, "settled"),
       ...(publicFilmstrip ? { filmstrip: publicFilmstrip } : {}), ...(publicVideo ? { video: publicVideo } : {}) };
   }
+  const flows: Record<string, PublicFlowSide> = {};
+  for (const [flowId, flow] of Object.entries(bundle.flows ?? {})) {
+    if (!/^[a-z0-9-]+\/[a-z0-9-]+$/.test(flowId)) throw new Error("Capture bundle flow id is invalid");
+    const frames: PublicFlowSide["frames"] = {};
+    for (const [key, value] of Object.entries(flow.frames)) {
+      if (!/^[a-z0-9-]+$/.test(key)) throw new Error("Capture bundle flow frame key is invalid");
+      const bytes = await evidenceFile(value.path); assertDecodedPng(bytes, "Flow frame");
+      if (value.sha256 !== createHash("sha256").update(bytes).digest("hex") || value.width !== bytes.readUInt32BE(16) || value.height !== bytes.readUInt32BE(20)
+        || !Number.isFinite(Date.parse(value.capturedAt))) throw new Error("Flow frame provenance mismatch");
+      const { path: _, ...metadata } = value;
+      frames[key] = { ...metadata, url: await store.put(`${prefix}/flow-${flowId.replace("/", "-")}-${key}.png`, bytes, "image/png") };
+    }
+    const { frames: _frames, file: _file, title: _title, ...rest } = flow;
+    flows[flowId] = { ...rest, frames };
+  }
   let appIcon: AppIconImage | undefined;
   if (bundle.appIcon) {
     const iconPath = resolve(directory, bundle.appIcon.path);
@@ -247,7 +262,22 @@ async function uploadSide(store: ScreenshotStore, directory: string, expectedCom
     const { path: _, ...metadata } = bundle.appIcon;
     appIcon = { ...metadata, url: await store.put(`${prefix}/${APP_ICON_FILE}`, bytes, "image/png") };
   }
-  return { bundle, images, appIcon, launch };
+  return { bundle, images, appIcon, launch, flows };
+}
+/** Every flow either side ran, head's order first; a frame row for each key a side took, in head's step order. */
+function publicFlows(base: { bundle: CaptureBundle; flows: Record<string, PublicFlowSide> }, head: { bundle: CaptureBundle; flows: Record<string, PublicFlowSide> },
+  assessments: CaptureReviewOptions["assessments"]): PublicFlowEvidence[] {
+  const ids = [...new Set([...Object.keys(head.flows), ...Object.keys(base.flows)])];
+  return ids.map(id => {
+    const record = head.bundle.flows?.[id] ?? base.bundle.flows?.[id];
+    const keys = [...new Set([...(head.bundle.flows?.[id]?.steps ?? []).flatMap(step => step.frame ? [step.frame] : []),
+      ...(base.bundle.flows?.[id]?.steps ?? []).flatMap(step => step.frame ? [step.frame] : [])])];
+    const labelOf = (key: string) => (head.bundle.flows?.[id] ?? base.bundle.flows?.[id])?.steps.find(step => step.frame === key)?.label ?? key;
+    return { id, title: record?.title ?? id, file: record?.file ?? "",
+      ...(base.flows[id] ? { base: base.flows[id] } : {}), ...(head.flows[id] ? { head: head.flows[id] } : {}),
+      frames: keys.map(key => { const surface = flowSurfaceId(id, key); const visual = assessments?.[surface]?.visual;
+        return { key, id: surface, label: labelOf(key), ...(visual ? { visual } : {}) }; }) };
+  });
 }
 export type CaptureReviewOptions = {
   plan: unknown; pullRequest: unknown; baseDirectory: string; headDirectory: string;
@@ -319,6 +349,7 @@ async function constructCaptureReview(options: CaptureReviewOptions, store: Scre
           ...(base.launch[scheme] ? { base: base.launch[scheme]! } : {}), ...(head.launch[scheme] ? { head: head.launch[scheme]! } : {}),
           ...(assessment?.visual ? { visual: assessment.visual } : {}) };
       }) } : {}),
+    ...(Object.keys(head.flows).length || Object.keys(base.flows).length ? { flows: publicFlows(base, head, options.assessments) } : {}),
     surfaces: plan.surfaces.flatMap(s => appearancePairs(s.id, colorSchemes, baseColorSchemes).map(({ id, scheme, baseId }) => {
       const assessment = options.assessments?.[id];
       // The bundle records one outcome per route; a secondary appearance's surface carries that outcome only when the

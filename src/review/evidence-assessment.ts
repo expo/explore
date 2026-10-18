@@ -1,6 +1,6 @@
 import { unattributedIssue } from "../capture/health.js";
 import { appearancePairs, bundleColorSchemes } from "../capture/appearance.js";
-import { homeIndicatorBandPercent, launchSurfaceId, statusBarBandPercent } from "../contracts/capture.js";
+import { flowSurfaceId, homeIndicatorBandPercent, launchSurfaceId, statusBarBandPercent } from "../contracts/capture.js";
 import { readFileSync, statSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
@@ -553,6 +553,30 @@ export async function assessPublicEvidence(options: {
     } catch (error) {
       comparisonError(id, error, { code: "VISUAL_COMPARISON_FAILED", stage: "compare",
         message: "Launch screenshot comparison failed.", nextAction: "Check the launch frames and the agent-device comparison diagnostics, then rerun comparison.", retryable: true });
+    }
+  }
+
+  // Flow frames compare like screens when both revisions took the same frame of the same flow.
+  for (const [flowId, headFlow] of Object.entries(options.head.bundle.flows ?? {})) {
+    const baseFlow = options.base.bundle.flows?.[flowId];
+    if (!baseFlow || !visualAvailable) continue;
+    for (const [key, headFrame] of Object.entries(headFlow.frames)) {
+      const baseFrame = baseFlow.frames[key];
+      if (!baseFrame || now() > deadline) continue;
+      const id = flowSurfaceId(flowId, key);
+      const basePath = localEvidencePath(options.base, baseFrame.path); const headPath = localEvidencePath(options.head, headFrame.path);
+      if (!basePath || !headPath) continue;
+      try {
+        const { measurement, ignoredTop, ignoredBottom } = ignoreSystemBands(await measure(basePath, headPath), { top: statusBarBandPercent(options.platform), bottom: homeIndicatorBandPercent(options.platform) });
+        const visual = visualVerdict(assessVisualMeasurements({ baselineSamples: 1, currentSamples: 1, requiredSamples: 1,
+          baselineWithin: [], currentWithin: [], crossBuild: [measurement], representative: measurement }), threshold);
+        if (ignoredTop > 0) visual.ignoredStatusBarRegions = ignoredTop;
+        if (ignoredBottom > 0) visual.ignoredHomeIndicatorRegions = ignoredBottom;
+        surfaces[id] = { visual };
+      } catch (error) {
+        comparisonError(id, error, { code: "VISUAL_COMPARISON_FAILED", stage: "compare",
+          message: "Flow frame comparison failed.", nextAction: "Check the flow frames and the agent-device comparison diagnostics, then rerun comparison.", retryable: true });
+      }
     }
   }
 

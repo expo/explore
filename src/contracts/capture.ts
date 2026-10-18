@@ -258,6 +258,19 @@ export type PublicLaunchEvidence = {
   base?: PublicLaunchSide; head?: PublicLaunchSide;
   visual?: PublicVisualVerdict;
 };
+/** A flow frame as published: the capture's record with its stored URL. */
+export type PublicFlowFrame = Omit<FlowFrame, "path"> & { url: string };
+export type PublicFlowSide = Omit<BundleFlow, "frames" | "file" | "title"> & { frames: Record<string, PublicFlowFrame> };
+/**
+ * One flow across the two revisions: its outcome on each side and its frames in step order. A frame is compared when
+ * both sides took it; a side that failed before a frame simply lacks it.
+ */
+export type PublicFlowEvidence = {
+  /** The flow id (`<file>/<title>`, slugged); its frames are the surfaces `flow:<id>/<key>`. */
+  id: string; title: string; file: string;
+  base?: PublicFlowSide; head?: PublicFlowSide;
+  frames: Array<{ key: string; id: string; label: string; visual?: PublicVisualVerdict }>;
+};
 export type PublicReview = {
   contract: "explore.review";
   pullRequest: ReviewPresentation; mode: "all" | "changes"; createdAt: string;
@@ -287,6 +300,8 @@ export type PublicReview = {
   navigation?: { base: NavigationGraph; head: NavigationGraph };
   /** The app launch per appearance, kept apart from source routes: it has no route or navigation. */
   launch?: PublicLaunchEvidence[];
+  /** The app's e2e flows the capture ran, kept apart from source routes like the launch. */
+  flows?: PublicFlowEvidence[];
   surfaces: Array<{
     id: string; status: "added" | "modified" | "removed" | "unchanged";
     base: SourceRoute | null; head: SourceRoute | null;

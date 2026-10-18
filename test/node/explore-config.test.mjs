@@ -354,3 +354,14 @@ test("a target can choose its own controller and simulator over capture's", () =
   assert.deepEqual(["duo", "android", "cloud"].map(id => captureRepack(resolveTargetConfig(config, { target: id }))), ["local", "local", "eas"]);
   assert.throws(() => validateExploreConfig({ ...base(), targets: { duo: { platform: "ios", controller: "maestro" } } }), error => error.code === "CONFIG_INVALID");
 });
+
+test("flows: the app's e2e tests run in flows mode or beside deterministic routes, never with the agent", () => {
+  const flows = validateExploreConfig({ ...base(), mode: "flows", flows: { tests: ["flows/*.e2e.ts", "e2e/checkout.e2e.ts"] } });
+  assert.equal(flows.mode, "flows");
+  assert.deepEqual(flows.flows, { tests: ["flows/*.e2e.ts", "e2e/checkout.e2e.ts"] });
+  assert.deepEqual(validateExploreConfig({ ...base(), flows: { tests: "e2e/**/*.e2e.ts" } }).flows, { tests: ["e2e/**/*.e2e.ts"] });
+  assert.throws(() => validateExploreConfig({ ...base(), mode: "flows" }), /flows.tests is required in flows mode/);
+  assert.throws(() => validateExploreConfig({ ...base(), mode: "agent", agent: { provider: "openai", model: "m", instructions: "x.md" }, flows: { tests: ["a.e2e.ts"] } }), /cannot be combined with agent mode/);
+  assert.throws(() => validateExploreConfig({ ...base(), flows: { tests: ["../outside.e2e.ts"] } }), /inside the app directory/);
+  assert.throws(() => validateExploreConfig({ ...base(), flows: { tests: [], extra: 1 } }), /flows/);
+});

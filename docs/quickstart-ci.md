@@ -90,7 +90,7 @@ The capture profile can be a release build; a development client is not supporte
 The generated `.expo-explore/config.yaml` lives in the application directory. Commit it with the app:
 
 ```yaml
-mode: deterministic
+mode: deterministic # deterministic (route links) | flows (setup, then the app's e2e tests) | agent
 app:
   platform: ios # ios | android
   bundleId: com.example.myapp # Android: the application id (android.package)
@@ -264,6 +264,50 @@ drifted flows remains follow-up work.
 Do not assume a failed full run is cheap to repeat: inspect its diagnostic and
 correct the specific failure first. Respect a user's request to stop paid runs;
 offline tests do not establish live cost or complete capture acceptance.
+
+### Flows: the app's e2e tests as capture
+
+Deterministic capture shows one frame per route. A flow shows the screens a user actually passes through: sign-up,
+sending money, checking out. Explore does not define a flow language for this; a flow is a test file of the
+[`e2e`](https://e2e.tester.army) package, written and run the way the app's own e2e suite is, and Explore runs it on
+the simulator session it already holds, on both revisions, after `setup`.
+
+```yaml
+mode: flows            # or keep mode: deterministic and add flows: to capture the routes and the flows
+flows:
+  tests:
+    - e2e/**/*.e2e.ts  # paths or globs from the app directory
+```
+
+```ts
+// e2e/send-money.e2e.ts
+import { expect, test } from "e2e";
+
+test("send money to a contact", async ({ app, device, screen }) => {
+  await device.openLink("myapp://send/contacts");
+  await app.screenshot("contacts");              // a frame the review compares across revisions
+  await screen.getByText("Alex Rivera").tap();
+  await screen.getByTestId("send-amount-input").fill("25");
+  await app.screenshot("amount");
+  await screen.getByTestId("send-amount-continue").tap();
+  await expect(screen.getByTestId("send-confirm")).toBeVisible();
+  await app.screenshot("review");
+});
+```
+
+- Every `app.screenshot(label)` is a frame of the review, `flow:<file>/<test>/<label>`, compared pixel by pixel
+  between base and head like a route. The Viewer lists each flow as a journey through its frames; the PR comment has
+  one line per flow.
+- A flow that fails keeps the frames it took and the report names the step that failed (`failed on head at step 5
+  (locator.tap getByText("Alex Rivera"))`); the capture goes on with the next flow. A flow is review evidence, not a
+  gate: the workflow does not fail because a flow did.
+- `agent.act("…")` steps run when the config has an `agent` block with its provider key in the environment; e2e's
+  replay cache (`.e2e/cache`, committed) then replays them without a model on later runs. Locator-only flows need no
+  model.
+- The flows run as the reviewed commit's own code, in a child process with the capture's narrowed environment, under
+  the same trust rule as the capture itself (same-repository PRs by authors with write access, or `ci.trustedAuthors`).
+- `e2e` writes its report inside the app directory while the flows run (`.expo-explore-flows/`); Explore removes it
+  before the checkout is verified clean.
 
 ### Agent mode
 

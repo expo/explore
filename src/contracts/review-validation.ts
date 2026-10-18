@@ -1,5 +1,5 @@
 import { projectReviewPresentation } from "./review.js";
-import { LAUNCH_SURFACE_ID, launchSurfaceId, type PublicLaunchSide, type PublicReview, type PublicVisualVerdict } from "./capture.js";
+import { LAUNCH_SURFACE_ID, flowSurfaceId, launchSurfaceId, type PublicFlowSide, type PublicLaunchSide, type PublicReview, type PublicVisualVerdict } from "./capture.js";
 import { SOURCE_IMPACT_KINDS, validateSourceChangeSummary } from "./source-change.js";
 import { validateNavigationGraph } from "./navigation-graph.js";
 import { validateSourceRoute } from "./source-route.js";
@@ -126,6 +126,47 @@ function validLaunchSide(side: unknown): boolean {
     && (video === undefined || (Boolean(video) && typeof video === "object" && typeof video.url === "string" && /^https:\/\//.test(video.url)
       && /^[a-f0-9]{64}$/.test(video.sha256) && Number.isSafeInteger(video.bytes) && video.bytes > 0 && video.mimeType === "video/mp4"
       && (video.durationMs === undefined || (Number.isSafeInteger(video.durationMs) && video.durationMs >= 0))));
+}
+const FLOW_STATUSES = new Set(["passed", "failed", "skipped", "flaky", "timed-out", "interrupted", "blocked"]);
+const STEP_STATUSES = new Set(["passed", "failed", "blocked", "timed-out", "cancelled"]);
+const validFlowFrame = (value: unknown): boolean => Boolean(value) && typeof value === "object"
+  && Object.keys(value as object).every(key => ["url", "sha256", "width", "height", "capturedAt"].includes(key))
+  && typeof (value as { url: unknown }).url === "string" && /^[a-f0-9]{64}$/.test(String((value as { sha256: unknown }).sha256))
+  && Number.isSafeInteger((value as { width: unknown }).width) && Number.isSafeInteger((value as { height: unknown }).height)
+  && Number.isFinite(Date.parse(String((value as { capturedAt: unknown }).capturedAt)));
+function validFlowSide(value: unknown): value is PublicFlowSide {
+  if (!value || typeof value !== "object" || Object.keys(value).some(key => !["status", "durationMs", "error", "steps", "frames"].includes(key))) return false;
+  const side = value as PublicFlowSide;
+  return FLOW_STATUSES.has(side.status) && Number.isSafeInteger(side.durationMs) && side.durationMs >= 0
+    && (side.error === undefined || (typeof side.error?.code === "string" && typeof side.error.message === "string"))
+    && Array.isArray(side.steps) && side.steps.length <= 10_000 && side.steps.every(step => step && typeof step === "object"
+      && Object.keys(step).every(key => ["api", "label", "status", "durationMs", "frame", "error"].includes(key))
+      && typeof step.api === "string" && typeof step.label === "string" && STEP_STATUSES.has(step.status) && Number.isSafeInteger(step.durationMs)
+      && (step.frame === undefined || (typeof step.frame === "string" && Object.hasOwn(side.frames, step.frame))))
+    && side.frames !== null && typeof side.frames === "object" && Object.entries(side.frames).every(([key, frame]) => /^[a-z0-9-]+$/.test(key) && validFlowFrame(frame));
+}
+/** Flow evidence is one entry per flow either side ran, with a verdict only for frames both sides took. */
+function assertFlowEvidence(review: PublicReview, enforceComparisonEvidence: boolean): void {
+  const flows = review.flows;
+  if (flows === undefined) return;
+  if (!Array.isArray(flows) || flows.length === 0 || flows.length > 1_000) throw new Error("Public flow evidence is invalid");
+  const ids = new Set<string>();
+  for (const entry of flows) {
+    if (!entry || typeof entry !== "object" || Object.keys(entry).some(key => !["id", "title", "file", "base", "head", "frames"].includes(key))
+      || typeof entry.id !== "string" || !/^[a-z0-9-]+\/[a-z0-9-]+$/.test(entry.id) || ids.has(entry.id)
+      || typeof entry.title !== "string" || typeof entry.file !== "string"
+      || (!entry.base && !entry.head) || (entry.base !== undefined && !validFlowSide(entry.base)) || (entry.head !== undefined && !validFlowSide(entry.head))
+      || !Array.isArray(entry.frames)) throw new Error("Public flow evidence is invalid");
+    ids.add(entry.id);
+    const keys = new Set<string>();
+    for (const frame of entry.frames) {
+      if (!frame || typeof frame !== "object" || Object.keys(frame).some(key => !["key", "id", "label", "visual"].includes(key))
+        || typeof frame.key !== "string" || keys.has(frame.key) || frame.id !== flowSurfaceId(entry.id, frame.key) || typeof frame.label !== "string"
+        || (!entry.base?.frames[frame.key] && !entry.head?.frames[frame.key])) throw new Error("Public flow evidence is invalid");
+      keys.add(frame.key);
+      if (frame.visual !== undefined) assertVisualVerdict(frame.visual, enforceComparisonEvidence, Boolean(entry.base?.frames[frame.key] && entry.head?.frames[frame.key]));
+    }
+  }
 }
 /** Launch evidence is one entry per captured appearance, with a verdict only when both sides observed a splash. */
 function assertLaunchEvidence(review: PublicReview, enforceComparisonEvidence: boolean): void {
@@ -333,6 +374,7 @@ function validatePublicReview(review: PublicReview, enforceComparisonEvidence: b
   }
   if (review.runtime.appIcon !== undefined) assertAppIcon(review.runtime.appIcon);
   assertLaunchEvidence(review, enforceComparisonEvidence);
+  assertFlowEvidence(review, enforceComparisonEvidence);
   const ids = new Set<string>();
   const sideBuildIds = { base: new Set<string>(), head: new Set<string>() };
   for (const surface of review.surfaces) {

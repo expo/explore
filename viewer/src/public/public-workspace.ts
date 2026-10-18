@@ -410,6 +410,40 @@ function sidePayload(review: PublicReview, side: Side): { map: ExploreMap; cover
           : "No splash screen was observed in screenshots; a launch recording (ffmpeg on the runner) is needed to see short splashes. Shown is the first settled frame.", createdAt: review.createdAt });
     }
   }
+  // The app's flows sit outside the route graph too: each frame a flow took is a screen, and the flow is a journey
+  // through them in step order. A side that failed before a frame has a gap there naming the step that failed.
+  for (const entry of review.flows ?? []) {
+    const flow = entry[side];
+    const screenIds: string[] = [];
+    for (const frame of entry.frames) {
+      const taken = flow?.frames[frame.key];
+      if (!taken) {
+        if (flow) {
+          const failed = flow.steps.find(step => step.status !== "passed");
+          map.gaps.push({ id: `flow:${side}:${frame.id}`, screenId: frame.id, kind: "coverage", status: "open",
+            message: failed ? `Not reached: the flow ${flow.status} at step ${flow.steps.indexOf(failed) + 1} (${failed.api} ${failed.label})${failed.error ? `: ${failed.error.message}` : ""}`
+              : `Not taken: the flow ${flow.status} without this frame`, createdAt: review.createdAt });
+        }
+        continue;
+      }
+      const artifact: Artifact = { id: `image:${side}:${frame.id}`, kind: "screenshot", path: `${side}/${frame.id.replace(/[:/]/g, "-")}.png`,
+        publicUrl: taken.url, sha256: taken.sha256, mimeType: "image/png", width: taken.width, height: taken.height, createdAt: taken.capturedAt };
+      map.artifacts.push(artifact);
+      map.screens.push({
+        id: frame.id, title: `${entry.title} › ${frame.label}`, route: `flow:${entry.id}`, state: frame.label,
+        start: false, terminal: false, depth: screenIds.length, firstSeenAt: taken.capturedAt, lastSeenAt: taken.capturedAt, visits: 1,
+        variantIds: [variantId(frame.id)], observationIds: [observationId(side, frame.id)], elementIds: [],
+      });
+      map.variants.push({ id: variantId(frame.id), screenId: frame.id, key: frame.key, name: frame.label, firstSeenAt: taken.capturedAt, lastSeenAt: taken.capturedAt, observationIds: [observationId(side, frame.id)] });
+      map.observations.push({
+        id: observationId(side, frame.id), screenId: frame.id, variantId: variantId(frame.id),
+        fingerprints: { combined: taken.sha256 }, capturedAt: taken.capturedAt, surfaceScope: "app",
+        elementIds: [], elements: [], screenshotArtifactId: artifact.id,
+      });
+      screenIds.push(frame.id);
+    }
+    if (screenIds.length) map.journeys.push({ id: `flow:${entry.id}`, title: entry.title, screenIds, transitionIds: [], attemptIds: [] });
+  }
   const openGaps = map.gaps.filter((gap) => gap.status === "open");
   if (openGaps.length > 0) map.run.status = "partial";
   return {
