@@ -849,6 +849,18 @@ test("an excluded route leaves the map with an accepted gap, like a redirect", (
     "Excluded by exploration.exclude; never captured");
 });
 
+test("an unchanged excluded route outside the capture context still says it was excluded", () => {
+  const review = navigationReview();
+  const excluded = review.surfaces.find(surface => surface.id === "games-pro");
+  excluded.excluded = true;
+  for (const side of ["base", "head"]) { delete excluded[`${side}Image`]; delete excluded[`${side}Outcome`]; }
+  const { current } = workspaceSides(publicReviewToWorkspace(review));
+  const gap = current.map.gaps.find(gap => gap.screenId === "games-pro");
+  assert.equal(gap.status, "accepted");
+  assert.equal(gap.message, "Excluded by exploration.exclude; never captured");
+  assert.equal(diffFor(review).index.screenNotes.get("games-pro"), "Excluded by exploration.exclude; never captured");
+});
+
 test("a screen's note is its first open gap of any kind, and an accepted gap only when nothing is open", () => {
   // A redirect on base that became a screen whose head capture failed: the comparison carries both sides' gaps.
   const review = verifyImages(fixture());
