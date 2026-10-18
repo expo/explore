@@ -582,3 +582,20 @@ test("only an iPhone foldable gets the rail pill, and a region reaching the righ
   // The slack is the rounding, no more: a region a tenth of a percent past the band is still kept.
   assert.equal(ignoreSystemBands(measurement([region({ x: 10, y: 2, width: 20, height: 4.6 })]), { top: 6.5, bottom: 0 }).ignoredTop, 0);
 });
+
+test("on a foldable a region across the pill's edge is kept whole, and one across the home indicator's edge is clipped", () => {
+  const duo = systemRegions({ platform: "ios", device: "iPhone Duo", pose: "closed" });
+  const region = (rect, normalizedRect, differentPixels) => ({ index: 0, rect, normalizedRect, differentPixels, shareOfDiffPercentage: 100, densityPercentage: 100, shape: "block", size: "small", location: "middle-right", dominantChange: "darker" });
+  const measurement = (regions) => ({ baselinePath: "b", currentPath: "h", totalPixels: 87400, differentPixels: regions.reduce((total, entry) => total + entry.differentPixels, 0), mismatchPercentage: 0.11, match: false, regions });
+  // A pill is not a band: what crosses its edge is the app's own rail, so the frames are never read for it.
+  const belowPill = region({ x: 85, y: 190, width: 10, height: 20 }, { x: 85, y: 21.74, width: 10, height: 2.29 }, 200);
+  const kept = ignoreSystemRegions(measurement([belowPill]), duo, () => assert.fail("a pill's edge needs no frames"));
+  assert.deepEqual([kept.ignoredStatusBar, kept.measurement.match, kept.measurement.regions], [0, false, [belowPill]]);
+  // The home indicator is a band across the width, as on a phone: in a 100x874 frame its 3% is the last 26 rows, from 848.
+  const frame = (paint) => { const png = new PngImage({ width: 100, height: 874 }); png.data.fill(255); paint?.(png); return png; };
+  const painted = (png) => { for (let y = 840; y < 850; y += 1) for (let x = 10; x < 20; x += 1) png.data.fill(0, (y * 100 + x) * 4, (y * 100 + x) * 4 + 3); };
+  const crossing = region({ x: 10, y: 840, width: 10, height: 10 }, { x: 10, y: 96.11, width: 10, height: 1.14 }, 100);
+  const clipped = ignoreSystemRegions(measurement([crossing]), duo, () => ({ baseline: frame(), current: frame(painted), distance: 0.1 * Math.sqrt(3 * 255 ** 2) }));
+  assert.deepEqual([clipped.ignoredStatusBar, clipped.ignoredHomeIndicator, clipped.measurement.match, clipped.measurement.differentPixels], [0, 1, false, 80]);
+  assert.deepEqual(clipped.measurement.regions.map((entry) => [entry.rect.y, entry.rect.height, entry.differentPixels, entry.shareOfDiffPercentage]), [[840, 8, 80, 100]]);
+});
