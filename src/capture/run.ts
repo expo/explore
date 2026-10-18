@@ -327,6 +327,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     + (routes.length - missingRoutes.length ? `, ${routes.length - missingRoutes.length} reused from the baseline` : "")
     + (missingRoutes.length ? `, ${missingRoutes.length} to capture` : ""));
   let captureFailure: unknown;
+  let flowRecords: CaptureBundle["flows"] | undefined;
+  const captureStartedAt = (options.now ?? Date.now)();
   const finish = async (): Promise<CiMapResult> => {
     if (!(await store.exists())) await store.initialize(map, false);
     const incomplete = captureFailure !== undefined || selectedIds.some(id => outcomes[id]?.status !== "captured" || outcomes[id]?.landing !== "verified")
@@ -583,8 +585,6 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   }
   let primaryError: unknown;
   let runtimeStage = "session";
-  let flowRecords: CaptureBundle["flows"] | undefined;
-  const captureStartedAt = (options.now ?? Date.now)();
   try {
     setStage(runtimeStage);
     let connection: SimulatorConnection | undefined;
