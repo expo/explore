@@ -1,0 +1,204 @@
+{
+ "id": "send-money/send-money-to-a-contact",
+ "title": "send money to a contact",
+ "file": "flows/send-money.e2e.ts",
+ "base": {
+  "status": "passed",
+  "durationMs": 3202,
+  "steps": [
+   {
+    "api": "device.openLink",
+    "label": "explore-example-wallet://send/contacts",
+    "status": "passed",
+    "durationMs": 812
+   },
+   {
+    "api": "expect.toBeVisible",
+    "label": "getByTestId(\"contacts-list\")",
+    "status": "passed",
+    "durationMs": 140
+   },
+   {
+    "api": "app.screenshot",
+    "label": "contacts",
+    "status": "passed",
+    "durationMs": 310,
+    "frame": "contacts"
+   },
+   {
+    "api": "locator.tap",
+    "label": "getByText(\"Alex Rivera\")",
+    "status": "passed",
+    "durationMs": 420
+   },
+   {
+    "api": "locator.fill",
+    "label": "getByTestId(\"send-amount-input\")",
+    "status": "passed",
+    "durationMs": 380
+   },
+   {
+    "api": "app.screenshot",
+    "label": "amount",
+    "status": "passed",
+    "durationMs": 290,
+    "frame": "amount"
+   },
+   {
+    "api": "locator.tap",
+    "label": "getByTestId(\"send-amount-continue\")",
+    "status": "passed",
+    "durationMs": 400
+   },
+   {
+    "api": "expect.toBeVisible",
+    "label": "getByTestId(\"send-confirm\")",
+    "status": "passed",
+    "durationMs": 150
+   },
+   {
+    "api": "app.screenshot",
+    "label": "review",
+    "status": "passed",
+    "durationMs": 300,
+    "frame": "review"
+   }
+  ],
+  "frames": {
+   "contacts": {
+    "url": "https://embedded.expo-explore.invalid/f3f6e607859abb7e1ff343cdeed2e8939d243966e7aca90e023fb561266cdfcb.png",
+    "sha256": "f3f6e607859abb7e1ff343cdeed2e8939d243966e7aca90e023fb561266cdfcb",
+    "width": 402,
+    "height": 874,
+    "capturedAt": "2026-09-22T11:39:40.895Z"
+   },
+   "amount": {
+    "url": "https://embedded.expo-explore.invalid/c127fb80b3c6423998da6bc161aba372c6fcf76b664253822718672f33c7d238.png",
+    "sha256": "c127fb80b3c6423998da6bc161aba372c6fcf76b664253822718672f33c7d238",
+    "width": 402,
+    "height": 874,
+    "capturedAt": "2026-09-22T11:39:47.748Z"
+   },
+   "review": {
+    "url": "https://embedded.expo-explore.invalid/157d6714f158f3b430cd0522eb72c20861f4159339d85ff0fc0ad4515a70ba72.png",
+    "sha256": "157d6714f158f3b430cd0522eb72c20861f4159339d85ff0fc0ad4515a70ba72",
+    "width": 402,
+    "height": 874,
+    "capturedAt": "2026-09-22T11:39:54.038Z"
+   }
+  }
+ },
+ "head": {
+  "status": "failed",
+  "durationMs": 7754,
+  "error": {
+   "code": "ASSERTION_FAILED",
+   "message": "getByTestId(\"send-confirm\") was not visible within 5000 ms"
+  },
+  "steps": [
+   {
+    "api": "device.openLink",
+    "label": "explore-example-wallet://send/contacts",
+    "status": "passed",
+    "durationMs": 812
+   },
+   {
+    "api": "expect.toBeVisible",
+    "label": "getByTestId(\"contacts-list\")",
+    "status": "passed",
+    "durationMs": 140
+   },
+   {
+    "api": "app.screenshot",
+    "label": "contacts",
+    "status": "passed",
+    "durationMs": 310,
+    "frame": "contacts"
+   },
+   {
+    "api": "locator.tap",
+    "label": "getByText(\"Alex Rivera\")",
+    "status": "passed",
+    "durationMs": 420
+   },
+   {
+    "api": "locator.fill",
+    "label": "getByTestId(\"send-amount-input\")",
+    "status": "passed",
+    "durationMs": 380
+   },
+   {
+    "api": "app.screenshot",
+    "label": "amount",
+    "status": "passed",
+    "durationMs": 290,
+    "frame": "amount"
+   },
+   {
+    "api": "locator.tap",
+    "label": "getByTestId(\"send-amount-continue\")",
+    "status": "passed",
+    "durationMs": 400
+   },
+   {
+    "api": "expect.toBeVisible",
+    "label": "getByTestId(\"send-confirm\")",
+    "status": "failed",
+    "durationMs": 5002,
+    "error": {
+     "code": "ASSERTION_FAILED",
+     "message": "getByTestId(\"send-confirm\") was not visible within 5000 ms"
+    }
+   }
+  ],
+  "frames": {
+   "contacts": {
+    "url": "https://embedded.expo-explore.invalid/962bb0cd594c48b6c47ef6fd8a6ca6f2411128d812a93ab17854b74fc59e6892.png",
+    "sha256": "962bb0cd594c48b6c47ef6fd8a6ca6f2411128d812a93ab17854b74fc59e6892",
+    "width": 402,
+    "height": 874,
+    "capturedAt": "2026-09-22T11:31:18.054Z"
+   },
+   "amount": {
+    "url": "https://embedded.expo-explore.invalid/4b2cd242fcf5a38712a4f290561fb24e496dfeeeb7c78c4258f6c75f26608b9f.png",
+    "sha256": "4b2cd242fcf5a38712a4f290561fb24e496dfeeeb7c78c4258f6c75f26608b9f",
+    "width": 402,
+    "height": 874,
+    "capturedAt": "2026-09-22T11:31:33.692Z"
+   }
+  }
+ },
+ "frames": [
+  {
+   "key": "contacts",
+   "id": "flow:send-money/send-money-to-a-contact/contacts",
+   "label": "contacts",
+   "visual": {
+    "verdict": "unchanged",
+    "reason": "matched",
+    "mismatchPercentage": 0,
+    "threshold": 0.1,
+    "tool": "agent-device@0.20.2",
+    "ignoredStatusBarRegions": 1
+   }
+  },
+  {
+   "key": "amount",
+   "id": "flow:send-money/send-money-to-a-contact/amount",
+   "label": "amount",
+   "visual": {
+    "verdict": "unchanged",
+    "reason": "matched",
+    "mismatchPercentage": 0,
+    "threshold": 0.1,
+    "tool": "agent-device@0.20.2",
+    "ignoredStatusBarRegions": 1
+   }
+  },
+  {
+   "key": "review",
+   "id": "flow:send-money/send-money-to-a-contact/review",
+   "label": "review"
+  }
+ ]
+}
