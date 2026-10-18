@@ -250,6 +250,7 @@ async function localReview(): Promise<void> {
     ...(parallel ? { parallel } : {}),
     // --include-untracked is accepted from before untracked files were included by default.
     committed: has("committed"), uncommitted: has("uncommitted"), ...(platform ? { platform } : {}),
+    ...(has("flows") ? { flows: required("flows").split(",") } : {}),
     scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack"), cache: !has("no-cache"), configPath: flag("config"), progress: stderrProgress() });
   if (has("output")) {
     for (const report of result.reports) {

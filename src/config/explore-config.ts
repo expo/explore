@@ -531,8 +531,16 @@ export function resolvePlatformConfig(config: ExploreConfig, platform: ExplorePl
  * every screen (`scope: all`) and keep its hosted link (`expiresIn: never`). `expiresIn` changes nothing when the
  * config hosts no report.
  */
-export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined; controller?: string | undefined; simulator?: string | undefined; repack?: string | undefined }): ExploreConfig {
+export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined; controller?: string | undefined; simulator?: string | undefined; repack?: string | undefined ; flows?: readonly string[] | undefined }): ExploreConfig{
   let result = config;
+  if (overrides.flows !== undefined) {
+    // --flows FILE[,FILE]: run these e2e files as the capture, and nothing else (flows mode), whatever config.yaml says.
+    const tests = overrides.flows.map(entry => entry.trim()).filter(Boolean);
+    if (!tests.length) fail("--flows needs at least one e2e test file or glob", "--flows");
+    for (const path of tests) if (isAbsolute(path) || path.split(/[\\/]/).includes("..") || /[\u0000-\u001f]/.test(path)) fail(`--flows ${path} must be a path or glob inside the app directory`, "--flows");
+    if (result.mode === "agent") fail("--flows cannot be combined with agent mode", "--flows");
+    result = { ...result, mode: "flows", flows: { tests: tests.map(path => path.replace(/\\/g, "/")) } };
+  }
   if (overrides.repack !== undefined) {
     if (overrides.repack !== "eas" && overrides.repack !== "local") fail("--repack must be eas or local", "--repack");
     result = { ...result, capture: { ...result.capture, repack: overrides.repack } };

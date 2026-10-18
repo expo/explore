@@ -10,58 +10,67 @@
     "api": "device.openLink",
     "label": "explore-example-wallet://send/contacts",
     "status": "passed",
-    "durationMs": 812
+    "durationMs": 812,
+    "line": 4
    },
    {
     "api": "expect.toBeVisible",
     "label": "getByTestId(\"contacts-list\")",
     "status": "passed",
-    "durationMs": 140
+    "durationMs": 140,
+    "line": 5
    },
    {
     "api": "app.screenshot",
     "label": "contacts",
     "status": "passed",
     "durationMs": 310,
-    "frame": "contacts"
+    "frame": "contacts",
+    "line": 6
    },
    {
     "api": "locator.tap",
     "label": "getByText(\"Alex Rivera\")",
     "status": "passed",
-    "durationMs": 420
+    "durationMs": 420,
+    "line": 7
    },
    {
     "api": "locator.fill",
     "label": "getByTestId(\"send-amount-input\")",
     "status": "passed",
-    "durationMs": 380
+    "durationMs": 380,
+    "line": 8
    },
    {
     "api": "app.screenshot",
     "label": "amount",
     "status": "passed",
     "durationMs": 290,
-    "frame": "amount"
+    "frame": "amount",
+    "line": 9
    },
    {
     "api": "locator.tap",
     "label": "getByTestId(\"send-amount-continue\")",
     "status": "passed",
-    "durationMs": 400
+    "durationMs": 400,
+    "line": 10
    },
    {
     "api": "expect.toBeVisible",
     "label": "getByTestId(\"send-confirm\")",
     "status": "passed",
-    "durationMs": 150
+    "durationMs": 150,
+    "line": 11
    },
    {
     "api": "app.screenshot",
     "label": "review",
     "status": "passed",
     "durationMs": 300,
-    "frame": "review"
+    "frame": "review",
+    "line": 12
    }
   ],
   "frames": {
@@ -86,7 +95,8 @@
     "height": 874,
     "capturedAt": "2026-09-22T11:39:54.038Z"
    }
-  }
+  },
+  "line": 3
  },
  "head": {
   "status": "failed",
@@ -100,45 +110,52 @@
     "api": "device.openLink",
     "label": "explore-example-wallet://send/contacts",
     "status": "passed",
-    "durationMs": 812
+    "durationMs": 812,
+    "line": 4
    },
    {
     "api": "expect.toBeVisible",
     "label": "getByTestId(\"contacts-list\")",
     "status": "passed",
-    "durationMs": 140
+    "durationMs": 140,
+    "line": 5
    },
    {
     "api": "app.screenshot",
     "label": "contacts",
     "status": "passed",
     "durationMs": 310,
-    "frame": "contacts"
+    "frame": "contacts",
+    "line": 6
    },
    {
     "api": "locator.tap",
     "label": "getByText(\"Alex Rivera\")",
     "status": "passed",
-    "durationMs": 420
+    "durationMs": 420,
+    "line": 7
    },
    {
     "api": "locator.fill",
     "label": "getByTestId(\"send-amount-input\")",
     "status": "passed",
-    "durationMs": 380
+    "durationMs": 380,
+    "line": 8
    },
    {
     "api": "app.screenshot",
     "label": "amount",
     "status": "passed",
     "durationMs": 290,
-    "frame": "amount"
+    "frame": "amount",
+    "line": 9
    },
    {
     "api": "locator.tap",
     "label": "getByTestId(\"send-amount-continue\")",
     "status": "passed",
-    "durationMs": 400
+    "durationMs": 400,
+    "line": 10
    },
    {
     "api": "expect.toBeVisible",
@@ -148,7 +165,8 @@
     "error": {
      "code": "ASSERTION_FAILED",
      "message": "getByTestId(\"send-confirm\") was not visible within 5000 ms"
-    }
+    },
+    "line": 11
    }
   ],
   "frames": {
@@ -166,7 +184,8 @@
     "height": 874,
     "capturedAt": "2026-09-22T11:31:33.692Z"
    }
-  }
+  },
+  "line": 3
  },
  "frames": [
   {

@@ -365,3 +365,14 @@ test("flows: the app's e2e tests run in flows mode or beside deterministic route
   assert.throws(() => validateExploreConfig({ ...base(), flows: { tests: ["../outside.e2e.ts"] } }), /inside the app directory/);
   assert.throws(() => validateExploreConfig({ ...base(), flows: { tests: [], extra: 1 } }), /flows/);
 });
+
+test("--flows runs the named e2e files as the whole capture, in flows mode, and is validated", () => {
+  const plain = validateExploreConfig(base());
+  const flows = withRunOverrides(plain, { flows: ["e2e/checkout.e2e.ts", " e2e/sign-up/*.e2e.ts "] });
+  assert.equal(flows.mode, "flows");
+  assert.deepEqual(flows.flows, { tests: ["e2e/checkout.e2e.ts", "e2e/sign-up/*.e2e.ts"] });
+  assert.deepEqual(withRunOverrides(plain, {}), plain);
+  assert.throws(() => withRunOverrides(plain, { flows: [" "] }), error => error.code === "CONFIG_INVALID");
+  assert.throws(() => withRunOverrides(plain, { flows: ["../other/app.e2e.ts"] }), error => error.code === "CONFIG_INVALID");
+  assert.throws(() => withRunOverrides(validateExploreConfig({ ...base(), mode: "agent" }), { flows: ["e2e/a.e2e.ts"] }), error => error.code === "CONFIG_INVALID");
+});

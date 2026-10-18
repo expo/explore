@@ -57,3 +57,11 @@ test("repeated screenshot labels get distinct frame keys", () => {
   const [flow] = summarizeFlowReport(twice);
   assert.deepEqual(flow.frames.map(frame => frame.key), ["home", "home-2"]);
 });
+
+test("steps and tests carry the e2e source line of the test file", async () => {
+  const summaries = summarizeFlowReport(JSON.parse(readFileSync(new URL("../fixtures/flows/e2e-report.json", import.meta.url), "utf8")));
+  const send = summaries.find(summary => summary.file === "tests/send.e2e.ts");
+  assert.equal(send.steps[0].line, 3);
+  assert.equal(send.steps[1].line, 4);
+  assert.ok(send.line === undefined || send.line > 0);
+});

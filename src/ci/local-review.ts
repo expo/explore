@@ -48,6 +48,8 @@ export type LocalReviewOptions = {
   parallel?: number | undefined;
   scope?: string | undefined;
   expiresIn?: string | undefined;
+  /** e2e files or globs to run as the capture instead of the config's mode (`--flows`). */
+  flows?: readonly string[] | undefined;
   /** `--controller`: the device controller for both sides, over the config's `capture.controller`. */
   controller?: string | undefined;
   /** `--simulator`: `local` runs both sides on simulators this Mac creates, over the config's `capture.simulator`. */
@@ -458,7 +460,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     });
     // The targets run at once, as CI runs them in parallel jobs: each on its own simulators, with its own output.
     const captureTarget = async (target: RunTarget): Promise<LocalReviewReport> => {
-      const config = withRunOverrides(resolveTargetConfig(rawConfig, { target: target.id }), { scope: options.scope, expiresIn: options.expiresIn, controller: options.controller, simulator: options.simulator, repack: options.repack });
+      const config = withRunOverrides(resolveTargetConfig(rawConfig, { target: target.id }), { scope: options.scope, expiresIn: options.expiresIn, flows: options.flows, controller: options.controller, simulator: options.simulator, repack: options.repack });
       const platform = target.platform;
       const output = join(work, target.id); await mkdir(output);
       outputs.push(output);

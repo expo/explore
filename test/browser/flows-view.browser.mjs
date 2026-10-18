@@ -60,6 +60,13 @@ test("the Flows view shows each flow's outcome per side, its frames and steps, a
   await card.locator(".flow-frame-button").first().click();
   await expect(page).toHaveURL(/#\/flows\/flow:send-money/);
   await expect(page.getByRole("complementary", { name: "Inspector panel" })).toContainText("send money to a contact › contacts");
+  // The inspector explains the frame by its flow, not by a route transition: the step, the steps around it, the e2e source.
+  const inspector = page.getByRole("complementary", { name: "Inspector panel" });
+  await expect(inspector.locator(".flow-section")).toContainText("Frame from step 3 of 8");
+  await expect(inspector.locator(".transition-section")).toHaveCount(0);
+  await expect(inspector.locator(".flow-section-step-row").nth(2)).toHaveClass(/current/);
+  await expect(inspector.locator(".flow-section-step-row").nth(2).locator("a")).toHaveAttribute("href", /github\.com\/expo\/explore-playground\/blob\/[0-9a-f]{40}\/flows\/send-money\.e2e\.ts#L6$/);
+  await expect(card.locator(".flow-file a")).toHaveAttribute("href", /send-money\.e2e\.ts#L3$/);
   assert.deepEqual(errors, []);
 });
 

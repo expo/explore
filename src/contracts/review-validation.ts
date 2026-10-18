@@ -135,7 +135,7 @@ const validFlowFrame = (value: unknown): boolean => Boolean(value) && typeof val
   && Number.isSafeInteger((value as { width: unknown }).width) && Number.isSafeInteger((value as { height: unknown }).height)
   && Number.isFinite(Date.parse(String((value as { capturedAt: unknown }).capturedAt)));
 function validFlowSide(value: unknown): value is PublicFlowSide {
-  if (!value || typeof value !== "object" || Object.keys(value).some(key => !["status", "durationMs", "error", "steps", "frames"].includes(key))) return false;
+  if (!value || typeof value !== "object" || Object.keys(value).some(key => !["status", "durationMs", "error", "line", "steps", "frames"].includes(key))) return false;
   const side = value as PublicFlowSide;
   return FLOW_STATUSES.has(side.status) && Number.isSafeInteger(side.durationMs) && side.durationMs >= 0
     && (side.line === undefined || (Number.isSafeInteger(side.line) && side.line > 0))
