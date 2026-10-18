@@ -135,7 +135,7 @@ test("a card that moved far along a row is one move, from the regions where it l
   const shifts = regionShifts(cardFrame(), cardFrame({ x: 330 }), regions);
   assert.deepEqual(shifts, [undefined, undefined], "too far for the drift search");
   assert.deepEqual(regionMoves(cardFrame(), cardFrame({ x: 330 }), regions, shifts),
-    [{ rect: { x: 330, y: 80, width: 150, height: 120 }, shift: { x: 270, y: 0 }, members: [0, 1] }]);
+    [{ rect: { x: 330, y: 80, width: 150, height: 120 }, shift: { x: 270, y: 0 }, members: [1, 0] }], "the region it arrived in first");
 });
 
 test("a move whose old and new places overlap takes in the fragments of it the comparison found in between", () => {
@@ -148,7 +148,7 @@ test("a move whose old and new places overlap takes in the fragments of it the c
     { x: 200, y: 100, width: 120, height: 40, dominantChange: "mixed" },
   ];
   const [move] = regionMoves(base, head, regions, regions.map(() => undefined));
-  assert.deepEqual(move, { rect: { x: 180, y: 80, width: 300, height: 120 }, shift: { x: 120, y: 0 }, members: [0, 1, 2] });
+  assert.deepEqual(move, { rect: { x: 180, y: 80, width: 300, height: 120 }, shift: { x: 120, y: 0 }, members: [1, 0, 2] });
 });
 
 test("a card that moved far down a column is a vertical move", () => {
@@ -158,7 +158,7 @@ test("a card that moved far down a column is a vertical move", () => {
   ];
   const base = cardFrame({ height: 480, x: 100, y: 20, cardHeight: 100 }), head = cardFrame({ height: 480, x: 100, y: 330, cardHeight: 100 });
   assert.deepEqual(regionMoves(base, head, regions, [undefined, undefined]),
-    [{ rect: { x: 100, y: 330, width: 150, height: 100 }, shift: { x: 0, y: 310 }, members: [0, 1] }]);
+    [{ rect: { x: 100, y: 330, width: 150, height: 100 }, shift: { x: 0, y: 310 }, members: [1, 0] }]);
 });
 
 test("content that left one place while other content arrived elsewhere is not a move", () => {
@@ -180,4 +180,66 @@ test("repeating content that lines up at several distances is not a move: the di
     { x: 300, y: 80, width: 100, height: 120, dominantChange: "darker" },
   ];
   assert.deepEqual(regionMoves(cardFrame({ tile: 40 }), cardFrame({ tile: 40, x: 320 }), regions, [undefined, undefined]), []);
+});
+
+/** Two frames laid over each other: the darker pixel of each wins, so a dark card in either shows. */
+function overlay(first, second) {
+  const data = Buffer.from(first.data);
+  for (let index = 0; index < data.length; index += 1) data[index] = Math.min(first.data[index], second.data[index]);
+  return { ...first, data };
+}
+
+/** Paints a block of one colour into a frame, as a badge or icon drawn on top. */
+function withBlock(frame, { x, y, width, height, value }) {
+  const data = Buffer.from(frame.data);
+  for (let py = y; py < y + height; py += 1) for (let px = x; px < x + width; px += 1) data.fill(value, (py * frame.width + px) * 4, (py * frame.width + px) * 4 + 3);
+  return { ...frame, data };
+}
+
+const farMove = [
+  { x: 60, y: 80, width: 150, height: 120, dominantChange: "brighter" },
+  { x: 330, y: 80, width: 150, height: 120, dominantChange: "darker" },
+];
+
+test("something new where the card was stays a change: the move takes only the place it arrived", () => {
+  // The card moved right, and another card took its old place.
+  const head = overlay(cardFrame({ x: 330 }), cardFrame({ x: 60, seed: 99 }));
+  assert.deepEqual(regionMoves(cardFrame(), head, farMove, [undefined, undefined]),
+    [{ rect: { x: 330, y: 80, width: 150, height: 120 }, shift: { x: 270, y: 0 }, members: [1] }]);
+});
+
+test("content that did not arrive intact is not a move: part of it deleted, or something changed inside it", () => {
+  // Only the card's top half arrived; its body was deleted.
+  const deleted = withBlock(cardFrame({ x: 330 }), { x: 330, y: 140, width: 150, height: 60, value: 240 });
+  assert.deepEqual(regionMoves(cardFrame(), deleted, farMove, [undefined, undefined]), []);
+  // The card moved, and an 8×8 white mark appeared inside it: a badge is a change, however small.
+  const marked = withBlock(cardFrame({ x: 330 }), { x: 400, y: 130, width: 8, height: 8, value: 255 });
+  assert.deepEqual(regionMoves(cardFrame(), marked, farMove, [undefined, undefined]), []);
+});
+
+test("content that is the same all down a move along a row keeps the move in line", () => {
+  // Vertical bars of irregular widths: every small vertical drift fits as well as none.
+  const bars = x => {
+    const frame = cardFrame({ x });
+    const data = Buffer.from(frame.data);
+    const widths = [6, 11, 4, 9, 14, 5, 8, 12, 7, 10, 6, 13, 9, 5, 11, 7, 6, 8];
+    let px = x, dark = true;
+    for (const width of widths) {
+      for (let py = 80; py < 200; py += 1) for (let column = px; column < Math.min(px + width, x + 150); column += 1) data.fill(dark ? 20 : 200, (py * frame.width + column) * 4, (py * frame.width + column) * 4 + 3);
+      px += width; dark = !dark;
+    }
+    return { ...frame, data };
+  };
+  const [move] = regionMoves(bars(60), bars(330), farMove, [undefined, undefined]);
+  assert.deepEqual(move?.shift, { x: 270, y: 0 });
+  assert.deepEqual(move?.rect, { x: 330, y: 80, width: 150, height: 120 });
+});
+
+test("regions with fractional edges, or reaching past the screenshot, are measured on the pixels they cover", () => {
+  const regions = [
+    { x: 60.4, y: 79.6, width: 149.8, height: 120.5, dominantChange: "brighter" },
+    { x: 330.2, y: 80, width: 150.3, height: 400, dominantChange: "darker" },
+  ];
+  const [move] = regionMoves(cardFrame(), cardFrame({ x: 330 }), regions, [undefined, undefined]);
+  assert.deepEqual(move?.shift, { x: 270, y: 0 });
 });

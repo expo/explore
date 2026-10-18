@@ -288,3 +288,25 @@ test('allRegionsMoved is only true, and only where every published region carrie
     assert.throws(() => assertPublicReview(input), /visual verdict is inconsistent/, label);
   }
 });
+
+test('a large move publishes as one region where the content is now, with its members\' pixels and the arrived region\'s location', async () => {
+  const { publishMeasuredRegions } = await import('../../dist/review/evidence-assessment.js');
+  const region = (x, share, location, dominantChange) => ({ index: 0, rect: { x, y: 100, width: 100, height: 200 },
+    normalizedRect: { x: x / 10, y: 10, width: 10, height: 20 }, differentPixels: share * 100, shareOfDiffPercentage: share,
+    densityPercentage: 50, shape: 'block', size: 'large', location, dominantChange });
+  // Arrived first: the card is centred now, so the region says center whichever member has more pixels.
+  const all = [region(100, 50.01, 'middle-left', 'brighter'), region(450, 50.01, 'center', 'darker')];
+  const moves = [{ rect: { x: 450, y: 100, width: 100, height: 200 }, shift: { x: 350, y: 0 }, members: [1, 0] }];
+  const published = publishMeasuredRegions(all, [undefined, undefined], moves, 1000, 1000);
+  assert.deepEqual(published.regions, [{ rect: { x: 450, y: 100, width: 100, height: 200 }, normalizedRect: { x: 45, y: 10, width: 10, height: 20 },
+    differentPixels: 10002, shareOfDiffPercentage: 100, dominantChange: 'mixed', location: 'center', shift: { x: 350, y: 0 } }],
+  'two shares of 50.01 cap at 100, the Viewer\'s bound');
+  assert.equal(published.allRegionsMoved, true, 'nothing else on the screen changed');
+  // A change that is not part of the move keeps the screen from reading as only moved, and more regions than the
+  // published limit keep the largest.
+  const crowded = [...all, ...Array.from({ length: 9 }, (_, index) => region(index, 0.5, 'top-left', 'mixed'))];
+  const withChanges = publishMeasuredRegions(crowded, crowded.map(() => undefined), moves, 1000, 1000);
+  assert.equal(withChanges.allRegionsMoved, undefined);
+  assert.equal(withChanges.regions.length, 8);
+  assert.deepEqual(withChanges.regions[0].shift, { x: 350, y: 0 });
+});

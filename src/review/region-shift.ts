@@ -144,7 +144,7 @@ export function regionShifts(baseFrame: DecodedFrame, headFrame: DecodedFrame, r
 /**
  * A move too large for the drift search: content that left one area and arrived in another, such as a card that
  * went from the left of a wide sheet to its centre. `rect` is where the moved content is in After, `shift` how far it
- * went, and `members` the regions it explains (indices into the regions measured).
+ * went, and `members` the regions it explains (indices into the regions measured), the region it arrived in first.
  */
 export type RegionMove = { rect: Rect; shift: RegionShift; members: number[] };
 
@@ -160,8 +160,10 @@ const AMBIGUOUS_LARGE = 1.05;
 const MIN_EXPLAINED_LARGE = MIN_EXPLAINED;
 /** After aligning by the move, at most this share of a region may still differ strongly (antialiased edges). */
 const CHANGED_SHARE = 0.001;
-/** How far across the move a large one may also drift, as layout below a moved element does. */
-const ACROSS = 3;
+/** How far across the move a large one may also drift, as layout below a moved element does; ties keep it in line. */
+const ACROSS_OFFSETS = [0, -1, 1, -2, 2, -3, 3];
+/** The most After's luminance may spread where content left and still be plain backdrop, nothing new drawn there. */
+const PLAIN_SPREAD = 6;
 
 const extent = (rect: Rect, axis: Axis) => axis === "x" ? { start: rect.x, size: rect.width } : { start: rect.y, size: rect.height };
 const across = (axis: Axis): Axis => axis === "x" ? "y" : "x";
@@ -191,21 +193,35 @@ function profile(source: Image, axis: Axis, bandStart: number, bandEnd: number):
   return values;
 }
 
-/** Whether, aligned by an integer move, more than a sliver of the region still differs strongly: a change, not a move. */
+/**
+ * Whether, aligned by an integer move, some of the region still differs strongly: content that changed, not only
+ * moved. A whole-pixel move copies the pixels, so only a sliver may differ (antialiased edges against another
+ * backdrop, never more than CHANGED_SHARE of the region), and never a block: a 2×2 block of strongly different pixels
+ * is something drawn (an icon, a badge, a mark), however small. Pixels the move brings in from off screen differ.
+ */
 function changedAfterLargeMove(base: Image, head: Image, rect: Rect, sx: number, sy: number): boolean {
   const allowed = Math.max(CHANGED_PIXELS, rect.width * rect.height * CHANGED_SHARE);
+  let row = new Uint8Array(rect.width), previous = new Uint8Array(rect.width);
   let strong = 0;
   for (let y = rect.y; y < rect.y + rect.height; y += 1) {
     const by = y - sy;
+    row.fill(0);
     for (let x = rect.x; x < rect.x + rect.width; x += 1) {
-      const bx = x - sx;
-      if (bx < 0 || by < 0 || bx >= base.width || by >= base.height) { strong += 1; continue; }
-      const h = (y * head.width + x) * 4, b = (by * base.width + bx) * 4;
-      for (let channel = 0; channel < 3; channel += 1) {
-        if (Math.abs(base.frame.data[b + channel]! - head.frame.data[h + channel]!) > CHANGED_CHANNEL) { strong += 1; break; }
+      const bx = x - sx, column = x - rect.x;
+      let differs = bx < 0 || by < 0 || bx >= base.width || by >= base.height;
+      if (!differs) {
+        const h = (y * head.width + x) * 4, b = (by * base.width + bx) * 4;
+        for (let channel = 0; channel < 3 && !differs; channel += 1) {
+          differs = Math.abs(base.frame.data[b + channel]! - head.frame.data[h + channel]!) > CHANGED_CHANNEL;
+        }
       }
+      if (!differs) continue;
+      row[column] = 1;
+      strong += 1;
       if (strong > allowed) return true;
+      if (column > 0 && row[column - 1] && previous[column] && previous[column - 1]) return true;
     }
+    [row, previous] = [previous, row];
   }
   return false;
 }
@@ -214,6 +230,34 @@ function changedAfterLargeMove(base: Image, head: Image, rect: Rect, sx: number,
 function explained(base: Image, head: Image, rect: Rect, shift: RegionShift): number {
   const unshifted = mismatch(base, head, rect, 0, 0);
   return unshifted === 0 ? 0 : 1 - mismatch(base, head, rect, shift.x, shift.y) / unshifted;
+}
+
+/** Whether a region's content, moved by `shift`, is the same in After: explained, and nothing changed in it. */
+function movedIntact(base: Image, head: Image, rect: Rect, shift: RegionShift): boolean {
+  return rect.width > 0 && rect.height > 0 && explained(base, head, rect, shift) >= MIN_EXPLAINED_LARGE
+    && !changedAfterLargeMove(base, head, rect, shift.x, shift.y);
+}
+
+/** Whether a part of After is plain backdrop: its luminance hardly spreads, so nothing is drawn there. */
+function plain(head: Image, rect: Rect): boolean {
+  if (rect.width <= 0 || rect.height <= 0) return true;
+  let sum = 0, squares = 0, count = 0;
+  for (let y = rect.y; y < rect.y + rect.height; y += PROFILE_STEP) {
+    for (let x = rect.x; x < rect.x + rect.width; x += PROFILE_STEP) {
+      const value = head.luminance[y * head.width + x]!;
+      sum += value; squares += value * value; count += 1;
+    }
+  }
+  const mean = sum / count;
+  return Math.sqrt(Math.max(0, squares / count - mean * mean)) <= PLAIN_SPREAD;
+}
+
+/** The parts of `rect` before and after `outline` along `axis`: what is left of it outside the outline. */
+function outside(rect: Rect, outline: Rect, axis: Axis): Rect[] {
+  const r = extent(rect, axis), o = extent(outline, axis);
+  const parts: Array<[number, number]> = [[r.start, Math.min(r.start + r.size, o.start)], [Math.max(r.start, o.start + o.size), r.start + r.size]];
+  return parts.filter(([from, to]) => to > from)
+    .map(([from, to]) => (axis === "x" ? { ...rect, x: from, width: to - from } : { ...rect, y: from, height: to - from }));
 }
 
 function clip(rect: Rect, width: number, height: number): Rect {
@@ -228,12 +272,14 @@ function union(a: Rect, b: Rect): Rect {
 
 /**
  * The large move a pair of regions shows, if one does: `left` is where content was (it differs because the content
- * left), `arrived` where it is now. The pair only names the axis and how far to look; the distance is where After's
- * brightness profile across the arrived region best matches Before's, and the pixels must agree once aligned.
+ * left), `arrived` where it is now, both already clipped to the screenshot. The pair only names the axis and how far
+ * to look; the distance is where After's brightness profile across the arrived region best matches Before's, and
+ * the pixels must agree once aligned, both where the content arrived and where the content that left went.
  */
 function pairMove(base: Image, head: Image, left: Rect, arrived: Rect, axis: Axis): RegionShift | undefined {
   const a = extent(arrived, axis), l = extent(left, axis), band = extent(arrived, across(axis)), lb = extent(left, across(axis));
   const bandStart = Math.max(band.start, lb.start), bandEnd = Math.min(band.start + band.size, lb.start + lb.size);
+  if (bandEnd <= bandStart || a.size <= 0) return undefined;
   const baseProfile = profile(base, axis, bandStart, bandEnd), headProfile = profile(head, axis, bandStart, bandEnd);
   const length = baseProfile.length;
   // Content moving toward the arrived region: the distance is positive when it lies after the region it left.
@@ -257,53 +303,60 @@ function pairMove(base: Image, head: Image, left: Rect, arrived: Rect, axis: Axi
   if (!minima.length) return undefined;
   const best = minima.reduce((least, fit) => (fit.error < least.error ? fit : least));
   if (minima.some(fit => fit !== best && Math.abs(fit.distance - best.distance) > 2 && fit.error <= best.error * AMBIGUOUS_LARGE + 1e-6)) return undefined;
-  // The pixels decide: across the move it may also drift a little, as content below a moved element does.
-  const rect = clip(arrived, head.width, head.height);
+  // The pixels decide: across the move it may also drift a little, as content below a moved element does. A tie
+  // keeps the move in line (content the same all across it fits every drift equally).
   let chosen: RegionShift | undefined, fit = -Infinity;
-  for (let other = -ACROSS; other <= ACROSS; other += 1) {
+  for (const other of ACROSS_OFFSETS) {
     const shift = shiftAlong(axis, best.distance, other);
-    const share = explained(base, head, rect, shift);
+    const share = explained(base, head, arrived, shift);
     if (share > fit) { fit = share; chosen = shift; }
   }
-  if (!chosen || fit < MIN_EXPLAINED_LARGE || changedAfterLargeMove(base, head, rect, chosen.x, chosen.y)) return undefined;
-  return chosen;
+  if (!chosen || fit < MIN_EXPLAINED_LARGE || changedAfterLargeMove(base, head, arrived, chosen.x, chosen.y)) return undefined;
+  // The content that left must be intact where the move takes it: a deletion is not a move.
+  const landed = clip({ ...left, x: left.x + chosen.x, y: left.y + chosen.y }, head.width, head.height);
+  return movedIntact(base, head, landed, chosen) ? chosen : undefined;
 }
 
 /**
  * Moves too large for the drift search, among the regions it left unexplained: two regions alike across an axis
- * and side by side along it, one darker and one brighter, are the two ends of something that moved. A move that
- * checks out also takes in any other unexplained region it explains (fragments of the same element where its old
- * and new places overlap), and its outline is the moved content in After.
+ * and side by side along it, one darker and one brighter, are the two ends of something that moved. Where the
+ * content left must be plain backdrop in After for that region to be part of the move; anything drawn there is a
+ * change of its own and stays one. A move that checks out also takes in any other unexplained region it explains
+ * (fragments of the same element where its old and new places overlap), and its outline is the moved content in After.
  */
 export function regionMoves(baseFrame: DecodedFrame, headFrame: DecodedFrame,
   regions: ReadonlyArray<Rect & { dominantChange?: string }>, shifts: ReadonlyArray<RegionShift | undefined>): RegionMove[] {
   if (baseFrame.width !== headFrame.width || baseFrame.height !== headFrame.height) return [];
   const base = image(baseFrame), head = image(headFrame);
-  const open = new Set(regions.map((_, index) => index).filter(index => !shifts[index]));
+  const clipped = regions.map(region => clip(region, head.width, head.height));
+  const open = new Set(regions.map((_, index) => index).filter(index => !shifts[index] && clipped[index]!.width > 0 && clipped[index]!.height > 0));
   const moves: RegionMove[] = [];
   // Largest first: the element that moved the most content is the one a reader is looking at.
-  const order = [...open].sort((left, right) => regions[right]!.width * regions[right]!.height - regions[left]!.width * regions[left]!.height);
-  for (const i of order) {
-    for (const j of order) {
-      if (i === j || !open.has(i) || !open.has(j)) continue;
-      const a = regions[i]!, b = regions[j]!;
-      const opposite = new Set([a.dominantChange, b.dominantChange]);
+  const order = [...open].sort((left, right) => clipped[right]!.width * clipped[right]!.height - clipped[left]!.width * clipped[left]!.height);
+  for (let first = 0; first < order.length; first += 1) {
+    for (let second = first + 1; second < order.length; second += 1) {
+      const i = order[first]!, j = order[second]!;
+      if (!open.has(i) || !open.has(j)) continue;
+      const opposite = new Set([regions[i]!.dominantChange, regions[j]!.dominantChange]);
       if (!(opposite.has("brighter") && opposite.has("darker"))) continue;
+      const a = clipped[i]!, b = clipped[j]!;
       for (const axis of ["x", "y"] as const) {
         if (!pairAlong(a, b, axis)) continue;
         // Either could be where the content arrived; the pixels decide which.
         const forward = pairMove(base, head, a, b, axis);
         const shift = forward ?? pairMove(base, head, b, a, axis);
         if (!shift) continue;
-        const [left, arrived] = forward ? [a, b] : [b, a];
+        const [leftIndex, arrivedIndex] = forward ? [i, j] : [j, i];
+        const left = clipped[leftIndex]!, arrived = clipped[arrivedIndex]!;
         let rect = clip(union(arrived, { ...left, x: left.x + shift.x, y: left.y + shift.y }), head.width, head.height);
-        const members = [i, j];
         open.delete(i); open.delete(j);
+        // Where the content left: plain backdrop belongs to the move, anything drawn there is a change of its own.
+        const members = outside(left, rect, axis).every(part => plain(head, part)) ? [arrivedIndex, leftIndex] : [arrivedIndex];
         // Fragments of the same element inside its new place, where the old and new overlap.
         for (const k of [...open]) {
-          const fragment = clip(regions[k]!, head.width, head.height);
+          const fragment = clipped[k]!;
           const inside = fragment.x >= rect.x && fragment.y >= rect.y && fragment.x + fragment.width <= rect.x + rect.width && fragment.y + fragment.height <= rect.y + rect.height;
-          if (!inside || explained(base, head, fragment, shift) < MIN_EXPLAINED_LARGE || changedAfterLargeMove(base, head, fragment, shift.x, shift.y)) continue;
+          if (!inside || !movedIntact(base, head, fragment, shift)) continue;
           members.push(k); open.delete(k); rect = union(rect, fragment);
         }
         moves.push({ rect, shift, members });
