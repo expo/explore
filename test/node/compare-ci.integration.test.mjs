@@ -48,12 +48,12 @@ test('any two commits: a capture and report like a pull request\'s, with no pull
     environment: { ...f.environment, GITHUB_TOKEN: '', GITHUB_STEP_SUMMARY: targetSummary }, transport: async input => assert.fail(`no GitHub request: ${input}`) });
   assert.match(await readFile(targetSummary, 'utf8'), /^- iPhone Duo \\\[open\\\] report of `v1\.1\.0` vs `v1\.0\.0`: \[Open\]\(https:\/\/explore-preview\.expo\.app\/\?repo=acme%2Fexample&run=1234&attempt=1&target=duo-open&artifact=900\) · /);
 
-  const summary = renderCompareSummary(result.review.pullRequest, 'https://example.expo.app/p/token', null, [await readCiReportInput(result.inputPath)]);
+  const summary = renderCompareSummary(result.review.pullRequest, 'https://example.expo.app/p/token', [await readCiReportInput(result.inputPath)]);
   assert.match(summary, /^### Explore: `v1\.1\.0` vs `v1\.0\.0`$/m);
   // Refs are code spans: one with ] ( ) would otherwise break the line's links. A caller's own title is one span.
   const odd = { ...result.review.pullRequest, base: { ...result.review.pullRequest.base, ref: 'x](evil)' }, title: 'v1.1.0 vs x](evil)' };
-  assert.match(renderCompareSummary(odd, 'https://example.expo.app/p/token', null, []), /^### Explore: `v1\.1\.0` vs `x\]\(evil\)`$/m);
-  assert.match(renderCompareSummary({ ...odd, title: 'Nightly `build`' }, 'https://example.expo.app/p/token', null, []), /^### Explore: `Nightly 'build'`$/m);
+  assert.match(renderCompareSummary(odd, 'https://example.expo.app/p/token', []), /^### Explore: `v1\.1\.0` vs `x\]\(evil\)`$/m);
+  assert.match(renderCompareSummary({ ...odd, title: 'Nightly `build`' }, 'https://example.expo.app/p/token', []), /^### Explore: `Nightly 'build'`$/m);
 
   // capture:review's preview output starts the deploy job only when the reviewed config hosts the report.
   const outputs = join(f.root, 'outputs');

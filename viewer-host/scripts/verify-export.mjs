@@ -79,32 +79,29 @@ if (!preview) {
     }
   }
 } else {
-  // A preview deployment answers only its own token and serves the report decrypted from its own
-  // static ciphertext until it expires (then the report route says 410); everything else is the same 404.
+  // A preview deployment answers only its own token. ci:deploy writes the report as static files under it, which EAS
+  // Hosting serves without the Worker; the Worker reads the manifest back for the shell's index and the agent API, and
+  // everything else is the same 404.
   const token = "abcdefghijklmnopqrstuvwxyz234567";
-  const keyBytes = webcrypto.getRandomValues(new Uint8Array(32));
-  const reportPath = "/_report/abcdefghijklmnop/report.zip.enc";
-  // A recorded PR review, so the exported Worker is seen to inflate the archive and answer the agent API.
-  const plain = new Uint8Array(await readFile(new URL("../../test/fixtures/example-review-artifact.zip", import.meta.url)));
-  const key = await webcrypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
-  const iv = webcrypto.getRandomValues(new Uint8Array(12));
-  const cipher = new Uint8Array(await webcrypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: new TextEncoder().encode("expo-explore-preview/1") }, key, plain));
-  const sealed = new Uint8Array(iv.byteLength + cipher.byteLength);
-  sealed.set(iv); sealed.set(cipher, iv.byteLength);
-  const env = {
-    EXPLORE_PREVIEW_TOKEN: token,
-    EXPLORE_PREVIEW_KEY: Buffer.from(keyBytes).toString("base64"),
-    EXPLORE_PREVIEW_EXPIRES_AT: new Date(Date.now() + 60_000).toISOString(),
-    EXPLORE_PREVIEW_REPORT: reportPath,
-  };
+  const reportPath = `/p/${token}/targets/report.json`;
+  // A recorded PR review, laid out as ci:deploy writes it, so the exported Worker is seen to read it and answer the agent API.
+  const { tsImport } = await import("tsx/esm/api");
+  const { loadReport } = await tsImport("../../src/report/agent-api.ts", import.meta.url);
+  const { manifestBody, PREVIEW_ASSET } = await tsImport("../../src/report/preview-manifest.ts", import.meta.url);
+  const loaded = await loadReport(new Uint8Array(await readFile(new URL("../../test/fixtures/example-review-artifact.zip", import.meta.url))));
+  const manifest = manifestBody(loaded, "verifyexport");
+  const files = new Map([[reportPath, new TextEncoder().encode(manifest)]]);
+  for (const name of loaded.entries.keys()) if (PREVIEW_ASSET.test(name)) files.set(`/p/${token}/${name}`, await loaded.read(name, 64 * 1024 * 1024));
+  const env = { EXPLORE_PREVIEW_TOKEN: token, EXPLORE_PREVIEW_REPORT: reportPath };
   const origin = "https://acme-explore--deploy.expo.app";
   const fetched = [];
   const fetchStub = async (input) => {
     const url = new URL(typeof input === "string" ? input : input.url);
-    fetched.push(url.href);
-    return url.pathname === reportPath ? new Response(sealed) : new Response("missing", { status: 404 });
+    fetched.push(url.pathname);
+    const body = files.get(url.pathname);
+    return body ? new Response(body, { headers: { "content-length": String(body.byteLength) } }) : new Response("missing", { status: 404 });
   };
-  const globals = { fetch: fetchStub, crypto: webcrypto, TextDecoder, Blob, DecompressionStream };
+  const globals = { fetch: fetchStub, crypto: webcrypto, TextDecoder, TextEncoder, Blob, DecompressionStream };
 
   const index = loadRoute("/index", env, globals);
   for (const method of ["GET", "HEAD", "POST", "OPTIONS"]) {
@@ -115,8 +112,9 @@ if (!preview) {
     for (const path of [`/p/${token}`, `/p/${token}/`, `/p/${token}?view=compare&screen=home`]) {
       const response = await handlers.GET(new Request(origin + path, { headers: { accept: "text/html,*/*;q=0.8" } }));
       const body = await response.text();
+      const preload = `<link rel="preload" href="/p/${token}/manifest.json" as="fetch" crossorigin>`;
       if (response.status !== 200 || response.headers.get("cache-control") !== "private, no-store" || !body.includes("<section data-explore-agent-index")
-        || body.replace(/<div id="root">.*<\/div>/s, '<div id="root"></div>') !== stagedHtml) {
+        || !body.includes(preload) || body.replace(preload, "").replace(/<div id="root">.*<\/div>/s, '<div id="root"></div>') !== stagedHtml) {
         throw new Error(`Preview page ${path} must serve the complete staged Viewer carrying the agent index`);
       }
       const markdown = await handlers.GET(new Request(origin + path));
@@ -124,31 +122,30 @@ if (!preview) {
         throw new Error(`Preview page ${path} must serve the Markdown index when HTML is not requested`);
       }
     }
+    const served = await handlers.GET(new Request(`${origin}/p/${token}/manifest.json`));
+    if (served.status !== 200 || await served.text() !== manifest) throw new Error(`Preview route ${page} must answer the static manifest the Viewer opens`);
     const summary = await handlers.GET(new Request(`${origin}/p/${token}/api/v1`));
     if (summary.status !== 200 || (await summary.json()).kind !== "pr-review") throw new Error(`Preview route ${page} must answer the agent API summary`);
     const changed = await handlers.GET(new Request(`${origin}/p/${token}/api/v1/screens?status=modified`));
     if (changed.status !== 200 || !((await changed.json()).total > 0)) throw new Error(`Preview route ${page} must list modified screens`);
     if (!(await (await handlers.GET(new Request(`${origin}/p/${token}/llms.txt`))).text()).startsWith("# Expo Explore report")) throw new Error(`Preview route ${page} must serve llms.txt`);
-    const zip = await handlers.GET(new Request(`${origin}/p/${token}/report.zip`));
-    if (zip.status !== 200 || zip.headers.get("content-type") !== "application/zip"
-      || Buffer.compare(Buffer.from(await zip.arrayBuffer()), Buffer.from(plain)) !== 0) {
-      throw new Error(`Preview report route ${page} must stream the decrypted report`);
+    const sha = [...loaded.entries.keys()].map(name => /^assets\/([a-f0-9]{64})\.png$/.exec(name)?.[1]).find(Boolean);
+    const image = await handlers.GET(new Request(`${origin}/p/${token}/api/v1/assets/${sha}`));
+    if (image.status !== 200 || Buffer.compare(Buffer.from(await image.arrayBuffer()), Buffer.from(files.get(`/p/${token}/assets/${sha}.png`))) !== 0) {
+      throw new Error(`Preview route ${page} must serve a screenshot to the agent API from the static file`);
     }
-    for (const path of [`/p/${token.replace("a", "b")}`, `/p/${token.replace("a", "b")}/report.zip`, `/p/${token.replace("a", "b")}/api/v1`, `/p/${token}/viewer/index.html`, `/p/${token}/other`, `/p/${token}/api/v1/other`, `/p/${token}/api/v2`, "/p/", `/P/${token}`]) {
+    // Screenshots and manifests are static files EAS Hosting serves itself; the Worker answers none of their paths.
+    for (const path of [`/p/${token.replace("a", "b")}`, `/p/${token.replace("a", "b")}/manifest.json`, `/p/${token.replace("a", "b")}/api/v1`, `/p/${token}/report.zip`,
+      `/p/${token}/targets/report.json`, `/p/${token}/assets/${sha}.png`, `/p/${token}/viewer/index.html`, `/p/${token}/other`, `/p/${token}/api/v1/other`, `/p/${token}/api/v2`, "/p/", `/P/${token}`]) {
       if ((await handlers.GET(new Request(origin + path))).status !== 404) throw new Error(`Preview route ${page} incorrectly accepts ${path}`);
     }
     for (const method of ["HEAD", "POST", "PUT", "DELETE", "OPTIONS"]) {
       if ((await handlers[method](new Request(`${origin}/p/${token}`, { method }))).status !== 404) throw new Error(`Preview route ${page} must answer 404 to ${method}`);
     }
-    const expired = loadRoute(page, { ...env, EXPLORE_PREVIEW_EXPIRES_AT: new Date(Date.now() - 1000).toISOString() }, globals);
-    if ((await expired.GET(new Request(`${origin}/p/${token}`, { headers: { accept: "text/html" } }))).status !== 200) throw new Error(`Preview route ${page} must keep opening the Viewer after expiry`);
-    for (const path of [`/p/${token}`, `/p/${token}/report.zip`, `/p/${token}/api/v1`, `/p/${token}/llms.txt`]) {
-      if ((await expired.GET(new Request(origin + path))).status !== 410) throw new Error(`Preview route ${page} must answer 410 for ${path} after expiry`);
-    }
-    const unsealed = loadRoute(page, {}, globals);
-    if ((await unsealed.GET(new Request(`${origin}/p/${token}`))).status !== 404) throw new Error(`Preview route ${page} must refuse to serve without a sealed configuration`);
+    const unconfigured = loadRoute(page, {}, globals);
+    if ((await unconfigured.GET(new Request(`${origin}/p/${token}`))).status !== 404) throw new Error(`Preview route ${page} must refuse to serve without a configuration`);
   }
-  if (fetched.some(href => !href.endsWith(reportPath))) throw new Error("Preview routes fetched something other than the sealed report path");
+  if (fetched.some(path => !path.startsWith(`/p/${token}/`))) throw new Error("Preview routes fetched something other than the deployment's own report files");
 }
 
 process.stdout.write(

@@ -1,9 +1,9 @@
-import { appearanceLabel, appearanceOptions, appearanceScope, filterComparisonAppearance, filterMapAppearance, filterReviewAppearance, type Appearance } from "./utils/appearance";
+import { appearanceLabel, appearanceOptions, appearanceScope, filterComparisonAppearance, filterMapAppearance, filterReviewAppearance, rememberAppearance, rememberedAppearance, type Appearance } from "./utils/appearance";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { Toaster } from "sonner";
-import { isEmbeddedArtifactUrl, optionalStorage, releaseEmbeddedArtifactUrl, resolveEmbeddedArtifactUrl, viewerLocation } from "./utils/embedded-report";
+import { isEmbeddedArtifactUrl, leaseEmbeddedArtifactUrl, optionalStorage, viewerLocation } from "./utils/embedded-report";
 import { REPORT_SOURCE } from "./utils/report-source";
 import { CanvasToolbar } from "./components/canvas/toolbar";
 import { CanvasCameraControls } from "./components/canvas/camera-controls";
@@ -11,7 +11,7 @@ import { CanvasVisibleFrameProvider } from "./components/canvas/visible-frame-pr
 import { AppLoading } from "./components/shared/app-loading";
 import { ReportLoadingShell } from "./components/shared/report-loading-shell";
 import { screenLabel } from "./utils/screen-path";
-import { AppPill, PLATFORM_NAMES } from "./components/panels/app-pill";
+import { AppPill, PLATFORM_NAMES, targetSwitch } from "./components/panels/app-pill";
 import { changedScreens, focusCounts as countFocusStatuses, isCapturedChange, type ChangedScreen } from "./utils/changed-screens";
 import { MapView } from "./components/views/semantic-map";
 import { RightPanel } from "./components/panels/right";
@@ -287,7 +287,8 @@ export function App() {
       {...(droppable ? { onOpenFile: openFile } : {})}
       {...(droppable && source.status === "failed" ? { onRetry: retry } : {})} />;
   }
-  return <ViewerApp />;
+  // A hosted preview switches targets in place; the new report gets a fresh Viewer.
+  return <ViewerApp key={source.reportKey} />;
 }
 
 function ViewerApp() {
@@ -304,8 +305,13 @@ function ViewerApp() {
   const routeRef = useRef(route);
   const contextRef = useRef(EMPTY_ROUTE_CONTEXT);
   const [mapProjectionFitKey, setMapProjectionFitKey] = useState(0);
-  // A report captured in several appearances shows one at a time; the primary (first captured) is the default.
-  const [appearanceChoice, setAppearanceChoice] = useState<Appearance | undefined>();
+  // A report captured in several appearances shows one at a time: the one this tab chose for the review (so a target
+  // switch keeps it) when this report has it, the primary (first captured) otherwise.
+  const [appearanceChoice, setAppearanceChoice] = useState<Appearance | undefined>(rememberedAppearance);
+  const chooseAppearance = useCallback((appearance: Appearance) => {
+    rememberAppearance(appearance);
+    setAppearanceChoice(appearance);
+  }, []);
   // For the ⇧T shortcut, which steps to the next captured appearance; set once they are known.
   const appearanceRef = useRef<{ options: readonly Appearance[]; current: Appearance | undefined }>({ options: [], current: undefined });
   const [handoffOpen, setHandoffOpen] = useState(false);
@@ -1007,7 +1013,7 @@ function ViewerApp() {
         const { options, current } = appearanceRef.current;
         if (options.length < 2) return;
         const index = current ? options.indexOf(current) : -1;
-        setAppearanceChoice(options[(index + 1) % options.length]);
+        chooseAppearance(options[(index + 1) % options.length]!);
       } else if (matchesShortcut(event, SHORTCUTS.app.changes)) {
         setChangesOpen((open) => !open);
       } else if (matchesShortcut(event, SHORTCUTS.panel.right)) {
@@ -1023,7 +1029,7 @@ function ViewerApp() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [clearSelectedScreen, flipTheme, navigate, searchOpen, selectCanvas, toggleRightPanel]);
+  }, [chooseAppearance, clearSelectedScreen, flipTheme, navigate, searchOpen, selectCanvas, toggleRightPanel]);
 
   // A side-panel row or a deep link is a "go to": the camera fits that screen and the step is
   // kept. Screens inventory clicks only select in place; Map clicks also focus the chosen screen. Repeating a selected target refits it without adding history.
@@ -1198,6 +1204,8 @@ function ViewerApp() {
       ? { ...presentedMap, run: { ...presentedMap.run, name: workspace.catalog.name } }
       : presentedMap
   ), [presentedMap, workspace]);
+  // The shortcuts list names the target keys only where the pill can switch.
+  const switchTargets = map ? targetSwitch(map.run, new URL(window.location.href)) : undefined;
   // Focus singles out diff states, so it means nothing without a baseline to diff against.
   const focusFilter = diff ? route.focus : [];
   const focusCounts = useMemo(() => countFocusStatuses(diff), [diff]);
@@ -1384,18 +1392,20 @@ function ViewerApp() {
       icon?.setAttribute("href", appIcon ?? fallback);
       return;
     }
-    // A report ZIP's icon is a reference the browser cannot load: the tab holds its Blob URL while it shows.
+    // A report ZIP's icon is a reference the browser cannot load: the tab holds its Blob URL while it shows. The lease
+    // releases it against the report that resolved it, even after a switch to another target's report.
     let state: "pending" | "shown" | "gone" = "pending";
-    resolveEmbeddedArtifactUrl(appIcon, "eager").then(
+    const lease = leaseEmbeddedArtifactUrl(appIcon, "eager");
+    lease.url.then(
       (url) => {
-        if (state === "gone") return void releaseEmbeddedArtifactUrl(appIcon);
+        if (state === "gone") return void lease.release();
         state = "shown";
         icon?.setAttribute("href", url);
       },
-      () => icon?.setAttribute("href", fallback),
+      () => { if (state !== "gone") icon?.setAttribute("href", fallback); },
     );
     return () => {
-      if (state === "shown") releaseEmbeddedArtifactUrl(appIcon);
+      if (state === "shown") lease.release();
       state = "gone";
     };
   }, [index, map, selectedScreenId]);
@@ -1528,7 +1538,7 @@ function ViewerApp() {
         index={index}
         {...(selectedScreenId ? { selectedScreenId } : {})}
         {...(review?.pullRequest ? { pullRequest: review.pullRequest } : {})}
-        {...(appearances.length > 1 && appearance ? { appearance: { current: appearance, options: appearances, onChange: setAppearanceChoice } } : {})}
+        {...(appearances.length > 1 && appearance ? { appearance: { current: appearance, options: appearances, onChange: chooseAppearance } } : {})}
         focus={focusFilter}
         focusCounts={focusCounts}
         {...(diff ? { diff } : {})}
@@ -1628,7 +1638,8 @@ function ViewerApp() {
       </CanvasVisibleFrameProvider>
       {shortcutsOpen ? (
         <ShortcutsDialog
-          context={{ canvas: route.canvas, review: reviewingInSidebar, hasChanges: compareOrder.length > 0, handoff: Boolean(handoffInput), appearances: appearances.length > 1 }}
+          context={{ canvas: route.canvas, review: reviewingInSidebar, hasChanges: compareOrder.length > 0, handoff: Boolean(handoffInput), appearances: appearances.length > 1,
+            ...(switchTargets ? { targets: switchTargets } : {}) }}
           onClose={() => setShortcutsOpen(false)}
         />
       ) : null}

@@ -10,6 +10,25 @@ export function appearanceLabel(appearance: Appearance): string {
   return APPEARANCE_LABELS[appearance];
 }
 
+/** The review a tab's choice belongs to: every target of one review shares the page path (and a report page's run). */
+function chosenAppearanceKey(): string {
+  return `explore.appearance:${window.location.pathname}:${new URLSearchParams(window.location.search).get("run") ?? ""}`;
+}
+
+/**
+ * The appearance this tab last chose for this review, so another target's report opens in it too when it was captured
+ * in it (a switch in place remounts the Viewer, and a report page loads again). Kept in session storage, which may be off.
+ */
+export function rememberedAppearance(): Appearance | undefined {
+  let stored: string | null = null;
+  try { stored = window.sessionStorage.getItem(chosenAppearanceKey()); } catch { /* Optional storage. */ }
+  return stored === "light" || stored === "dark" ? stored : undefined;
+}
+
+export function rememberAppearance(appearance: Appearance): void {
+  try { window.sessionStorage.setItem(chosenAppearanceKey(), appearance); } catch { /* Optional storage. */ }
+}
+
 /** The appearances a report captured, primary first; one or none means the report has no appearance switch. */
 export function appearanceOptions(map: ExploreMap | undefined): Appearance[] {
   if (!map) return [];

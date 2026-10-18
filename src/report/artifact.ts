@@ -14,7 +14,8 @@ import { CiError, toCiError } from "../shared/ci-errors.js";
 
 const CONTRACT = "explore.report-input";
 /** The reviewed config's hosted-preview request, carried to the credentialed deploy job. */
-export type CiPreviewRequest = { hosting: "eas"; expiresAfterDays: number | null; owner?: string; project?: string };
+/** The config's report.preview, handed from the capture job to the deploy job. */
+export type CiPreviewRequest = { hosting: "eas"; expiresAfterIgnored?: true; owner?: string; project?: string };
 export type CiReportInput = {
   contract: typeof CONTRACT;
   publicReview: PublicReview;
@@ -64,7 +65,8 @@ async function readInputUnchecked(inputPath: string): Promise<CiReportInput> {
   }
   if (input.preview !== undefined) {
     const preview = input.preview;
-    if (preview.hosting !== "eas" || (preview.expiresAfterDays !== null && (!Number.isInteger(preview.expiresAfterDays) || preview.expiresAfterDays < 1 || preview.expiresAfterDays > 365))
+    // An `expiresAfterDays` from before Explore stopped setting an expiry is ignored.
+    if (preview.hosting !== "eas"
       || (preview.project !== undefined && !/^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/.test(preview.project))
       || (preview.owner !== undefined && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(preview.owner))) {
       throw new Error("Invalid hosted preview request");

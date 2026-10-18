@@ -1,27 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { webcrypto, createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import { deflateRawSync } from "node:zlib";
 import { readFileSync } from "node:fs";
-import { PREVIEW_CIPHER, previewResponse, type PreviewEnvironment } from "../src/server/preview";
+import { previewResponse, type PreviewEnvironment } from "../src/server/preview";
 import { agentApiReply, agentIndexMarkdown, loadReport, prefersHtml, prefersMarkdown } from "../../src/report/agent-api";
+import { manifestBody, MAX_MANIFEST_BYTES, reportFromManifest } from "../../src/report/preview-manifest";
 import { readZipDirectory } from "../../src/report/zip-reader";
 
-const subtle = webcrypto.subtle as SubtleCrypto;
 const token = "abcdefghijklmnopqrstuvwxyz234567";
 const origin = "https://acme-explore--k7f3z0d1q8.expo.app";
 const html = '<!doctype html><html><body><div id="root"></div><script type="module" src="/viewer/assets/main.js"></script></body></html>';
-const keyBytes: Uint8Array<ArrayBuffer> = webcrypto.getRandomValues(new Uint8Array(32));
 const review = new Uint8Array(readFileSync(new URL("../../test/fixtures/example-review-artifact.zip", import.meta.url))) as Uint8Array<ArrayBuffer>;
 
-async function sealed(plain: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
-  const key = await subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
-  const iv = webcrypto.getRandomValues(new Uint8Array(PREVIEW_CIPHER.ivBytes));
-  const cipher = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv, additionalData: new TextEncoder().encode(PREVIEW_CIPHER.aad) }, key, plain));
-  const out = new Uint8Array(iv.byteLength + cipher.byteLength);
-  out.set(iv); out.set(cipher, iv.byteLength);
-  return out;
-}
 
 /** A ZIP the way zipReportDirectory writes one: the JSON deflated, PNGs stored. */
 function zip(files: Record<string, Uint8Array>): Uint8Array<ArrayBuffer> {
@@ -74,19 +65,26 @@ const explorationReport = {
 };
 const explorationZip = zip({ "exploration.json": new TextEncoder().encode(JSON.stringify(explorationReport)), [`assets/${pngSha}.png`]: png });
 
-function deployment(files: Record<string, Uint8Array<ArrayBuffer>>, env: PreviewEnvironment, now?: () => number) {
+/** A hosted preview as ci:deploy writes it: each target's manifest at its path, and every asset once under the token. */
+async function deployment(reports: Record<string, Uint8Array>, env: PreviewEnvironment) {
+  const files: Record<string, Uint8Array> = {};
+  for (const [path, archive] of Object.entries(reports)) {
+    const loaded = (await loadReport(archive))!;
+    files[path] = new TextEncoder().encode(manifestBody(loaded));
+    for (const name of loaded.entries.keys()) if (name.startsWith("assets/") && !name.endsWith("/")) files[`/p/${token}/${name}`] = (await loaded.read(name, 64 * 1024 * 1024))!;
+  }
   const calls: string[] = [];
   const fetchImpl = (async (input: RequestInfo | URL) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     calls.push(url.href);
     const body = files[url.pathname];
-    return body ? new Response(body, { headers: { "content-length": String(body.byteLength) } }) : new Response("missing", { status: 404 });
+    return body ? new Response(body as BodyInit, { headers: { "content-length": String(body.byteLength) } }) : new Response("missing", { status: 404 });
   }) as typeof fetch;
-  const options = { env, indexHtml: html, fetchImpl, subtle, cache: new Map(), ...(now ? { now } : {}) };
-  return { calls, get: (path: string, accept?: string) => previewResponse(new Request(`${origin}/p/${token}${path}`, accept === undefined ? {} : { headers: { accept } }), options) };
+  const options = { env, indexHtml: html, fetchImpl, cache: new Map(), loading: new Map() };
+  return { calls, files, cache: options.cache, get: (path: string, accept?: string) => previewResponse(new Request(`${origin}/p/${token}${path}`, accept === undefined ? {} : { headers: { accept } }), options) };
 }
 
-const reviewEnv: PreviewEnvironment = { EXPLORE_PREVIEW_TOKEN: token, EXPLORE_PREVIEW_KEY: Buffer.from(keyBytes).toString("base64"), EXPLORE_PREVIEW_EXPIRES_AT: "2030-01-01T00:00:00Z", EXPLORE_PREVIEW_REPORT: "/_report/abcdefghijklmnop/report.zip.enc" };
+const reviewEnv: PreviewEnvironment = { EXPLORE_PREVIEW_TOKEN: token, EXPLORE_PREVIEW_REPORT: `/p/${token}/targets/report.json` };
 
 test("the archive reader accepts the deployed layout and rejects everything else", async () => {
   assert.ok(readZipDirectory(review)?.has("review.json"));
@@ -98,7 +96,7 @@ test("the archive reader accepts the deployed layout and rejects everything else
 });
 
 test("the token page negotiates: browsers get the shell carrying the agent index, everything else gets Markdown", async () => {
-  const site = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(review) }, reviewEnv);
+  const site = await deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: review }, reviewEnv);
   const browser = await site.get("?view=compare&screen=home", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
   assert.equal(browser.status, 200);
   assert.match(browser.headers.get("content-type") ?? "", /^text\/html/);
@@ -106,7 +104,7 @@ test("the token page negotiates: browsers get the shell carrying the agent index
   assert.ok(shell.startsWith("<!doctype html>"));
   assert.match(shell, /<div id="root"><section data-explore-agent-index style="[^"]*clip:rect\(0 0 0 0\)[^"]*"><h1>Expo Explore report: .* PR #\d+/);
   assert.match(shell, new RegExp(`href="${origin}/p/${token}/api/v1/screens\\?status=modified,accessibility-only,added,removed"`));
-  assert.match(shell, /<\/section><\/div><script type="module"/);
+  assert.match(shell, /<\/section><\/div><link rel="preload" [^>]*><script type="module"/);
   assert.equal(browser.headers.get("vary"), "Accept");
   assert.equal(browser.headers.get("link"), `<${origin}/p/${token}/api/v1>; rel="alternate"; type="application/json", <${origin}/p/${token}/llms.txt>; rel="alternate"; type="text/markdown"`);
   assert.equal(browser.headers.get("cache-control"), "private, no-store");
@@ -118,19 +116,19 @@ test("the token page negotiates: browsers get the shell carrying the agent index
     assert.match(response.headers.get("content-type") ?? "", /^text\/markdown/, String(accept));
     const body = await response.text();
     assert.match(body, /^# Expo Explore report: /, String(accept));
-    assert.match(body, /This link stops serving the report after 2030-01-01T00:00:00.000Z/);
+    assert.ok(!body.includes("stops serving"), "a hosted preview lasts as long as its deployment; the index names no expiry");
     assert.ok(body.includes(`(${origin}/p/${token}/api/v1/screens?status=modified,accessibility-only,added,removed)`), body);
     assert.equal(response.headers.get("content-security-policy"), browser.headers.get("content-security-policy"));
   }
   const llms = await site.get("/llms.txt", "text/html");
   assert.match(llms.headers.get("content-type") ?? "", /^text\/markdown/);
   assert.equal(await llms.text(), await (await site.get("")).text());
-  // The sealed file is decrypted and parsed once per isolate, not once per request.
+  // The static manifest is fetched and parsed once per isolate, not once per request.
   assert.deepEqual(site.calls, [`${origin}${reviewEnv.EXPLORE_PREVIEW_REPORT}`]);
 });
 
 test("the API serves a PR review: summary, filtered and paged screens, detail, transitions, assets, raw", async () => {
-  const site = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(review) }, reviewEnv);
+  const site = await deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: review }, reviewEnv);
   const summary = await (await site.get("/api/v1")).json();
   assert.equal(summary.kind, "pr-review");
   assert.equal(summary.contract, "explore.review");
@@ -198,12 +196,15 @@ test("the API serves a PR review: summary, filtered and paged screens, detail, t
 
   const raw = await site.get("/api/v1/raw");
   assert.equal(raw.status, 200);
-  assert.equal((await raw.json()).review.contract, "explore.review", "raw is the file as written, review nested under `review`");
-  assert.deepEqual(site.calls, [`${origin}${reviewEnv.EXPLORE_PREVIEW_REPORT}`]);
+  const rawBytes = new Uint8Array(await raw.arrayBuffer());
+  assert.deepEqual(rawBytes, (await loadReport(review))!.raw, "raw is review.json byte for byte, as the ZIP held it");
+  assert.equal(JSON.parse(new TextDecoder().decode(rawBytes)).review.contract, "explore.review");
+  // The manifest once, and the one screenshot asked for, read from the same static file the Viewer loads.
+  assert.deepEqual(site.calls, [`${origin}${reviewEnv.EXPLORE_PREVIEW_REPORT}`, `${origin}/p/${token}/assets/${sha}.png`]);
 });
 
 test("the API serves an exploration: screens with elements and transitions, journeys, gaps, frontier", async () => {
-  const site = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(explorationZip) }, reviewEnv);
+  const site = await deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: explorationZip }, reviewEnv);
   const index = await (await site.get("")).text();
   assert.match(index, /^# Expo Explore exploration: Euxy \(ios\)/);
   assert.ok(index.includes("mapped 2 screens, 1 transitions, 1 elements; 1 coverage gaps. Stopped: budget. Mapped the sequencer."), index);
@@ -229,22 +230,9 @@ test("the API serves an exploration: screens with elements and transitions, jour
   assert.deepEqual(await (await site.get("/api/v1/raw")).json(), explorationReport);
 });
 
-test("expiry, platforms and wrong tokens behave like the report routes", async () => {
-  const after = () => Date.parse("2030-01-01T00:00:00Z");
-  const expired = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(review) }, reviewEnv, after);
-  const shell = await expired.get("", "text/html");
-  assert.equal(shell.status, 200);
-  assert.equal(await shell.text(), html, "the expired shell carries no report data");
-  assert.equal((await expired.get("/api/v1/screens/", "text/html")).status, 410);
-  for (const path of ["", "/llms.txt", "/api/v1", "/api/v1/screens", `/api/v1/assets/${"a".repeat(64)}`]) {
-    const response = await expired.get(path);
-    assert.equal(response.status, 410, path);
-    assert.deepEqual(await response.json(), { error: "expired", expiredAt: "2030-01-01T00:00:00.000Z" });
-  }
-  assert.deepEqual(expired.calls, []);
-
-  const multiEnv: PreviewEnvironment = { ...reviewEnv, EXPLORE_PREVIEW_REPORT: undefined, EXPLORE_PREVIEW_REPORTS: JSON.stringify([{ platform: "ios", path: "/_report/abcdefghijklmnop/ios.zip.enc" }, { platform: "android", path: "/_report/abcdefghijklmnop/android.zip.enc" }]) };
-  const multi = deployment({ "/_report/abcdefghijklmnop/ios.zip.enc": await sealed(review), "/_report/abcdefghijklmnop/android.zip.enc": await sealed(explorationZip) }, multiEnv);
+test("platforms and wrong tokens behave like the report routes", async () => {
+  const multiEnv: PreviewEnvironment = { ...reviewEnv, EXPLORE_PREVIEW_REPORT: undefined, EXPLORE_PREVIEW_REPORTS: JSON.stringify([{ platform: "ios", path: `/p/${token}/targets/ios.json` }, { platform: "android", path: `/p/${token}/targets/android.json` }]) };
+  const multi = await deployment({ [`/p/${token}/targets/ios.json`]: review, [`/p/${token}/targets/android.json`]: explorationZip }, multiEnv);
   const ios = await (await multi.get("/api/v1")).json();
   assert.equal(ios.kind, "pr-review");
   assert.deepEqual(ios.platforms, ["ios", "android"]);
@@ -257,12 +245,12 @@ test("expiry, platforms and wrong tokens behave like the report routes", async (
   assert.match(await (await multi.get("?platform=android")).text(), /^# Expo Explore exploration/);
   assert.equal((await multi.get("/api/v1?platform=web")).status, 404);
   assert.equal((await multi.get("/api/v1?platform=ios&platform=android")).status, 404);
-  assert.equal(multi.calls.length, 2, "each platform's report is decrypted once");
+  assert.equal(multi.calls.length, 2, "each platform's manifest is fetched once");
 
   const wrongToken = token.replace(/a/, "b");
-  const site = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(review) }, reviewEnv);
+  const site = await deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: review }, reviewEnv);
   for (const path of [`/p/${wrongToken}/api/v1`, `/p/${wrongToken}/llms.txt`, `/p/${token}/API/v1`, `/p/${token}/api/v1//screens`]) {
-    const response = await previewResponse(new Request(`${origin}${path}`), { env: reviewEnv, indexHtml: html, fetchImpl: fetch, subtle, cache: new Map() });
+    const response = await previewResponse(new Request(`${origin}${path}`), { env: reviewEnv, indexHtml: html, fetchImpl: fetch, cache: new Map() });
     assert.equal(response.status, 404, path);
   }
   assert.equal((await site.get("/api/v1", undefined)).status, 200);
@@ -337,12 +325,12 @@ test("statuses follow the Viewer: accessibility-only, unavailable for a failed o
 
 test("a deployment of several targets keeps each target in its links and names the others in the index", async () => {
   const listing = [
-    { target: "iphone", platform: "ios", label: "iPhone 17", path: "/_report/abcdefghijklmnop/iphone.zip.enc" },
-    { target: "duo-open", platform: "ios", label: "iPhone Duo (open)", path: "/_report/abcdefghijklmnop/duo-open.zip.enc" },
-    { target: "android", platform: "android", label: "Android", path: "/_report/abcdefghijklmnop/android.zip.enc" },
+    { target: "iphone", platform: "ios", label: "iPhone 17", path: `/p/${token}/targets/iphone.json` },
+    { target: "duo-open", platform: "ios", label: "iPhone Duo (open)", path: `/p/${token}/targets/duo-open.json` },
+    { target: "android", platform: "android", label: "Android", path: `/p/${token}/targets/android.json` },
   ];
   const targetsEnv: PreviewEnvironment = { ...reviewEnv, EXPLORE_PREVIEW_REPORT: undefined, EXPLORE_PREVIEW_REPORTS: JSON.stringify(listing) };
-  const site = deployment({ [listing[0]!.path]: await sealed(review), [listing[1]!.path]: await sealed(review), [listing[2]!.path]: await sealed(explorationZip) }, targetsEnv);
+  const site = await deployment({ [listing[0]!.path]: review, [listing[1]!.path]: review, [listing[2]!.path]: explorationZip }, targetsEnv);
   const duo = await (await site.get("/api/v1?target=duo-open")).json();
   assert.equal(duo.kind, "pr-review");
   assert.deepEqual(duo.platforms, ["ios", "android"], "distinct platforms, as before targets");
@@ -362,4 +350,114 @@ test("a deployment of several targets keeps each target in its links and names t
   assert.ok(!index.includes(`- [iPhone Duo (open)]`), "the index does not list its own target among the others");
   assert.equal((await (await site.get("/api/v1?platform=android")).json()).kind, "exploration");
   assert.equal((await site.get("/api/v1?target=pixel")).status, 404);
+});
+
+test("the manifest route answers each target's static manifest, the shell preloads it, and screenshots are not the Worker's", async () => {
+  const site = await deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: review }, reviewEnv);
+  const shell = await (await site.get("", "text/html")).text();
+  assert.ok(shell.includes(`<link rel="preload" href="/p/${token}/manifest.json" as="fetch" crossorigin><script type="module"`), shell.slice(0, 400));
+  const linked = await (await site.get("?target=ios&view=compare", "text/html")).text();
+  assert.ok(linked.includes(`<link rel="preload" href="/p/${token}/manifest.json?platform=ios" as="fetch" crossorigin>`), linked.slice(0, 400));
+
+  const manifest = await site.get("/manifest.json");
+  assert.equal(manifest.status, 200);
+  assert.match(manifest.headers.get("content-type") ?? "", /^application\/json/);
+  assert.equal(manifest.headers.get("cache-control"), "private, no-store");
+  assert.equal(await manifest.text(), new TextDecoder().decode(site.files[reviewEnv.EXPLORE_PREVIEW_REPORT!]), "the static manifest, byte for byte");
+  // Screenshots are static files EAS Hosting serves itself; a path the deployment does not hold is the Worker's 404.
+  for (const path of ["/assets/" + "0".repeat(64) + ".png", "/report.zip", "/targets/report.json"]) {
+    assert.equal((await site.get(path)).status, 404, path);
+  }
+});
+
+test("a ZIP's directory records are not assets: the manifest the Viewer validates names files only", async () => {
+  const withDirectory = zip({ "exploration.json": new TextEncoder().encode(JSON.stringify(explorationReport)), "assets/": new Uint8Array(), [`assets/${pngSha}.png`]: png });
+  assert.ok(readZipDirectory(withDirectory)!.has("assets/"));
+  assert.deepEqual(JSON.parse(manifestBody((await loadReport(withDirectory))!)).entries, { [`assets/${pngSha}.png`]: png.byteLength });
+  assert.equal(JSON.parse(manifestBody((await loadReport(withDirectory))!, "abc")).deployment, "abc", "a deployment stamps the manifests it writes");
+});
+
+test("a static file the Worker cannot fetch this time answers 503, which the Viewer retries; one that is not there is a 404", async () => {
+  const flaky = (status: number) => (path: string) => previewResponse(new Request(`${origin}/p/${token}${path}`), {
+    env: reviewEnv, indexHtml: html, cache: new Map(), loading: new Map(), fetchImpl: (async () => new Response("upstream", { status })) as typeof fetch });
+  for (const path of ["/manifest.json", "/api/v1", "/llms.txt"]) {
+    const response = await flaky(502)(path);
+    assert.equal(response.status, 503, path);
+    assert.equal(response.headers.get("retry-after"), "1");
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.equal((await flaky(404)(path)).status, 404, path);
+  }
+  // The shell still opens; the Viewer then asks for the manifest and shows why it cannot.
+  assert.equal((await previewResponse(new Request(`${origin}/p/${token}`, { headers: { accept: "text/html" } }), {
+    env: reviewEnv, indexHtml: html, cache: new Map(), loading: new Map(), fetchImpl: (async () => new Response("upstream", { status: 502 })) as typeof fetch })).status, 200);
+  const garbage = { env: reviewEnv, indexHtml: html, cache: new Map(), loading: new Map(),
+    fetchImpl: (async () => new Response("not a manifest", { status: 200 })) as typeof fetch };
+  assert.equal((await previewResponse(new Request(`${origin}/p/${token}/api/v1`), garbage)).status, 404, "a file that is not a manifest of a report");
+});
+
+test("the shell and the agent API share one fetch of a manifest, kept within the cache's bytes; the manifest route only passes it through", async () => {
+  const listing = ["iphone", "duo-open"].map(target => ({ target, platform: "ios", label: target, path: `/p/${token}/targets/${target}.json` }));
+  const env: PreviewEnvironment = { ...reviewEnv, EXPLORE_PREVIEW_REPORT: undefined, EXPLORE_PREVIEW_REPORTS: JSON.stringify(listing) };
+  const site = await deployment(Object.fromEntries(listing.map(entry => [entry.path, explorationZip])), env);
+  // Requests that arrive together wait for one fetch.
+  assert.deepEqual((await Promise.all([site.get("/api/v1?target=iphone"), site.get("/llms.txt?target=iphone"), site.get("?target=iphone", "text/html")])).map(response => response.status), [200, 200, 200]);
+  assert.equal(site.calls.length, 1);
+  // Kept now, so the Viewer's manifest request is answered from memory.
+  assert.equal((await site.get("/manifest.json?target=iphone")).status, 200);
+  assert.equal(site.calls.length, 1);
+  // Not kept (a prefetch of another target): streamed through each time, never parsed.
+  assert.equal((await site.get("/manifest.json?target=duo-open")).status, 200);
+  assert.equal((await site.get("/manifest.json?target=duo-open")).status, 200);
+  assert.equal(site.calls.length, 3);
+});
+
+test("a manifest is parsed once and keeps the report's own bytes; another key order still opens; one the Viewer would refuse does not", async () => {
+  const loaded = (await loadReport(review))!;
+  const read = async () => undefined;
+  const written = new TextEncoder().encode(manifestBody(loaded, "stamp"));
+  const parsed = reportFromManifest(written, read)!;
+  assert.equal(parsed.kind, "pr-review");
+  assert.deepEqual(parsed.raw, loaded.raw);
+  assert.equal(parsed.raw.buffer, written.buffer, "the report's bytes are a view of the manifest, not a copy");
+  assert.equal(parsed.entries.size, [...loaded.entries.keys()].filter(name => name.startsWith("assets/")).length);
+  // Another writer's layout: parsed whole, the report re-serialized.
+  const reordered = JSON.parse(new TextDecoder().decode(written));
+  const other = reportFromManifest(new TextEncoder().encode(JSON.stringify({ report: reordered.report, format: reordered.format, file: reordered.file, entries: reordered.entries })), read)!;
+  assert.equal(other.kind, "pr-review");
+  assert.deepEqual(other.json, parsed.json);
+  // A nested `"report"` key before the report's own is not where the report starts.
+  const nested = `{"format":"explore.preview-manifest/1","extra":{"a":1,"report":2},"file":"review.json","entries":{},"report":${new TextDecoder().decode(loaded.raw)}}`;
+  const fromNested = reportFromManifest(new TextEncoder().encode(nested), read)!;
+  assert.equal(fromNested.kind, "pr-review");
+  assert.deepEqual(fromNested.json, parsed.json);
+  for (const bad of ['{"format":"explore.preview-manifest/1","file":"review.json","entries":{"../x":1},"report":{}}', '{"format":"other","file":"review.json","entries":{},"report":{}}', "not json"]) {
+    assert.equal(reportFromManifest(new TextEncoder().encode(bad), read), undefined, bad);
+  }
+  assert.equal(reportFromManifest(new Uint8Array(MAX_MANIFEST_BYTES + 1), read), undefined, "larger than the Viewer opens");
+});
+
+test("an agent's screenshot the Worker cannot fetch this time is a 503; one the report does not hold is a 404", async () => {
+  const site = await deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: review }, reviewEnv);
+  const loaded = (await loadReport(review))!;
+  const name = [...loaded.entries.keys()].find(entry => /^assets\/[a-f0-9]{64}\.png$/.test(entry))!;
+  const sha = name.slice(7, 71);
+  const manifest = site.files[reviewEnv.EXPLORE_PREVIEW_REPORT!]!;
+  const failing = (status: number) => previewResponse(new Request(`${origin}/p/${token}/api/v1/assets/${sha}`), { env: reviewEnv, indexHtml: html, cache: new Map(), loading: new Map(),
+    fetchImpl: (async (input: RequestInfo | URL) => String(input).endsWith(".json") ? new Response(manifest as BodyInit) : new Response("upstream", { status })) as typeof fetch });
+  const unavailable = await failing(502);
+  assert.equal(unavailable.status, 503);
+  assert.equal((await unavailable.json()).error, "unavailable");
+  assert.equal((await failing(404)).status, 404);
+});
+
+test("kept manifests count their parsed size against the cache: the oldest goes when the next would not fit", async () => {
+  const big = (label: string) => zip({ "exploration.json": new TextEncoder().encode(JSON.stringify({ ...explorationReport, padding: label.repeat(6 * 1024 * 1024) })), [`assets/${pngSha}.png`]: png });
+  const listing = ["first", "second"].map(target => ({ target, platform: "ios", label: target, path: `/p/${token}/targets/${target}.json` }));
+  const env: PreviewEnvironment = { ...reviewEnv, EXPLORE_PREVIEW_REPORT: undefined, EXPLORE_PREVIEW_REPORTS: JSON.stringify(listing) };
+  const site = await deployment({ [listing[0]!.path]: big("a"), [listing[1]!.path]: big("b") }, env);
+  assert.equal((await site.get("/api/v1?target=first")).status, 200);
+  assert.deepEqual([...site.cache.keys()], [`${origin}${listing[0]!.path}`]);
+  // Two 6 MB manifests are about 36 MB once parsed, over the 32 MB the isolate keeps.
+  assert.equal((await site.get("/api/v1?target=second")).status, 200);
+  assert.deepEqual([...site.cache.keys()], [`${origin}${listing[1]!.path}`]);
 });

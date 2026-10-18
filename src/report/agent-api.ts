@@ -1,10 +1,10 @@
 /**
  * The agent-facing view of one hosted report: `/p/<token>/api/v1/...` JSON resources, the Markdown
  * index agents get when they fetch the token page without asking for HTML, and the block the Viewer
- * shell carries for fetchers that convert HTML to text. It reads the decrypted archive directly, so
- * it only picks the fields it publishes from the report JSON and treats everything else as untrusted.
+ * shell carries for fetchers that convert HTML to text. It reads the report's own JSON (from a ZIP, or from the static
+ * manifest a hosted preview serves), so it only picks the fields it publishes and treats everything else as untrusted.
  */
-import { readZipDirectory, readZipEntry, type ZipEntry } from "./zip-reader.js";
+import { readZipDirectory, readZipEntry } from "./zip-reader.js";
 
 export const AGENT_API_VERSION = "v1";
 /** The largest review.json or exploration.json a hosted report reads. */
@@ -22,8 +22,10 @@ export type LoadedReport = {
   file: "review.json" | "exploration.json";
   raw: Uint8Array;
   json: Json;
-  zip: Uint8Array;
-  entries: Map<string, ZipEntry>;
+  /** Every file of the report by name (`assets/<sha256>.png`), with its size. */
+  entries: Map<string, { size: number }>;
+  /** One file's bytes, at most `limit` of them; undefined when there is no such file or it is larger. Rejects when it cannot be read now. */
+  read: (name: string, limit: number) => Promise<Uint8Array | undefined>;
 };
 
 const rec = (value: unknown): Json => (typeof value === "object" && value !== null && !Array.isArray(value) ? value as Json : {});
@@ -34,25 +36,40 @@ const bool = (value: unknown): boolean | undefined => (typeof value === "boolean
 const strings = (value: unknown): string[] => arr(value).filter((item): item is string => typeof item === "string");
 const defined = <T extends Json>(object: T): T => Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined)) as T;
 
-/** Parses the decrypted archive; undefined when it is not a report this API knows how to read. */
+/** Parses a report ZIP; undefined when it is not a report this API knows how to read. */
 export async function loadReport(zip: Uint8Array): Promise<LoadedReport | undefined> {
-  const entries = readZipDirectory(zip);
-  if (!entries) return undefined;
-  const file = entries.has("review.json") ? "review.json" : entries.has("exploration.json") ? "exploration.json" : undefined;
+  const directory = readZipDirectory(zip);
+  if (!directory) return undefined;
+  const file = directory.has("review.json") ? "review.json" : directory.has("exploration.json") ? "exploration.json" : undefined;
   if (!file) return undefined;
-  const raw = await readZipEntry(zip, entries.get(file)!, MAX_METADATA_BYTES);
+  const raw = await readZipEntry(zip, directory.get(file)!, MAX_METADATA_BYTES);
   if (!raw) return undefined;
+  const read = async (name: string, limit: number) => {
+    const entry = directory.get(name);
+    return entry ? await readZipEntry(zip, entry, limit) : undefined;
+  };
+  return reportFrom(file, raw, directory, read);
+}
+
+/** The report a metadata file describes, with its files and a way to read them; undefined when it is not a report this API reads. */
+export function reportFrom(file: string, raw: Uint8Array, entries: Map<string, { size: number }>, read: LoadedReport["read"]): LoadedReport | undefined {
   let parsed: unknown;
   try { parsed = JSON.parse(new TextDecoder().decode(raw)); } catch { return undefined; }
+  return reportFromJson(file, raw, parsed, entries, read);
+}
+
+/** `reportFrom` for a metadata file already parsed: `parsed` is `raw` as JSON. */
+export function reportFromJson(file: string, raw: Uint8Array, parsed: unknown, entries: Map<string, { size: number }>, read: LoadedReport["read"]): LoadedReport | undefined {
+  if (file !== "review.json" && file !== "exploration.json") return undefined;
   const root = rec(parsed);
   if (file === "review.json") {
     const review = rec(root.review);
     if (review.contract !== "explore.review" || !Array.isArray(review.surfaces)) return undefined;
-    return { kind: "pr-review", file, raw, json: review, zip, entries };
+    return { kind: "pr-review", file, raw, json: review, entries, read };
   }
   const report = root.kind === "explore.exploration-report" ? root : rec(root.report);
   if (report.kind !== "explore.exploration-report" || typeof report.map !== "object") return undefined;
-  return { kind: "exploration", file, raw, json: report, zip, entries };
+  return { kind: "exploration", file, raw, json: report, entries, read };
 }
 
 export type AgentContext = {
@@ -465,9 +482,10 @@ export async function agentApiReply(context: AgentContext, loaded: LoadedReport,
     }
     case "assets": {
       if (id === undefined) return notFound();
-      const entry = loaded.entries.get(`assets/${id}.png`);
-      if (!entry) return notFound();
-      const bytes = await readZipEntry(loaded.zip, entry, MAX_ASSET_BYTES);
+      if (!loaded.entries.has(`assets/${id}.png`)) return notFound();
+      let bytes: Uint8Array | undefined;
+      try { bytes = await loaded.read(`assets/${id}.png`, MAX_ASSET_BYTES); }
+      catch { return json({ error: "unavailable", message: "The screenshot could not be read; retry shortly" }, 503); }
       if (!bytes) return notFound();
       return { status: 200, contentType: "image/png", body: bytes as BodyInit, headers: { ETag: `"${id}"`, "Content-Length": String(bytes.byteLength) } };
     }

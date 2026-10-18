@@ -21,6 +21,16 @@ export function resolveEmbeddedArtifactUrl(reference: string, priority: Screensh
   return Promise.resolve(reference);
 }
 
+/**
+ * Resolve, with a release bound to the report that resolved it: for a caller that may let go after a hosted preview has
+ * switched to another target's report, whose screenshots it must not release.
+ */
+export function leaseEmbeddedArtifactUrl(reference: string, priority: ScreenshotPriority = "lazy"): { url: Promise<string>; release: () => void } {
+  const archive = activeArtifactReport;
+  if (!archive) return { url: resolveEmbeddedArtifactUrl(reference, priority), release: () => {} };
+  return { url: archive.resolve(reference, priority), release: () => archive.release(reference) };
+}
+
 /** Artifact screenshots release their Blob URL when no visible image or download uses it; the report keeps a few for a quick return. */
 export function releaseEmbeddedArtifactUrl(reference: string): boolean {
   if (!activeArtifactReport) return false;

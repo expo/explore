@@ -1,5 +1,5 @@
 /**
- * Reads the sealed report archive once it is decrypted: a ZIP written by `zipReportDirectory`
+ * Reads a report ZIP (deploy, the local report server, the agent API): a ZIP written by `zipReportDirectory`
  * (review.json or exploration.json deflated, assets/<sha256>.png stored). Only the central directory
  * is trusted for sizes and offsets, every offset is bounds-checked, and entries are inflated on demand.
  */

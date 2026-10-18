@@ -15,7 +15,7 @@ import { installCiFiles } from "../ci/workflow-install.js";
 import { readRouteEntry } from "../ci/route-entry.js";
 import { buildVerifiedPlan } from "../ci/verified-plan.js";
 import { formatCaptureCheck, formatDoctorReport, referencedSecretNames, runCaptureCheck, runDoctor } from "../ci/doctor.js";
-import { readExploreConfig, readExploreInstructions, resolveTargetConfig, configTargets, isTargetId, withRunOverrides, previewDays, configPlatforms as listPlatforms, EXPLORE_PLATFORMS, DEFAULT_EXPLORE_CONFIG_PATH, PREVIEW_DEFAULT_DAYS, type ExplorePlatform } from "../config/explore-config.js";
+import { readExploreConfig, readExploreInstructions, resolveTargetConfig, configTargets, isTargetId, withRunOverrides, warnIgnoredExpiry, configPlatforms as listPlatforms, EXPLORE_PLATFORMS, DEFAULT_EXPLORE_CONFIG_PATH, type ExplorePlatform } from "../config/explore-config.js";
 import { argumentError, output, required, has, flag, flags, nonNegativeInteger, oneOf, positiveInteger } from "./args.js";
 import { help } from "./help.js";
 import { CiError } from "../shared/ci-errors.js";
@@ -222,6 +222,8 @@ export async function captureReview(): Promise<void> {
   const configPath = flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH;
   const selection = targetSelection();
   const rawConfig = await readExploreConfig(headProject, configPath);
+  // A release comparison's workflow may still pass --expires-in; ci:deploy says once that report.preview.expiresAfter is ignored.
+  if (has("expires-in")) warnIgnoredExpiry("--expires-in");
   const config = withRunOverrides(resolveTargetConfig(rawConfig, selection), { scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") });
   if (has("pull-request") === has("compare")) argumentError("Pass --pull-request FILE for a pull request, or --compare FILE for any two commits.", has("compare") ? "compare" : "pull-request");
   // A matrix job names its target; its artifacts, report and comment section carry the target's id.
@@ -245,6 +247,7 @@ export async function captureBaseline(): Promise<void> {
 /** `capture` (or `capture:review`) `[--base REF] [--head REF | --committed]`: a local review, opened in the Viewer or hosted with --upload. */
 async function localReview(): Promise<void> {
   const platform = platformFlag(), target = targetFlag();
+  if (has("expires-in")) warnIgnoredExpiry("--expires-in");
   const parallel = has("parallel") ? positiveInteger("parallel") : undefined;
   const result = await runLocalReview({ project: flag("project") ?? process.cwd(), base: flag("base"), head: flag("head"), ...(target ? { target } : {}),
     ...(parallel ? { parallel } : {}),
@@ -276,9 +279,8 @@ async function localReview(): Promise<void> {
     ...(result.head.uncommitted?.length ? { uncommittedFiles: result.head.uncommitted.length } : {}) });
   if (has("upload")) {
     const preview = result.config.report?.preview;
-    const hosted = await deployLocalReports({ reports: zips, project: previewProjectSlug(result.repository, preview?.project), ...(preview?.owner ? { owner: preview.owner } : {}),
-      // null is expiresAfter: never, which must not fall back to the default.
-      expiresAfterDays: has("expires-in") ? previewDays(required("expires-in"), "--expires-in") : preview ? preview.expiresAfterDays : PREVIEW_DEFAULT_DAYS });
+    if (preview?.expiresAfterIgnored) warnIgnoredExpiry("report.preview.expiresAfter");
+    const hosted = await deployLocalReports({ reports: zips, project: previewProjectSlug(result.repository, preview?.project), ...(preview?.owner ? { owner: preview.owner } : {}) });
     // Hosted, the temporary copies are not needed (a failed upload keeps them for report:upload); --output keeps its own.
     const copied = has("output");
     if (!copied) await rm(result.work, { recursive: true, force: true });
