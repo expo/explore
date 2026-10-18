@@ -293,7 +293,8 @@ export async function runCiReview(options: {
       done: { base: 0, head: 0 }, baseFromCache: false };
     await assertCurrentHead(); await postComment();
     stage = "preflight";
-    const active = plan.headCaptureSurfaceIds.length + plan.baseCaptureSurfaceIds.length > 0;
+    // A side with routes to capture, or flows to run, needs the token, the installed dependencies and a session.
+    const active = plan.headCaptureSurfaceIds.length + plan.baseCaptureSurfaceIds.length > 0 || config.flows !== undefined;
     if (active && !options.useLocalEasSession) requireSecret(environment, "EXPO_TOKEN");
     const exploration = await prepareCiExploration(config, projects.head, environment, active,
       { ...(options.agentSessionFactory ? { createSession: options.agentSessionFactory } : {}),
@@ -478,7 +479,7 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
   const plan = await buildVerifiedPlan({ baseProject: options.project, headProject: options.project,
     baseSha: options.sha, headSha: options.sha, config: options.config, output, scope: "all" });
   progress(planSummary(plan, true));
-  const active = plan.headCaptureSurfaceIds.length > 0;
+  const active = plan.headCaptureSurfaceIds.length > 0 || options.config.flows !== undefined;
   if (active && !options.useLocalEasSession) requireSecret(environment, "EXPO_TOKEN");
   let usagePhase: AgentUsagePhase = "preflight";
   const exploration = await prepareCiExploration(options.config, options.project, environment, active,

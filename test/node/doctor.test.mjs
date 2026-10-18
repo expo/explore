@@ -647,3 +647,23 @@ test("doctor checks each target where it runs: local tools for local targets, EA
   assert.equal(check(forced, "eas-simulator")[0].status, "pass");
   assert.deepEqual(check(forced, "controller"), []);
 });
+
+test("doctor checks that flows.tests names committed e2e files and that the app can import e2e", async (t) => {
+  const flows = { ...baseConfig, mode: "flows", flows: { tests: ["e2e/*.e2e.ts", "e2e/extra/checkout.e2e.ts"] } };
+  const root = await app(t, flows, { "e2e/home.e2e.ts": "import { test } from 'e2e';\ntest('home', async () => {});\n" });
+  const report = await runDoctor(offline(root));
+  const tests = check(report, "flows-tests")[0];
+  assert.equal(tests.status, "fail");
+  assert.equal(tests.code, "FLOWS_TESTS_MISSING");
+  assert.match(tests.message, /"e2e\/extra\/checkout\.e2e\.ts"/);
+  assert.doesNotMatch(tests.message, /e2e\/\*\.e2e\.ts/);
+  assert.equal(check(report, "flows-e2e")[0].code, "FLOWS_E2E_UNRESOLVED");
+  assert.equal(check(report, "flows-output").length, 0);
+
+  await write(root, { "e2e/extra/checkout.e2e.ts": "export {};\n", "node_modules/e2e/package.json": JSON.stringify({ name: "e2e", version: "0.21.2" }), ".expo-explore-flows/keep": "" });
+  const ready = await runDoctor(offline(root));
+  assert.equal(check(ready, "flows-tests")[0].status, "pass");
+  assert.match(check(ready, "flows-tests")[0].message, /2 e2e test files/);
+  assert.match(check(ready, "flows-e2e")[0].message, /e2e 0\.21\.2/);
+  assert.equal(check(ready, "flows-output")[0].code, "FLOWS_OUTPUT_EXISTS");
+});

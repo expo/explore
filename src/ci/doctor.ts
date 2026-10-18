@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { lstat, mkdir, readdir, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import { CiError, toCiError } from "../shared/ci-errors.js";
 import type { CaptureBundle } from "../contracts/capture.js";
 import type { SourceCapturePlan } from "../source/capture-plan.js";
@@ -10,6 +10,7 @@ import type { CommandRunner } from "../capture/run.js";
 import { runBaselineCi } from "./pipeline.js";
 import { DEFAULT_EXPLORE_CONFIG_PATH, captureRepack, configTargets, readExploreConfig, readExploreInstructions, resolveTargetConfig, withRunOverrides, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { explorationSecretNames } from "../config/exploration-inputs.js";
+import { FLOWS_OUTPUT_DIRECTORY } from "../capture/flows/run-flows.js";
 import { controllerCached } from "../shared/controller-cache.js";
 import { androidTools, hostEmulatorAbi, localSimulatorTarget, localSystemImage } from "../capture/local-simulator.js";
 import { ARGENT_VERSION } from "../shared/argent-version.js";
@@ -89,6 +90,36 @@ function list(values: readonly string[], limit = 8): string {
 export function referencedSecretNames(config: ExploreConfig, instructions?: string): string[] {
   return explorationSecretNames([instructions ?? "",
     ...(config.setup ?? []).map(action => action.action === "fill" || action.action === "type" ? action.text : "")].join("\n"));
+}
+
+/** `**` crosses directories, `*` and `?` stay inside a segment; the rest is literal. */
+function globToRegExp(glob: string): RegExp {
+  const source = glob.split("**").map(part => part.split("*").map(piece => piece.split("?").map(ch => ch.replace(/[.+^${}()|[\]\\]/g, "\\$&")).join("[^/]")).join("[^/]*")).join("(?:.*)");
+  return new RegExp(`^${source.replace(/^\(\?:\.\*\)\//, "(?:.*/)?")}$`);
+}
+
+/** The flows the capture would run: each entry of flows.tests names a committed file, and the app can import `e2e`. */
+async function flowChecks(project: string, config: ExploreConfig): Promise<DoctorCheck[]> {
+  if (!config.flows) return [];
+  const checks: DoctorCheck[] = [];
+  const files = (await readdir(project, { recursive: true, withFileTypes: true }).catch(() => []))
+    .filter(entry => entry.isFile() && !relative(project, entry.parentPath).split(sep).includes("node_modules"))
+    .map(entry => relative(project, join(entry.parentPath, entry.name)).split(sep).join("/"));
+  const unmatched = config.flows.tests.filter(pattern => /[*?]/.test(pattern) ? !files.some(file => globToRegExp(pattern).test(file)) : !files.includes(pattern));
+  const matched = new Set(config.flows.tests.flatMap(pattern => /[*?]/.test(pattern) ? files.filter(file => globToRegExp(pattern).test(file)) : files.includes(pattern) ? [pattern] : []));
+  checks.push(unmatched.length
+    ? { step: 4, id: "flows-tests", status: "fail", code: "FLOWS_TESTS_MISSING", message: `flows.tests names no file for ${unmatched.map(pattern => `"${pattern}"`).join(", ")}.`,
+      nextAction: "Point flows.tests at the app's committed e2e test files (for example e2e/**/*.e2e.ts), or add the files." }
+    : { step: 4, id: "flows-tests", status: "pass", message: `flows.tests matches ${matched.size} e2e test file${matched.size === 1 ? "" : "s"}.` });
+  const e2ePackage = await readFile(join(project, "node_modules", "e2e", "package.json"), "utf8").then(text => JSON.parse(text) as { version?: string }).catch(() => undefined);
+  checks.push(e2ePackage
+    ? { step: 4, id: "flows-e2e", status: "pass", message: `The app resolves e2e ${e2ePackage.version ?? ""}`.trim() + "." }
+    : { step: 4, id: "flows-e2e", status: "warn", code: "FLOWS_E2E_UNRESOLVED", message: "The app's node_modules has no e2e package; its test files import it.",
+      nextAction: "Add e2e to the app's devDependencies and install (the capture installs the committed lockfile)." });
+  if (await lstat(join(project, FLOWS_OUTPUT_DIRECTORY)).catch(() => undefined)) checks.push({ step: 4, id: "flows-output", status: "warn", code: "FLOWS_OUTPUT_EXISTS",
+    message: `${FLOWS_OUTPUT_DIRECTORY} is in the app directory; a capture writes e2e's output there and removes it when it ends.`,
+    nextAction: `Remove ${FLOWS_OUTPUT_DIRECTORY} (a previous run was interrupted) and keep it out of the commit.` });
+  return checks;
 }
 
 function routeChecks(config: ExploreConfig, report: RouteEntryReport): DoctorCheck[] {
@@ -508,6 +539,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   try {
     routes = readRouteEntry(project, config);
     checks.push(...routeChecks(config, routes));
+    checks.push(...await flowChecks(project, config));
   } catch (error) {
     checks.push(fromError(5, "routes", error, { code: "SOURCE_ANALYSIS_FAILED", nextAction: "Commit the app source and check navigation.provider and navigation.entry." }));
   }
