@@ -267,11 +267,10 @@ export function ZoomBridge(props: {
       onCameraGestureStart.current?.();
       // The hold only tracks the key (released, interrupted, a field or dialog taking over); the
       // glide reads it every frame and stops with it.
-      hold.begin(event.code, () => true);
-      glideWhileHeld(hold, event.code, zoomGlide(direction), ZOOM_GLIDE);
+      glideWhileHeld(hold.begin(event.code, () => true), zoomGlide(direction), ZOOM_GLIDE);
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (hold.holding(event.code)) hold.end();
+      hold.release(event.code);
     };
 
     const onModifierWheel = (event: WheelEvent) => {

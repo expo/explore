@@ -112,33 +112,74 @@ test("a glide starts on the first frame after key down; a tap completes one step
   const move = (steps) => { moved += steps; return true; };
 
   // A tap: released a third of the way into its step, it goes on to exactly one step at the same speed.
-  hold.begin("BracketRight", () => true);
-  glideWhileHeld(hold, "BracketRight", move, profile);
+  glideWhileHeld(hold.begin("BracketRight", () => true), move, profile);
   frames.tick(0);
   frames.tick(16);
   assert.ok(Math.abs(moved - 0.16) < 1e-9, `moves on the first frame, with no initial delay (${moved})`);
   frames.tick(16);
-  hold.end();
+  hold.release("BracketRight");
   for (let frame = 0; frame < 20 && frames.pending; frame += 1) frames.tick(16);
   assert.ok(Math.abs(moved - 1) < 1e-9, `a tap covers one step (${moved})`);
   assert.equal(frames.pending, 0, "and the glide is over");
 
   // A hold: a second in it is well past one step, and it stops on the frame the key is released.
   moved = 0;
-  hold.begin("BracketRight", () => true);
-  glideWhileHeld(hold, "BracketRight", move, profile);
+  glideWhileHeld(hold.begin("BracketRight", () => true), move, profile);
   for (let frame = 0; frame < 61; frame += 1) frames.tick(16);
   assert.ok(moved > 9 && moved < 11, `ten steps a second (${moved})`);
-  hold.end();
+  hold.release("BracketRight");
   const released = moved;
   for (let frame = 0; frame < 10 && frames.pending; frame += 1) frames.tick(16);
   assert.equal(moved, released, "nothing after release");
   assert.equal(frames.pending, 0);
 
   // A limit ends the hold.
-  hold.begin("BracketLeft", () => true);
-  glideWhileHeld(hold, "BracketLeft", () => false, profile);
+  glideWhileHeld(hold.begin("BracketLeft", () => true), () => false, profile);
   frames.tick(16);
   assert.ok(!hold.holding("BracketLeft"), "a move that finds nothing ends the hold");
   assert.equal(frames.pending, 0);
+});
+
+test("each press glides on its own: a tap still finishing is not taken over by the next press, and an interruption stops it at once", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const frames = fakeFrames(t);
+  const profile = { startRate: 10, topRate: 10, rampMs: 1 };
+  const hold = createKeyHold();
+  const moved = { first: 0, second: 0 };
+  const mover = (name) => (steps) => { moved[name] += steps; return true; };
+
+  // Tap ], then hold ] again before the tap's step is done: the tap still ends at one step.
+  glideWhileHeld(hold.begin("BracketRight", () => true), mover("first"), profile);
+  frames.tick(0);
+  frames.tick(16);
+  hold.release("BracketRight");
+  frames.tick(16);
+  glideWhileHeld(hold.begin("BracketRight", () => true), mover("second"), profile);
+  for (let frame = 0; frame < 61; frame += 1) frames.tick(16);
+  assert.ok(Math.abs(moved.first - 1) < 1e-9, `the tap covers one step, not the hold after it (${moved.first})`);
+  assert.ok(moved.second > 9 && moved.second < 11, `the hold glides on its own (${moved.second})`);
+  hold.release("BracketRight");
+  for (let frame = 0; frame < 10 && frames.pending; frame += 1) frames.tick(16);
+  assert.equal(frames.pending, 0, "both glides are over");
+
+  // An interruption (Esc, blur, a dialog) stops a glide on its next frame, short of a step.
+  moved.first = 0;
+  glideWhileHeld(hold.begin("Equal", () => true), mover("first"), profile);
+  frames.tick(0);
+  frames.tick(16);
+  hold.interrupt({ code: "Escape", key: "Escape", repeat: false });
+  for (let frame = 0; frame < 10 && frames.pending; frame += 1) frames.tick(16);
+  assert.ok(Math.abs(moved.first - 0.16) < 1e-9, `no motion after the interruption (${moved.first})`);
+  assert.equal(frames.pending, 0);
+
+  // A finishing tap that reaches a limit leaves the newer hold alone.
+  let calls = 0;
+  glideWhileHeld(hold.begin("BracketRight", () => true), () => (calls += 1) < 2, profile);
+  frames.tick(0);
+  frames.tick(16);
+  hold.release("BracketRight");
+  glideWhileHeld(hold.begin("BracketLeft", () => true), () => true, profile);
+  frames.tick(16);
+  assert.ok(hold.holding("BracketLeft"), "[ is still held after ]'s tap hit 100%");
+  hold.end();
 });

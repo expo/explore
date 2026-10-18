@@ -28,13 +28,26 @@ export function holdSchedule(count: number): number[] {
   return times;
 }
 
+/** One press of a held key, which a glide can outlive. */
+export type KeyPress = {
+  /** Whether its key is still down, and nothing interrupted the hold or began a newer one. */
+  readonly held: boolean;
+  /** Whether it ended by its key going up, rather than by an interruption. */
+  readonly released: boolean;
+  /** Ends the hold, if this press still is it. */
+  end: () => void;
+};
+
 export type KeyHold = {
   /**
    * Starts holding `code` after its first step already landed. `step` takes the next step and
    * says whether there was one; the hold ends by itself when there is not.
    */
-  begin: (code: string, step: () => boolean) => void;
+  begin: (code: string, step: () => boolean) => KeyPress;
+  /** Ends the hold as an interruption: another key, blur, a field or dialog taking the keyboard. */
   end: () => void;
+  /** Ends the hold because `code` went up, if it is the key being held. */
+  release: (code: string) => void;
   /**
    * Ends the hold when another key goes down, as the OS's own key repeat stops. A modifier does
    * not end it, so ⇧ or ⌘ can join a held key. Call it first in the listener, before any guard.
@@ -74,24 +87,25 @@ export function glideRate(elapsed: number, profile: GlideProfile): number {
 /**
  * For a continuous value (a zoom, a divider) a key glides instead of stepping, from the moment it
  * goes down: `move` is called every frame with how far to go, in tap steps (fractions of one), at
- * the profile's speed, until the hold ends. A tap, released before a whole step is covered, still
- * completes its one step at that speed, so a tap and a hold begin as one motion. `move` says
- * whether it moved; at a limit it does not, and the hold ends there.
+ * the profile's speed, while `press` is held. A tap, released before a whole step is covered, still
+ * completes its one step at that speed, so a tap and a hold begin as one motion; an interrupted
+ * press stops where it is. `move` says whether it moved; at a limit it does not, and the press's
+ * hold ends there.
  */
-export function glideWhileHeld(hold: KeyHold, code: string, move: (steps: number) => boolean, profile: GlideProfile): void {
+export function glideWhileHeld(press: KeyPress, move: (steps: number) => boolean, profile: GlideProfile): void {
   const start = performance.now();
   let last = start;
   let covered = 0;
   const frame = (now: number) => {
-    const held = hold.holding(code);
-    if (!held && covered >= 1) return;
+    const held = press.held;
+    if (!held && !(press.released && covered < 1)) return;
     // A frame's timestamp can predate the key down that scheduled it.
     let steps = glideRate(now - start, profile) * Math.max(0, now - last) / 1000;
     last = Math.max(last, now);
     if (!held) steps = Math.min(steps, 1 - covered);
     covered += steps;
     if (steps > 0 && !move(steps)) {
-      hold.end();
+      press.end();
       return;
     }
     requestAnimationFrame(frame);
@@ -101,11 +115,16 @@ export function glideWhileHeld(hold: KeyHold, code: string, move: (steps: number
 
 /** One held key at a time, timed on the schedule above. */
 export function createKeyHold(): KeyHold {
-  let current: { code: string; timer: ReturnType<typeof setTimeout> } | undefined;
-  const end = () => {
-    if (current) clearTimeout(current.timer);
+  let current: { code: string; timer: ReturnType<typeof setTimeout>; press: { held: boolean; released: boolean } } | undefined;
+  const finish = (released: boolean) => {
+    if (current) {
+      clearTimeout(current.timer);
+      current.press.held = false;
+      current.press.released = released;
+    }
     current = undefined;
   };
+  const end = () => finish(false);
   return {
     begin(code, step) {
       end();
@@ -114,12 +133,21 @@ export function createKeyHold(): KeyHold {
         const next = holdIntervalMs(count);
         // A field or a dialog took the keyboard mid-hold: end, rather than step behind it.
         if (!current || !keyboardFree() || !step()) { end(); return; }
-        current = { code, timer: setTimeout(tick, next) };
+        current.timer = setTimeout(tick, next);
         count += 1;
       };
-      current = { code, timer: setTimeout(tick, HOLD_INITIAL_DELAY_MS) };
+      const state = { held: true, released: false };
+      current = { code, timer: setTimeout(tick, HOLD_INITIAL_DELAY_MS), press: state };
+      return {
+        get held() { return state.held; },
+        get released() { return state.released; },
+        end: () => { if (current?.press === state) end(); },
+      };
     },
     end,
+    release(code) {
+      if (current?.code === code) finish(true);
+    },
     interrupt(event) {
       if (current && !event.repeat && event.code !== current.code && !MODIFIER_KEYS.has(event.key)) end();
     },

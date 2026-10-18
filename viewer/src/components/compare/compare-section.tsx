@@ -189,8 +189,7 @@ export function useCompareController(options: CompareControllerOptions) {
   // A tap of [ or ] moves the divider one step; held, it keeps going from the same motion. The hold only
   // tracks the key; the glide reads it every frame and stops with it.
   const glideDivider = (code: string, direction: 1 | -1) => {
-    hold.begin(code, () => true);
-    glideWhileHeld(hold, code, (steps) => moveDivider(direction, steps), DIVIDER_GLIDE);
+    glideWhileHeld(hold.begin(code, () => true), (steps) => moveDivider(direction, steps), DIVIDER_GLIDE);
   };
 
   useEffect(() => {
@@ -240,7 +239,7 @@ export function useCompareController(options: CompareControllerOptions) {
       event.preventDefault();
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (hold.holding(event.code)) hold.end();
+      hold.release(event.code);
     };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
