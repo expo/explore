@@ -145,7 +145,7 @@ function validFlowSide(value: unknown): value is PublicFlowSide {
       && (step.line === undefined || (Number.isSafeInteger(step.line) && step.line > 0))
       && typeof step.api === "string" && typeof step.label === "string" && STEP_STATUSES.has(step.status) && Number.isSafeInteger(step.durationMs)
       && (step.frame === undefined || (typeof step.frame === "string" && Object.hasOwn(side.frames, step.frame))))
-    && side.frames !== null && typeof side.frames === "object" && Object.entries(side.frames).every(([key, frame]) => /^[a-z0-9-]+$/.test(key) && validFlowFrame(frame));
+    && side.frames !== null && typeof side.frames === "object" && Object.entries(side.frames).every(([key, frame]) => /^[a-z0-9-]+(?:@(?:light|dark))?$/.test(key) && validFlowFrame(frame));
 }
 /** Flow evidence is one entry per flow either side ran, with a verdict only for frames both sides took. */
 const validFlowsFailure = (value: unknown): boolean => Boolean(value) && typeof value === "object" && Object.keys(value as object).every(key => key === "code" || key === "message")
@@ -170,7 +170,8 @@ function assertFlowEvidence(review: PublicReview, enforceComparisonEvidence: boo
     ids.add(entry.id);
     const keys = new Set<string>();
     for (const frame of entry.frames) {
-      if (!frame || typeof frame !== "object" || Object.keys(frame).some(key => !["key", "id", "label", "visual"].includes(key))
+      if (!frame || typeof frame !== "object" || Object.keys(frame).some(key => !["key", "id", "label", "visual", "colorScheme"].includes(key))
+        || (frame.colorScheme !== undefined && (frame.colorScheme !== "light" && frame.colorScheme !== "dark" || !frame.key.endsWith(`@${frame.colorScheme}`)))
         || typeof frame.key !== "string" || keys.has(frame.key) || frame.id !== flowSurfaceId(entry.id, frame.key) || typeof frame.label !== "string"
         || (!entry.base?.frames[frame.key] && !entry.head?.frames[frame.key])) throw new Error("Public flow evidence is invalid");
       keys.add(frame.key);

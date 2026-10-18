@@ -240,7 +240,7 @@ async function uploadSide(store: ScreenshotStore, directory: string, expectedCom
     if (!/^[a-z0-9-]+\/[a-z0-9-]+$/.test(flowId)) throw new Error("Capture bundle flow id is invalid");
     const frames: PublicFlowSide["frames"] = {};
     for (const [key, value] of Object.entries(flow.frames)) {
-      if (!/^[a-z0-9-]+$/.test(key)) throw new Error("Capture bundle flow frame key is invalid");
+      if (!/^[a-z0-9-]+(?:@(?:light|dark))?$/.test(key)) throw new Error("Capture bundle flow frame key is invalid");
       const bytes = await evidenceFile(value.path); assertDecodedPng(bytes, "Flow frame");
       if (value.sha256 !== createHash("sha256").update(bytes).digest("hex") || value.width !== bytes.readUInt32BE(16) || value.height !== bytes.readUInt32BE(20)
         || !Number.isFinite(Date.parse(value.capturedAt))) throw new Error("Flow frame provenance mismatch");
@@ -268,6 +268,7 @@ async function uploadSide(store: ScreenshotStore, directory: string, expectedCom
 function publicFlows(base: { bundle: CaptureBundle; flows: Record<string, PublicFlowSide> }, head: { bundle: CaptureBundle; flows: Record<string, PublicFlowSide> },
   assessments: CaptureReviewOptions["assessments"]): PublicFlowEvidence[] {
   const ids = [...new Set([...Object.keys(head.flows), ...Object.keys(base.flows)])];
+  const schemes = bundleColorSchemes(head.bundle);
   return ids.map(id => {
     const record = head.bundle.flows?.[id] ?? base.bundle.flows?.[id];
     const keys = [...new Set([...(head.bundle.flows?.[id]?.steps ?? []).flatMap(step => step.frame ? [step.frame] : []),
@@ -275,8 +276,10 @@ function publicFlows(base: { bundle: CaptureBundle; flows: Record<string, Public
     const labelOf = (key: string) => (head.bundle.flows?.[id] ?? base.bundle.flows?.[id])?.steps.find(step => step.frame === key)?.label ?? key;
     return { id, title: record?.title ?? id, file: record?.file ?? "",
       ...(base.flows[id] ? { base: base.flows[id] } : {}), ...(head.flows[id] ? { head: head.flows[id] } : {}),
-      frames: keys.map(key => { const surface = flowSurfaceId(id, key); const visual = assessments?.[surface]?.visual;
-        return { key, id: surface, label: labelOf(key), ...(visual ? { visual } : {}) }; }) };
+      frames: keys.flatMap(key => [key, ...schemes.slice(1).map(scheme => `${key}@${scheme}`)]
+        .filter(frameKey => frameKey === key || head.flows[id]?.frames[frameKey] || base.flows[id]?.frames[frameKey])
+        .map(frameKey => { const surface = flowSurfaceId(id, frameKey); const visual = assessments?.[surface]?.visual; const scheme = frameKey.slice(key.length + 1);
+          return { key: frameKey, id: surface, label: labelOf(key), ...(visual ? { visual } : {}), ...(scheme ? { colorScheme: scheme as "light" | "dark" } : {}) }; })) };
   });
 }
 export type CaptureReviewOptions = {

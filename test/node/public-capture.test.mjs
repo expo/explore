@@ -378,9 +378,13 @@ test('flow frames are report assets: the review names them by hash and the local
   const headDirectory = f.options.headDirectory;
   await mkdir(join(headDirectory, 'flows', 'home', 'home-opens'), { recursive: true });
   await writeFile(join(headDirectory, 'flows', 'home', 'home-opens', 'home.png'), framePng);
-  const head = { ...f.bundles.head, flows: { 'home/home-opens': { file: 'e2e/home.e2e.ts', title: 'home opens', status: 'passed', durationMs: 12,
+  const darkImage = new PNG({ width: 1, height: 1 }); darkImage.data = Buffer.from([1, 2, 3, 255]);
+  const darkPng = PNG.sync.write(darkImage); const darkSha = createHash('sha256').update(darkPng).digest('hex');
+  await writeFile(join(headDirectory, 'flows', 'home', 'home-opens', 'home@dark.png'), darkPng);
+  const head = { ...f.bundles.head, runtimeProfile: { ...f.bundles.head.runtimeProfile, colorSchemes: 'light,dark' }, flows: { 'home/home-opens': { file: 'e2e/home.e2e.ts', title: 'home opens', status: 'passed', durationMs: 12,
     steps: [{ api: 'app.screenshot', label: 'home', status: 'passed', durationMs: 3, frame: 'home' }],
-    frames: { home: { path: 'flows/home/home-opens/home.png', sha256: frameSha, width: 1, height: 1, capturedAt: '2026-09-08T00:00:01Z' } } } } };
+    frames: { home: { path: 'flows/home/home-opens/home.png', sha256: frameSha, width: 1, height: 1, capturedAt: '2026-09-08T00:00:01Z' },
+      'home@dark': { path: 'flows/home/home-opens/home@dark.png', sha256: darkSha, width: 1, height: 1, capturedAt: '2026-09-08T00:00:02Z' } } } } };
   await writeFile(join(headDirectory, 'bundle.json'), JSON.stringify(head));
   const result = await prepareCaptureReview({ ...f.options });
   assertPublicReview(result.review);
@@ -388,4 +392,9 @@ test('flow frames are report assets: the review names them by hash and the local
   assert.equal(flow.id, 'home/home-opens');
   assert.match(flow.head.frames.home.url, new RegExp(`${frameSha}\\.png$`));
   assert.deepEqual(result.assets.filter(asset => asset.sha256 === frameSha).map(asset => asset.path), [join(headDirectory, 'flows', 'home', 'home-opens', 'home.png')]);
+  // A second appearance's frame is its own surface, `<key>@<scheme>`, carrying the scheme; the primary frame carries none.
+  assert.deepEqual(flow.frames.map(frame => [frame.key, frame.id, frame.colorScheme]),
+    [['home', 'flow:home/home-opens/home', undefined], ['home@dark', 'flow:home/home-opens/home@dark', 'dark']]);
+  assert.match(flow.head.frames['home@dark'].url, new RegExp(`${darkSha}\\.png$`));
+  assert.equal(result.assets.filter(asset => asset.sha256 === darkSha).length, 1);
 });

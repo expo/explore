@@ -147,7 +147,7 @@ export function FlowsView(props: { review: PublicReview; phone?: boolean; onOpen
             ) : null}
             <div className="flow-body">
               <ol className="flow-filmstrip" aria-label="Frames">
-                {entry.frames.map(frame => <Frame key={frame.key} entry={entry} frame={frame} {...(props.onOpenFrame ? { onOpen: props.onOpenFrame } : {})} />)}
+                {entry.frames.filter(frame => !frame.colorScheme).map(frame => <Frame key={frame.key} entry={entry} frame={frame} {...(props.onOpenFrame ? { onOpen: props.onOpenFrame } : {})} />)}
               </ol>
               <Steps entry={entry} review={props.review} />
             </div>

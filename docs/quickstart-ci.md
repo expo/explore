@@ -313,6 +313,7 @@ test("send money to a contact", async ({ app, device, screen }) => {
   before the checkout is verified clean.
 - A target or platform can run its own flows: `targets.fold.flows: { tests: [e2e/fold/*.e2e.ts] }` (or `platforms.android.flows`) replaces the top-level `flows` for that target; the others keep it. Within one file, e2e's own `test.describe(..., { platforms: ["ios"] })` already keeps a test to a platform, so a shared list usually suffices.
 - To run a few flows without touching the config, name them on the command line: `explore capture --flows e2e/sequencer.e2e.ts,e2e/patterns.e2e.ts` (files or globs, comma-separated) runs those e2e files as the whole capture — flows mode, no route frames — whatever `mode:` says.
+- The flows run once per appearance in `capture.appearance` (so twice for `[light, dark]`, after the light pass): a frame the dark pass takes shows up in Compare as the dark pair of its light frame; the Flows view lists the light frames and the steps once.
 - Every step the review shows links to its line in the e2e file at the head commit (the Flows view and, for a frame, the inspector's Flow section), when the review names a GitHub repository.
 
 ### Agent mode

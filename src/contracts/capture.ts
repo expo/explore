@@ -277,7 +277,8 @@ export type PublicFlowEvidence = {
   /** The flow id (`<file>/<title>`, slugged); its frames are the surfaces `flow:<id>/<key>`. */
   id: string; title: string; file: string;
   base?: PublicFlowSide; head?: PublicFlowSide;
-  frames: Array<{ key: string; id: string; label: string; visual?: PublicVisualVerdict }>;
+  /** A secondary-appearance frame is `<key>@<scheme>` with its `colorScheme`, taken by a second run of the flow in that appearance. */
+  frames: Array<{ key: string; id: string; label: string; visual?: PublicVisualVerdict; colorScheme?: "light" | "dark" }>;
 };
 export type PublicReview = {
   contract: "explore.review";

@@ -3,7 +3,7 @@ import { assertNoCaptureHealthIssues, captureHealthIssues, partitionCaptureHealt
 import { type RouteResetSetting } from "./route-reset.js";
 import { defaultReadinessSeconds } from "./readiness.js";
 import { captureLaunch, ffmpegRecordingTools, launchDirectory, type LaunchSetting, type RecordingTools } from "./launch-capture.js";
-import { runFlows } from "./flows/run-flows.js";
+import { flowFramePath, runFlows } from "./flows/run-flows.js";
 import { createHash } from "node:crypto";
 import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -796,12 +796,45 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       // hands the device over by closing its session. The app and the state setup put in it stay on the device.
       if (controller !== "argent") runner({ command: options.agentDeviceCommand, args: ["close", "--session", CONTROLLER_SESSION, "--json"], cwd: simulatorProject,
         environment: controllerEnvironment, timeoutMs: 60_000, allowFailure: true });
-      const result = await runFlows({ project, tests: options.flows.tests, platform: options.platform, bundleId: options.bundleId, connection,
+      const flowRunOptions = { project, tests: options.flows.tests, platform: options.platform, bundleId: options.bundleId, connection,
         ...(connection ? {} : { stateDir: join(simulatorProject, "agent-device-state") }), deviceId: runtime.controllerDeviceId,
-        workDirectory: simulatorProject, outputDirectory: flowsWorkDirectory, runner, environment: controllerEnvironment, timeoutMs: remainingMs,
-        agent: options.flows.agent, progress: say, ...(options.environment?.EXPLORE_FLOWS_ENGINE_MODULE ? { engineModule: options.environment.EXPLORE_FLOWS_ENGINE_MODULE } : {}) });
+        workDirectory: simulatorProject, runner, environment: controllerEnvironment,
+        agent: options.flows.agent, progress: say, ...(options.environment?.EXPLORE_FLOWS_ENGINE_MODULE ? { engineModule: options.environment.EXPLORE_FLOWS_ENGINE_MODULE } : {}) };
+      const result = await runFlows({ ...flowRunOptions, outputDirectory: flowsWorkDirectory, timeoutMs: remainingMs });
       flowRecords = result.flows;
       flowsFailure = result.failure;
+      // The other appearances run the flows again; a frame the primary pass took joins its record as `<key>@<scheme>`
+      // (the launch convention), so Compare pairs it by appearance. A pass that fails only leaves its frames missing.
+      for (const colorScheme of colorSchemes.slice(1)) {
+        if (flowsFailure || controller === "argent" || !Object.keys(flowRecords).length) break;
+        const schemeRemainingMs = options.maxDurationMinutes * 60_000 - ((options.now ?? Date.now)() - captureStartedAt);
+        if (schemeRemainingMs < 60_000) { say(`no time left for the ${colorScheme} flows`); break; }
+        say(`flows in ${colorScheme}`);
+        // Explore's session comes back to switch the appearance and relaunch the app in it, then hands the device over again.
+        runner({ command: controllerCommand, args: ["open", options.bundleId, "--session", CONTROLLER_SESSION, ...deviceArgs(runtime), "--platform", options.platform, "--json"],
+          cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 5 * 60_000 });
+        applyAppearance(colorScheme);
+        runner({ command: controllerCommand, args: ["open", options.bundleId, "--relaunch", "--session", CONTROLLER_SESSION, ...deviceArgs(runtime), "--platform", options.platform, "--level", "full", "--json"],
+          cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
+        runner({ command: options.agentDeviceCommand, args: ["close", "--session", CONTROLLER_SESSION, "--json"], cwd: simulatorProject,
+          environment: controllerEnvironment, timeoutMs: 60_000, allowFailure: true });
+        const schemeDirectory = await mkdtemp(join(tmpdir(), `expo-explore-flows-${colorScheme}-`));
+        try {
+          const pass = await runFlows({ ...flowRunOptions, outputDirectory: schemeDirectory, timeoutMs: schemeRemainingMs });
+          if (pass.failure) say(`the ${colorScheme} flows did not run: ${pass.failure.message}`);
+          for (const [flowId, flow] of Object.entries(pass.flows)) {
+            const record = flowRecords[flowId];
+            if (!record) continue;
+            for (const [key, frame] of Object.entries(flow.frames)) {
+              if (!record.frames[key]) continue;
+              const path = flowFramePath(flowId, `${key}@${colorScheme}`);
+              await mkdir(join(flowsWorkDirectory, dirname(path)), { recursive: true });
+              await copyFile(join(schemeDirectory, frame.path), join(flowsWorkDirectory, path));
+              record.frames[`${key}@${colorScheme}`] = { ...frame, path };
+            }
+          }
+        } finally { await rm(schemeDirectory, { recursive: true, force: true }); }
+      }
     }
   } catch (error) { primaryError = toCiError(error, { code: `CAPTURE_${runtimeStage.toUpperCase()}_FAILED`, stage: runtimeStage,
     nextAction: "Inspect the capture diagnostic, correct the failing prerequisite, and rerun Explore." }); }
