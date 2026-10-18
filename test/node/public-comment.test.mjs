@@ -642,3 +642,11 @@ test('the map is dropped before the change lists shrink, and a malformed map is 
     assert.equal(parsed.navigation, undefined);
   }
 });
+
+test('an excluded route is neither listed nor counted as an app-wide screen', () => {
+  const excluded = surface('channel', 'modified', { extra: { sourceScope: 'app-wide', excluded: true,
+    sourceChange: { ...sourceChange('Dependency update.', 'global'), files: [{ path: 'package.json', status: 'modified', relation: 'global', hunks: [], facts: [], truncated: false }] } } });
+  for (const key of ['baseImage', 'headImage', 'baseOutcome', 'headOutcome']) delete excluded[key];
+  const body = renderPublicComment(state({ review: review([...evidenceReview().surfaces, excluded]) }));
+  assert.doesNotMatch(body, /\/channel|App-wide source changes|not compared/);
+});

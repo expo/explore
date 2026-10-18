@@ -36,6 +36,55 @@ test("changed routes include ancestors and descendants without ancestor sibling 
   assert.equal(result.surfaces.find(row=>row.headSurface.route==="/end").status,"unchanged");
 });
 
+test("a comment or whitespace-only edit to an imported file changes no surface; an edit to its tokens does", () => {
+  const theme = "export const theme = { tint: 'blue' };\n";
+  const files = [["app/one.tsx", 'import { theme } from "../src/theme"; export default () => theme;'], ["app/two.tsx", page], ["src/theme.ts", theme]];
+  const head = (text) => [files[0], files[1], ["src/theme.ts", text]];
+  const change = [{ status: "modified", path: "src/theme.ts" }];
+  for (const text of ["// Palette.\nexport const theme = { tint: 'blue' };\n", "/** The palette, attached to the declaration as JSDoc. */\nexport const theme = { tint: 'blue' };\n", "export const theme = {\n  tint: 'blue' /* default */\n};\r\n", theme + "\n\n"]) {
+    const result = plan({ base: files, head: head(text), changes: change });
+    assert.deepEqual(result.surfaces.map((row) => [row.status, row.reasons]), [["unchanged", []], ["unchanged", []]], text);
+    assert.deepEqual(selectedPaths(result), []);
+  }
+  for (const text of ["export const theme = { tint: 'red' };\n", "export const theme = { tint: 'blue' }\n", "export const theme = { tint: 'blue' };; \n", "export const theme = { tint: 'blue' ;\n"]) {
+    assert.equal(plan({ base: files, head: head(text), changes: change }).surfaces[0].status, "modified", text);
+  }
+  // JSX text keeps its whitespace: a space inside a Text is rendered.
+  const jsx = (text) => [["app/one.tsx", `import {Text} from "react-native"; export default () => <Text>${text}</Text>;`]];
+  assert.equal(plan({ base: jsx("a"), head: jsx(" a "), changes: [{ status: "modified", path: "app/one.tsx" }] }).surfaces[0].status, "modified");
+  assert.equal(plan({ base: jsx("a"), head: jsx("{/* note */}a"), changes: [{ status: "modified", path: "app/one.tsx" }] }).surfaces[0].status, "unchanged");
+});
+
+test("a line break, JSX space or compiler comment that changes the program is a change; re-wrapping is not", () => {
+  const status = (path, before, after) => plan({ base: [[path, before]], head: [[path, after]], changes: [{ status: "modified", path }] }).surfaces[0].status;
+  const screen = (body) => `import {Text, View} from "react-native"; export default function Screen({ n, a, b }) { ${body} }`;
+  // Automatic semicolon insertion: the same tokens, a different program.
+  for (const [before, after] of [
+    ['return "hello";', 'return\n"hello";'],
+    ['return /* x */ "hello";', 'return /*\n*/ "hello";'],
+    ["return (\n<View/>);", "return\n(<View/>);"],
+    ["a\n++b; return null;", "a++\nb; return null;"],
+  ]) assert.equal(status("app/one.tsx", screen(before), screen(after)), "modified", after);
+  // The JSX transform keeps space within a line, and trims it only where a line breaks.
+  for (const [before, after] of [["<Text>a</Text>", "<Text> a</Text>"], ["<Text>{n} items</Text>", "<Text>{n}items</Text>"], ["<Text>{a} {b}</Text>", "<Text>{a}   {b}</Text>"]]) {
+    assert.equal(status("app/one.tsx", screen(`return ${before};`), screen(`return ${after};`)), "modified", after);
+  }
+  for (const [before, after] of [
+    ["return (<View><Text>hello world</Text></View>);", "return (\n  <View>\n    <Text>\n      hello\n      world\n    </Text>\n  </View>\n);"],
+    ["return f(a, b);", "return f(\n  a,\n  b\n);"],
+  ]) assert.equal(status("app/one.tsx", screen(before), screen(after)), "unchanged", after);
+  // A comment a compiler or bundler reads is not trivia.
+  for (const [before, after] of [
+    ["/** @jsxImportSource react */\n", "/** @jsxImportSource other */\n"],
+    ["/** @jsx h */\n", "/** @jsx g */\n"],
+    ["", "// @flow\n"],
+  ]) assert.equal(status("app/one.jsx", `${before}export default () => <a/>;`, `${after}export default () => <a/>;`), "modified", after);
+  assert.equal(status("app/one.tsx", screen("return f();"), screen("return /*#__PURE__*/ f();")), "modified");
+  assert.equal(status("app/one.tsx", screen("return <Text>a</Text>;"), screen("return <Text>{/* @jsx h */}a</Text>;")), "modified");
+  // An ordinary JSDoc tag is still a comment.
+  assert.equal(status("app/one.tsx", `/** @param n a count */\n${screen("return null;")}`, `/**\n * @param n the count\n * @returns nothing\n */\n${screen("return null;")}`), "unchanged");
+});
+
 test("source snapshots detect modifications even when a caller omits a diff entry", () => {
   const result=plan({base:[["app/one.tsx",page]],head:[["app/one.tsx",page.replace("null","<View/>")]]});
   assert.equal(result.surfaces[0].status,"modified");
@@ -136,7 +185,7 @@ test("package.json changes are app-wide unless they only touch scripts that inst
 test("app-wide inputs that no route imports mark every surface modified", () => {
   const files = [["app/one.tsx", page], ["app/two.tsx", page], ["package.json", JSON.stringify({ main: "index.js" })], ["index.js", "import 'expo-router/entry';"]];
   for (const path of ["eas.json", ".env", ".env.production", "tailwind.config.js", "postcss.config.cjs", "index.js"]) {
-    const head = files.some(([name]) => name === path) ? files.map(([name, text]) => [name, name === path ? `${text}\n` : text]) : [...files, [path, "{}"]];
+    const head = files.some(([name]) => name === path) ? files.map(([name, text]) => [name, name === path ? `${text};` : text]) : [...files, [path, "{}"]];
     assert.deepEqual(selectedPaths(plan({ base: files, head, changes: [{ status: files.some(([name]) => name === path) ? "modified" : "added", path }] })), ["/one", "/two"], path);
   }
   assert.deepEqual(selectedPaths(plan({ base: files, head: [...files, ["docs/eas.json", "{}"]], changes: [{ status: "added", path: "docs/eas.json" }] })), []);
