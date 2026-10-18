@@ -77,7 +77,7 @@ export function shortcutGroups(context: ShortcutContext): Group[][] {
     title: "View",
     rows: [
       ...(context.canvas === "compare" ? [] : [{ label: "Show or hide the inspector", keys: [SHORTCUTS.panel.right] }]),
-      { label: "Viewer theme: auto, dark, light", keys: [SHORTCUTS.appearance.theme] },
+      { label: "Viewer theme: dark or light", keys: [SHORTCUTS.appearance.theme] },
       ...(context.appearances ? [{ label: "The app's appearance: light or dark", keys: [SHORTCUTS.appearance.app] }] : []),
       { label: "Show this list", keys: ["?"] },
     ],

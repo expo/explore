@@ -373,6 +373,10 @@ function ViewerApp() {
   const toggleTheme = useCallback(() => {
     setThemePreference(current => current === "system" ? "dark" : current === "dark" ? "light" : "system");
   }, []);
+  // The T key flips what is on screen, dark to light and back; only the button returns to Auto.
+  const flipTheme = useCallback(() => {
+    setThemePreference(current => (current === "system" ? preferredSystemTheme : current) === "dark" ? "light" : "dark");
+  }, [preferredSystemTheme]);
 
   const load = useCallback(async (silent = false) => {
     void silent;
@@ -997,7 +1001,7 @@ function ViewerApp() {
         if (!handoffAvailableRef.current) return;
         setHandoffOpen(true);
       } else if (matchesShortcut(event, SHORTCUTS.appearance.theme)) {
-        toggleTheme();
+        flipTheme();
       } else if (matchesShortcut(event, SHORTCUTS.appearance.app)) {
         // Only a report captured in both schemes has another appearance to show.
         const { options, current } = appearanceRef.current;
@@ -1019,7 +1023,7 @@ function ViewerApp() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [clearSelectedScreen, navigate, searchOpen, selectCanvas, toggleRightPanel, toggleTheme]);
+  }, [clearSelectedScreen, flipTheme, navigate, searchOpen, selectCanvas, toggleRightPanel]);
 
   // A side-panel row or a deep link is a "go to": the camera fits that screen and the step is
   // kept. Screens inventory clicks only select in place; Map clicks also focus the chosen screen. Repeating a selected target refits it without adding history.

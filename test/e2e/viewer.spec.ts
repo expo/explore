@@ -2825,14 +2825,23 @@ test("drives the shell from the keyboard, and says so on hover", async ({ page }
   await expect(page.locator(".tooltip-key")).toHaveText("C");
   await page.getByRole("button", { name: "Expand inspector" }).hover();
   await expect(page.locator(".tooltip-key")).toHaveText("I");
-  // The theme button has no key: it names the mode in force and nothing else.
+  // The theme button names the mode in force, and T is its key.
   const themeButton = page.getByRole("button", { name: "Toggle theme" });
   await themeButton.hover();
-  await expect(page.locator(".tooltip-content")).toContainText("Theme:");
+  await expect(page.locator(".tooltip-content")).toContainText("Theme: Auto");
   await expect(page.locator(".tooltip-key")).toHaveText("T");
   await page.mouse.move(0, 0);
   const initialTheme = await page.locator("html").getAttribute("data-theme");
   expect(initialTheme === "light" || initialTheme === "dark").toBe(true);
+  const otherTheme = initialTheme === "dark" ? "light" : "dark";
+  // T flips between dark and light from whatever Auto showed, and never steps back to Auto.
+  await page.keyboard.press("t");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", otherTheme);
+  await page.keyboard.press("t");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", initialTheme!);
+  await themeButton.hover();
+  await expect(page.locator(".tooltip-content")).toContainText(initialTheme === "dark" ? "Theme: Dark" : "Theme: Light");
+  await page.mouse.move(0, 0);
   // The retired theme and inspector chords no longer answer.
   await page.keyboard.press(`${mod}+Alt+t`);
   await expect(page.locator("html")).toHaveAttribute("data-theme", initialTheme!);
