@@ -56,6 +56,23 @@ export function changeCountText(groups: readonly ChangeGroup[]): string {
   return [visual ? `${visual} visual change${visual === 1 ? "" : "s"}` : undefined, `${accessibility} accessibility only`].filter(Boolean).join(" · ");
 }
 
+export type NavigationGroup = "added" | "modified" | "removed";
+export type NavigationKind = "push" | "replace" | "navigate" | "redirect" | "tab" | "dismissTo";
+const NAVIGATION_GROUPS: NavigationGroup[] = ["added", "modified", "removed"];
+const NAVIGATION_KINDS: NavigationKind[] = ["push", "replace", "navigate", "redirect", "tab", "dismissTo"];
+export const MAX_NAVIGATION_NODES = 30;
+export const MAX_NAVIGATION_EDGES = 80;
+
+/**
+ * The comment's map: one node per route that was added, removed or changed visually, and per route one step before
+ * one of them; edges index `nodes`. `tab` marks a route a tab switch shows, `base` an edge into a removed route, which
+ * only the base revision's navigation has.
+ */
+export type CommentNavigation = {
+  nodes: { route: string; group?: NavigationGroup; tab?: true }[];
+  edges: { from: number; to: number; kinds: NavigationKind[]; base?: true }[];
+};
+
 export type SideHealth = { planned: number; captured: number; verified: number; unverified: number; unavailable: number };
 
 export type PlatformRecord = {
@@ -92,6 +109,7 @@ export type PlatformRecord = {
   notCompared?: number;
   /** Differences stated once rather than per screen (variants, app-wide source changes). */
   context?: string[];
+  navigation?: CommentNavigation;
   diagnostics?: { side?: "base" | "head"; route: string; code: string; message: string; nextAction: string }[];
   diagnosticCount?: number;
   failure?: { step: string; message: string };
@@ -236,6 +254,8 @@ export function parsePlatformRecord(value: unknown): PlatformRecord | undefined 
       ? [{ id: entry.id, route: entry.route, group: entry.group as ChangeGroup, description: entry.description, ...(isString(entry.scheme, 20) ? { scheme: entry.scheme } : {}) }] : []);
     if (changes.length <= 2000) record.changes = changes;
   }
+  const navigation = parseNavigation(value.navigation);
+  if (navigation) record.navigation = navigation;
   if (Array.isArray(value.context)) record.context = value.context.filter((entry): entry is string => isString(entry, 2000)).slice(0, 10);
   if (Array.isArray(value.diagnostics)) {
     record.diagnostics = value.diagnostics.flatMap((entry): NonNullable<PlatformRecord["diagnostics"]> => isRecord(entry) && isString(entry.route, 2000) && isString(entry.code, 200)
@@ -247,6 +267,25 @@ export function parsePlatformRecord(value: unknown): PlatformRecord | undefined 
   if (isRecord(value.failure) && isString(value.failure.step, 200) && isString(value.failure.message)) record.failure = { step: value.failure.step, message: value.failure.message };
   if (value.superseded === true) record.superseded = true;
   return record;
+}
+
+function parseNavigation(value: unknown): CommentNavigation | undefined {
+  if (!isRecord(value) || !Array.isArray(value.nodes) || !Array.isArray(value.edges) || value.nodes.length > MAX_NAVIGATION_NODES
+    || value.edges.length > MAX_NAVIGATION_EDGES) return undefined;
+  const nodes: CommentNavigation["nodes"] = [];
+  for (const node of value.nodes) {
+    if (!isRecord(node) || !isString(node.route, 200) || !optional(node.group, (group): group is NavigationGroup => NAVIGATION_GROUPS.includes(group as NavigationGroup))
+      || !(node.tab === undefined || node.tab === true)) return undefined;
+    nodes.push({ route: node.route, ...(node.group ? { group: node.group } : {}), ...(node.tab ? { tab: true } : {}) });
+  }
+  const edges: CommentNavigation["edges"] = [];
+  const isNode = (index: unknown): index is number => isCount(index) && index < nodes.length;
+  for (const edge of value.edges) {
+    if (!isRecord(edge) || !isNode(edge.from) || !isNode(edge.to) || !Array.isArray(edge.kinds) || !edge.kinds.length
+      || !edge.kinds.every(kind => NAVIGATION_KINDS.includes(kind as NavigationKind)) || !(edge.base === undefined || edge.base === true)) return undefined;
+    edges.push({ from: edge.from, to: edge.to, kinds: [...new Set(edge.kinds as NavigationKind[])], ...(edge.base ? { base: true } : {}) });
+  }
+  return nodes.length && edges.length ? { nodes, edges } : undefined;
 }
 
 export function parseHistory(value: unknown): HistoryEntry[] {
