@@ -12,6 +12,12 @@ type ScreenshotImageProps = ImgHTMLAttributes<HTMLImageElement> & {
   indicator?: "spinner";
   /** Stands in for an embedded screenshot that cannot be read: the caller's own no-screenshot state. */
   fallback?: ReactNode;
+  /**
+   * Keeps the picture of the source before on screen until the new one has decoded: for a map card, whose source
+   * changes only when the report's other appearance or target swaps every screenshot at once. Never for a view that
+   * steps between screens or draws changes over the picture, where it would show the screen before under the new one.
+   */
+  holdPrevious?: boolean;
 };
 
 type ScreenshotState = "loading" | "ready" | "failed";
@@ -37,21 +43,21 @@ function waitingSource(width: number | string | undefined, height: number | stri
  * embedded screenshot resolves, the image shows an empty frame (and, with `indicator`, a spinner)
  * and never its alt text; a screenshot that cannot be read shows `fallback`.
  */
-export function ScreenshotImage({ src, loading, indicator, fallback, onLoad, onError, ...props }: ScreenshotImageProps) {
+export function ScreenshotImage({ src, loading, indicator, fallback, holdPrevious, onLoad, onError, ...props }: ScreenshotImageProps) {
   const imageRef = useRef<HTMLImageElement>(null);
   const [resolved, setResolved] = useState<{ source: string; url: string }>();
   const [failed, setFailed] = useState<string>();
   const [shown, setShown] = useState<string>();
   const [lastSource, setLastSource] = useState(src);
-  // The picture of the source before, kept on screen until the new one has decoded: a report's
-  // other appearance or target swaps every screenshot at once, and nothing should blank meanwhile.
+  // With `holdPrevious`, the picture of the source before, kept on screen until the new one has decoded.
   const [held, setHeld] = useState<string>();
   const embedded = typeof src === "string" && isEmbeddedArtifactUrl(src);
   // A new source starts over: a fresh attempt, even for one that failed before, and never a URL
   // resolved on an earlier visit, which was released on leaving and may since have been revoked.
   if (lastSource !== src) {
     setLastSource(src);
-    setHeld(shown ?? held);
+    // A source that failed has no picture of its own to hand on, and drops the one it held.
+    setHeld(holdPrevious && failed !== lastSource ? shown ?? held : undefined);
     setResolved(undefined);
     setShown(undefined);
     setFailed(undefined);

@@ -67,6 +67,7 @@ function Harness() {
         width={120} height={80} loading={state.loading} decoding="async" className="captured-image"
         data-screen="checkout" onLoad={loaded} onError={failed}
         {...(state.indicator ? { indicator: state.indicator } : {})}
+        {...(state.holdPrevious ? { holdPrevious: true } : {})}
         {...(state.fallback ? { fallback: <span data-testid="fallback">No screenshot</span> } : {})} />}
     </div>
   </main>;
@@ -350,8 +351,38 @@ async function blobUrl(page, bytes) {
   return page.evaluate(bytes => URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/png" })), [...bytes]);
 }
 
+test("returning to a screenshot before the next one resolves waits for a fresh URL, never the released one", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", fallback: true, indicator: "spinner" });
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
+  const released = await blobUrl(page, firstImage);
+  await page.evaluate(({ source, url }) => window.resolveScreenshot(source, url), { source: firstSource, url: released });
+  await expectDecoded(image, 2, 3);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+
+  // A to B releases A's URL; while B still resolves, the report evicts and revokes it. Without `holdPrevious` (Compare,
+  // the Inspector) nothing of A stays up under B's name and outlines: B waits with its spinner.
+  await page.evaluate(source => window.updateScreenshot({ source }), secondSource);
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toContain(secondSource);
+  await expectWaiting(image);
+  await expect(page.getByRole("status", { name: "Loading screenshot" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.releaseCalls)).toEqual([firstSource]);
+  await page.evaluate(url => URL.revokeObjectURL(url), released);
+
+  // Back to A before B resolves: A waits for its new resolution instead of drawing the revoked URL.
+  await page.evaluate(source => window.updateScreenshot({ source }), firstSource);
+  await expect.poll(() => page.evaluate(source => window.resolverCalls.filter(value => value === source).length, firstSource)).toBe(2);
+  await expectWaiting(image);
+  await expect(image).toHaveAttribute("aria-busy", "true");
+  const fresh = await blobUrl(page, firstImage);
+  await page.evaluate(({ source, url }) => window.resolveScreenshot(source, url), { source: firstSource, url: fresh });
+  await expectDecoded(image, 2, 3);
+  await expect(image).toHaveAttribute("src", fresh);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  assert.deepEqual(await page.evaluate(() => window.imageErrors), []);
+});
+
 test("a new source keeps the picture before it on screen until it decodes; returning to the first waits for a fresh URL, never reloading the released one", { timeout: 30_000 }, async t => {
-  const { page, image } = await fixture(t, { loading: "eager", fallback: true });
+  const { page, image } = await fixture(t, { loading: "eager", fallback: true, holdPrevious: true });
   await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
   const released = await blobUrl(page, firstImage);
   await page.evaluate(({ source, url }) => window.resolveScreenshot(source, url), { source: firstSource, url: released });
@@ -380,6 +411,26 @@ test("a new source keeps the picture before it on screen until it decodes; retur
   await expect(image).toHaveAttribute("data-screenshot-state", "ready");
   await expect(page.getByTestId("fallback")).toHaveCount(0);
   assert.deepEqual(await page.evaluate(() => window.imageErrors), []);
+});
+
+test("a held picture is not handed on past a source that failed: the next source waits on its own stand-in", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", fallback: true, holdPrevious: true });
+  const first = await blobUrl(page, firstImage);
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
+  await page.evaluate(({ source, url }) => window.resolveScreenshot(source, url), { source: firstSource, url: first });
+  await expectDecoded(image, 2, 3);
+
+  // A to B, which cannot be read: B's fallback, with A's picture gone with it.
+  await page.evaluate(source => window.updateScreenshot({ source }), secondSource);
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toContain(secondSource);
+  await expect(image).toHaveAttribute("src", first);
+  await page.evaluate(source => window.rejectScreenshot(source), secondSource);
+  await expect(page.getByTestId("fallback")).toHaveText("No screenshot");
+
+  // On to C: A's picture does not come back under C while C resolves.
+  await page.evaluate(source => window.updateScreenshot({ source }), thirdSource);
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toContain(thirdSource);
+  await expectWaiting(image);
 });
 
 test("a fresh URL for a screenshot that failed to decode gives it another try", { timeout: 30_000 }, async t => {

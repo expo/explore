@@ -239,7 +239,7 @@ export function AppPill(props: AppPillProps) {
           <button type="button" className="panel-logo-button" aria-label="Map" onClick={props.onOpenMap}>
             {appIcon ? (
               <ScreenshotImage className="panel-app-icon" src={appIcon} alt="" loading="eager" draggable={false}
-                fallback={<ExpoLogo mark />} />
+                fallback={<ExpoLogo mark />} holdPrevious />
             ) : <ExpoLogo mark />}
           </button>
         </Tooltip>
