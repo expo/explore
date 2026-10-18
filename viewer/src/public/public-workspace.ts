@@ -366,7 +366,7 @@ function sidePayload(review: PublicReview, side: Side): { map: ExploreMap; cover
         screenId: surface.id,
         kind: "coverage",
         status: deliberatelyOmitted ? "accepted" : "open",
-        message: deliberatelyOmitted && outsideCaptureContext && entry.kind !== "redirect"
+        message: deliberatelyOmitted && outsideCaptureContext && entry.kind !== "redirect" && !surface.excluded
           ? "Not compared; no capture was recorded" : captureStatus(review, surface, side),
         createdAt: review.createdAt,
       });
