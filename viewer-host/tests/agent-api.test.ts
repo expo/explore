@@ -106,7 +106,7 @@ test("the token page negotiates: browsers get the shell carrying the agent index
   assert.ok(shell.startsWith("<!doctype html>"));
   assert.match(shell, /<div id="root"><section data-explore-agent-index style="[^"]*clip:rect\(0 0 0 0\)[^"]*"><h1>Expo Explore report: .* PR #\d+/);
   assert.match(shell, new RegExp(`href="${origin}/p/${token}/api/v1/screens\\?status=modified,accessibility-only,added,removed"`));
-  assert.match(shell, /<\/section><\/div><script type="module"/);
+  assert.match(shell, /<\/section><\/div><link rel="preload" [^>]*><script type="module"/);
   assert.equal(browser.headers.get("vary"), "Accept");
   assert.equal(browser.headers.get("link"), `<${origin}/p/${token}/api/v1>; rel="alternate"; type="application/json", <${origin}/p/${token}/llms.txt>; rel="alternate"; type="text/markdown"`);
   assert.equal(browser.headers.get("cache-control"), "private, no-store");
@@ -362,4 +362,43 @@ test("a deployment of several targets keeps each target in its links and names t
   assert.ok(!index.includes(`- [iPhone Duo (open)]`), "the index does not list its own target among the others");
   assert.equal((await (await site.get("/api/v1?platform=android")).json()).kind, "exploration");
   assert.equal((await site.get("/api/v1?target=pixel")).status, 404);
+});
+
+test("the manifest and asset routes let the Viewer open a report before any screenshot, and the shell preloads the manifest", async () => {
+  const site = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(review) }, reviewEnv);
+  const loaded = (await loadReport(review))!;
+  const shell = await (await site.get("", "text/html")).text();
+  assert.ok(shell.includes(`<link rel="preload" href="/p/${token}/manifest.json" as="fetch" crossorigin><script type="module"`), shell.slice(0, 400));
+  const linked = await (await site.get("?target=ios&view=compare", "text/html")).text();
+  assert.ok(linked.includes(`<link rel="preload" href="/p/${token}/manifest.json?platform=ios" as="fetch" crossorigin>`), linked.slice(0, 400));
+
+  const manifest = await site.get("/manifest.json");
+  assert.equal(manifest.status, 200);
+  assert.match(manifest.headers.get("content-type") ?? "", /^application\/json/);
+  assert.equal(manifest.headers.get("cache-control"), "private, no-store");
+  const body = await manifest.json() as { format: string; file: string; entries: Record<string, number>; report: { review: unknown } };
+  assert.equal(body.format, "explore.preview-manifest/1");
+  assert.equal(body.file, "review.json");
+  assert.deepEqual(body.report, JSON.parse(new TextDecoder().decode(loaded.raw)));
+  const assets = [...loaded.entries].filter(([name]) => name.startsWith("assets/"));
+  assert.ok(assets.length > 0);
+  assert.deepEqual(body.entries, Object.fromEntries(assets.map(([name, entry]) => [name, entry.size])));
+  assert.ok(!("review.json" in body.entries));
+
+  const [name, entry] = assets.find(([file]) => file.endsWith(".png"))!;
+  const asset = await site.get(`/${name}`);
+  assert.equal(asset.status, 200);
+  assert.equal(asset.headers.get("content-type"), "image/png");
+  assert.equal(asset.headers.get("cache-control"), "private, max-age=31536000, immutable");
+  assert.equal(asset.headers.get("content-length"), String(entry.size));
+  assert.equal(asset.headers.get("etag"), `"${name.slice("assets/".length, "assets/".length + 64)}"`);
+  const bytes = new Uint8Array(await asset.arrayBuffer());
+  assert.equal(bytes.byteLength, entry.size);
+  assert.equal(createHash("sha256").update(bytes).digest("hex"), name.slice("assets/".length, "assets/".length + 64));
+
+  for (const path of ["/assets/" + "0".repeat(64) + ".png", "/assets/" + name.slice("assets/".length, -4) + ".gif", "/assets/review.json", `/${name}/`, `/${name}?platform=android`]) {
+    assert.equal((await site.get(path)).status, 404, path);
+  }
+  // The sealed file is still decrypted once per isolate.
+  assert.deepEqual(site.calls, [`${origin}${reviewEnv.EXPLORE_PREVIEW_REPORT}`]);
 });

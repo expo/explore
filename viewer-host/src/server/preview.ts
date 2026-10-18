@@ -6,6 +6,7 @@
  * bundle under /viewer/ is public and identical to the central host's.
  */
 import { AGENT_API_VERSION, agentApiReply, agentIndexHtml, agentIndexMarkdown, loadReport, prefersHtml, type AgentContext, type LoadedReport } from "../../../src/report/agent-api";
+import { readZipEntry } from "../../../src/report/zip-reader";
 
 export type PreviewEnvironment = {
   /** Lowercase base32 path token the review comment links to. */
@@ -136,7 +137,13 @@ export type PreviewRequestOptions = {
   cache?: Map<string, Promise<LoadedReport | undefined>>;
 };
 
-const ROUTE = /^\/p\/([a-z2-7]{32})(?:\/|\/(report\.zip|reports\.json|llms\.txt)|(\/api\/v1(?:\/[A-Za-z0-9._:@-]{1,200}){0,2}\/?))?$/;
+const ROUTE = /^\/p\/([a-z2-7]{32})(?:\/|\/(report\.zip|reports\.json|manifest\.json|llms\.txt)|(\/api\/v1(?:\/[A-Za-z0-9._:@-]{1,200}){0,2}\/?)|\/assets\/([a-f0-9]{64}\.(?:png|jpg|mp4)))?$/;
+/** The manifest the Viewer opens instead of the whole ZIP: the report's metadata file plus every asset's size. */
+export const PREVIEW_MANIFEST_FORMAT = "explore.preview-manifest/1";
+/** Content-addressed and token-gated: this browser may keep an asset for as long as it likes, shared caches may not. */
+const ASSET_CACHE_CONTROL = "private, max-age=31536000, immutable";
+const ASSET_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", mp4: "video/mp4" };
+const MAX_ASSET_BYTES = 32 * 1024 * 1024;
 const reportCache = new Map<string, Promise<LoadedReport | undefined>>();
 
 /**
@@ -158,7 +165,7 @@ export async function previewResponse(request: Request, options: PreviewRequestO
   const url = new URL(request.url);
   const match = ROUTE.exec(url.pathname);
   if (!match || !sameToken(match[1]!, config.token)) return previewNotFound();
-  const route = match[2] ?? (match[3] ? "api" : undefined);
+  const route = match[2] ?? (match[3] ? "api" : match[4] ? "asset" : undefined);
   const expired = config.expiresAt !== null && (options.now ?? Date.now)() >= config.expiresAt;
   const pageUrl = `${url.origin}/p/${config.token}`;
   const linkHeader = `<${pageUrl}/api/${AGENT_API_VERSION}>; rel="alternate"; type="application/json", <${pageUrl}/llms.txt>; rel="alternate"; type="text/markdown"`;
@@ -168,8 +175,13 @@ export async function previewResponse(request: Request, options: PreviewRequestO
     headers.set("Link", linkHeader);
     headers.set("Vary", "Accept");
     if (expired) return new Response(options.indexHtml, { headers });
-    const loaded = await loadedReport(url.origin, selectReport(config, url), config, options);
-    return new Response(loaded ? shellWithIndex(options.indexHtml, agentIndexHtml(agentContext(pageUrl, config, loaded.report), loaded.loaded)) : options.indexHtml, { headers });
+    const selected = selectReport(config, url);
+    const loaded = await loadedReport(url.origin, selected, config, options);
+    if (!loaded) return new Response(options.indexHtml, { headers });
+    const shell = shellWithIndex(options.indexHtml, agentIndexHtml(agentContext(pageUrl, config, loaded.report), loaded.loaded));
+    // The same URL the Viewer will fetch for this page: its target's query when the link names one, none otherwise.
+    const requested = url.searchParams.get("target") ?? url.searchParams.get("platform");
+    return new Response(shellWithPreload(shell, `/p/${config.token}/manifest.json${requested ? `?${targetQuery(requested)}` : ""}`), { headers });
   }
   if (expired) return previewExpired(config.expiresAt!);
   if (route === "reports.json") {
@@ -187,6 +199,11 @@ export async function previewResponse(request: Request, options: PreviewRequestO
     headers.set("Vary", "Accept");
     return new Response(options.indexHtml, { headers });
   }
+  if (route === "manifest.json") {
+    const headers = baseHeaders("application/json; charset=utf-8");
+    return new Response(manifestBody(loaded.loaded), { headers });
+  }
+  if (route === "asset") return assetResponse(loaded.loaded, match[4]!);
   const context = agentContext(pageUrl, config, report);
   if (route === undefined || route === "llms.txt") {
     const headers = baseHeaders("text/markdown; charset=utf-8");
@@ -219,6 +236,41 @@ function agentContext(pageUrl: string, config: PreviewConfig, report: PreviewRep
     expiresAt: config.expiresAt === null ? null : new Date(config.expiresAt).toISOString() };
 }
 const PLATFORM_LABELS: Record<PreviewPlatform, string> = { ios: "iOS", android: "Android" };
+
+/** `platform=<id>` for a target named after its platform (links from before targets), `target=<id>` otherwise. */
+function targetQuery(target: string): string {
+  return `${target === "ios" || target === "android" ? "platform" : "target"}=${target}`;
+}
+
+/**
+ * Start the manifest download while the Viewer bundle is still loading: `crossorigin` makes the preload match
+ * the Viewer's same-origin `fetch`, so the bytes arrive once.
+ */
+export function shellWithPreload(indexHtml: string, manifestPath: string): string {
+  const link = `<link rel="preload" href="${manifestPath}" as="fetch" crossorigin>`;
+  const at = indexHtml.indexOf("</head>") !== -1 ? indexHtml.indexOf("</head>") : indexHtml.indexOf("<script");
+  return at === -1 ? indexHtml : `${indexHtml.slice(0, at)}${link}${indexHtml.slice(at)}`;
+}
+
+/** The metadata file verbatim plus the size of every asset, so the Viewer opens the report before any screenshot. */
+export function manifestBody(loaded: LoadedReport): string {
+  const entries: Record<string, number> = {};
+  for (const [name, entry] of loaded.entries) if (name.startsWith("assets/")) entries[name] = entry.size;
+  return `{"format":"${PREVIEW_MANIFEST_FORMAT}","file":"${loaded.file}","entries":${JSON.stringify(entries)},"report":${new TextDecoder().decode(loaded.raw)}}`;
+}
+
+/** One asset of the report, inflated from the decrypted ZIP the isolate holds. */
+async function assetResponse(loaded: LoadedReport, file: string): Promise<Response> {
+  const entry = loaded.entries.get(`assets/${file}`);
+  if (!entry) return previewNotFound();
+  const bytes = await readZipEntry(loaded.zip, entry, MAX_ASSET_BYTES);
+  if (!bytes) return previewNotFound();
+  const headers = baseHeaders(ASSET_TYPES[file.slice(file.lastIndexOf(".") + 1)] ?? "application/octet-stream");
+  headers.set("Cache-Control", ASSET_CACHE_CONTROL);
+  headers.set("Content-Length", String(bytes.byteLength));
+  headers.set("ETag", `"${file.slice(0, 64)}"`);
+  return new Response(bytes as BodyInit, { headers });
+}
 
 /** The agent index as the shell's initial `#root` content; the Viewer replaces it when it renders. */
 export function shellWithIndex(indexHtml: string, indexBlock: string): string {

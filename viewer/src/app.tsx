@@ -287,7 +287,8 @@ export function App() {
       {...(droppable ? { onOpenFile: openFile } : {})}
       {...(droppable && source.status === "failed" ? { onRetry: retry } : {})} />;
   }
-  return <ViewerApp />;
+  // A hosted preview switches targets in place; the new report gets a fresh Viewer.
+  return <ViewerApp key={source.reportKey} />;
 }
 
 function ViewerApp() {

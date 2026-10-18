@@ -3,7 +3,7 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
-import { BlobReader, BlobWriter, Uint8ArrayReader, ZipReader, ZipWriter } from "@zip.js/zip.js";
+import { BlobReader, BlobWriter, Uint8ArrayReader, ZipReader, ZipWriter, Uint8ArrayWriter } from "@zip.js/zip.js";
 import { chromium, expect as playwrightExpect } from "@playwright/test";
 import { PNG } from "pngjs";
 import { createBrowserVite } from "../helpers/browser-vite.mjs";
@@ -54,6 +54,18 @@ async function archive(report = reportFixture(), extra = [], imageBytes = png) {
   return Buffer.from(await (await writer.close()).arrayBuffer());
 }
 
+/** The report ZIP as the preview Worker reads it: entry bytes by name, and the manifest it answers with. */
+async function unzipped(bytes) {
+  const reader = new ZipReader(new Uint8ArrayReader(new Uint8Array(bytes)), { useWebWorkers: false });
+  const files = new Map();
+  for (const entry of await reader.getEntries()) files.set(entry.filename, await entry.getData(new Uint8ArrayWriter()));
+  await reader.close();
+  const file = files.has("review.json") ? "review.json" : "exploration.json";
+  const entries = Object.fromEntries([...files].filter(([name]) => name.startsWith("assets/")).map(([name, data]) => [name, data.length]));
+  const manifest = `{"format":"explore.preview-manifest/1","file":"${file}","entries":${JSON.stringify(entries)},"report":${new TextDecoder().decode(files.get(file))}}`;
+  return { files, manifest };
+}
+
 /**
  * Serve `/r` like the hosted Viewer: the page alone, no report endpoint; the ZIP comes from the
  * reviewer. `reportIdentity: null` opens the bare page without a linked run.
@@ -61,19 +73,27 @@ async function archive(report = reportFixture(), extra = [], imageBytes = png) {
 async function harness(t, bytes, { app = false, open = true, name = fileName, reportIdentity = identity,
   query = "&focus=modified&screen=home&inspect=diff", fault, preview } = {}) {
   const pagePath = preview ? `/p/${preview.token}` : "/r";
+  // What the preview Worker serves from the decrypted ZIP: the manifest the Viewer opens, and each asset on request.
+  const served = preview && bytes ? await unzipped(bytes) : undefined;
   const vite = await createBrowserVite(t, { configFile: false,
     root: fileURLToPath(new URL("../../viewer", import.meta.url)), logLevel: "error", esbuild: { jsx: "automatic" },
     server: { host: "127.0.0.1", port: 0 }, plugins: [{ name: "report-page-fixture", configureServer(server) {
       server.middlewares.use((request, response, next) => {
         const url = new URL(request.url, "http://localhost");
         // A preview deployment's Worker: the decrypted report behind the token, or the same 404 as any other path.
-        if (preview && url.pathname === `${pagePath}/report.zip`) {
+        if (preview && url.pathname === `${pagePath}/manifest.json`) {
           preview.requests = (preview.requests ?? 0) + 1;
           preview.queries = [...(preview.queries ?? []), url.search];
           if (preview.status && preview.status !== 200) { response.statusCode = preview.status; return response.end(preview.body ?? "Not found"); }
-          response.setHeader("content-type", "application/zip");
-          response.setHeader("content-length", String(bytes.length));
-          return response.end(bytes);
+          response.setHeader("content-type", "application/json");
+          return response.end(served.manifest);
+        }
+        if (preview && url.pathname.startsWith(`${pagePath}/assets/`)) {
+          const asset = served.files.get(url.pathname.slice(pagePath.length + 1));
+          if (!asset) { response.statusCode = 404; return response.end("Not found"); }
+          response.setHeader("content-type", "application/octet-stream");
+          response.setHeader("content-length", String(asset.length));
+          return response.end(asset);
         }
         if (preview?.listing && url.pathname === `${pagePath}/reports.json`) {
           response.setHeader("content-type", "application/json");
@@ -431,7 +451,7 @@ test("a hosted run of several targets opens the linked target and switches betwe
   const { page, errors } = await harness(t, await archive(report), { app: true, reportIdentity: null, preview, query: "&target=duo-open" });
   const button = page.getByRole("button", { name: "Device: iPhone Duo (open). Open another device's report" });
   await expect(button).toBeVisible();
-  assert.deepEqual(preview.queries, ["?target=duo-open"], "the Viewer asks the Worker for the linked target's report");
+  assert.equal(preview.queries[0], "?target=duo-open", "the Viewer asks the Worker for the linked target's report");
   await button.click();
   const items = page.getByRole("menu", { name: "Device" }).getByRole("menuitemradio");
   await expect(items).toHaveCount(4);
@@ -439,11 +459,15 @@ test("a hosted run of several targets opens the linked target and switches betwe
     [["iPhone 17", "false"], ["iPhone Duo (closed)", "false"], ["iPhone Duo (open)", "true"], ["Android", "false"]]);
   await expect(items.nth(3)).toContainText("2 changes · Pixel 9 16");
   await expect(items.nth(1)).toContainText("Same review, other device");
+  await page.evaluate(() => { window.__samePage = true; });
   await items.nth(3).click();
   await page.waitForURL(url => new URL(url).searchParams.get("platform") === "android");
   const next = new URL(page.url());
   assert.equal(next.searchParams.get("target"), null, "a target named after its platform is linked as before targets");
-  await expect.poll(() => preview.queries.at(-1)).toBe("?platform=android");
+  // The switch stays on the page: the Worker is asked for the other target's manifest (the prefetch may already have), not for a new page.
+  await expect.poll(() => preview.queries).toContain("?platform=android");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  assert.equal(await page.evaluate(() => window.__samePage), true, "the switch stays on the page instead of reloading it");
   assert.deepEqual(errors, []);
 });
 
@@ -454,14 +478,18 @@ test("a hosted report from before targets still switches platforms by ?platform=
   const { page, errors } = await harness(t, await archive(report), { app: true, reportIdentity: null, preview, query: "&platform=android" });
   const button = page.getByRole("button", { name: "Platform: Android. Open another platform's report" });
   await expect(button).toBeVisible();
-  assert.deepEqual(preview.queries, ["?platform=android"]);
+  assert.equal(preview.queries[0], "?platform=android");
   await button.click();
   const items = page.getByRole("menu", { name: "Platform" }).getByRole("menuitemradio");
   assert.deepEqual(await items.evaluateAll(rows => rows.map(row => [row.querySelector(".menu-row-label")?.firstChild?.textContent, row.getAttribute("aria-checked")])),
     [["iOS", "false"], ["Android", "true"]]);
   await expect(items.nth(0)).toContainText("3 changes");
+  await page.evaluate(() => { window.__samePage = true; });
   await items.nth(0).click();
   await page.waitForURL(url => new URL(url).searchParams.get("platform") === "ios");
+  await expect.poll(() => preview.queries).toContain("?platform=ios");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  assert.equal(await page.evaluate(() => window.__samePage), true, "the switch stays on the page instead of reloading it");
   assert.deepEqual(errors, []);
 });
 
