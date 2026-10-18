@@ -567,6 +567,60 @@ test("Forward onto a target still downloading keeps the preview link and its pla
   assert.deepEqual(errors, []);
 });
 
+test("a switch to a target whose screenshots have another shape lays the map out again for its cards, so none overlap", { timeout: 60_000 }, async t => {
+  const targets = [
+    { id: "iphone", platform: "ios", label: "iPhone 17" },
+    { id: "duo-open", platform: "ios", label: "iPhone Duo (open)" },
+  ];
+  // Home leads to Settings and About, Settings on to Profile: three layers, so the map runs left to right with
+  // Settings and About stacked, a card's height plus a gap apart. A Duo card is shorter than a phone's.
+  const shaped = async (target, width, height) => {
+    const picture = new PNG({ width, height });
+    picture.data.fill(255);
+    const capture = PNG.sync.write(picture);
+    const report = reportFixture();
+    const home = report.review.surfaces[0];
+    for (const side of ["baseImage", "headImage"]) {
+      Object.assign(home[side], { width, height, sha256: createHash("sha256").update(capture).digest("hex") });
+    }
+    const route = id => {
+      const side = { ...home.head, id, route: `/${id}`, path: `/${id}`, routeFile: `app/${id}.tsx`, logicalPath: `app/${id}.tsx` };
+      return { id, status: "unchanged", base: { ...side }, head: side, baseImage: { ...home.baseImage }, headImage: { ...home.headImage },
+        baseOutcome: { ...home.baseOutcome }, headOutcome: { ...home.headOutcome } };
+    };
+    report.review.surfaces.push(route("settings"), route("about"), route("profile"));
+    const edge = (from, to) => ({ from, to, kind: "push", provenance: "source", sourceFile: `app/${from}.tsx` });
+    const graph = { contract: "explore.navigation", edges: [edge("home", "settings"), edge("home", "about"), edge("settings", "profile")],
+      modalSurfaceIds: [], unresolved: [] };
+    report.review.navigation = { base: structuredClone(graph), head: graph };
+    report.review.runtime = { ...report.review.runtime, platform: "ios", platforms: ["ios"], target: targets.find(entry => entry.id === target), targets };
+    return Buffer.from((await imageArchive([capture], 0, report)).bytes);
+  };
+  const preview = { token: "klmnopqrstuvwxyz2345672345672345",
+    listing: targets.map(({ id, platform, label }) => ({ target: id, platform, label })),
+    archives: { "?target=iphone": await shaped("iphone", 130, 282) } };
+  const { page, errors } = await harness(t, await shaped("duo-open", 233, 339), { app: true, reportIdentity: null, preview,
+    query: "&target=duo-open" });
+  const nodes = page.locator(".map-canvas .react-flow__node");
+  await expect(nodes).toHaveCount(4);
+  /** Overlaps between the cards' boxes on screen, and how tall the cards stand against their width. */
+  const layout = () => nodes.evaluateAll(elements => {
+    const boxes = elements.map(element => element.getBoundingClientRect());
+    let overlaps = 0;
+    for (const [index, a] of boxes.entries()) for (const b of boxes.slice(index + 1)) {
+      if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) overlaps += 1;
+    }
+    return { overlaps, shape: Math.round(boxes[0].height / boxes[0].width * 10) / 10 };
+  });
+  await expect.poll(layout).toEqual({ overlaps: 0, shape: 1.6 });
+
+  await page.getByRole("button", { name: "Device: iPhone Duo (open). Open another device's report" }).click();
+  await page.getByRole("menu", { name: "Device" }).getByRole("menuitemradio").nth(0).click();
+  await expect(page.locator(".collapsed-platform").first()).toHaveText("iPhone 17");
+  await expect.poll(layout, { timeout: 10_000 }).toEqual({ overlaps: 0, shape: 2.3 });
+  assert.deepEqual(errors, []);
+});
+
 test("a hosted manifest larger than the Viewer reads is refused before it is parsed", { timeout: 60_000 }, async t => {
   const preview = { token: "klmnopqrstuvwxyz2345672345672345", padding: 11 * 1024 * 1024 };
   const { page, errors } = await harness(t, await archive(), { app: true, reportIdentity: null, preview, query: "" });
