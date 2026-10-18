@@ -14,7 +14,7 @@ The Viewer verifies that a dropped ZIP is the report for the linked run attempt 
 
 ## Environment
 
-The central host reads no environment variables and holds no secrets. A preview deployment reads only the four `EXPLORE_PREVIEW_*` values sealed into it at deploy time (below).
+The central host reads no environment variables and holds no secrets. A preview deployment reads only the `EXPLORE_PREVIEW_*` values written into it at deploy time (below).
 
 ## Routes
 
@@ -25,22 +25,28 @@ The central host reads no environment variables and holds no secrets. A preview 
 A hosted preview is one immutable EAS Hosting deployment per review, in the reviewed application's own EAS account, that opens the report without a download. Its export (`npm run export:preview`, written to `dist-preview/`) holds the identical staged Viewer under `/viewer/` and three API routes:
 
 - `/p/<token>` serves the Viewer shell for exactly one 160-bit token (32 lowercase base32 characters) to requests that accept HTML; the shell's `#root` holds a text index of the report (title, counts, API links) until the Viewer renders, and a `Link` header names the JSON and Markdown alternates. Requests that do not prefer HTML (`Accept: */*`, `text/markdown`, `application/json`) get the same index as Markdown, so an agent handed the link finds the API by itself.
-- `/p/<token>/manifest.json` is what the Viewer opens: the report's metadata file (`review.json` or `exploration.json`) verbatim plus the size of every asset, decrypted from this deployment's own static files and ~12 KB over the wire; the shell preloads it so it downloads alongside the Viewer bundle. `/p/<token>/assets/<sha256>.<png|jpg|mp4>` serves one asset when the Viewer first shows it, `private, immutable` with a `max-age` of a week at most and never past the link's expiry, so this browser keeps it while shared caches never see it. Both answer `503` when the Worker cannot read the report at that moment, which the Viewer retries; `ci:deploy` checks that the manifest matches the deployed ZIP and that an asset serves its exact bytes. `/p/<token>/report.zip` still streams the whole decrypted ZIP (downloads, older Viewers). `/p/<token>/reports.json` lists the capture targets (up to 8, each with its platform and label) a multi-target deployment serves; `?target=<id>` selects one on every other route, and `?platform=<p>`, from links before targets, selects the target named `<p>`, else the first of that platform.
-- `/p/<token>/llms.txt` is the Markdown index at a fixed path, and `/p/<token>/api/v1/...` is the read-only agent API (`src/server/agent-api.ts`): summary, `/screens[?status=]`, `/screens/<id>`, `/transitions`, and for exploration reports `/journeys`, `/gaps`, `/frontier`, `/assets/<sha256>`, `/raw`, with `?limit=`/`?cursor=` paging (50 default, 200 max). The Worker decrypts and parses an archive when a request first needs it (`src/server/report-zip.ts` reads the stored PNGs and the deflated report JSON) and keeps the two most recently used in memory, plus every target's manifest; a manifest built for a report it is not keeping (the Viewer prefetches every target's) decrypts that report once and lets it go. The manifest and asset helpers live in `src/report/preview-manifest.ts`, shared with the local report server.
-- `/` and every other path, token, or method answer the same `404 Not found`, so a response never confirms that a deployment or token exists. After the sealed expiry the exact token still opens the Viewer shell for browsers, and every report route, including the Markdown index and the API, answers `410` with the expiry instant so the Viewer and agents can say the link expired.
+- `/p/<token>/manifest.json` is what the Viewer opens: the report's metadata file (`review.json` or `exploration.json`) verbatim plus the size of every asset, about 12 KB over the wire; the shell preloads it so it downloads alongside the Viewer bundle. The Worker answers it from its target's static manifest, passed through unparsed unless the isolate already holds it. `/p/<token>/reports.json` lists the capture targets (up to 8, each with its platform and label) a multi-target deployment serves; `?target=<id>` selects one on every other route, and `?platform=<p>`, from links before targets, selects the target named `<p>`, else the first of that platform.
+- `/p/<token>/llms.txt` is the Markdown index at a fixed path, and `/p/<token>/api/v1/...` is the read-only agent API (`src/server/agent-api.ts`): summary, `/screens[?status=]`, `/screens/<id>`, `/transitions`, and for exploration reports `/journeys`, `/gaps`, `/frontier`, `/assets/<sha256>`, `/raw`, with `?limit=`/`?cursor=` paging (50 default, 200 max). The Worker reads the target's static manifest when a request first needs it and keeps parsed manifests in memory within 32 MB; requests that arrive together share one fetch. `/api/v1/assets/<sha256>` reads the screenshot's static file.
+- `/` and every other path, token, or method answer the same `404 Not found`, so a response never confirms that a deployment or token exists. A static file the Worker cannot fetch this time answers `503`, which the Viewer retries.
 
-`ci:deploy` seals the deployment by writing a deploy-time `.env` next to the export; EAS Hosting delivers it to the Worker and to nothing else:
+`ci:deploy` writes the report as static files of the deployment, under the token, and EAS Hosting serves them directly, before the Worker:
+
+| Path | Content |
+| --- | --- |
+| `/p/<token>/targets/<target>.json` | one target's manifest (`report.json` for a single unlisted report), stamped with the deployment so `ci:deploy` can tell it from the one an alias still serves |
+| `/p/<token>/assets/<sha256>.<png\|jpg\|mp4>` | every screenshot and recording, once, shared by the targets that show it |
+
+It also writes a deploy-time `.env` next to the export; EAS Hosting delivers it to the Worker and to nothing else:
 
 | Variable | Value |
 | --- | --- |
 | `EXPLORE_PREVIEW_TOKEN` | the path token in the review comment's **Explore report** link |
-| `EXPLORE_PREVIEW_KEY` | base64 AES-256-GCM key, generated per deployment |
-| `EXPLORE_PREVIEW_EXPIRES_AT` | ISO 8601 instant; the report routes answer 410 from then on (unset: the link does not expire) |
-| `EXPLORE_PREVIEW_REPORT` | `/_report/<id>/report.zip.enc`, the ciphertext's static path |
+| `EXPLORE_PREVIEW_REPORT` | `/p/<token>/targets/report.json` (a single iOS report), or |
+| `EXPLORE_PREVIEW_REPORTS` | JSON listing each target, its platform, label, change count and device, and its manifest's path |
 
-The report is encrypted before upload (12-byte IV, then AES-GCM ciphertext and tag, additional data `expo-explore-preview/1`) and the key never leaves the deployment environment, so the CDN serves only ciphertext and a token that leaks into a request log does not leak the report. A preview link is still a bearer link: anyone who has it can open the report until it expires. Expo account members who can read the project's deployments are inside that trust boundary. Report bytes are never embedded in the Worker bundle, because a deleted deployment's static files disappear within seconds while its Worker can keep answering for a few minutes.
+Nothing is encrypted: what keeps a report private is the 160-bit token in every path, the same as for the link itself. A preview link is a bearer link: anyone who has it can open the report until the deployment is deleted (EAS Hosting deletes one without an alias after 30 days on Free and 90 on paid plans), and Expo account members who can read the project's deployments are inside that trust boundary. Explore sets no expiry; `EXPLORE_PREVIEW_KEY` and `EXPLORE_PREVIEW_EXPIRES_AT` from earlier deployments belong to those deployments' own Workers.
 
-`npm run verify:export:preview` loads the exported route bundles and checks the token, expiry, decryption, content negotiation, agent API, and 404 behavior against the sealed example report.
+`npm run verify:export:preview` loads the exported route bundles and checks the token, the manifest route, content negotiation, the agent API (including a screenshot read from its static file), and 404 behavior against the example report laid out as `ci:deploy` writes it.
 
 ## Validation and deployment
 

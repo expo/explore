@@ -5,18 +5,9 @@ import { openViewerInBrowser, startViewerServer, waitForViewerShutdown } from ".
 import { writeExplorationReport } from "../binary/report.js";
 import { assertHostingExport, deployExplorationReport, zipReportDirectory } from "../report/preview-deploy.js";
 import { keepReports } from "./report-commands.js";
+import { warnIgnoredExpiry } from "../config/explore-config.js";
 import { argumentError, flag, flags, has, nonNegativeInteger, oneOf, output, positional, positiveInteger } from "./args.js";
 
-const MAX_EXPIRY_DAYS = 90;
-
-/** `7d`, `30d`, `never`: how long the hosted link serves the report. */
-export function expiresInDays(value: string): number | null {
-  if (value === "never") return null;
-  const match = /^(\d{1,3})d$/.exec(value);
-  const days = match ? Number(match[1]) : NaN;
-  if (!Number.isSafeInteger(days) || days < 1 || days > MAX_EXPIRY_DAYS) argumentError(`--expires-in must be 1d to ${MAX_EXPIRY_DAYS}d, or never (got ${value})`, "expires-in");
-  return days;
-}
 
 /** `--alias NAME` plus a fixed token from EXPLORE_PREVIEW_TOKEN: the hosted link stays the same from one run to the next (validated by the deploy). */
 function stableLinkOptions(): { alias?: string; token?: string } {
@@ -35,7 +26,7 @@ export async function exploreBinary(): Promise<void> {
     "Run expo-explore explore:binary <path to .apk, .app, .tar.gz, or simulator .ipa>.");
   if (has("upload") && has("no-upload")) argumentError("Pass either --upload or --no-upload", "no-upload");
   const outputDirectory = resolve(process.cwd(), flag("output") ?? defaultOutputDirectory(archive));
-  const expiresAfterDays = expiresInDays(flag("expires-in") ?? "7d");
+  if (has("expires-in")) warnIgnoredExpiry("--expires-in");
   const platform = flag("platform") === undefined ? undefined : oneOf("platform", ["ios", "android"] as const);
   const provider = flag("provider") === undefined ? undefined : oneOf("provider", ["anthropic", "openai"] as const);
   const controller = flag("controller") === undefined ? undefined : oneOf("controller", ["agent-device", "argent"] as const);
@@ -66,7 +57,7 @@ export async function exploreBinary(): Promise<void> {
   if (upload) {
     say("hosting the report on EAS Hosting");
     const owner = result.session.owner || flag("owner");
-    hosted = await deployExplorationReport({ reportPath: report.reportPath, platform: result.archive.platform, project: flag("project") ?? DEFAULT_BINARY_PROJECT, ...(owner ? { owner } : {}), expiresAfterDays, ...stableLinkOptions() });
+    hosted = await deployExplorationReport({ reportPath: report.reportPath, platform: result.archive.platform, project: flag("project") ?? DEFAULT_BINARY_PROJECT, ...(owner ? { owner } : {}), ...stableLinkOptions() });
     say(`report: ${hosted.previewUrl}${hosted.expiresAt ? ` (expires ${hosted.expiresAt})` : ""}`);
   }
   const summary = { ok: true,
@@ -101,7 +92,7 @@ export async function exploreSession(): Promise<void> {
   const session = positional() ?? flag("session");
   const bundleId = flag("bundle-id");
   const outputDirectory = resolve(process.cwd(), flag("output") ?? defaultOutputDirectory(bundleId ?? "session"));
-  const expiresAfterDays = expiresInDays(flag("expires-in") ?? "7d");
+  if (has("expires-in")) warnIgnoredExpiry("--expires-in");
   const platform = flag("platform") === undefined ? undefined : oneOf("platform", ["ios", "android"] as const);
   const provider = flag("provider") === undefined ? undefined : oneOf("provider", ["anthropic", "openai"] as const);
   const controller = flag("controller") === undefined ? undefined : oneOf("controller", ["agent-device", "argent"] as const);
@@ -129,7 +120,7 @@ export async function exploreSession(): Promise<void> {
   let hosted: Awaited<ReturnType<typeof deployExplorationReport>> | undefined;
   if (has("upload")) {
     say("hosting the report on EAS Hosting");
-    hosted = await deployExplorationReport({ reportPath: report.reportPath, platform: result.app.platform, project: flag("project") ?? DEFAULT_BINARY_PROJECT, ...(flag("owner") ? { owner: flag("owner")! } : {}), expiresAfterDays, ...stableLinkOptions() });
+    hosted = await deployExplorationReport({ reportPath: report.reportPath, platform: result.app.platform, project: flag("project") ?? DEFAULT_BINARY_PROJECT, ...(flag("owner") ? { owner: flag("owner")! } : {}), ...stableLinkOptions() });
     say(`report: ${hosted.previewUrl}${hosted.expiresAt ? ` (expires ${hosted.expiresAt})` : ""}`);
   }
   const summary = { ok: true, app: result.app, device: { model: result.runtime.deviceModel, osVersion: result.runtime.osVersion },

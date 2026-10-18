@@ -173,18 +173,17 @@ test("agent instruction files must exist inside the repository", async (t) => {
   assert.equal((await readExploreConfig(project)).agent.instructions, ".expo-explore/instructions.md");
 });
 
-test("report.preview opts into hosted previews with a bounded expiry and an optional project slug", () => {
-  assert.deepEqual(validateExploreConfig({ ...base(), report: { preview: { hosting: "eas" } } }).report,
-    { preview: { hosting: "eas", expiresAfterDays: 30 } });
-  assert.deepEqual(validateExploreConfig({ ...base(), report: { preview: { hosting: "eas", expiresAfter: "14 days", owner: "acme", project: "acme-explore" } } }).report,
-    { preview: { hosting: "eas", expiresAfterDays: 14, owner: "acme", project: "acme-explore" } });
-  assert.deepEqual(validateExploreConfig({ ...base(), report: { preview: { hosting: "eas", expiresAfter: 3 } } }).report?.preview?.expiresAfterDays, 3);
-  assert.equal(validateExploreConfig({ ...base(), report: { preview: { hosting: "eas", expiresAfter: "365d" } } }).report?.preview?.expiresAfterDays, 365);
-  assert.equal(validateExploreConfig({ ...base(), report: { preview: { hosting: "eas", expiresAfter: "never" } } }).report?.preview?.expiresAfterDays, null);
+test("report.preview opts into hosted previews with an optional owner and project slug; an expiry from older configs is ignored", () => {
+  assert.deepEqual(validateExploreConfig({ ...base(), report: { preview: { hosting: "eas" } } }).report, { preview: { hosting: "eas" } });
+  assert.deepEqual(validateExploreConfig({ ...base(), report: { preview: { hosting: "eas", owner: "acme", project: "acme-explore" } } }).report,
+    { preview: { hosting: "eas", owner: "acme", project: "acme-explore" } });
+  // A hosted preview lasts as long as its EAS Hosting deployment: an old config's expiresAfter still validates, and is only noted.
+  for (const expiresAfter of ["14 days", 3, "never", "forever"]) {
+    assert.deepEqual(validateExploreConfig({ ...base(), report: { preview: { hosting: "eas", expiresAfter } } }).report, { preview: { hosting: "eas", expiresAfterIgnored: true } });
+  }
   assert.deepEqual(validateExploreConfig({ ...base(), report: {} }).report, {});
   assert.equal(validateExploreConfig(base()).report, undefined);
-  for (const preview of [{ hosting: "vercel" }, { hosting: "eas", expiresAfter: "366d" }, { hosting: "eas", expiresAfter: "0d" }, { hosting: "eas", expiresAfter: "forever" },
-    { hosting: "eas", expiresAfter: "2 weeks" }, { hosting: "eas", project: "Acme" },
+  for (const preview of [{ hosting: "vercel" }, { hosting: "eas", project: "Acme" },
     { hosting: "eas", owner: "Acme Org" }, { hosting: "eas", token: "x" }, {}]) {
     assert.throws(() => validateExploreConfig({ ...base(), report: { preview } }), /Invalid .expo-explore\/config.yaml: report.preview/);
   }

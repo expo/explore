@@ -425,15 +425,6 @@ test("a hosted preview link downloads the report from its own token route, opens
   await expect(shell).toContainText("This preview link is not valid, or its deployment was deleted");
   await expect(expired.page.locator(".report-drop-input")).toHaveCount(0);
   assert.deepEqual(expired.errors, []);
-
-  // A deployment past its sealed expiry still opens and says when the link expired.
-  const gone = await harness(t, await archive(), { app: true, reportIdentity: null,
-    preview: { ...preview, token: "cdefghijklmnopqrstuvwxyz23456723", status: 410, body: JSON.stringify({ error: "expired", expiredAt: "2030-01-01T00:00:00.000Z" }) } });
-  const goneShell = gone.page.locator(".report-loading-shell");
-  await expect(goneShell).toHaveAttribute("data-loading-status", "failed");
-  await expect(goneShell).toContainText("This preview link expired on Jan 1, 2030. Download the report from the pull request or workflow run instead");
-  await expect(gone.page.locator(".report-drop-input")).toHaveCount(0);
-  assert.deepEqual(gone.errors, []);
 });
 
 test("a hosted run of several targets opens the linked target and switches between all of them in config order", { timeout: 60_000 }, async t => {
@@ -594,10 +585,12 @@ test("report links name their target: ?target=, ?platform= from before targets, 
     const api = window.archiveApi;
     const attempt = fn => { try { return fn(); } catch (error) { return `error: ${error.message}`; } };
     const preview = "http://x/p/abcdefghijklmnopqrstuvwxyz234567";
+    const manifest = page => api.previewManifestUrl(api.previewToken(page), api.reportTarget(page));
     return {
-      target: api.previewReportUrl(new URL(`${preview}?target=duo-open`)),
-      platform: api.previewReportUrl(new URL(`${preview}?platform=android`)),
-      none: api.previewReportUrl(new URL(preview)),
+      target: manifest(new URL(`${preview}?target=duo-open`)),
+      platform: manifest(new URL(`${preview}?platform=android`)),
+      none: manifest(new URL(preview)),
+      asset: api.previewAssetUrl("abcdefghijklmnopqrstuvwxyz234567", `assets/${"a".repeat(64)}.png`),
       both: attempt(() => api.reportTarget(new URL(`${preview}?target=duo-open&platform=ios`))),
       invalid: attempt(() => api.reportTarget(new URL(`${preview}?target=Duo`))),
       reserved: attempt(() => api.reportTarget(new URL(`${preview}?target=report`))),
@@ -608,9 +601,11 @@ test("report links name their target: ?target=, ?platform= from before targets, 
     };
   });
   assert.deepEqual(result, {
-    target: "/p/abcdefghijklmnopqrstuvwxyz234567/report.zip?target=duo-open",
-    platform: "/p/abcdefghijklmnopqrstuvwxyz234567/report.zip?platform=android",
-    none: "/p/abcdefghijklmnopqrstuvwxyz234567/report.zip",
+    target: "/p/abcdefghijklmnopqrstuvwxyz234567/manifest.json?target=duo-open",
+    platform: "/p/abcdefghijklmnopqrstuvwxyz234567/manifest.json?platform=android",
+    none: "/p/abcdefghijklmnopqrstuvwxyz234567/manifest.json",
+    // A screenshot is a static file named by its content, the same for every target.
+    asset: `/p/abcdefghijklmnopqrstuvwxyz234567/assets/${"a".repeat(64)}.png`,
     both: "error: This report link needs one target, such as ios or android.",
     invalid: "error: This report link needs one target, such as ios or android.",
     reserved: "error: This report link needs one target, such as ios or android.",
