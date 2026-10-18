@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Buffer } from "node:buffer";
-import { regionShifts } from "../../dist/review/region-shift.js";
+import { regionMoves, regionShifts } from "../../dist/review/region-shift.js";
 
 /** A 120×160 frame of a light background with dark text-like bars, drawn `offsetY` pixels lower (fractions blend rows). */
 function frame(offsetY, { barColor = 40, extraBar = false } = {}) {
@@ -100,4 +100,84 @@ test("a region that moved and also changed is not a move: the leftover after ali
 test("a half-pixel move up and down is judged alike", () => {
   const up = regionShifts(frame(0), frame(-0.5), [region])[0], down = regionShifts(frame(0), frame(0.5), [region])[0];
   assert.deepEqual([up?.y, down?.y], [-0.5, 0.5]);
+});
+
+/**
+ * A light frame with a dark card of irregular blocks at (x, y): the blocks make every offset look different, as a
+ * real card's text and icons do. `tile` repeats one such block pattern every `tile` pixels across the whole row
+ * instead, as a grid of identical cells does, starting `x` pixels in.
+ */
+function cardFrame({ width = 600, height = 300, x = 60, y = 80, cardWidth = 150, cardHeight = 120, seed = 7, tile } = {}) {
+  const data = Buffer.alloc(width * height * 4, 240);
+  for (let index = 3; index < data.length; index += 4) data[index] = 255;
+  const paint = (px, py, value) => data.fill(value, (py * width + px) * 4, (py * width + px) * 4 + 3);
+  let state = seed;
+  const random = () => (state = (state * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const blocks = Array.from({ length: tile ? 6 : 40 }, () => {
+    const span = tile ?? cardWidth;
+    return [Math.floor(random() * (span - 12)), Math.floor(random() * (cardHeight - 8)), 4 + Math.floor(random() * 8), 3 + Math.floor(random() * 5), 80 + Math.floor(random() * 160)];
+  });
+  for (let py = y; py < y + cardHeight; py += 1) {
+    for (let px = tile ? 0 : x; px < (tile ? width : x + cardWidth); px += 1) {
+      const local = tile ? (((px - x) % tile) + tile) % tile : px - x;
+      const block = blocks.find(([bx, by, bw, bh]) => local >= bx && local < bx + bw && py - y >= by && py - y < by + bh);
+      paint(px, py, block ? block[4] : 12);
+    }
+  }
+  return { width, height, data };
+}
+
+test("a card that moved far along a row is one move, from the regions where it left and where it arrived", () => {
+  const regions = [
+    { x: 60, y: 80, width: 150, height: 120, dominantChange: "brighter" },
+    { x: 330, y: 80, width: 150, height: 120, dominantChange: "darker" },
+  ];
+  const shifts = regionShifts(cardFrame(), cardFrame({ x: 330 }), regions);
+  assert.deepEqual(shifts, [undefined, undefined], "too far for the drift search");
+  assert.deepEqual(regionMoves(cardFrame(), cardFrame({ x: 330 }), regions, shifts),
+    [{ rect: { x: 330, y: 80, width: 150, height: 120 }, shift: { x: 270, y: 0 }, members: [0, 1] }]);
+});
+
+test("a move whose old and new places overlap takes in the fragments of it the comparison found in between", () => {
+  // A 300-wide card moved 120 right: the comparison sees where it only was, where it only is, and a fragment of the
+  // overlap whose pixels differ because the card's own content moved over itself.
+  const base = cardFrame({ width: 700, cardWidth: 300 }), head = cardFrame({ width: 700, cardWidth: 300, x: 180 });
+  const regions = [
+    { x: 60, y: 80, width: 120, height: 120, dominantChange: "brighter" },
+    { x: 360, y: 80, width: 120, height: 120, dominantChange: "darker" },
+    { x: 200, y: 100, width: 120, height: 40, dominantChange: "mixed" },
+  ];
+  const [move] = regionMoves(base, head, regions, regions.map(() => undefined));
+  assert.deepEqual(move, { rect: { x: 180, y: 80, width: 300, height: 120 }, shift: { x: 120, y: 0 }, members: [0, 1, 2] });
+});
+
+test("a card that moved far down a column is a vertical move", () => {
+  const regions = [
+    { x: 100, y: 20, width: 150, height: 100, dominantChange: "brighter" },
+    { x: 100, y: 330, width: 150, height: 100, dominantChange: "darker" },
+  ];
+  const base = cardFrame({ height: 480, x: 100, y: 20, cardHeight: 100 }), head = cardFrame({ height: 480, x: 100, y: 330, cardHeight: 100 });
+  assert.deepEqual(regionMoves(base, head, regions, [undefined, undefined]),
+    [{ rect: { x: 100, y: 330, width: 150, height: 100 }, shift: { x: 0, y: 310 }, members: [0, 1] }]);
+});
+
+test("content that left one place while other content arrived elsewhere is not a move", () => {
+  const regions = [
+    { x: 60, y: 80, width: 150, height: 120, dominantChange: "brighter" },
+    { x: 330, y: 80, width: 150, height: 120, dominantChange: "darker" },
+  ];
+  assert.deepEqual(regionMoves(cardFrame(), cardFrame({ x: 330, seed: 99 }), regions, [undefined, undefined]), [], "another card arrived");
+  // The pair must be opposite: two regions that both got darker are two changes.
+  assert.deepEqual(regionMoves(cardFrame(), cardFrame({ x: 330 }), regions.map(region => ({ ...region, dominantChange: "darker" })), [undefined, undefined]), []);
+  // Regions already explained by a small move are not reconsidered.
+  assert.deepEqual(regionMoves(cardFrame(), cardFrame({ x: 330 }), regions, [{ x: 0, y: 1 }, undefined]), []);
+});
+
+test("repeating content that lines up at several distances is not a move: the distance would be a guess", () => {
+  // A row of identical cells every 40 pixels, all moved 260 right: 220, 260 and 300 fit about as well.
+  const regions = [
+    { x: 60, y: 80, width: 100, height: 120, dominantChange: "brighter" },
+    { x: 300, y: 80, width: 100, height: 120, dominantChange: "darker" },
+  ];
+  assert.deepEqual(regionMoves(cardFrame({ tile: 40 }), cardFrame({ tile: 40, x: 320 }), regions, [undefined, undefined]), []);
 });

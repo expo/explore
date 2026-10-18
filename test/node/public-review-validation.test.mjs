@@ -258,7 +258,9 @@ test('a visual region may carry the shift its content moved by, and a malformed 
   const { assertPublicReview } = await import('../../dist/contracts/review-validation.js');
   const valid = JSON.parse(JSON.stringify(reviewWithRegion({ x: 0, y: -4.17 })));
   assert.doesNotThrow(() => assertPublicReview(valid));
-  for (const shift of [{ x: 0 }, { x: 0, y: Number.NaN }, { x: 0, y: 500 }, 'up']) {
+  // A card recentred on iPhone Duo's inner display moved 395 pixels: a large move is still a move.
+  assert.doesNotThrow(() => assertPublicReview(JSON.parse(JSON.stringify(reviewWithRegion({ x: 395, y: 0 })))));
+  for (const shift of [{ x: 0 }, { x: 0, y: Number.NaN }, { x: 0, y: 9000 }, 'up']) {
     assert.throws(() => assertPublicReview(reviewWithRegion(shift)), /visual verdict is inconsistent/, JSON.stringify(shift));
   }
 });
