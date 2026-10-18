@@ -350,7 +350,7 @@ async function blobUrl(page, bytes) {
   return page.evaluate(bytes => URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/png" })), [...bytes]);
 }
 
-test("returning to a screenshot before the next one resolves waits for a fresh URL, never the released one", { timeout: 30_000 }, async t => {
+test("a new source keeps the picture before it on screen until it decodes; returning to the first waits for a fresh URL, never reloading the released one", { timeout: 30_000 }, async t => {
   const { page, image } = await fixture(t, { loading: "eager", fallback: true });
   await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
   const released = await blobUrl(page, firstImage);
@@ -358,17 +358,20 @@ test("returning to a screenshot before the next one resolves waits for a fresh U
   await expectDecoded(image, 2, 3);
   await expect(image).toHaveAttribute("data-screenshot-state", "ready");
 
-  // A to B releases A's URL; while B still resolves, the report evicts and revokes it.
+  // A to B releases A's URL, but A's picture stays up (nothing blanks while every screenshot of a report swaps at once);
+  // while B still resolves, the report evicts and revokes the URL behind it, which the decoded picture survives.
   await page.evaluate(source => window.updateScreenshot({ source }), secondSource);
   await expect.poll(() => page.evaluate(() => window.resolverCalls)).toContain(secondSource);
-  await expectWaiting(image);
+  await expect(image).toHaveAttribute("src", released);
+  await expect(image).toHaveAttribute("data-screenshot-state", "loading");
+  await expect(image).toHaveAttribute("aria-busy", "true");
   await expect.poll(() => page.evaluate(() => window.releaseCalls)).toEqual([firstSource]);
   await page.evaluate(url => URL.revokeObjectURL(url), released);
 
-  // Back to A before B resolves: A waits for its new resolution instead of drawing the revoked URL.
+  // Back to A before B resolves: A keeps the picture and waits for its new resolution instead of reloading the revoked URL.
   await page.evaluate(source => window.updateScreenshot({ source }), firstSource);
   await expect.poll(() => page.evaluate(source => window.resolverCalls.filter(value => value === source).length, firstSource)).toBe(2);
-  await expectWaiting(image);
+  await expect(image).toHaveAttribute("src", released);
   await expect(image).toHaveAttribute("aria-busy", "true");
   const fresh = await blobUrl(page, firstImage);
   await page.evaluate(({ source, url }) => window.resolveScreenshot(source, url), { source: firstSource, url: fresh });

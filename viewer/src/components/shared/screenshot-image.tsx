@@ -43,11 +43,15 @@ export function ScreenshotImage({ src, loading, indicator, fallback, onLoad, onE
   const [failed, setFailed] = useState<string>();
   const [shown, setShown] = useState<string>();
   const [lastSource, setLastSource] = useState(src);
+  // The picture of the source before, kept on screen until the new one has decoded: a report's
+  // other appearance or target swaps every screenshot at once, and nothing should blank meanwhile.
+  const [held, setHeld] = useState<string>();
   const embedded = typeof src === "string" && isEmbeddedArtifactUrl(src);
   // A new source starts over: a fresh attempt, even for one that failed before, and never a URL
   // resolved on an earlier visit, which was released on leaving and may since have been revoked.
   if (lastSource !== src) {
     setLastSource(src);
+    setHeld(shown ?? held);
     setResolved(undefined);
     setShown(undefined);
     setFailed(undefined);
@@ -104,15 +108,18 @@ export function ScreenshotImage({ src, loading, indicator, fallback, onLoad, onE
 
   const url = embedded && resolved?.source === src ? resolved.url : undefined;
   const state: ScreenshotState = failed === src ? "failed" : url && shown === url ? "ready" : "loading";
-  const displayed = state !== "failed" ? url : undefined;
+  const displayed = state !== "failed" ? url ?? held : undefined;
 
   // Re-committing the URL the image already shows (it left the viewport and came back before a
   // render, and the report still held the URL) fires no load event: the decoded image is ready.
   useLayoutEffect(() => {
     const image = imageRef.current;
-    if (!displayed || shown === displayed || !image || image.getAttribute("src") !== displayed) return;
-    if (image.complete && image.naturalWidth > 0) setShown(displayed);
-  }, [displayed, shown]);
+    if (!displayed || displayed !== url || shown === displayed || !image || image.getAttribute("src") !== displayed) return;
+    if (image.complete && image.naturalWidth > 0) {
+      setShown(displayed);
+      setHeld(undefined);
+    }
+  }, [displayed, url, shown]);
 
   if (!embedded) return <img {...props} ref={imageRef} loading={loading} src={src} onLoad={onLoad} onError={onError} />;
   if (state === "failed" && fallback !== undefined) return <>{fallback}</>;
@@ -129,10 +136,13 @@ export function ScreenshotImage({ src, loading, indicator, fallback, onLoad, onE
         onLoad={event => {
           if (!isScreenshot(event)) return;
           setShown(url);
+          setHeld(undefined);
           onLoad?.(event);
         }}
         onError={event => {
           if (event.nativeEvent.isTrusted) {
+            // The held picture's URL was revoked since (the report let it go): nothing to show until the new one.
+            if (held && !url && event.currentTarget.getAttribute("src") === held) { setHeld(undefined); return; }
             if (!isScreenshot(event)) return;
             setFailed(src);
           }
