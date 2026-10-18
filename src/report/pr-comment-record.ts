@@ -400,33 +400,38 @@ export function foldRecord(existing: CommentRecords, incoming: PlatformRecord): 
   if (!currentRun && record.superseded) return { current: {}, previous, history: pushHistory(existing.history, historyEntryOf([record])) };
   if (!currentRun || currentRun.runId === record.runId) {
     const next = { ...existing.current, [target]: record };
-    // A rerun's new attempt replaces a finished record with one still working; the finished one stays readable meanwhile.
+    // A rerun's new attempt replaces a ready record with one that is not; the ready one stays readable meanwhile.
     const replaced = existing.current[target];
-    const rerun = replaced && isFinished(replaced) && !isFinished(record) && Number(record.runAttempt) > Number(replaced.runAttempt);
+    const rerun = replaced && isReady(replaced) && !isReady(record) && Number(record.runAttempt) > Number(replaced.runAttempt);
     return { current: next, previous: trimPrevious(rerun ? { ...ofRun(previous, record.runId), [target]: replaced } : previous, next), history: existing.history };
   }
   if (runOrder(currentRun.runId) > runOrder(record.runId) || record.superseded) {
     return { current: existing.current, previous, history: pushHistory(existing.history, historyEntryOf([{ ...record, superseded: true }])) };
   }
-  // The finished records of the run being replaced stay readable until the new run has its own. They replace older
-  // previous records rather than joining them: what the comment shows as one review comes from one run.
-  const kept = Object.fromEntries(current.filter(isFinished).map(item => [recordTarget(item), item]));
+  // The review of the run being replaced stays readable until the new run has a ready target. It replaces older
+  // previous records rather than joining them: what the comment shows as one review comes from one run. A run without a
+  // ready target has no review, so the one before it stays.
+  const kept = current.some(isReady) ? Object.fromEntries(current.filter(isFinished).map(item => [recordTarget(item), item])) : previous;
   const next = { [target]: record };
-  return { current: next, previous: trimPrevious(Object.keys(kept).length ? kept : previous, next), history: pushHistory(existing.history, historyEntryOf(current)) };
+  return { current: next, previous: trimPrevious(kept, next), history: pushHistory(existing.history, historyEntryOf(current)) };
 }
 
 const isFinished = (record: PlatformRecord) => record.phase === "ready" || record.phase === "failed";
+const isReady = (record: PlatformRecord) => record.phase === "ready";
 
 function ofRun(records: Partial<Record<CommentTarget, PlatformRecord>>, runId: string): Partial<Record<CommentTarget, PlatformRecord>> {
   return Object.fromEntries(Object.entries(records).filter(([, record]) => record?.runId === runId));
 }
 
-/** A target's previous record goes once its current one finished; all of them go once every current record has. */
+/**
+ * A target's previous record goes once its current one is ready; all of them go once every current record finished
+ * and one is ready. A failure is no review: the previous one stays up beside it.
+ */
 function trimPrevious(previous: Partial<Record<CommentTarget, PlatformRecord>>, current: Partial<Record<CommentTarget, PlatformRecord>>): Partial<Record<CommentTarget, PlatformRecord>> {
   const records = Object.values(current).filter((record): record is PlatformRecord => Boolean(record));
-  if (records.every(isFinished)) return {};
+  if (records.every(isFinished) && records.some(isReady)) return {};
   const trimmed = { ...previous };
-  for (const record of records) if (isFinished(record)) delete trimmed[recordTarget(record)];
+  for (const record of records) if (isReady(record)) delete trimmed[recordTarget(record)];
   return trimmed;
 }
 

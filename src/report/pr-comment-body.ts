@@ -589,12 +589,21 @@ function changesSection(ready: PlatformRecord[], rows: ChangeRow[], rowCap: numb
   return lines;
 }
 
-/** The previous run stays on the comment while a new one works; this line, above it, says so. */
+/**
+ * The previous run stays on the comment while a new one works or has only failed; this line, above it, says which,
+ * with each failure's step and message.
+ */
 function newRunLine(current: PlatformRecord[], shown: PlatformRecord[], repository: string): string {
   const first = current[0]!;
-  const verb = current.some(record => record.phase === "capturing") ? "capturing" : "starting";
-  const names = current.length > 1 || shown.length > 1 || first.target || first.label !== undefined ? ` on ${current.map(labelOf).join(", ")}` : "";
-  return `> **New run in progress** for ${commitLink(repository, first.headSha)} · ${verb}${names} · ${link("run", first.links.run)}`;
+  const active = current.filter(record => !finished(record));
+  const failed = current.filter(record => record.phase === "failed");
+  const named = current.length > 1 || shown.length > 1 || Boolean(first.target) || first.label !== undefined;
+  const verb = active.some(record => record.phase === "capturing") ? "capturing" : "starting";
+  const working = active.length ? [`${verb}${named ? ` on ${active.map(labelOf).join(", ")}` : ""}`] : [];
+  const failures = failed.map(record => [named ? `**${labelOf(record)} failed**` : undefined, inlineText(record.failure?.step ?? "capture", 48),
+    record.failure?.message ? inlineText(record.failure.message, MAX_FAILURE_MESSAGE) : undefined].filter(Boolean).join(" · "));
+  const links = [link("run", first.links.run), ...(failed.length ? [link("evidence", failed[0]!.links.artifacts)] : [])];
+  return `> **${active.length ? "New run in progress" : "New run failed"}** for ${commitLink(repository, first.headSha)} · ${[...working, ...failures, ...links].join(" · ")}`;
 }
 
 function footer(records: PlatformRecord[]): string {
@@ -640,8 +649,8 @@ function deploymentMarkerOf(records: CommentRecords): string | undefined {
 }
 
 /**
- * The whole comment from its records: hidden lines first, then the review. Until a target of the current run finished,
- * the previous run's review stays up under a line that says a new run is working.
+ * The whole comment from its records: hidden lines first, then the review. Until a target of the current run is ready,
+ * the previous run's review stays up under a line that says a new run is working or failed.
  */
 export function renderCommentRecords(records: CommentRecords, existing?: string, budget = PUBLIC_COMMENT_BODY_BUDGET): string {
   const current = orderedRecords(records);
@@ -650,7 +659,7 @@ export function renderCommentRecords(records: CommentRecords, existing?: string,
     ...current.map(recordLine), ...previous.map(previousLine), ...[historyLine(records.history)].filter((line): line is string => Boolean(line))];
   if (!current.length) return [...hidden, "### Explore review", "", ...(records.history.some(entry => Object.values(entry.platforms).some(item => item?.superseded)) ? [SUPERSEDED_NOTE, ""] : []),
     ...historySection("", records.history)].join("\n");
-  const shown = current.some(finished) || !previous.length ? current : previous;
+  const shown = current.some(record => record.phase === "ready") || !previous.length ? current : previous;
   const first = shown[0]!;
   const repository = repositoryOf(first.links.run);
   const ready = shown.filter(record => record.phase === "ready");

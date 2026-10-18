@@ -482,6 +482,40 @@ test('the review a new run keeps up comes from one run: a target the last run ne
   assert.doesNotMatch(visible(body).split('<details>')[0], /artifact=7654/, 'run 42 is only under Previous runs');
 });
 
+test('a new run\'s failure does not replace the previous review: it is named on the new-run line until a target is ready', async () => {
+  const { platformSectionMerge, readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
+  const androidOf = overrides => state({ artifactOnly: true, build: { ...state().build, platform: 'android' }, runtime: { ...state().runtime, platform: 'android', deviceModel: 'Pixel 9' }, ...overrides });
+  const both = platformSectionMerge(androidOf({}), 'android').merge(platformSectionMerge(state({ artifactOnly: true }), 'ios').merge(undefined));
+  const nextHead = 'd'.repeat(40);
+  const next = { pullRequest: { ...pullRequest, head: { ref: 'feature', sha: nextHead } },
+    links: viewerLinks({ repository: pullRequest.repository, headSha: nextHead, runId: '43', runAttempt: '1', configPath: '.expo-explore/config.yaml' }) };
+  const commit = `[dddddddd](<https://github.com/expo/explore-playground/commit/${nextHead}>)`;
+  const run43 = '[run](<https://github.com/expo/explore-playground/actions/runs/43/attempts/1>) · [evidence](<https://github.com/expo/explore-playground/actions/runs/43#artifacts>)';
+  const failure = { phase: 'failed', review: undefined, evidence: undefined, failure: { step: 'capture-head', message: 'boom' } };
+  // Android fails before iOS posts anything.
+  const failed = platformSectionMerge(androidOf({ ...next, ...failure }), 'android').merge(both);
+  assert.equal(visible(failed).split('\n')[1], `> **New run failed** for ${commit} · **Android failed** · capture\\-head · boom · ${run43}`);
+  assert.equal(titleOf(failed), titleOf(both));
+  assert.deepEqual(listOf(failed), listOf(both));
+  assert.deepEqual(Object.keys(readCommentRecords(failed).previous), ['ios', 'android']);
+  const working = platformSectionMerge(state({ ...next, phase: 'capturing', review: undefined, evidence: undefined, capture: undefined }), 'ios').merge(failed);
+  assert.equal(visible(working).split('\n')[1], `> **New run in progress** for ${commit} · capturing on iOS · **Android failed** · capture\\-head · boom · ${run43}`);
+  assert.deepEqual(listOf(working), listOf(both));
+  // iOS is ready: its review takes over, and Android's failure is its own line.
+  const ready = platformSectionMerge(state({ ...next, artifactOnly: true }), 'ios').merge(working);
+  assert.doesNotMatch(ready, /New run|expo-explore-previous/);
+  assert.match(statusOf(ready, 'Android'), /^\*\*Android failed\*\* · capture\\-head · boom · /);
+  // A single target that failed keeps the review before it, and the run after it still has that review to keep.
+  const single = platformSectionMerge(state({ ...next, ...failure }), 'ios').merge(platformSectionMerge(state({ artifactOnly: true }), 'ios').merge(undefined));
+  assert.equal(visible(single).split('\n')[1], `> **New run failed** for ${commit} · capture\\-head · boom · ${run43}`);
+  assert.match(titleOf(single), /^### 3 screens changed · /);
+  const later = platformSectionMerge(state({ phase: 'capturing', review: undefined, evidence: undefined, capture: undefined,
+    links: viewerLinks({ repository: pullRequest.repository, headSha: 'e'.repeat(40), runId: '44', runAttempt: '1', configPath: '.expo-explore/config.yaml' }),
+    pullRequest: { ...pullRequest, head: { ref: 'feature', sha: 'e'.repeat(40) } } }), 'ios').merge(single);
+  assert.equal(readCommentRecords(later).previous.ios.runId, '42');
+  assert.match(titleOf(later), /^### 3 screens changed · /);
+});
+
 test('a rerun keeps the attempt it replaces up until the new attempt finishes', async () => {
   const { platformSectionMerge, readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
   const ready = platformSectionMerge(state({ artifactOnly: true }), 'ios').merge(undefined);
