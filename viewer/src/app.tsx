@@ -11,7 +11,7 @@ import { CanvasVisibleFrameProvider } from "./components/canvas/visible-frame-pr
 import { AppLoading } from "./components/shared/app-loading";
 import { ReportLoadingShell } from "./components/shared/report-loading-shell";
 import { screenLabel } from "./utils/screen-path";
-import { AppPill, PLATFORM_NAMES } from "./components/panels/app-pill";
+import { AppPill, PLATFORM_NAMES, targetSwitch } from "./components/panels/app-pill";
 import { changedScreens, focusCounts as countFocusStatuses, isCapturedChange, type ChangedScreen } from "./utils/changed-screens";
 import { MapView } from "./components/views/semantic-map";
 import { RightPanel } from "./components/panels/right";
@@ -1199,6 +1199,8 @@ function ViewerApp() {
       ? { ...presentedMap, run: { ...presentedMap.run, name: workspace.catalog.name } }
       : presentedMap
   ), [presentedMap, workspace]);
+  // The shortcuts list names the target keys only where the pill can switch.
+  const switchTargets = map ? targetSwitch(map.run, new URL(window.location.href)) : undefined;
   // Focus singles out diff states, so it means nothing without a baseline to diff against.
   const focusFilter = diff ? route.focus : [];
   const focusCounts = useMemo(() => countFocusStatuses(diff), [diff]);
@@ -1631,7 +1633,8 @@ function ViewerApp() {
       </CanvasVisibleFrameProvider>
       {shortcutsOpen ? (
         <ShortcutsDialog
-          context={{ canvas: route.canvas, review: reviewingInSidebar, hasChanges: compareOrder.length > 0, handoff: Boolean(handoffInput), appearances: appearances.length > 1 }}
+          context={{ canvas: route.canvas, review: reviewingInSidebar, hasChanges: compareOrder.length > 0, handoff: Boolean(handoffInput), appearances: appearances.length > 1,
+            ...(switchTargets ? { targets: switchTargets } : {}) }}
           onClose={() => setShortcutsOpen(false)}
         />
       ) : null}

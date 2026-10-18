@@ -268,3 +268,13 @@ test("unknown values fall back without disturbing the rest", () => {
     { ...base, canvas: "screens" },
   );
 });
+
+test("another target's report opens at the same canvas and route, keeping only what means the same there", () => {
+  assert.equal(nav.placeForAnotherTarget("#/compare/settings/profile?screen=s-12&variant=v2&baseline=build-0.9&inspect=diff&focus=modified,added&dir=in&expand=g1&evidence=logs"),
+    "#/compare/settings/profile?inspect=diff&dir=in&focus=modified,added");
+  assert.equal(nav.placeForAnotherTarget("#/map/home"), "#/map/home");
+  assert.equal(nav.placeForAnotherTarget("#/screens?screen=s-3"), "#/screens");
+  // No place, or a hash from before routes: the other report opens where a link to it would.
+  assert.equal(nav.placeForAnotherTarget(""), "");
+  assert.equal(nav.placeForAnotherTarget("#map"), "");
+});

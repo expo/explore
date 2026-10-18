@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
-import { CANVAS_NUMBER_KEYS, formatShortcut, SHORTCUTS, type Shortcut } from "../../utils/shortcuts";
+import { CANVAS_NUMBER_KEYS, formatShortcut, SHORTCUTS, TARGET_NUMBER_KEYS, type Shortcut } from "../../utils/shortcuts";
 import type { CanvasView } from "../../utils/navigation";
 import { useModalDialog } from "../../hooks/use-modal-dialog";
 
@@ -19,7 +19,20 @@ export type ShortcutContext = {
   handoff?: boolean;
   /** The report was captured in both light and dark, so the app's appearance can be switched. */
   appearances?: boolean;
+  /** The run's other targets are one switch away; the pill calls them devices, or platforms in reports from before targets. */
+  targets?: { noun: "device" | "platform"; count: number };
 };
+
+function targetRows(targets: NonNullable<ShortcutContext["targets"]>): Row[] {
+  const numbers = SHORTCUTS.targetByNumber.slice(0, Math.min(targets.count, SHORTCUTS.targetByNumber.length));
+  return [
+    { label: `Another ${targets.noun}'s report`, keys: [SHORTCUTS.target.menu] },
+    ...(TARGET_NUMBER_KEYS && numbers.length > 1
+      ? [{ label: `A ${targets.noun} by its place in that menu`, keys: [`${formatShortcut(numbers[0]!)}–${formatShortcut(numbers.at(-1)!)}`] }]
+      : []),
+    { label: `Back to the last ${targets.noun}`, keys: [SHORTCUTS.target.last] },
+  ];
+}
 
 const COMPARE = SHORTCUTS.compare;
 
@@ -71,6 +84,7 @@ export function shortcutGroups(context: ShortcutContext): Group[][] {
       { label: "Search screens", keys: [SHORTCUTS.app.search] },
       ...(context.handoff ? [{ label: "Hand off to AI", keys: [SHORTCUTS.app.handoff] }] : []),
       ...(context.hasChanges ? [{ label: "Changed screens menu", keys: [SHORTCUTS.app.changes] }] : []),
+      ...(context.targets ? targetRows(context.targets) : []),
     ],
   };
   const view: Group = {

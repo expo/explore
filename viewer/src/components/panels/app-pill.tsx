@@ -9,9 +9,9 @@ import { artifactUrl } from "../../utils/model";
 import { REPORT_SOURCE } from "../../utils/report-source";
 import { Tooltip } from "../shared/tooltip";
 import { KeyHint } from "../shared/key-hint";
-import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
+import { formatShortcut, matchesShortcut, shortcutsLive, SHORTCUTS, TARGET_NUMBER_KEYS } from "../../utils/shortcuts";
 import { ChangesMenu } from "./changes-menu";
-import type { FocusStatus } from "../../utils/navigation";
+import { placeForAnotherTarget, type FocusStatus } from "../../utils/navigation";
 import type { ExploreMap, MapIndex } from "../../utils/model";
 import type { BuildDiff } from "../../utils/build-diff";
 import type { PullRequestPresentation } from "../../utils/review-model";
@@ -23,7 +23,10 @@ type SiblingReport = { target: string; changes?: number; device?: string };
 /** One report of the run, as the switch offers it. */
 export type SwitchTarget = { id: string; platform: string; label: string };
 
-/** The same review's report for another target: this page's URL with the target swapped (and the artifact id dropped). */
+/**
+ * The same review's report for another target: this page's URL with the target swapped (and the artifact id dropped),
+ * open at the same place where the other report has it.
+ */
 export function siblingReportUrl(page: URL, target: string): string | undefined {
   const preview = isPreviewPath(page.pathname);
   if (!preview && page.searchParams.get("origin") === "local") return undefined;
@@ -36,8 +39,25 @@ export function siblingReportUrl(page: URL, target: string): string | undefined 
   url.searchParams.set(key, value);
   url.searchParams.delete("artifact");
   url.searchParams.delete("screen");
-  url.hash = "";
+  url.hash = placeForAnotherTarget(page.hash);
   return url.href;
+}
+
+/**
+ * The target this tab showed before the current one, for `. Kept in session storage, since a report page that is not a
+ * hosted preview loads again to switch; a Back or Forward between targets counts as a switch too.
+ */
+function useLastTarget(current: string): string | undefined {
+  const [last, setLast] = useState<string>();
+  useEffect(() => {
+    const key = `explore.targets:${window.location.pathname}:${new URLSearchParams(window.location.search).get("run") ?? ""}`;
+    let stored: { shown?: unknown; last?: unknown } = {};
+    try { stored = JSON.parse(window.sessionStorage.getItem(key) ?? "{}") as typeof stored; } catch { /* Optional storage. */ }
+    const previous = [stored.shown, stored.last].find((id): id is string => isReportTargetId(id) && id !== current);
+    try { window.sessionStorage.setItem(key, JSON.stringify({ shown: current, ...(previous ? { last: previous } : {}) })); } catch { /* Optional storage. */ }
+    setLast(previous);
+  }, [current]);
+  return last;
 }
 
 /**
@@ -52,6 +72,13 @@ export function runTargets(run: ExploreMap["run"]): { current: string; targets: 
   }
   const platforms = (run.platforms ?? []).filter(platform => platform in PLATFORM_NAMES);
   return { current, targets: platforms.length > 1 ? platforms.map(platform => ({ id: platform, platform, label: PLATFORM_NAMES[platform]! })) : [] };
+}
+
+/** What the shortcuts list says about switching: nothing when this page cannot open another target's report. */
+export function targetSwitch(run: ExploreMap["run"], page: URL): { noun: "device" | "platform"; count: number } | undefined {
+  const { current, targets } = runTargets(run);
+  if (!targets.some(target => target.id !== current && siblingReportUrl(page, target.id))) return undefined;
+  return { noun: targets.every(target => target.id === target.platform) ? "platform" : "device", count: targets.length };
 }
 
 /** On a hosted preview, the deployment lists what it serves per target; elsewhere only the targets' names are known. */
@@ -146,18 +173,61 @@ export function AppPill(props: AppPillProps) {
     .filter(target => target.id !== run.current)
     .map(target => ({ target, url: page ? siblingReportUrl(page, target.id) : undefined, report: siblingReports?.find(report => report.target === target.id) }))
     .filter((entry): entry is { target: SwitchTarget; url: string; report: SiblingReport | undefined } => Boolean(entry.url));
+  // The URL is read when the switch happens, so the other report opens where the reader is now.
+  const openTarget = (id: string) => {
+    setPlatformOpen(false);
+    const url = siblingReportUrl(new URL(window.location.href), id);
+    if (url && !REPORT_SOURCE.switchTarget(id, url)) window.location.assign(url);
+  };
+  // ⌥1–⌥8 follow the menu's order, the run's config order.
+  const numberHint = (target: SwitchTarget) => {
+    const shortcut = TARGET_NUMBER_KEYS ? SHORTCUTS.targetByNumber[run.targets.indexOf(target)] : undefined;
+    return shortcut ? { shortcut: formatShortcut(shortcut) } : {};
+  };
   const platformItems = siblings.length ? run.targets.flatMap(target => {
-    if (target.id === run.current) return [{ kind: "item" as const, label: target.label, description: device || undefined, checked: true, onSelect: () => setPlatformOpen(false) }];
+    if (target.id === run.current) return [{ kind: "item" as const, label: target.label, description: device || undefined, checked: true, ...numberHint(target), onSelect: () => setPlatformOpen(false) }];
     const sibling = siblings.find(entry => entry.target.id === target.id);
     return sibling ? [{
       kind: "item" as const, label: target.label,
       description: [sibling.report?.changes === undefined ? undefined : `${sibling.report.changes} ${sibling.report.changes === 1 ? "change" : "changes"}`, sibling.report?.device]
         .filter(Boolean).join(" · ") || (target.platform === platform ? "Same review, other device" : "Same review, other platform"),
-      checked: false, onSelect: () => { setPlatformOpen(false); if (!REPORT_SOURCE.switchTarget(target.id, sibling.url)) window.location.assign(sibling.url); },
+      checked: false, ...numberHint(target), onSelect: () => openTarget(target.id),
     }] : [];
   }) : [];
   // A report whose target is not among the run's (a hand-edited one) still lists itself first, checked.
   if (siblings.length && !currentTarget) platformItems.unshift({ kind: "item" as const, label: targetLabel, description: device || undefined, checked: true, onSelect: () => setPlatformOpen(false) });
+
+  // D opens the menu, ⌥1–⌥8 open a target by its place in it, and ` returns to the last target shown (the next one in
+  // the menu's order before there is one). The handler reads the current targets from a ref.
+  const last = useLastTarget(run.current);
+  const targetKeys = { siblings: siblings.map(entry => entry.target.id), order: run.targets.map(target => target.id), current: run.current, last, openTarget };
+  const targetKeysRef = useRef(targetKeys);
+  targetKeysRef.current = targetKeys;
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const { siblings, order, current, last, openTarget } = targetKeysRef.current;
+      if (!siblings.length || !shortcutsLive(event)) return;
+      if (matchesShortcut(event, SHORTCUTS.target.menu)) {
+        event.preventDefault();
+        setPlatformOpen(open => !open);
+        return;
+      }
+      let id: string | undefined;
+      if (matchesShortcut(event, SHORTCUTS.target.last)) {
+        const start = order.indexOf(current);
+        id = last && siblings.includes(last) ? last
+          : order.map((_, step) => order[(start + 1 + step) % order.length]!).find(candidate => siblings.includes(candidate));
+      } else if (TARGET_NUMBER_KEYS) {
+        const place = SHORTCUTS.targetByNumber.findIndex(shortcut => matchesShortcut(event, shortcut));
+        if (place === -1) return;
+        id = order[place];
+      } else return;
+      event.preventDefault();
+      if (id && siblings.includes(id)) openTarget(id);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   return (
     <div className="left-panel collapsed">
@@ -182,7 +252,7 @@ export function AppPill(props: AppPillProps) {
           </strong>
           {siblings.length ? (
             <>
-              <Tooltip label={`${device || targetLabel} · open another ${noun}'s report`} placement="bottom">
+              <Tooltip label={`${device || targetLabel} · open another ${noun}'s report`} shortcut={formatShortcut(SHORTCUTS.target.menu)} placement="bottom">
                 <button ref={platformRef} type="button" className="collapsed-platform" aria-haspopup="menu" aria-expanded={platformOpen}
                   aria-label={`${noun === "device" ? "Device" : "Platform"}: ${targetLabel}. Open another ${noun}'s report`}
                   onClick={() => setPlatformOpen(open => !open)}>

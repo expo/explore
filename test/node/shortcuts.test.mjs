@@ -58,3 +58,15 @@ test("no two shortcuts share a chord", () => {
     }
   }
 });
+
+test("⌥1–⌥8 open a target by its place, with ⌥ alone; D and ` are plain keys", () => {
+  assert.equal(SHORTCUTS.targetByNumber.length, 8);
+  assert.ok(matchesShortcut(key("Digit2", { altKey: true }), SHORTCUTS.targetByNumber[1]));
+  assert.ok(!matchesShortcut(key("Digit2"), SHORTCUTS.targetByNumber[1]), "a plain 2 is Compare's Swipe");
+  assert.ok(!matchesShortcut(key("Digit2", { altKey: true, shiftKey: true }), SHORTCUTS.targetByNumber[1]));
+  assert.ok(!matchesShortcut(key("Digit2", { altKey: true, ctrlKey: true }), SHORTCUTS.targetByNumber[1]));
+  assert.equal(formatShortcut(SHORTCUTS.targetByNumber[0], true), "⌥1");
+  assert.equal(formatShortcut(SHORTCUTS.targetByNumber[0], false), "Alt+1");
+  assert.ok(matchesShortcut(key("KeyD"), SHORTCUTS.target.menu));
+  assert.ok(matchesShortcut(key("Backquote"), SHORTCUTS.target.last));
+});

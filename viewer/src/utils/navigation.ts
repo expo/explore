@@ -221,6 +221,28 @@ export function canonicalRoute(route: Route, ctx: RouteContext): Route {
   };
 }
 
+/** The query parameters that mean the same in another target's report of the run. */
+const PLACE_PARAMS = ["inspect", "dir", "focus"] as const;
+
+/**
+ * Where the reader is, as another target's report reads it: the canvas and the screen's route (which resolves to that
+ * target's screen recorded under it), the Inspector tab, the transition direction and the change filter. Screen ids,
+ * variants, baselines, evidence tabs and expanded groups belong to one report and are left behind.
+ */
+export function placeForAnotherTarget(hash: string): string {
+  if (!hash.startsWith("#/")) return "";
+  const at = hash.indexOf("?");
+  const path = at === -1 ? hash.slice(1) : hash.slice(1, at);
+  const params = new URLSearchParams(at === -1 ? "" : hash.slice(at + 1));
+  const kept = new URLSearchParams();
+  for (const key of PLACE_PARAMS) {
+    const value = params.get(key);
+    if (value) kept.set(key, value);
+  }
+  const search = kept.toString().replace(/%2C/gi, ",");
+  return `#${path}${search ? `?${search}` : ""}`;
+}
+
 /** Normalizes a route at the app boundary: Diff needs a baseline. */
 export function sanitizeViewerRoute(route: Route): Route {
   const requestedInspect = parseInspect(route.inspect) ?? "session";

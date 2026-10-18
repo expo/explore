@@ -75,6 +75,9 @@ async function harness(t, bytes, { app = false, open = true, name = fileName, re
   const pagePath = preview ? `/p/${preview.token}` : "/r";
   // What the preview Worker serves from the decrypted ZIP: the manifest the Viewer opens, and each asset on request.
   const served = preview && bytes ? await unzipped(bytes) : undefined;
+  // `archives` by query gives a target its own report; every other query gets `bytes`.
+  const servedBy = Object.fromEntries(await Promise.all(Object.entries(preview?.archives ?? {}).map(async ([search, zip]) => [search, await unzipped(zip)])));
+  const servedFor = search => servedBy[search] ?? served;
   const vite = await createBrowserVite(t, { configFile: false,
     root: fileURLToPath(new URL("../../viewer", import.meta.url)), logLevel: "error", esbuild: { jsx: "automatic" },
     server: { host: "127.0.0.1", port: 0 }, plugins: [{ name: "report-page-fixture", configureServer(server) {
@@ -88,11 +91,14 @@ async function harness(t, bytes, { app = false, open = true, name = fileName, re
           response.setHeader("content-type", "application/json");
           // A slow target (`delays` by query) keeps its manifest in flight while the reviewer moves on.
           // `padding` makes the manifest larger than the Viewer reads.
-          const body = preview.padding ? " ".repeat(preview.padding) + served.manifest : served.manifest;
+          const manifest = servedFor(url.search).manifest;
+          const body = preview.padding ? " ".repeat(preview.padding) + manifest : manifest;
           return void setTimeout(() => response.end(body), preview.delays?.[url.search] ?? 0);
         }
         if (preview && url.pathname.startsWith(`${pagePath}/assets/`)) {
-          const asset = served.files.get(url.pathname.slice(pagePath.length + 1));
+          // Screenshot URLs name no target: any report of the deployment may hold one.
+          const name = url.pathname.slice(pagePath.length + 1);
+          const asset = [served, ...Object.values(servedBy)].map(report => report.files.get(name)).find(Boolean);
           if (!asset) { response.statusCode = 404; return response.end("Not found"); }
           response.setHeader("content-type", "application/octet-stream");
           response.setHeader("content-length", String(asset.length));
@@ -563,6 +569,61 @@ test("a hosted manifest larger than the Viewer reads is refused before it is par
   const shell = page.locator(".report-loading-shell");
   await expect(shell).toHaveAttribute("data-loading-status", "failed");
   await expect(shell).toContainText("This report's index is larger than the Viewer opens.");
+  assert.deepEqual(errors, []);
+});
+
+test("D, ⌥1–⌥8 and ` switch targets from the keyboard, and the other report opens at the same place", { timeout: 60_000 }, async t => {
+  const report = reportFixture();
+  report.review.runtime = { ...report.review.runtime, platform: "android", platforms: ["ios", "android"] };
+  const ios = reportFixture();
+  ios.review.runtime = { ...ios.review.runtime, platform: "ios", platforms: ["ios", "android"] };
+  const preview = { token: "ijklmnopqrstuvwxyz23456723456723", listing: [{ platform: "ios" }, { platform: "android" }],
+    archives: { "?platform=ios": await archive(ios) } };
+  // An Apple keyboard, where ⌥ digits reach the page (Linux browsers keep Alt+1–8 for their tabs).
+  const { page, errors } = await harness(t, await archive(report), { app: true, reportIdentity: null, preview,
+    query: "&platform=android&focus=modified&screen=home&inspect=diff",
+    fault: () => { Object.defineProperty(Navigator.prototype, "platform", { get: () => "MacIntel" }); } });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect.poll(() => new URL(page.url()).hash).toMatch(/^#\/map\/home\?/);
+  const place = new URL(page.url()).hash;
+  await page.evaluate(() => { window.__samePage = true; });
+  const target = () => new URL(page.url()).searchParams.get("platform");
+
+  // ` returns to the last target; before there is one, it opens the next in the menu.
+  await page.keyboard.press("Backquote");
+  await expect.poll(target).toBe("ios");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const carried = new URL(page.url()).hash;
+  assert.equal(carried.split("?")[0], place.split("?")[0], "the other report opens at the same canvas and route");
+  assert.equal(new URLSearchParams(carried.split("?")[1]).get("inspect"), "diff");
+  assert.equal(new URLSearchParams(carried.split("?")[1]).get("screen"), null, "a screen id belongs to one report");
+  await expect(page.locator(".map-canvas .is-selected")).toHaveCount(1);
+  await page.keyboard.press("Backquote");
+  await expect.poll(target).toBe("android");
+
+  // D opens the menu, which prints each target's ⌥ key.
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await page.keyboard.press("KeyD");
+  const items = page.getByRole("menu", { name: "Platform" }).getByRole("menuitemradio");
+  await expect(items).toHaveCount(2);
+  assert.deepEqual(await items.evaluateAll(rows => rows.map(row => row.querySelector(".menu-row-shortcut")?.textContent)), ["⌥1", "⌥2"]);
+  await page.keyboard.press("Escape");
+  await expect(items).toHaveCount(0);
+
+  await page.keyboard.press("Alt+Digit1");
+  await expect.poll(target).toBe("ios");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  // The shown target's own key does nothing.
+  await page.keyboard.press("Alt+Digit1");
+  await page.keyboard.press("Alt+Digit2");
+  await expect.poll(target).toBe("android");
+  assert.equal(await page.evaluate(() => window.__samePage), true, "every switch stays on the page");
+
+  await page.keyboard.press("Shift+Slash");
+  const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(dialog).toContainText("Another platform's report");
+  await expect(dialog).toContainText("⌥1–⌥2");
+  await expect(dialog).toContainText("Back to the last platform");
   assert.deepEqual(errors, []);
 });
 
