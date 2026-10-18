@@ -48,8 +48,21 @@ test("the Flows view shows each flow's outcome per side, its frames and steps, a
   await expect(card.locator(".flow-failure")).toContainText('expect.toBeVisible getByTestId("send-confirm")');
   // Both sides took contacts and amount; only base reached review.
   await expect(card.locator(".flow-frame-caption", { hasText: "contacts" })).toBeVisible();
+  const contacts = card.locator(".flow-frame", { has: page.locator(".flow-frame-caption", { hasText: "contacts" }) });
+  await expect(contacts).toHaveAttribute("data-side", "head");
+  await expect(contacts.locator(".flow-frame-flip")).toHaveText("After");
+  await contacts.locator(".flow-frame-flip").click();
+  await expect(contacts).toHaveAttribute("data-side", "base");
+  await expect(contacts.locator(".flow-frame-flip")).toHaveText("Before");
+  await expect(contacts.locator(".flow-frame-image")).toHaveAttribute("alt", /Before$/);
+  await contacts.locator(".flow-frame-flip").click();
+  await expect(contacts).toHaveAttribute("data-side", "head");
+  const review = card.locator(".flow-frame", { has: page.locator(".flow-frame-caption", { hasText: "review" }) });
+  await expect(review.locator(".flow-frame-missing")).toContainText("Not reached");
+  await review.locator(".flow-frame-flip").click();
+  await expect(review.locator(".flow-frame-image")).toBeVisible();
   await expect(card).toContainText("Not reached after");
-  await expect(card.locator("img")).toHaveCount(5);
+  await expect(card.locator("img")).toHaveCount(3, "one face per frame: contacts and amount on After, review flipped to Before");
   for (const image of await card.locator("img").all()) {
     expect(await image.evaluate(element => element.naturalWidth), "every frame decodes from the report's assets").toBeGreaterThan(0);
   }

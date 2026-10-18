@@ -50,7 +50,7 @@ export type DevicePose = typeof DEVICE_POSES[number];
 
 export type PlatformConfig = { device?: string; bundleId?: string; easProfile?: string;
   /** This platform's flows, over the top-level `flows` (e2e's own `platforms` option filters tests within a file). */
-  flows?: { tests: string[] } };
+  flows?: { tests: string[]; frames?: "checkpoints" | "steps" } };
 
 /**
  * One named capture target (`targets.<id>`): a platform's device, optionally in a pose, captured as its own report.
@@ -60,7 +60,7 @@ export type TargetConfig = { platform: ExplorePlatform; device?: string; pose?: 
   /** This target's device controller and simulator, over `capture.controller` and `capture.simulator`. */
   controller?: "agent-device" | "argent"; simulator?: "eas" | "local";
   /** This target's flows, over the top-level `flows`: a foldable may run its own journeys, a phone the common ones. */
-  flows?: { tests: string[] } };
+  flows?: { tests: string[]; frames?: "checkpoints" | "steps" } };
 
 /**
  * A target id names directories, report files, CI artifacts and URL parameters, so it is short and plain. `base` and
@@ -108,7 +108,7 @@ export type ExploreConfig = {
   parameters?: Record<string, Record<string, string>>;
   setup?: ExploreSetupAction[];
   /** The app's e2e flows (test files of the `e2e` package) the capture runs on each revision, as paths or globs from the app directory. */
-  flows?: { tests: string[] };
+  flows?: { tests: string[]; frames?: "checkpoints" | "steps" };
   agent?: { provider: "openai" | "anthropic"; model: string; instructions?: string };
   /** Hosted previews: one token-gated EAS Hosting deployment per review, see docs/private-review.md. */
   report?: { preview?: { hosting: "eas"; /** null: the link never expires; the deployment lives until someone deletes it. */ expiresAfterDays: number | null; owner?: string; project?: string } };
@@ -291,10 +291,11 @@ function flowsConfig(value: unknown, mode: ExploreConfig["mode"]): ExploreConfig
 /** `{ tests: [...] }` at `label`: e2e files or globs inside the app directory. Targets and platforms carry their own. */
 function flowTests(value: unknown, label: string): NonNullable<ExploreConfig["flows"]> {
   const input = record(value, label);
-  exactKeys(input, ["tests"], label);
+  exactKeys(input, ["tests", "frames"], label);
   const tests = Array.isArray(input.tests) ? input.tests : input.tests === undefined ? [] : [input.tests];
   if (!tests.length || tests.length > 100) fail(`${label}.tests must list between 1 and 100 test files or globs`, `${label}.tests`);
-  return { tests: tests.map((entry, index) => {
+  if (input.frames !== undefined && input.frames !== "checkpoints" && input.frames !== "steps") fail(`${label}.frames must be "checkpoints" (frames where the flows call app.screenshot) or "steps" (a frame after every step)`, `${label}.frames`);
+  return { ...(input.frames === "steps" ? { frames: "steps" as const } : {}), tests: tests.map((entry, index) => {
     const path = text(entry, `${label}.tests[${index}]`, 512);
     if (isAbsolute(path) || path.split(/[\\/]/).includes("..") || /[\u0000-\u001f]/.test(path)) fail(`${label}.tests[${index}] must be a path or glob inside the app directory`, `${label}.tests[${index}]`);
     return path.replace(/\\/g, "/");

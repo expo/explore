@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { PublicFlowEvidence, PublicFlowSide, PublicReview } from "../../../../src/contracts/capture";
 import { artifactUrl, type Artifact } from "../../utils/model";
 import { flowSourceHref } from "../../utils/flow-source";
@@ -48,36 +49,73 @@ function frameSrc(entry: PublicFlowEvidence, side: Side, key: string, taken: Non
   return artifactUrl(artifact);
 }
 
-function Frame(props: { entry: PublicFlowEvidence; frame: PublicFlowEvidence["frames"][number]; onOpen?: (surfaceId: string) => void }) {
+function Frame(props: {
+  entry: PublicFlowEvidence;
+  frame: PublicFlowEvidence["frames"][number];
+  onOpen?: (surfaceId: string) => void;
+}) {
   const { entry, frame } = props;
   const verdict = verdictLabel(frame, entry.base, entry.head);
+  const [flipped, setFlipped] = useState(false);
+  const canFlip = Boolean(entry.base && entry.head);
+  const side: "base" | "head" = canFlip && flipped ? "base" : entry.head ? "head" : "base";
+  const taken = entry[side]?.frames[frame.key];
+  const flow = entry[side];
+  const stop = flow && !taken ? stoppedAt(flow) : undefined;
+  const src = taken ? frameSrc(entry, side, frame.key, taken) : undefined;
   return (
-    <li className={`flow-frame tone-${verdict.tone}`}>
-      <div className="flow-frame-pair">
-        {(["base", "head"] as const).map(side => {
-          const taken = entry[side]?.frames[frame.key];
-          const flow = entry[side];
-          const stop = flow && !taken ? stoppedAt(flow) : undefined;
-          return (
-            <figure key={side} className="flow-frame-side">
-              <figcaption>{SIDE_LABEL[side]}</figcaption>
-              {taken && frameSrc(entry, side, frame.key, taken) ? (
-                <button type="button" className="flow-frame-button" onClick={props.onOpen ? () => props.onOpen!(frame.id) : undefined}
-                  aria-label={`Open ${frame.label} (${SIDE_LABEL[side]}) in Compare`}>
-                  <ScreenshotImage className="flow-frame-image" src={frameSrc(entry, side, frame.key, taken)!} alt={`${entry.title} › ${frame.label}, ${SIDE_LABEL[side]}`} width={taken.width} height={taken.height} loading="lazy" draggable={false} />
-                </button>
-              ) : (
-                <div className="flow-frame-missing" role="note">
-                  {!flow ? "Flow not run" : stop ? <>Not reached<small>the flow {flow.status} at step {stop.index + 1}</small></> : "Not taken"}
-                </div>
-              )}
-            </figure>
-          );
-        })}
-      </div>
+    <li className={`flow-frame tone-${verdict.tone}`} data-side={side}>
+      <figure className="flow-frame-face">
+        {canFlip ? (
+          <button
+            type="button"
+            className="flow-frame-flip"
+            onClick={() => setFlipped(value => !value)}
+            aria-pressed={side === "base"}
+            aria-label={`Show ${side === "base" ? "After" : "Before"} for ${frame.label}`}
+          >
+            {SIDE_LABEL[side]}
+          </button>
+        ) : (
+          <span className="flow-frame-flip is-static">{SIDE_LABEL[side]}</span>
+        )}
+        {taken && src ? (
+          <button
+            type="button"
+            className="flow-frame-button"
+            onClick={props.onOpen ? () => props.onOpen!(frame.id) : undefined}
+            aria-label={`Open ${frame.label} (${SIDE_LABEL[side]}) in Compare`}
+          >
+            <ScreenshotImage
+              className="flow-frame-image"
+              src={src}
+              alt={`${entry.title} › ${frame.label}, ${SIDE_LABEL[side]}`}
+              width={taken.width}
+              height={taken.height}
+            />
+          </button>
+        ) : (
+          <div className="flow-frame-missing" role="note">
+            {!flow
+              ? "Flow not run"
+              : stop
+                ? (
+                  <>
+                    Not reached
+                    <small>
+                      the flow {flow.status} at step {stop.index + 1}
+                    </small>
+                  </>
+                )
+                : "Not taken"}
+          </div>
+        )}
+      </figure>
       <div className="flow-frame-caption">
         <strong>{frame.label}</strong>
-        <span className={`flow-verdict tone-${verdict.tone}`}>{verdict.text}</span>
+        <span className={`flow-verdict tone-${verdict.tone}`}>
+          {verdict.text}
+        </span>
       </div>
     </li>
   );

@@ -84,7 +84,7 @@ export type CiMapOptions = {
   /** Stops the capture between steps (before the build, the session and each route); a session it started is still stopped. */
   signal?: AbortSignal;
   /** The app's e2e flows to run after the routes (`only`: instead of them), as paths or globs from the app directory. */
-  flows?: { tests: readonly string[]; only?: boolean; agent?: { provider: "openai" | "anthropic"; model: string } };
+  flows?: { tests: readonly string[]; only?: boolean; frames?: "checkpoints" | "steps"; agent?: { provider: "openai" | "anthropic"; model: string } };
 };
 export type SimulatorRuntimeMetadata = {
   provider: "eas-simulator" | "local-simulator"; controller: "agent-device" | "argent"; controllerPackageVersion: string;
@@ -832,7 +832,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       const flowRunOptions = { project, tests: options.flows.tests, platform: options.platform, bundleId: options.bundleId, connection,
         ...(connection ? {} : { stateDir: join(simulatorProject, "agent-device-state") }), deviceId: runtime.controllerDeviceId,
         workDirectory: simulatorProject, runner, environment: controllerEnvironment,
-        agent: options.flows.agent, progress: say, ...(options.environment?.EXPLORE_FLOWS_ENGINE_MODULE ? { engineModule: options.environment.EXPLORE_FLOWS_ENGINE_MODULE } : {}) };
+        agent: options.flows.agent, frames: options.flows.frames ?? "checkpoints", progress: say, ...(options.environment?.EXPLORE_FLOWS_ENGINE_MODULE ? { engineModule: options.environment.EXPLORE_FLOWS_ENGINE_MODULE } : {}) };
       const result = await runFlows({ ...flowRunOptions, outputDirectory: flowsWorkDirectory, timeoutMs: remainingMs });
       flowRecords = result.flows;
       flowsFailure = result.failure;

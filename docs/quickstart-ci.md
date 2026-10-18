@@ -277,6 +277,7 @@ mode: flows            # or keep mode: deterministic and add flows: to capture t
 flows:
   tests:
     - e2e/**/*.e2e.ts  # paths or globs from the app directory
+  # frames: steps     # also take a frame after every step; the default keeps only the frames the flows take with app.screenshot
 ```
 
 ```ts
@@ -294,6 +295,11 @@ test("send money to a contact", async ({ app, device, screen }) => {
   await app.screenshot("review");
 });
 ```
+
+Every `app.screenshot(label)` is a frame the review compares across revisions; the label names it. For a long flow, set
+`flows.frames: steps` and Explore also takes a frame after every step (a tap, a fill, an assertion), named by its step
+number, so the Flows view shows the whole journey rather than only the checkpoints. Per-step frames cost one screenshot
+per step, so a 30-step flow takes about a minute longer per revision and appearance.
 
 - A flow starts by opening the app: `await app.open()` for a plain launch, or `device.openLink("myapp://…")` for a deep
   link. The flows run in their own agent-device session on Explore's simulator, which begins with no app in the

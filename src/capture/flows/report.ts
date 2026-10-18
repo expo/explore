@@ -43,7 +43,10 @@ function serializedError(value: unknown): { code: string; message: string } | un
 }
 
 /** Every selected test of the report, with the attempt the run counted (the last one). */
-export function summarizeFlowReport(report: unknown): FlowTestSummary[] {
+/** A frame the worker took after a step ended, when the capture asks for a frame per step. */
+export type StepFrameFile = { stepIndex: number; path: string; capturedAt: string };
+
+export function summarizeFlowReport(report: unknown, stepFrames?: ReadonlyMap<string, readonly StepFrameFile[]>): FlowTestSummary[] {
   if (!isRecord(report) || !isRecord(report.run) || !Array.isArray(report.run.results)) throw new Error("The e2e report has no run results");
   const artifacts = new Map<string, Record<string, unknown>>();
   const summaries: FlowTestSummary[] = [];
@@ -77,6 +80,18 @@ export function summarizeFlowReport(report: unknown): FlowTestSummary[] {
       }
       steps.push(summary);
     }
+    // Per-step frames fill in the steps that took no frame of their own, in the step's place.
+    for (const file of stepFrames?.get(text(result.testId) || text(result.id)) ?? []) {
+      const step = steps[file.stepIndex];
+      if (!step || step.frame !== undefined) continue;
+      const base = `step-${file.stepIndex + 1}`;
+      const seen = (keys.get(base) ?? 0) + 1;
+      keys.set(base, seen);
+      const key = seen === 1 ? base : `${base}-${seen}`;
+      step.frame = key;
+      frames.push({ key, label: `${file.stepIndex + 1}. ${step.label || step.api}`.slice(0, 80), path: file.path, stepIndex: file.stepIndex, capturedAt: file.capturedAt });
+    }
+    frames.sort((a, b) => a.stepIndex - b.stepIndex);
     const summaryError = serializedError(attempt?.error);
     const line = isRecord(result.source) && result.source.file === file && Number.isSafeInteger(result.source.line) && (result.source.line as number) > 0 ? result.source.line as number : undefined;
     summaries.push({ id: flowId(file, titlePath), file, title: titlePath.join(" › "), status, durationMs: count(attempt?.durationMs),

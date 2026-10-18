@@ -360,6 +360,9 @@ test("flows: the app's e2e tests run in flows mode or beside deterministic route
   assert.equal(flows.mode, "flows");
   assert.deepEqual(flows.flows, { tests: ["flows/*.e2e.ts", "e2e/checkout.e2e.ts"] });
   assert.deepEqual(validateExploreConfig({ ...base(), flows: { tests: "e2e/**/*.e2e.ts" } }).flows, { tests: ["e2e/**/*.e2e.ts"] });
+  assert.deepEqual(validateExploreConfig({ ...base(), flows: { tests: "e2e/a.e2e.ts", frames: "steps" } }).flows, { frames: "steps", tests: ["e2e/a.e2e.ts"] });
+  assert.deepEqual(validateExploreConfig({ ...base(), flows: { tests: "e2e/a.e2e.ts", frames: "checkpoints" } }).flows, { tests: ["e2e/a.e2e.ts"] }, "checkpoints is the default and is not kept");
+  assert.throws(() => validateExploreConfig({ ...base(), flows: { tests: "e2e/a.e2e.ts", frames: "all" } }), /flows\.frames must be "checkpoints"/);
   assert.throws(() => validateExploreConfig({ ...base(), mode: "flows" }), /flows.tests is required in flows mode/);
   assert.throws(() => validateExploreConfig({ ...base(), mode: "agent", agent: { provider: "openai", model: "m", instructions: "x.md" }, flows: { tests: ["a.e2e.ts"] } }), /cannot be combined with agent mode/);
   assert.throws(() => validateExploreConfig({ ...base(), flows: { tests: ["../outside.e2e.ts"] } }), /inside the app directory/);

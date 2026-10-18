@@ -65,3 +65,23 @@ test("steps and tests carry the e2e source line of the test file", async () => {
   assert.equal(send.steps[1].line, 4);
   assert.ok(send.line === undefined || send.line > 0);
 });
+
+test("per-step frames fill the steps that took no frame of their own, keyed by step number", () => {
+  const selected = report.run.results.find(result => result.selected !== false);
+  const stepFrames = new Map([[selected.testId, [
+    { stepIndex: 1, path: "explore-step-frames/a-1.png", capturedAt: "2026-01-01T00:00:01.000Z" },
+    { stepIndex: 0, path: "explore-step-frames/a-0.png", capturedAt: "2026-01-01T00:00:00.000Z" },
+    { stepIndex: 2, path: "explore-step-frames/a-2.png", capturedAt: "2026-01-01T00:00:02.000Z" },
+    { stepIndex: 9, path: "explore-step-frames/a-9.png", capturedAt: "2026-01-01T00:00:09.000Z" },
+  ]]]);
+  const [flow] = summarizeFlowReport(report, stepFrames);
+  assert.deepEqual(flow.steps.map(step => step.frame), ["home", "step-2", "step-3", "contacts"], "a screenshot step keeps its own frame; a step past the end is ignored");
+  assert.deepEqual(flow.frames.map(frame => [frame.key, frame.stepIndex, frame.path]), [
+    ["home", 0, flow.frames[0].path],
+    ["step-2", 1, "explore-step-frames/a-1.png"],
+    ["step-3", 2, "explore-step-frames/a-2.png"],
+    ["contacts", 3, flow.frames[3].path],
+  ], "frames come out in step order");
+  assert.equal(flow.frames[1].label, '2. getByTestId("home-send")');
+  assert.deepEqual(summarizeFlowReport(report, new Map([["other-test", [{ stepIndex: 1, path: "x.png", capturedAt: "" }]]]))[0].frames.length, 2, "frames of another test are not attached");
+});

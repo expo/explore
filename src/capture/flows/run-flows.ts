@@ -42,6 +42,8 @@ export type RunFlowsOptions = {
   environment: NodeJS.ProcessEnv;
   timeoutMs: number;
   agent?: { provider: "openai" | "anthropic"; model: string } | undefined;
+  /** `steps`: a frame after every step of every flow, not only where a flow calls app.screenshot. */
+  frames?: "checkpoints" | "steps" | undefined;
   progress?: ((message: string) => void) | undefined;
   /** Tests only: an engine module in place of agent-device. */
   engineModule?: string | undefined;
@@ -75,7 +77,7 @@ export async function runFlows(options: RunFlowsOptions): Promise<FlowsOutcome> 
 async function executeFlows(options: RunFlowsOptions, work: string, output: string, say: (message: string) => void): Promise<FlowsOutcome> {
   const request: FlowsRequest = {
     projectRoot: options.project, tests: [...options.tests], platform: options.platform, bundleId: options.bundleId, session: FLOWS_SESSION,
-    output, timeoutMs: options.timeoutMs,
+    output, timeoutMs: options.timeoutMs, frames: options.frames ?? "checkpoints",
     ...(options.connection ? { daemon: { baseUrl: options.connection.daemonBaseUrl } } : options.stateDir ? { stateDir: options.stateDir } : {}),
     ...(options.deviceId ? { deviceId: options.deviceId } : {}),
     ...(options.agent ? { agent: options.agent } : {}),

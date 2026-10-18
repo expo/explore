@@ -3,13 +3,14 @@
  * the flows are the reviewed commit's own test code, so they run with the narrowed environment the capture gives
  * them and never inside Explore's process. Reads one request file, writes one result file next to it.
  */
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { run } from "e2e/runner";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join, relative } from "node:path";
+import { run, type RunEventSink } from "e2e/runner";
+import { createAgentDeviceClient } from "agent-device";
 import type { E2EConfig } from "e2e";
 import type { EngineHandle } from "e2e/engine";
 import { mobile, type DeviceProvider } from "@e2e-dev/mobile";
-import { summarizeFlowReport } from "./report.js";
+import { summarizeFlowReport, type StepFrameFile } from "./report.js";
 
 export type FlowsRequest = {
   projectRoot: string;
@@ -21,6 +22,8 @@ export type FlowsRequest = {
   /** Where e2e writes its report and screenshots; inside the capture's private directory. */
   output: string;
   timeoutMs: number;
+  /** `steps` takes a frame after every step of a flow; `checkpoints` keeps only the frames the flows take with app.screenshot. */
+  frames: "checkpoints" | "steps";
   /** Explore's EAS session daemon; the token comes through `EXPLORE_FLOWS_DAEMON_TOKEN`. */
   daemon?: { baseUrl: string };
   /** A local agent-device daemon's state directory, when the capture runs a simulator on this machine. */
@@ -82,12 +85,45 @@ export async function runFlowsWorker(requestPath: string, environment: NodeJS.Pr
   };
   const controller = new AbortController();
   const expiry = setTimeout(() => controller.abort(), request.timeoutMs + 60_000);
+  const stepFrames = request.frames === "steps" && !request.engineModule ? stepFrameRecorder(request, token) : undefined;
   try {
-    const result = await run({ cwd: request.projectRoot, config, interruptSignal: controller.signal });
+    const result = await run({ cwd: request.projectRoot, config, interruptSignal: controller.signal, ...(stepFrames ? { onEvent: stepFrames.onEvent } : {}) });
+    const frames = stepFrames ? await stepFrames.finish() : undefined;
     const report = result.report as unknown as { run: { errors?: unknown[] } };
     const output: FlowsResult = { status: result.status, exitCode: result.exitCode,
       errors: (report.run.errors ?? []).flatMap(error => error && typeof error === "object" ? [{ code: String((error as { code?: unknown }).code ?? "ERROR"), message: String((error as { message?: unknown }).message ?? "") }] : []),
-      artifactsRoot: join(request.output, "results"), tests: summarizeFlowReport(result.report) };
+      artifactsRoot: join(request.output, "results"), tests: summarizeFlowReport(result.report, frames) };
     await writeFile(join(request.output, "explore-flows.json"), JSON.stringify(output), { mode: 0o600 });
   } finally { clearTimeout(expiry); }
+}
+
+/**
+ * Takes a frame of the flows' session after every step ends, through the same daemon e2e drives it on. e2e does not wait
+ * for a reporter, so the frame shows the device as the next step begins; a frame that fails is skipped, not fatal.
+ */
+export function stepFrameRecorder(request: FlowsRequest, token: string | undefined): { onEvent: RunEventSink; finish: () => Promise<Map<string, StepFrameFile[]>> } {
+  const root = join(request.output, "results");
+  const directory = join(root, "explore-step-frames");
+  const client = createAgentDeviceClient({
+    session: request.session,
+    ...(request.daemon ? { daemonBaseUrl: request.daemon.baseUrl, daemonAuthToken: token } : { stateDir: request.stateDir, daemonBaseUrl: "", daemonAuthToken: "", daemonTransport: "auto" }),
+  } as Parameters<typeof createAgentDeviceClient>[0]);
+  const frames = new Map<string, StepFrameFile[]>();
+  const pending: Promise<void>[] = [];
+  let ready: Promise<void> | undefined;
+  return {
+    onEvent(event) {
+      if (event.type !== "step" || event.progress.phase !== "end" || event.progress.status !== "passed") return;
+      const { testId } = event;
+      const stepIndex = event.progress.identity?.stepIndex;
+      if (stepIndex === undefined) return;
+      const file = join(directory, `${testId.replace(/[^A-Za-z0-9._-]+/g, "_")}-${stepIndex}.png`);
+      ready ??= mkdir(directory, { recursive: true }).then(() => undefined);
+      pending.push(ready
+        .then(() => client.capture.screenshot({ path: file }))
+        .then(() => { (frames.get(testId) ?? frames.set(testId, []).get(testId)!).push({ stepIndex, path: relative(root, file), capturedAt: new Date().toISOString() }); })
+        .catch(error => { process.stderr.write(`explore: step frame ${stepIndex + 1} of ${testId} was not taken: ${(error as Error).message}\n`); }));
+    },
+    async finish() { await Promise.all(pending); return frames; },
+  };
 }
