@@ -1,7 +1,7 @@
 import { type CSSProperties, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import { ToggleGroup } from "../shared/toggle-group";
-import { ChangeOutlines, HomeIndicatorBand, StatusBarBand } from "../panels/visual-diff";
+import { ChangeOutlines, SystemRegionBands } from "../panels/visual-diff";
 import { WhatChangedContent, type LayoutShift } from "./compare-header";
 import {
   CompareStage,
@@ -110,8 +110,7 @@ export function SidebarReview(props: CompareControllerOptions) {
     ? (
       <>
         <ChangeOutlines changes={areas} activeIndex={activeArea} />
-        {compare.statusBarIgnored ? <StatusBarBand /> : null}
-        {compare.homeIndicatorIgnored ? <HomeIndicatorBand /> : null}
+        <SystemRegionBands regions={compare.systemRegions} />
       </>
     )
     : null;
@@ -135,8 +134,7 @@ export function SidebarReview(props: CompareControllerOptions) {
           areas={areas}
           activeArea={activeArea}
           showOutlines={compare.shownOutlines}
-          statusBarIgnored={compare.statusBarIgnored}
-          homeIndicatorIgnored={compare.homeIndicatorIgnored}
+          systemRegions={compare.systemRegions}
           overlay={overlay}
           flipSide={compare.flipSide}
           onFlip={compare.flip}

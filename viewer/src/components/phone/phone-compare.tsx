@@ -1,7 +1,7 @@
 import { useRef, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { List, ScanSearch } from "lucide-react";
 import { ToggleGroup } from "../shared/toggle-group";
-import { ChangeOutlines, HomeIndicatorBand, StatusBarBand } from "../panels/visual-diff";
+import { ChangeOutlines, SystemRegionBands } from "../panels/visual-diff";
 import { CompareNav, CompareSteps, WhatChangedContent } from "../compare/compare-header";
 import {
   CompareStage,
@@ -41,8 +41,7 @@ export function PhoneCompare(props: CompareControllerOptions & {
   const overlay = compare.shownOutlines ? (
     <>
       <ChangeOutlines changes={areas} activeIndex={activeArea} />
-      {compare.statusBarIgnored ? <StatusBarBand /> : null}
-        {compare.homeIndicatorIgnored ? <HomeIndicatorBand /> : null}
+      <SystemRegionBands regions={compare.systemRegions} />
     </>
   ) : null;
   const facts = compare.split.visible.map((fact) => fact.copy);
@@ -109,8 +108,7 @@ export function PhoneCompare(props: CompareControllerOptions & {
           areas={areas}
           activeArea={activeArea}
           showOutlines={compare.shownOutlines}
-          statusBarIgnored={compare.statusBarIgnored}
-          homeIndicatorIgnored={compare.homeIndicatorIgnored}
+          systemRegions={compare.systemRegions}
           overlay={overlay}
           flipSide={compare.flipSide}
           onFlip={compare.flip}

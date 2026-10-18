@@ -592,6 +592,7 @@ export function publicReviewProjection(review: PublicReview): ViewerReviewProjec
         ...(surface.visual?.mismatchPercentage !== undefined ? { mismatchPercentage: surface.visual.mismatchPercentage } : {}),
         ...(surface.visual?.ignoredStatusBarRegions ? { ignoredStatusBarRegions: surface.visual.ignoredStatusBarRegions } : {}),
         ...(surface.visual?.ignoredHomeIndicatorRegions ? { ignoredHomeIndicatorRegions: surface.visual.ignoredHomeIndicatorRegions } : {}),
+        ...(surface.visual?.systemRegions ? { systemRegions: surface.visual.systemRegions } : {}),
         ...(surface.visual?.allRegionsMoved ? { allRegionsMoved: true } : {}),
         regions: (surface.visual?.regions ?? []).map((region) => {
           const move = regionMove(region, review.runtime.platform);
@@ -633,6 +634,7 @@ export function publicReviewProjection(review: PublicReview): ViewerReviewProjec
         ...(entry.visual.mismatchPercentage !== undefined ? { mismatchPercentage: entry.visual.mismatchPercentage } : {}),
         ...(entry.visual.ignoredStatusBarRegions ? { ignoredStatusBarRegions: entry.visual.ignoredStatusBarRegions } : {}),
         ...(entry.visual.ignoredHomeIndicatorRegions ? { ignoredHomeIndicatorRegions: entry.visual.ignoredHomeIndicatorRegions } : {}),
+        ...(entry.visual.systemRegions ? { systemRegions: entry.visual.systemRegions } : {}),
         regions: (entry.visual.regions ?? []).map((region) => ({ ...region.normalizedRect, share: region.shareOfDiffPercentage })),
       })
       : undefined;
