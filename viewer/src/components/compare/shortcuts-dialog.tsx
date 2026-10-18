@@ -81,7 +81,7 @@ export function shortcutGroups(context: ShortcutContext): Group[][] {
       ...(CANVAS_NUMBER_KEYS
         ? [{ label: "The same, by their place in the toolbar", keys: sections.map((section) => SHORTCUTS.canvasByNumber[section]) }]
         : []),
-      { label: "Search screens", keys: [SHORTCUTS.app.search] },
+      { label: "Search screens and commands", keys: [SHORTCUTS.app.search] },
       { label: "Find a screen on the Screens page", keys: ["/"] },
       ...(context.handoff ? [{ label: "Hand off to AI", keys: [SHORTCUTS.app.handoff] }] : []),
       ...(context.hasChanges ? [{ label: "Changed screens menu", keys: [SHORTCUTS.app.changes] }] : []),
