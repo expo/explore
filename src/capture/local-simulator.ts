@@ -294,8 +294,9 @@ export async function reservePort(port: number, environment: NodeJS.ProcessEnv):
   const abandoned = async (path: string) => {
     const info = await stat(path).catch(() => undefined);
     if (!info) return false;
-    const owner = await readFile(join(path, "owner"), "utf8").catch(() => undefined);
-    return owner === undefined ? Date.now() - info.mtimeMs > 10_000 : !processAlive(Number(owner));
+    // writeFile creates the owner file before it writes the pid, so an empty one is a holder mid-write too.
+    const owner = await readFile(join(path, "owner"), "utf8").catch(() => "");
+    return owner === "" ? Date.now() - info.mtimeMs > 10_000 : !processAlive(Number(owner));
   };
   for (;;) {
     try { await mkdir(mutex); await writeFile(join(mutex, "owner"), String(process.pid)); break; }

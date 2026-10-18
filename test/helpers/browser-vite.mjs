@@ -27,7 +27,10 @@ export async function createBrowserVite(test, options) {
   });
   const requested = options.server;
   const port = requested?.port === 0 ? await freePort(requested.host ?? "127.0.0.1") : requested?.port;
-  server = await createServer({ ...options, cacheDir,
+  // A cold cacheDir optimizes dependencies as the page asks for them; one found late (the JSX dev runtime, which
+  // esbuild's JSX imports) makes Vite reload the page, dropping whatever the test has done in it.
+  const optimizeDeps = { ...options.optimizeDeps, include: [...(options.optimizeDeps?.include ?? []), "react/jsx-dev-runtime"] };
+  server = await createServer({ ...options, cacheDir, optimizeDeps,
     ...(requested ? { server: { ...requested, port, ...(requested.port === 0 ? { strictPort: true } : {}) } } : {}) });
   return server;
 }

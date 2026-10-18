@@ -8,11 +8,13 @@ import { createHash } from 'node:crypto';
 import { PNG } from 'pngjs';
 import { AGENT_DEVICE_VERSION } from '../../dist/capture/run.js';
 import { CAPTURE_OBSERVER_IDENTIFIER } from '../../dist/capture/observer.js';
+import { controllerCacheRoot, ensureController } from '../../dist/shared/controller-cache.js';
 import { writeCaptureObserverPackages } from './capture-observer-fixture.mjs';
 
 /**
  * In-process public CI fixture: a git project with base/head commits plus mocked `eas`, `repack-app`,
- * `agent-device` and GitHub transports, so a review runs end to end without network or a simulator.
+ * `agent-device` and GitHub transports, so a review runs end to end without a simulator, and without network once the
+ * real agent-device that compares screenshots is cached.
  */
 
 export const PROJECT_ID = '00000000-0000-4000-8000-000000000001';
@@ -27,6 +29,17 @@ export const usageReceipt = (overrides = {}) => ({ provider: 'anthropic', model:
   totals: { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 40, estimatedCostUsd: 0.012 },
   models: [{ model: 'fixture-model', inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 40, estimatedCostUsd: 0.012, costBasis: 'list' }],
   ...overrides });
+
+/**
+ * The review's screenshot comparison runs the real agent-device, which fetches itself on first use. The fixture fetches
+ * it once, with retries, into the machine's controller cache, so a review never downloads it mid-run.
+ */
+const CONTROLLER_CACHE = controllerCacheRoot(process.env);
+for (let attempt = 1; ; attempt++) {
+  try { await ensureController('agent-device', { environment: { ...process.env, EXPLORE_CONTROLLER_CACHE: CONTROLLER_CACHE } }); break; }
+  catch (error) { if (attempt === 3) throw error; await new Promise(resolve => setTimeout(resolve, attempt * 2_000)); }
+}
+
 export async function readUsage(output) {
   const path = join(output, 'agent-usage.jsonl');
   assert.equal((await stat(path)).mode & 0o777, 0o600, 'usage receipts are private artifacts');
@@ -103,7 +116,7 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
   const pr = { repositoryId: '123', repository: 'acme/example', number: 7, title: 'Source capture integration', url: 'https://github.com/acme/example/pull/7',
     base: { ref: 'main', sha: baseSha }, head: { ref: 'feature', sha: headSha } };
   const pullRequestPath = join(root, 'pull-request.json'); await writeFile(pullRequestPath, JSON.stringify(pr));
-  const environment = { PATH: process.env.PATH, HOME: root, RUNNER_TEMP: root, EXPO_TOKEN: 'test-expo-secret', GITHUB_TOKEN: 'test-github-secret',
+  const environment = { PATH: process.env.PATH, HOME: root, RUNNER_TEMP: root, EXPLORE_CONTROLLER_CACHE: CONTROLLER_CACHE, EXPO_TOKEN: 'test-expo-secret', GITHUB_TOKEN: 'test-github-secret',
     GITHUB_RUN_ID: '1234', GITHUB_RUN_ATTEMPT: '1', GITHUB_REPOSITORY: pr.repository, TOOLS_COMMIT: 'c'.repeat(40), EXPLORE_VIEWER_ORIGIN: 'https://viewer.example' };
   const requests = []; const comments = []; const sessions = new Map(); let currentSession; const idleDevice = { path: '/', scheme: 'light' }; let sessionCounter = 0; let repackedSha; let openFailed = false;
   const identity = (session) => ({ session: 'expo-explore-runtime', appBundleId: config.app.bundleId,
@@ -206,7 +219,7 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
         ] });
       }
       if (command === 'settings') { if (request.args[1] === 'appearance') device.scheme = request.args[2]; return ok({ setting: request.args[1], value: request.args[2] }); }
-      if (command === 'screenshot') { const color = createHash('sha256').update(`${device.path}:${device.scheme}:${device.path === '/home' ? device.build : 'unchanged-source'}`).digest(); const data = Buffer.alloc(16 * 24 * 4); for (let i = 0; i < data.length; i += 4) { data[i] = color[0]; data[i + 1] = color[1]; data[i + 2] = color[2]; data[i + 3] = 255; } writeFileSync(request.args[1], PNG.sync.write({ width: 16, height: 24, data })); return ok({ path: request.args[1] }); }
+      if (command === 'screenshot') { const color = createHash('sha256').update(`${device.path}:${device.scheme}:${device.path === '/home' ? device.build : 'unchanged-source'}`).digest(); /* Hashed colours can land within the diff threshold, so /home's red channel keeps the base build apart from any other. */ if (device.path === '/home') color[0] = device.build?.endsWith(baseSha) ? 0 : 255; const data = Buffer.alloc(16 * 24 * 4); for (let i = 0; i < data.length; i += 4) { data[i] = color[0]; data[i + 1] = color[1]; data[i + 2] = color[2]; data[i + 3] = 255; } writeFileSync(request.args[1], PNG.sync.write({ width: 16, height: 24, data })); return ok({ path: request.args[1] }); }
     }
     throw new Error(`Unexpected mocked command: ${request.command} ${request.args.join(' ')}`);
   };

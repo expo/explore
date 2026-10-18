@@ -268,7 +268,8 @@ export async function runCiReview(options: {
   const { projects, output, config, environment, state, assertCurrentHead, postComment } = options;
   const progress = options.progress ?? silentProgress;
   // The controllers are fetched before any EAS work, so a blocked download fails before a session is paid for. agent-device
-  // also compares the screenshots. An injected runner (tests) runs no real controller.
+  // also compares the screenshots. An injected runner (tests) stands in for the controllers' calls, but not for that
+  // comparison: it still runs the real agent-device, which fetches itself on first use.
   if (!options.runner) await prefetchControllers(config, environment, progress);
   const pr = options.presentation;
   const now = options.now ?? Date.now;

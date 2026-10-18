@@ -272,6 +272,8 @@ test("choosing the report file opens it with the link's selection and keeps Modi
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await page.getByRole("button", { name: "Screens", exact: true }).click();
   const screenshot = page.locator(".screens-page img[data-screenshot-src]").first();
+  // The placeholder is the screenshot's size too, so wait for the screenshot itself.
+  await expect(screenshot).toHaveAttribute("data-screenshot-state", "ready");
   await expect.poll(() => screenshot.evaluate(image => image.naturalWidth)).toBe(32);
   const screenshotUrl = await screenshot.getAttribute("src");
   assert.match(page.url(), /#\/screens/);
@@ -328,6 +330,8 @@ test("a reload and a later per-screen link reopen the dropped report from the br
   await expect(page.getByText("Greeting changed from Hello to Welcome", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Screens", exact: true }).click();
   const screenshot = page.locator(".screens-page img[data-screenshot-src]").first();
+  // The placeholder is the screenshot's size too, so wait for the screenshot itself.
+  await expect(screenshot).toHaveAttribute("data-screenshot-state", "ready");
   await expect.poll(() => screenshot.evaluate(image => image.naturalWidth)).toBe(32);
   // Comment links to one screen carry the same run identity, so they open without a new drop.
   await page.goto(`${origin}/r?${new URLSearchParams(identity)}&screen=home&inspect=diff`);
