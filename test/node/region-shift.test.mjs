@@ -206,6 +206,18 @@ test("something new where the card was stays a change: the move takes only the p
   const head = overlay(cardFrame({ x: 330 }), cardFrame({ x: 60, seed: 99 }));
   assert.deepEqual(regionMoves(cardFrame(), head, farMove, [undefined, undefined]),
     [{ rect: { x: 330, y: 80, width: 150, height: 120 }, shift: { x: 270, y: 0 }, members: [1] }]);
+  // A flat panel in another colour than the backdrop around it: nothing spreads, but it is not the backdrop.
+  const panel = withBlock(cardFrame({ x: 330 }), { x: 60, y: 80, width: 150, height: 120, value: 180 });
+  assert.deepEqual(regionMoves(cardFrame(), panel, farMove, [undefined, undefined])[0]?.members, [1]);
+  // An 8×8 badge where a large card was: a small mark in a large plain area is still something drawn.
+  const large = [
+    { x: 60, y: 80, width: 300, height: 400, dominantChange: "brighter" },
+    { x: 600, y: 80, width: 300, height: 400, dominantChange: "darker" },
+  ];
+  const card = x => cardFrame({ width: 960, height: 560, x, cardWidth: 300, cardHeight: 400 });
+  assert.deepEqual(regionMoves(card(60), card(600), large, [undefined, undefined])[0]?.members, [1, 0], "plain backdrop joins the move");
+  const badge = withBlock(card(600), { x: 200, y: 250, width: 8, height: 8, value: 0 });
+  assert.deepEqual(regionMoves(card(60), badge, large, [undefined, undefined])[0]?.members, [1]);
 });
 
 test("content that did not arrive intact is not a move: part of it deleted, or something changed inside it", () => {
@@ -215,6 +227,16 @@ test("content that did not arrive intact is not a move: part of it deleted, or s
   // The card moved, and an 8×8 white mark appeared inside it: a badge is a change, however small.
   const marked = withBlock(cardFrame({ x: 330 }), { x: 400, y: 130, width: 8, height: 8, value: 255 });
   assert.deepEqual(regionMoves(cardFrame(), marked, farMove, [undefined, undefined]), []);
+  // Changes of moderate contrast on the dark card: a grey badge, and a button in another shade.
+  for (const block of [{ x: 400, y: 130, width: 8, height: 8, value: 120 }, { x: 340, y: 160, width: 40, height: 20, value: 60 }]) {
+    assert.deepEqual(regionMoves(cardFrame(), withBlock(cardFrame({ x: 330 }), block), farMove, [undefined, undefined]), [], JSON.stringify(block));
+  }
+});
+
+test("a hairline that differs where the content arrived is not a change: antialiased edges against another backdrop", () => {
+  // Two pixels wide and of moderate contrast, as the curve under euxy's Patterns chevrons (brentvatne/euxy#163).
+  const crossed = withBlock(cardFrame({ x: 330 }), { x: 330, y: 150, width: 150, height: 2, value: 90 });
+  assert.deepEqual(regionMoves(cardFrame(), crossed, farMove, [undefined, undefined])[0]?.shift, { x: 270, y: 0 });
 });
 
 test("content that is the same all down a move along a row keeps the move in line", () => {

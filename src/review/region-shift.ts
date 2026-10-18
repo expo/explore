@@ -63,12 +63,15 @@ function at(source: Image, x: number, y: number, channel?: number): number {
   return value(x0, y0) * (1 - fx) * (1 - fy) + value(x1, y0) * fx * (1 - fy) + value(x0, y1) * (1 - fx) * fy + value(x1, y1) * fx * fy;
 }
 
-/** How badly After's region matches Before shifted by (sx, sy). */
+/** How badly After's region matches Before shifted by (sx, sy). A whole-pixel shift reads Before's pixels directly. */
 function mismatch(base: Image, head: Image, rect: Rect, sx: number, sy: number): number {
+  const whole = Number.isInteger(sx) && Number.isInteger(sy);
   let error = 0;
   for (let y = rect.y; y < rect.y + rect.height; y += 1) {
+    const by = Math.min(base.height - 1, Math.max(0, y - sy));
     for (let x = rect.x; x < rect.x + rect.width; x += 1) {
-      error += Math.abs(at(base, x - sx, y - sy) - head.luminance[y * head.width + x]!);
+      const before = whole ? base.luminance[by * base.width + Math.min(base.width - 1, Math.max(0, x - sx))]! : at(base, x - sx, y - sy);
+      error += Math.abs(before - head.luminance[y * head.width + x]!);
     }
   }
   return error;
@@ -162,8 +165,14 @@ const MIN_EXPLAINED_LARGE = MIN_EXPLAINED;
 const CHANGED_SHARE = 0.001;
 /** How far across the move a large one may also drift, as layout below a moved element does; ties keep it in line. */
 const ACROSS_OFFSETS = [0, -1, 1, -2, 2, -3, 3];
-/** The most After's luminance may spread where content left and still be plain backdrop, nothing new drawn there. */
-const PLAIN_SPREAD = 6;
+/**
+ * Blocks that give something drawn away, where every pixel differs by more than `channel` in some channel: a 2×2
+ * block of strongly different pixels (an icon, a badge, a mark), or a 4×4 block of moderately different ones (a
+ * tint, a low-contrast label, a grey badge). Antialiased edges and hairlines against another backdrop are thinner:
+ * the chevrons in euxy's Patterns rows (brentvatne/euxy#163) cross a curve that differs by up to 69 in 3×3 blocks
+ * but only 26 in 4×4 ones, while a grey "Off" label the move did not bring differs by 55 in 4×4 blocks.
+ */
+const SOLID_BLOCKS = [{ size: 2, channel: CHANGED_CHANNEL }, { size: 4, channel: 40 }];
 
 const extent = (rect: Rect, axis: Axis) => axis === "x" ? { start: rect.x, size: rect.width } : { start: rect.y, size: rect.height };
 const across = (axis: Axis): Axis => axis === "x" ? "y" : "x";
@@ -194,41 +203,46 @@ function profile(source: Image, axis: Axis, bandStart: number, bandEnd: number):
 }
 
 /**
- * Whether, aligned by an integer move, some of the region still differs strongly: content that changed, not only
- * moved. A whole-pixel move copies the pixels, so only a sliver may differ (antialiased edges against another
- * backdrop, never more than CHANGED_SHARE of the region), and never a block: a 2×2 block of strongly different pixels
- * is something drawn (an icon, a badge, a mark), however small. Pixels the move brings in from off screen differ.
+ * Whether a region holds something drawn: a solid block (SOLID_BLOCKS), or more than `allowed` strongly different
+ * pixels anywhere. `difference` is how much the pixel at (x, y) differs, in its most different channel.
  */
-function changedAfterLargeMove(base: Image, head: Image, rect: Rect, sx: number, sy: number): boolean {
-  const allowed = Math.max(CHANGED_PIXELS, rect.width * rect.height * CHANGED_SHARE);
-  let row = new Uint8Array(rect.width), previous = new Uint8Array(rect.width);
+function drawnIn(rect: Rect, difference: (x: number, y: number) => number, allowed = Infinity): boolean {
+  // Per block: how many pixels differ in a row up to here, and for each column, how many rows have such a run.
+  const blocks = SOLID_BLOCKS.map(block => ({ ...block, run: 0, rows: new Uint32Array(rect.width) }));
   let strong = 0;
   for (let y = rect.y; y < rect.y + rect.height; y += 1) {
-    const by = y - sy;
-    row.fill(0);
+    for (const block of blocks) block.run = 0;
     for (let x = rect.x; x < rect.x + rect.width; x += 1) {
-      const bx = x - sx, column = x - rect.x;
-      let differs = bx < 0 || by < 0 || bx >= base.width || by >= base.height;
-      if (!differs) {
-        const h = (y * head.width + x) * 4, b = (by * base.width + bx) * 4;
-        for (let channel = 0; channel < 3 && !differs; channel += 1) {
-          differs = Math.abs(base.frame.data[b + channel]! - head.frame.data[h + channel]!) > CHANGED_CHANNEL;
-        }
+      const value = difference(x, y), column = x - rect.x;
+      if (value > CHANGED_CHANNEL && ++strong > allowed) return true;
+      for (const block of blocks) {
+        block.run = value > block.channel ? block.run + 1 : 0;
+        block.rows[column] = block.run >= block.size ? block.rows[column]! + 1 : 0;
+        if (block.rows[column]! >= block.size) return true;
       }
-      if (!differs) continue;
-      row[column] = 1;
-      strong += 1;
-      if (strong > allowed) return true;
-      if (column > 0 && row[column - 1] && previous[column] && previous[column - 1]) return true;
     }
-    [row, previous] = [previous, row];
   }
   return false;
 }
 
-/** How much of a region's difference an integer move explains: 1 is all of it, 0 none. */
-function explained(base: Image, head: Image, rect: Rect, shift: RegionShift): number {
-  const unshifted = mismatch(base, head, rect, 0, 0);
+/**
+ * Whether, aligned by an integer move, some of the region still differs: content that changed, not only moved. A
+ * whole-pixel move copies the pixels, so only a sliver may differ strongly (antialiased edges against another
+ * backdrop, never more than CHANGED_SHARE of the region), and never a solid block. Pixels the move brings in from
+ * off screen differ.
+ */
+function changedAfterLargeMove(base: Image, head: Image, rect: Rect, sx: number, sy: number): boolean {
+  return drawnIn(rect, (x, y) => {
+    const bx = x - sx, by = y - sy;
+    if (bx < 0 || by < 0 || bx >= base.width || by >= base.height) return 255;
+    const h = (y * head.width + x) * 4, b = (by * base.width + bx) * 4;
+    return Math.max(Math.abs(base.frame.data[b]! - head.frame.data[h]!), Math.abs(base.frame.data[b + 1]! - head.frame.data[h + 1]!),
+      Math.abs(base.frame.data[b + 2]! - head.frame.data[h + 2]!));
+  }, Math.max(CHANGED_PIXELS, rect.width * rect.height * CHANGED_SHARE));
+}
+
+/** How much of a region's difference an integer move explains: 1 is all of it, 0 none. `unshifted` is the region's own. */
+function explained(base: Image, head: Image, rect: Rect, shift: RegionShift, unshifted = mismatch(base, head, rect, 0, 0)): number {
   return unshifted === 0 ? 0 : 1 - mismatch(base, head, rect, shift.x, shift.y) / unshifted;
 }
 
@@ -238,18 +252,27 @@ function movedIntact(base: Image, head: Image, rect: Rect, shift: RegionShift): 
     && !changedAfterLargeMove(base, head, rect, shift.x, shift.y);
 }
 
-/** Whether a part of After is plain backdrop: its luminance hardly spreads, so nothing is drawn there. */
-function plain(head: Image, rect: Rect): boolean {
+/**
+ * Whether a part of After where content left is plain backdrop: the colour around it (the median of the pixels just
+ * outside it, not in the moved content's `outline`), with nothing drawn on it. A part with nothing around it is not.
+ */
+function plain(head: Image, rect: Rect, outline: Rect): boolean {
   if (rect.width <= 0 || rect.height <= 0) return true;
-  let sum = 0, squares = 0, count = 0;
-  for (let y = rect.y; y < rect.y + rect.height; y += PROFILE_STEP) {
-    for (let x = rect.x; x < rect.x + rect.width; x += PROFILE_STEP) {
-      const value = head.luminance[y * head.width + x]!;
-      sum += value; squares += value * value; count += 1;
-    }
-  }
-  const mean = sum / count;
-  return Math.sqrt(Math.max(0, squares / count - mean * mean)) <= PLAIN_SPREAD;
+  const around: number[][] = [[], [], []];
+  const add = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= head.width || y >= head.height) return;
+    if (x >= outline.x && y >= outline.y && x < outline.x + outline.width && y < outline.y + outline.height) return;
+    for (let channel = 0; channel < 3; channel += 1) around[channel]!.push(head.frame.data[(y * head.width + x) * 4 + channel]!);
+  };
+  for (let x = rect.x - 1; x <= rect.x + rect.width; x += 1) { add(x, rect.y - 1); add(x, rect.y + rect.height); }
+  for (let y = rect.y; y < rect.y + rect.height; y += 1) { add(rect.x - 1, y); add(rect.x + rect.width, y); }
+  if (!around[0]!.length) return false;
+  const backdrop = around.map(values => values.sort((a, b) => a - b)[values.length >> 1]!);
+  return !drawnIn(rect, (x, y) => {
+    const offset = (y * head.width + x) * 4;
+    return Math.max(Math.abs(head.frame.data[offset]! - backdrop[0]!), Math.abs(head.frame.data[offset + 1]! - backdrop[1]!),
+      Math.abs(head.frame.data[offset + 2]! - backdrop[2]!));
+  });
 }
 
 /** The parts of `rect` before and after `outline` along `axis`: what is left of it outside the outline. */
@@ -306,9 +329,10 @@ function pairMove(base: Image, head: Image, left: Rect, arrived: Rect, axis: Axi
   // The pixels decide: across the move it may also drift a little, as content below a moved element does. A tie
   // keeps the move in line (content the same all across it fits every drift equally).
   let chosen: RegionShift | undefined, fit = -Infinity;
+  const unshifted = mismatch(base, head, arrived, 0, 0);
   for (const other of ACROSS_OFFSETS) {
     const shift = shiftAlong(axis, best.distance, other);
-    const share = explained(base, head, arrived, shift);
+    const share = explained(base, head, arrived, shift, unshifted);
     if (share > fit) { fit = share; chosen = shift; }
   }
   if (!chosen || fit < MIN_EXPLAINED_LARGE || changedAfterLargeMove(base, head, arrived, chosen.x, chosen.y)) return undefined;
@@ -351,7 +375,7 @@ export function regionMoves(baseFrame: DecodedFrame, headFrame: DecodedFrame,
         let rect = clip(union(arrived, { ...left, x: left.x + shift.x, y: left.y + shift.y }), head.width, head.height);
         open.delete(i); open.delete(j);
         // Where the content left: plain backdrop belongs to the move, anything drawn there is a change of its own.
-        const members = outside(left, rect, axis).every(part => plain(head, part)) ? [arrivedIndex, leftIndex] : [arrivedIndex];
+        const members = outside(left, rect, axis).every(part => plain(head, part, rect)) ? [arrivedIndex, leftIndex] : [arrivedIndex];
         // Fragments of the same element inside its new place, where the old and new overlap.
         for (const k of [...open]) {
           const fragment = clipped[k]!;
