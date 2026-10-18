@@ -520,3 +520,28 @@ for (const failedPhase of ['preflight', 'capture-head']) {
     assert.doesNotMatch(f.comments.join('\n'), /agent-usage|estimatedCostUsd|cacheReadInputTokens|query-pipeline/);
   });
 }
+
+test('an excluded route is flagged in the published review and never captured on either side', async t => {
+  const f = await fixture(t, 'expo-router');
+  t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
+  const output = join(f.root, 'review');
+  const result = await runPublicCi({ baseProject: f.baseProject, headProject: f.headProject, pullRequestPath: f.pullRequestPath, output,
+    config: { ...f.config, exploration: { scope: 'changes', exclude: ['/settings'] } }, environment: f.environment,
+    transport: f.transport, runner: f.runner, now: f.now, sleep: f.sleep });
+  const plan = JSON.parse(await readFile(join(output, 'execution-plan.json'), 'utf8'));
+  const settings = plan.surfaces.find(surface => surface.headSurface?.route === '/settings');
+  assert.deepEqual(plan.excludedSurfaceIds, [settings.id]);
+  for (const side of ['base', 'head']) {
+    const bundle = await readCaptureBundle(join(output, `${side}-export`));
+    assert.equal(settings.id in bundle.outcomes, false, `${side}: an excluded route is not captured`);
+  }
+  const packaged = await exportCiReport({ inputPath: result.inputPath, outputPath: join(f.root, 'artifact') });
+  const report = JSON.parse(await readFile(join(packaged.outputPath, 'review.json'), 'utf8'));
+  const published = report.review.surfaces.find(surface => surface.id === settings.id);
+  assert.equal(published.excluded, true);
+  assert.equal(published.headImage ?? published.baseImage ?? published.headOutcome ?? published.baseOutcome, undefined);
+  assert.ok(report.review.surfaces.filter(surface => surface.id !== settings.id).every(surface => surface.excluded === undefined));
+  // /home changed and links to /settings: the neighbor is still captured, the excluded route is not a missing screen.
+  const home = report.review.surfaces.find(surface => surface.head?.route === '/home');
+  assert.ok(home.headImage && home.baseImage);
+});

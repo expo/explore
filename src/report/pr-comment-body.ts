@@ -222,7 +222,7 @@ function launchLine(review: PublicReview): string | undefined {
 
 function contextLines(review: PublicReview): string[] {
   const variants = review.surfaces.filter(surface => surface.review?.status === "variant").length;
-  const appWide = review.surfaces.filter(surface => surface.sourceScope === "app-wide");
+  const appWide = review.surfaces.filter(surface => surface.sourceScope === "app-wide" && !surface.excluded);
   const files = [...new Set(appWide.flatMap(surface => surface.sourceChange?.files.filter(file => file.relation === "global").map(file => file.path) ?? []))].sort();
   const lines: string[] = [];
   const launch = launchLine(review);
