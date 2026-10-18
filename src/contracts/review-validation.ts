@@ -148,7 +148,8 @@ function validFlowSide(value: unknown): value is PublicFlowSide {
 /** Flow evidence is one entry per flow either side ran, with a verdict only for frames both sides took. */
 function assertFlowEvidence(review: PublicReview, enforceComparisonEvidence: boolean): void {
   const flows = review.flows;
-  if (flows === undefined) return;
+  // Reports from before flow evidence carry a structural `flows` object (source-derived groups); it is not evidence.
+  if (flows === undefined || (flows !== null && typeof flows === "object" && !Array.isArray(flows))) return;
   if (!Array.isArray(flows) || flows.length === 0 || flows.length > 1_000) throw new Error("Public flow evidence is invalid");
   const ids = new Set<string>();
   for (const entry of flows) {

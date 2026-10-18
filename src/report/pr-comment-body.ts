@@ -196,7 +196,7 @@ function previewExpiry(expiresAt: number): string {
  */
 /** "Flow Send money: passed, 4 frames, 1 changed" — one line per e2e flow the capture ran. */
 function flowLines(review: PublicReview): string[] {
-  return (review.flows ?? []).map(entry => {
+  return (Array.isArray(review.flows) ? review.flows : []).map(entry => {
     const side = (name: "base" | "head") => {
       const flow = entry[name];
       if (!flow) return `not run on ${name}`;

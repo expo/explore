@@ -412,7 +412,7 @@ function sidePayload(review: PublicReview, side: Side): { map: ExploreMap; cover
   }
   // The app's flows sit outside the route graph too: each frame a flow took is a screen, and the flow is a journey
   // through them in step order. A side that failed before a frame has a gap there naming the step that failed.
-  for (const entry of review.flows ?? []) {
+  for (const entry of Array.isArray(review.flows) ? review.flows : []) {
     const flow = entry[side];
     const screenIds: string[] = [];
     for (const frame of entry.frames) {
