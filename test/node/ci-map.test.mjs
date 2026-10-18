@@ -111,7 +111,9 @@ async function fixture(t, settings = {}) {
   const planPath = join(root, 'plan.json'); await writeFile(planPath, JSON.stringify(plan));
   const requests = [];
   let current = '/'; let snapshots = 0; let sessionName; let screenshotAttempts = 0; let splashLeft = 0; let recordingPath = ''; let alert = null; let appearance = 'light'; let alertReads = 0;
-  let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let deviceLost = false; let relaunchedAfterForeign = false; let serverStarts = 0; let unreadableLeft = settings.unreadableAfterFold ?? 0; let foldUnverifiedLeft = settings.foldUnverified ?? 0;
+  let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let deviceLost = false; let relaunchedAfterForeign = false; let serverStarts = 0; let unreadableLeft = settings.unreadableAfterFold ?? 0;
+  // startsErrored / startsUnnamed: how many session starts EAS fails, after naming the session (it ERRORS) or before.
+  let starts = 0; let currentSession = 'session-1'; const erroredSessions = new Set(); let foldUnverifiedLeft = settings.foldUnverified ?? 0;
   const deviceName = settings.android ? 'Pixel 7' : 'iPhone 17 Pro';
   const platform = settings.android ? 'android' : 'ios';
   // A local simulator is the one the capture created, named for Explore.
@@ -184,11 +186,11 @@ async function fixture(t, settings = {}) {
       if (command === 'simulator:availability') return json({ available: settings.available !== false });
       // controlActions: what the session's serve-sim offers through simulator:control (none unless a test names them).
       if (command === 'simulator:control') {
-        assert.equal(value(request, '--id'), 'session-1', 'simulator:control names the session');
+        assert.equal(value(request, '--id'), currentSession, 'simulator:control names the session');
         if (request.args.includes('--list')) return json(Object.fromEntries((settings.controlActions ?? []).map(action => [action, { type: 'object' }])));
         assert.ok((settings.controlActions ?? []).includes(request.args[1]), `${request.args[1]} is offered by the session`);
         if (request.args[1] === 'appearance.set') appearance = request.args.at(-1);
-        return json({ id: 'session-1', action: request.args[1], output: '' });
+        return json({ id: currentSession, action: request.args[1], output: '' });
       }
       if (command === 'fingerprint:generate') return json({ hash: 'source-fingerprint' });
       const buildMetadata = settings.buildMetadata ? { appVersion: '2.1.0', appBuildVersion: '42' } : {};
@@ -219,13 +221,23 @@ async function fixture(t, settings = {}) {
       }
       if (command === 'simulator:start') {
         sessionName = value(request, '--name');
-        writeFileSync(join(request.cwd, '.env.eas-simulator'), HEADER + "EAS_SIMULATOR_SESSION_ID='session-1'\n" + (settings.argent
+        starts += 1; currentSession = `session-${starts}`;
+        if (starts <= (settings.startsUnnamed ?? 0)) { writeFileSync(join(request.cwd, '.env.eas-simulator'), HEADER); throw new Error('GraphQL request failed.'); }
+        if (starts <= (settings.startsErrored ?? 0)) erroredSessions.add(currentSession);
+        writeFileSync(join(request.cwd, '.env.eas-simulator'), HEADER + `EAS_SIMULATOR_SESSION_ID='${currentSession}'\n` + (settings.argent
           ? "ARGENT_TOOLS_URL='https://controller.example/session'\nARGENT_AUTH_TOKEN='" + DAEMON_TOKEN + "'\n"
           : "AGENT_DEVICE_DAEMON_BASE_URL='https://controller.example/session'\nAGENT_DEVICE_DAEMON_AUTH_TOKEN='" + DAEMON_TOKEN + "'\n"));
         if (settings.startFailure) throw new Error('start reported failure after allocation');
+        if (erroredSessions.has(currentSession)) throw new Error('Simulator session errored while starting');
         return { stdout: 'ready', stderr: '' };
       }
-      if (command === 'simulator:get') return json({ id: 'session-1', name: sessionName, type: settings.argent ? 'argent' : 'agent-device', platform: settings.android ? 'ANDROID' : 'IOS', status: 'IN_PROGRESS',
+      // orphanFromFailedStart: a start that failed before naming the session had still created one.
+      if (command === 'simulator:list') return json({ sessions: settings.orphanFromFailedStart && value(request, '--name') === sessionName ? [{ id: 'orphan-1', name: sessionName,
+        type: settings.argent ? 'argent' : 'agent-device', status: 'STARTING', platform: 'IOS',
+        // orphanUnproven: the session by that name does not show it belongs to this project.
+        deviceRunSessionUrl: `https://expo.dev/accounts/${settings.orphanUnproven ? 'someone-else' : 'acme'}/projects/example/simulator-sessions/orphan-1` }] : [], pageInfo: {} });
+      if (command === 'simulator:get') return json({ id: value(request, '--id'), name: sessionName, type: settings.argent ? 'argent' : 'agent-device', platform: settings.android ? 'ANDROID' : 'IOS',
+        status: erroredSessions.has(value(request, '--id')) ? 'ERRORED' : 'IN_PROGRESS',
         app: { id: settings.wrongProject ? 'foreign-project' : PROJECT_ID, slug: 'example', ownerAccount: { name: 'acme' } },
         remoteConfig: { ...(settings.argent ? { toolsUrl: 'https://controller.example/session', toolsAuthToken: DAEMON_TOKEN }
           : { agentDeviceRemoteSessionUrl: 'https://controller.example/session', agentDeviceRemoteSessionToken: DAEMON_TOKEN }),
@@ -234,7 +246,7 @@ async function fixture(t, settings = {}) {
           ...(settings.previewApiUrl ? { previewApiUrl: settings.previewApiUrl } : {}) } });
       if (command === 'simulator:stop') {
         if (settings.stopFailure) throw new Error('stop unavailable');
-        return json({ id: 'session-1', status: 'STOPPED' });
+        return json({ id: value(request, '--id'), status: 'STOPPED' });
       }
     }
     if (request.command === 'fake-repack') {
@@ -547,6 +559,93 @@ test('when a fold on EAS leaves Argent reading the dark panel, the capture resta
     else await assert.rejects(run, error => JSON.stringify(error).includes('CONTROLLER_READER_STUCK'));
     assert.equal(f.requests.filter(request => request.command.endsWith('/argent-controller') && request.args[0] === 'fold').length, 2);
     assert.equal(f.requests.filter(request => request.args[0] === 'simulator:control' && request.args[1] === 'springboard.restart').length, 1);
+  }
+});
+
+test('a session EAS ends while starting is replaced by a new one, under a name of its own, up to five times with a growing wait', async t => {
+  const f = await fixture(t, { startsErrored: 1 });
+  const lines = []; const waits = [];
+  const result = await runCiMap({ ...f.options, progress: line => lines.push(line), sleep: ms => { waits.push(ms); } });
+  assert.equal(result.runStatus, 'complete');
+  const started = f.requests.filter(request => request.args[0] === 'simulator:start').map(request => value(request, '--name'));
+  assert.equal(started.length, 2);
+  assert.notEqual(started[0], started[1], 'the new session has a name of its own');
+  assert.ok(lines.some(line => /EAS ended simulator session session-1 \(ERRORED\) before it was ready; starting a new EAS Simulator session in 10 s \(1\/5\)/.test(line)), lines.join('\n'));
+  assert.equal(lines.filter(line => /while the app is repacked/.test(line)).length, 1, 'only the first start runs beside the repack');
+  assert.equal(result.simulatorSessionId, 'session-2');
+  assert.ok(waits.includes(10_000));
+  // Five new sessions at most, waiting 10 s, 20 s, 40 s, 80 s and 120 s before them; then the failure to start is reported as one.
+  const always = await fixture(t, { startsErrored: 6 });
+  const backoff = [];
+  await assert.rejects(runCiMap({ ...always.options, sleep: ms => { if (ms >= 10_000) backoff.push(ms); } }),
+    error => error.code === 'SIMULATOR_START_FAILED' && /6 sessions ended before they were ready \(the last, session-6, ERRORED\)/.test(error.message)
+      && error.details.endedSessions.length === 6 && error.details.attempts === 6);
+  assert.equal(always.requests.filter(request => request.args[0] === 'simulator:start').length, 6);
+  assert.deepEqual(backoff, [10_000, 20_000, 40_000, 80_000, 120_000]);
+  assert.equal(new Set(always.requests.filter(request => request.args[0] === 'simulator:start').map(request => value(request, '--name'))).size, 6, 'every session has its own name');
+  // One session that ended is a failure to start too, not a question of ownership.
+  const once = await fixture(t, { startsErrored: 6 });
+  await assert.rejects(runCiMap({ ...once.options, sleep: () => {}, runner: request => {
+    if (request.args[0] === 'simulator:start' && once.requests.filter(r => r.args[0] === 'simulator:start').length >= 1) throw new Error('Controller simulator:start exited with status 1: quota exhausted');
+    return once.options.runner(request);
+  } }), error => error.code === 'SIMULATOR_START_FAILED');
+});
+
+test('new sessions stay within 30 minutes of the first failed start, each start capped by what is left', async t => {
+  const f = await fixture(t, { startsErrored: 6 });
+  let clock = Date.parse('2026-10-18T00:00:00Z');
+  const timeouts = [];
+  await assert.rejects(runCiMap({ ...f.options, now: () => clock, sleep: ms => { clock += ms; }, runner: request => {
+    // Each start takes 10 minutes before EAS ends the session.
+    if (request.args[0] === 'simulator:start') { timeouts.push(request.timeoutMs); clock += 10 * 60_000; }
+    return f.options.runner(request);
+  } }), error => error.code === 'SIMULATOR_START_FAILED');
+  // The budget runs from the first failure, at 10:00, to 40:00. The start at 10:10 fits whole; those at 20:30 and 31:10
+  // get only what is left (19:30, then 8:50); after 41:10 none starts.
+  assert.deepEqual(timeouts, [20 * 60_000, 20 * 60_000, 19.5 * 60_000, (8 * 60 + 50) * 1000]);
+});
+
+test('Ctrl+C while waiting for a new session stops the review instead of starting one', async t => {
+  const f = await fixture(t, { startsErrored: 6 });
+  const controller = new AbortController();
+  await assert.rejects(runCiMap({ ...f.options, signal: controller.signal, sleep: () => controller.abort(new Error('interrupted')) }));
+  assert.equal(f.requests.filter(request => request.args[0] === 'simulator:start').length, 1);
+});
+
+test('a start that fails before naming a session stops any session of that name first, then starts a new one', async t => {
+  const f = await fixture(t, { startsUnnamed: 1, orphanFromFailedStart: true });
+  assert.equal((await runCiMap({ ...f.options, sleep: () => {} })).runStatus, 'complete');
+  const order = f.requests.map(request => request.args[0] === 'simulator:stop' && value(request, '--id') === 'orphan-1' ? 'stop-orphan' : request.args[0] === 'simulator:start' ? 'start' : undefined).filter(Boolean);
+  assert.deepEqual(order, ['start', 'stop-orphan', 'start']);
+  // The last failed start is accounted for as well, though no new session follows it.
+  const always = await fixture(t, { startsUnnamed: 6, orphanFromFailedStart: true });
+  await assert.rejects(runCiMap({ ...always.options, sleep: () => {} }), error => error.code === 'SIMULATOR_START_FAILED');
+  assert.equal(always.requests.filter(request => request.args[0] === 'simulator:stop' && value(request, '--id') === 'orphan-1').length, 6);
+});
+
+test('a session of that name Explore cannot prove is its own is never stopped or replaced', async t => {
+  const f = await fixture(t, { startsUnnamed: 1, orphanFromFailedStart: true, orphanUnproven: true });
+  await assert.rejects(runCiMap({ ...f.options, sleep: () => {} }), error => error.code === 'SIMULATOR_START_FAILED');
+  assert.equal(f.requests.filter(request => request.args[0] === 'simulator:start').length, 1);
+  assert.equal(f.requests.some(request => request.args[0] === 'simulator:stop'), false);
+});
+
+test('a session Explore cannot prove is its own is never replaced, even one that ERRORED', async t => {
+  const f = await fixture(t, { wrongProject: true, startsErrored: 1 });
+  await assert.rejects(runCiMap(f.options), error => /SESSION_HANDOFF_UNVERIFIED/.test(JSON.stringify(error)));
+  assert.equal(f.requests.filter(request => request.args[0] === 'simulator:start').length, 1);
+});
+
+test('account failures to start are not retried; temporary ones and timeouts are', async t => {
+  for (const [message, retried] of [['GraphQL request failed: not authorized', false], ['quota exhausted', false], ['GraphQL request failed.', true], ['No simulator capacity for iPhone Duo', true]]) {
+    const f = await fixture(t);
+    let starts = 0;
+    const run = runCiMap({ ...f.options, sleep: () => {}, runner: request => {
+      if (request.args[0] === 'simulator:start' && ++starts === 1) { writeFileSync(join(request.cwd, '.env.eas-simulator'), HEADER); throw new Error(`Controller simulator:start exited with status 1: ${message}`); }
+      return f.options.runner(request);
+    } });
+    if (retried) assert.equal((await run).runStatus, 'complete', message); else await assert.rejects(run, error => error.code === 'SIMULATOR_START_FAILED', message);
+    assert.equal(starts, retried ? 2 : 1, message);
   }
 });
 

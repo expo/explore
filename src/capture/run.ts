@@ -22,7 +22,7 @@ import { loadAppIcon, loadCachedAppIcon, storeAppIcon } from "./app-icon.js";
 import { defaultRunner, runAgentControllerCommand } from "./controller.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
 import { assertCaptureEasProfile, assertSimulatorAvailable, fingerprintFrom, hasEasEnvironmentFetchFailure, nativeBuildFrom, existingBuild, repackProfileFrom, prepareExactSourceBuild, type RepackMode } from "./eas-build.js";
-import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, controllerVersion, simulatorOsVersion, type ActiveSimulatorRuntime, type SimulatorConnection } from "./simulator.js";
+import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, endedOwnSimulatorSession, liveSimulatorSessionsNamed, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, controllerVersion, simulatorOsVersion, type ActiveSimulatorRuntime, type SimulatorConnection } from "./simulator.js";
 import { argentControllerInvocation } from "./controller-invocation.js";
 import { sharedBuild } from "./shared-build.js";
 import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, agentDeviceClaims, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
@@ -99,6 +99,20 @@ export type CiMapResult = {
 };
 
 
+/** New EAS sessions a capture starts in place of one EAS failed to start (ERRORED while booting, or never named). */
+const SESSION_START_RETRIES = 5;
+/**
+ * The most time, from the first failed start, that replacement sessions may take, waits included. It keeps a review
+ * inside its CI job (90 minutes for a baseline) with a native build, a repack and both captures still to run.
+ */
+const SESSION_RETRY_BUDGET_MS = 30 * 60_000;
+/** How long one `eas simulator:start` may take: eas-cli waits up to 15 minutes for a session, not counting the queue. */
+const SESSION_START_TIMEOUT_MS = 20 * 60_000;
+/** The wait before each of them: 10 s, doubling, at most 2 minutes. */
+export function sessionRetryDelayMs(retry: number): number {
+  return Math.min(10_000 * 2 ** (retry - 1), 120_000);
+}
+
 /**
  * Minutes an EAS session is asked for beyond the capture's own budget. The session starts beside the repack, and the
  * capture deadline only starts once the app is installed, so the session also has to outlast a slow or queued hosted
@@ -112,6 +126,17 @@ const SESSION_PREPARATION_MINUTES = 20;
 function sessionDurationLimit(error: unknown): number | undefined {
   const match = /max duration must not exceed (\d+(?:\.\d+)?) minutes/i.exec(error instanceof Error ? error.message : String(error));
   return match ? Math.floor(Number(match[1])) : undefined;
+}
+
+/**
+ * A start failure EAS may not repeat on the next try: a failed request, a dropped connection, a timeout, or no capacity
+ * right now. An account's quota, plan or permissions are not, and fail at once rather than after every retry.
+ */
+function transientSessionStartFailure(error: unknown): boolean {
+  if (error instanceof CiError && error.code === "CONTROLLER_REQUEST_TIMEOUT") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  if (/not authori[sz]ed|unauthori[sz]ed|forbidden|permission|quota|billing|max duration/i.test(message)) return false;
+  return /GraphQL request failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|timed out|\b50[234]\b|capacity/i.test(message);
 }
 
 function positiveInteger(value: number, name: string): number {
@@ -501,19 +526,23 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     }
   } catch (error) { await stopEarlyDevice().catch(() => undefined); throw error; }
   // The session is named before its app exists: an EAS session starts while the app is repacked (startSession).
-  const sessionName = simulatorSessionName({ mapName: options.name, mapId: options.buildId, gitCommit: options.gitCommit, easBuildId: local ? "local" : "installed",
-    runIdentity: JSON.stringify({ mapDirectory, outputDirectory, run: sourceEnvironment.GITHUB_RUN_ID, attempt: sourceEnvironment.GITHUB_RUN_ATTEMPT }) });
+  // A session EAS failed to start is replaced once (see the session block), under a name of its own.
+  const sessionNameFor = (retry: number) => simulatorSessionName({ mapName: options.name, mapId: options.buildId, gitCommit: options.gitCommit, easBuildId: local ? "local" : "installed",
+    runIdentity: JSON.stringify({ mapDirectory, outputDirectory, run: sourceEnvironment.GITHUB_RUN_ID, attempt: sourceEnvironment.GITHUB_RUN_ATTEMPT, ...(retry ? { sessionRetry: retry } : {}) }) });
+  let sessionRetries = 0;
+  let sessionName = sessionNameFor(0);
   /**
    * Starts the EAS Simulator session in the background, empty, once the build to repack is known (not while a native
    * build runs, which can take most of an hour of session time). The app is installed through the controller when both
    * are ready. Resolves with the start command's failure, if any; the session block verifies what EAS handed over.
    */
-  const startSession = () => {
+  const startSession = (retry?: { timeoutMs: number }) => {
     if (local || sessionStart) return;
-    say(`starting an EAS Simulator session (${options.device}) while the app is repacked`);
+    if (!retry) say(`starting an EAS Simulator session (${options.device}) while the app is repacked`);
     const request = (minutes: number) => ({ command: options.easCommand, args: ["simulator:start", "--name", sessionName, "--platform", options.platform, "--device", options.device,
       "--type", controller, "--package-version", controllerVersion(controller), "--public-link",
-      "--max-duration-minutes", String(minutes), "--out-config-type", "dotenv", "--non-interactive"], cwd: simulatorProject, environment: easEnvironment, timeoutMs: 20 * 60_000 });
+      "--max-duration-minutes", String(minutes), "--out-config-type", "dotenv", "--non-interactive"], cwd: simulatorProject, environment: easEnvironment,
+      timeoutMs: retry?.timeoutMs ?? SESSION_START_TIMEOUT_MS });
     // An injected runner (tests) answers synchronously; a real start runs beside the repack.
     const start = async (minutes: number) => options.runner ? options.runner(request(minutes)) : runAgentControllerCommand(request(minutes), options.signal ?? new AbortController().signal);
     sessionStart = writeFile(dotenvPath, SIMULATOR_DOTENV_HEADER, { flag: "wx", mode: 0o600 })
@@ -607,8 +636,72 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       throw new Error("The local device did not start before capture");
     } else {
       if (!localApp || !sessionStart) throw new Error("An EAS Simulator session needs the instrumented app on this machine");
-      const startError = await sessionStart;
-      const handoff = await readSimulatorDotenvHandoff(dotenvPath);
+      let startError = await sessionStart;
+      let handoff = await readSimulatorDotenvHandoff(dotenvPath);
+      // EAS sometimes fails to start a session: it errors while booting, or the start request fails before a session is
+      // named. After every failed start, whatever it may have left running is accounted for; then, when the failure is
+      // provably EAS's, a new session replaces it, up to SESSION_START_RETRIES times within SESSION_RETRY_BUDGET_MS, with
+      // a growing wait. A session Explore cannot prove is its own is never replaced or stopped: that stays a handoff
+      // failure below, as does a lookup that fails.
+      const clock = options.now ?? Date.now;
+      const endedSessions: string[] = [];
+      let ended: { sessionId: string; status: string } | undefined;
+      let retryDeadline: number | undefined;
+      for (;;) {
+        const easRead = (args: string[]) => {
+          try { return runner({ command: options.easCommand, args, cwd: project, environment: easEnvironment, timeoutMs: 2 * 60_000, allowFailure: true }).stdout; }
+          catch { return ""; }
+        };
+        let reason: string | undefined;
+        ended = undefined;
+        if (handoff.sessionId) {
+          const status = endedOwnSimulatorSession(easRead(["simulator:get", "--id", handoff.sessionId, "--json", "--non-interactive"]),
+            { sessionId: handoff.sessionId, sessionName, project: profile.projectIdentity, type: controller, platform: options.platform });
+          if (status) {
+            ended = { sessionId: handoff.sessionId, status };
+            endedSessions.push(handoff.sessionId);
+            reason = `EAS ended simulator session ${handoff.sessionId} (${status}) before it was ready`;
+          }
+        } else if (startError && transientSessionStartFailure(startError)) {
+          // The failed request may still have created a session: any by this exact name is stopped, so none is left running.
+          const live = liveSimulatorSessionsNamed(easRead(["simulator:list", "--name", sessionName, "--status", "new", "--status", "queued", "--status", "starting",
+            "--status", "in-progress", "--limit", "100", "--json", "--non-interactive"]), sessionName, profile.projectIdentity);
+          if (live) {
+            for (const id of live) assertSimulatorStopped(eas(["simulator:stop", "--id", id, "--json", "--non-interactive"], 2 * 60_000).stdout, id);
+            reason = `EAS could not start the simulator session (${simulatorStartFailure(startError, [options.expoToken]).message})`;
+          }
+        }
+        if (!reason || sessionRetries >= SESSION_START_RETRIES) break;
+        retryDeadline ??= clock() + SESSION_RETRY_BUDGET_MS;
+        const delayMs = sessionRetryDelayMs(sessionRetries + 1);
+        // A new start needs at least a minute of the budget after its wait; one started later could not finish in it.
+        const startTimeoutMs = Math.min(SESSION_START_TIMEOUT_MS, retryDeadline - clock() - delayMs);
+        if (startTimeoutMs < 60_000) break;
+        sessionRetries += 1;
+        say(`${reason}; starting a new EAS Simulator session in ${Math.round(delayMs / 1000)} s (${sessionRetries}/${SESSION_START_RETRIES})`);
+        options.signal?.throwIfAborted();
+        // Asynchronous and cancellable, so targets capturing beside this one keep running and Ctrl+C stops the wait.
+        if (options.sleep) options.sleep(delayMs);
+        else await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => { options.signal?.removeEventListener("abort", abort); resolve(); }, delayMs);
+          const abort = () => { clearTimeout(timer); reject(options.signal!.reason); };
+          options.signal?.addEventListener("abort", abort, { once: true });
+        });
+        options.signal?.throwIfAborted();
+        await rm(dotenvPath, { force: true });
+        sessionName = sessionNameFor(sessionRetries);
+        sessionStart = undefined;
+        startSession({ timeoutMs: startTimeoutMs });
+        startError = await sessionStart;
+        handoff = await readSimulatorDotenvHandoff(dotenvPath);
+      }
+      // Every session EAS ended is its own failure to start, never a question of ownership.
+      if (ended) throw new CiError({ code: "SIMULATOR_START_FAILED", stage: "session",
+        message: `EAS could not start a simulator session: ${endedSessions.length === 1 ? `session ${ended.sessionId} ended (${ended.status}) before it was ready`
+          : `${endedSessions.length} sessions ended before they were ready (the last, ${ended.sessionId}, ${ended.status})`}.`,
+        nextAction: "Rerun Explore. If sessions keep failing to start, check the EAS Simulator status and the sessions' logs on expo.dev.",
+        retryable: true, details: { attempts: sessionRetries + 1, endedSessions, ...(startError ? { startFailure: simulatorStartFailure(startError, [options.expoToken]) } : {}) },
+        ...(startError ? { cause: startError } : {}) });
       const startSecrets = [options.expoToken, ...(handoff.connection ? [handoff.connection.daemonAuthToken] : [])];
       const startFailure = startError ? simulatorStartFailure(startError, startSecrets) : undefined;
       if (handoff.sessionId) {

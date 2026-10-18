@@ -372,7 +372,7 @@ For a review, builds still run on EAS. The app is repacked with the route observ
 
 With `--controller argent`, Explore installs Argent's tool-server on first use with `npm ci` from a lockfile Explore ships, so every dependency is pinned (about 160 MB, in the controller cache), and starts one per device. The host switches the appearance, so a local Argent capture records every appearance the config asks for. Reports record where they were captured, and a baseline is reused only by a review captured the same way.
 
-A foldable folds before the app first opens (`pose` on a [target](#targets)); with agent-device on a local simulator it folds just after, since agent-device folds only inside a session. With Argent, an opened iPhone Duo is captured upright, in landscape. After a fold, Argent's reader can stay on the panel that went dark. Explore resets Argent's device helpers before each fold, which prevents it on a fresh EAS Simulator session. If it still happens, Explore restarts the tool-server on a local simulator, or resets the helpers on EAS Simulator, where the tool-server is the session's, and then restarts SpringBoard as well.
+A foldable folds before the app first opens (`pose` on a [target](#targets)); with agent-device on a local simulator it folds just after, since agent-device folds only inside a session. With Argent, an opened iPhone Duo is captured upright, in landscape. After a fold, Argent's reader can stay on the panel that went dark, so Explore checks that the lit panel is read. If it isn't, Explore restarts the tool-server on a local simulator. On EAS Simulator, where the tool-server is the session's, it resets Argent's device helpers, then restarts SpringBoard and folds again. On EAS Simulator, an opened iPhone Duo usually needs that SpringBoard restart, which adds about a minute.
 
 Each capture records what it starts on your Mac (simulators, emulators, controller daemons, tool-servers) and removes it when it ends. If a review or a local `explore:binary` run is stopped hard, the next local one stops what it left running; nothing Explore did not record is touched.
 
@@ -514,7 +514,7 @@ curl -s "$LINK/api/v1/screens?status=modified" | jq '.items[] | {route, status, 
 
 1. The review workflow runs on open, non-draft PRs from the repository whose author has write access. Bots such as Devin go under `ci.trustedAuthors` in `.expo-explore/config.yaml`.
 2. Explore reads the diff and your router source to pick the affected screens.
-3. It builds both revisions on EAS (reusing a build with the same native fingerprint) and captures each screen on EAS Simulator (or, on your machine, a local simulator), reusing a baseline of the base commit when one exists.
+3. It builds both revisions on EAS (reusing a build with the same native fingerprint) and captures each screen on EAS Simulator (or, on your machine, a local simulator), reusing a baseline of the base commit when one exists. If EAS fails to start a session, Explore starts a new one, up to five times within 30 minutes.
 4. It compares the captures. A screen with a source change is **Modified** if its captures differ.
 5. It uploads the report to GitHub Actions and posts a PR comment.
 

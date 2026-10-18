@@ -237,22 +237,52 @@ export function assertSimulatorSessionIdentity(
   ) {
     throw new Error("eas simulator:get did not prove the exact expected simulator session");
   }
-  // eas-cli 22.4.0 omits the `app` record; its `deviceRunSessionUrl` still binds the session
-  // to one exact owner and slug, so accept either proof but never neither.
-  const expectedSessionUrl = `https://expo.dev/accounts/${expectedProject.owner}`
-    + `/projects/${expectedProject.slug}/simulator-sessions/${expectedSessionId}`;
-  const projectProven = isRecord(value.app)
-    ? value.app.id === expectedProject.projectId
-      && value.app.slug === expectedProject.slug
-      && isRecord(value.app.ownerAccount)
-      && value.app.ownerAccount.name === expectedProject.owner
-    : value.deviceRunSessionUrl === expectedSessionUrl;
-  if (!projectProven) {
+  if (!sessionProjectProven(value, expectedSessionId, expectedProject)) {
     throw new Error("eas simulator:get did not prove the exact expected simulator session");
   }
   if (expectedConnection && !remoteConfigMatches(value.remoteConfig, expectedConnection)) {
     throw new Error(`eas simulator:get returned a different ${connectionController(expectedConnection)} connection`);
   }
+}
+
+/**
+ * eas-cli 22.4.0 omits the `app` record; its `deviceRunSessionUrl` still binds the session to one exact owner and
+ * slug, so either proof is accepted but never neither.
+ */
+function sessionProjectProven(value: Record<string, unknown>, sessionId: string, project: RepackProfile["projectIdentity"]): boolean {
+  const expectedSessionUrl = `https://expo.dev/accounts/${project.owner}/projects/${project.slug}/simulator-sessions/${sessionId}`;
+  return isRecord(value.app)
+    ? value.app.id === project.projectId && value.app.slug === project.slug && isRecord(value.app.ownerAccount) && value.app.ownerAccount.name === project.owner
+    : value.deviceRunSessionUrl === expectedSessionUrl;
+}
+
+/**
+ * The status (ERRORED or STOPPED) of a session `eas simulator:get` shows EAS ended before Explore could use it, when it
+ * is provably this capture's own: the exact id, name, type, platform and project. Only such a session is replaced by a
+ * new one; anything less certain (undefined here) stays a handoff failure.
+ */
+export function endedOwnSimulatorSession(stdout: string, expected: { sessionId: string; sessionName: string; project: RepackProfile["projectIdentity"];
+  type: "agent-device" | "argent"; platform: Platform }): "ERRORED" | "STOPPED" | undefined {
+  let value: unknown;
+  try { value = JSON.parse(stdout); } catch { return undefined; }
+  return isRecord(value) && value.id === expected.sessionId && value.name === expected.sessionName && value.type === expected.type
+    && value.platform === expected.platform.toUpperCase() && (value.status === "ERRORED" || value.status === "STOPPED")
+    && sessionProjectProven(value, expected.sessionId, expected.project) ? value.status : undefined;
+}
+
+/**
+ * This project's sessions with exactly this name that EAS may still be starting or running, from
+ * `eas simulator:list --json`: their ids when every one is provably this project's, or undefined when the listing
+ * cannot be read or a session by that name cannot be proven Explore's, so a caller never assumes none exist.
+ */
+export function liveSimulatorSessionsNamed(stdout: string, sessionName: string, project: RepackProfile["projectIdentity"]): string[] | undefined {
+  let value: unknown;
+  try { value = JSON.parse(stdout); } catch { return undefined; }
+  if (!isRecord(value) || !Array.isArray(value.sessions)) return undefined;
+  const live = new Set(["NEW", "QUEUED", "STARTING", "IN_PROGRESS"]);
+  const named = value.sessions.filter((session): session is Record<string, unknown> => isRecord(session) && session.name === sessionName && live.has(String(session.status)));
+  if (named.some(session => typeof session.id !== "string" || !/^[A-Za-z0-9._-]{1,256}$/.test(session.id) || !sessionProjectProven(session, session.id, project))) return undefined;
+  return named.map(session => session.id as string);
 }
 
 /** The session's published controller endpoint is the one Explore holds: agent-device's daemon, or Argent's tool-server. */
