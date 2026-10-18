@@ -69,8 +69,10 @@ export function indexMap(map: ExploreMap): MapIndex {
     outgoing,
     incoming,
     plainTitles: map.run?.exploration === "black-box",
+    // Why a screen has no screenshot, in the report's words; an open gap outranks an accepted one.
     screenNotes: new Map(
-      (map.gaps ?? []).filter((gap) => gap.status === "open" && gap.screenId).reverse().map((gap) => [gap.screenId!, gap.message]),
+      (map.gaps ?? []).filter((gap) => gap.kind === "coverage" && gap.status !== "resolved" && gap.screenId)
+        .sort((a, b) => Number(a.status === "open") - Number(b.status === "open")).reverse().map((gap) => [gap.screenId!, gap.message]),
     ),
   };
 }

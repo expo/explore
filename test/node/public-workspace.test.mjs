@@ -839,6 +839,11 @@ test("an excluded route leaves the map with an accepted gap, like a redirect", (
   const gap = current.map.gaps.find(gap => gap.screenId === "games-pro");
   assert.equal(gap.status, "accepted");
   assert.equal(gap.message, "Excluded by exploration.exclude; never captured");
+  assert.equal(
+    indexMap(current.map).screenNotes.get("games-pro"),
+    "Excluded by exploration.exclude; never captured",
+    "the inspector's placeholder says why there is no screenshot",
+  );
   const projection = publicReviewProjection(review);
   assert.equal(projection.runtimeEvidence["public:games-pro"].current.groups.capture.find((row) => row.label === "Capture").value,
     "Excluded by exploration.exclude; never captured");
