@@ -517,6 +517,14 @@ code {
   opacity: 1;
   --map-card-opacity: 1;
 }
+/* Hover never recedes anything, but where focus or a selection has already dimmed the map, the
+   hovered screen and the screens it connects to come back up, with the transitions between them,
+   so the neighbourhood reads. These come after both dimming rules so the pointer's context wins. */
+.connection-canvas-surface.canvas-hovering .react-flow__node-screen.graph-node-hover-related {
+  opacity: 1;
+  --map-card-opacity: 1;
+}
+.connection-canvas-surface.canvas-hovering .react-flow__edge.graph-edge-hover-related { opacity: 1; }
 /* Re-layout: the canvas blinks out whole — nodes, edges and labels together — so the graph can
    change shape and the camera can cut unseen, then comes straight back. Both transitions live
    inside their class, so once the sequence ends the stylesheet owns opacity again. */

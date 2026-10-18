@@ -115,6 +115,8 @@ function ScreenNodeCard({ data, selected }: NodeProps<ScreenGraphNode>) {
       imageHeight={data.screenshotSize?.imageHeight ?? data.frame.screen.height}
       placeholderSize={data.frame.screen}
       loading="lazy"
+      // The route heads the card, so the tooltip goes below it.
+      tooltipPlacement="bottom"
       leading={<Handle type="target" position={horizontal ? Position.Left : Position.Top} className="graph-handle" />}
       trailing={<Handle type="source" position={horizontal ? Position.Right : Position.Bottom} className="graph-handle" />}
       onMouseEnter={() => data.onHover(data.screen.id)}
