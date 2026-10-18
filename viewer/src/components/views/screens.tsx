@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, ListTree } from "lucide-react";
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, ListTree, Search } from "lucide-react";
 import { artifactUrl, isLaunchScreen, type ExploreMap, type MapIndex, type Screen } from "../../utils/model";
 import { primaryScreenshotForScreen, screenshotSize, typicalScreenshotSize, type ScreenshotSize } from "../../utils/screen-images";
 import { diffClass, type BuildDiff, type DiffStatus } from "../../utils/build-diff";
@@ -9,11 +9,14 @@ import { screenTree, treeIndex, treeNodeKey, treeScreenOrder, type ScreenTree, t
 import type { Appearance } from "../../utils/appearance";
 import type { FocusRequest, FocusStatus } from "../../utils/navigation";
 import { shortcutsLive } from "../../utils/shortcuts";
+import { normalizeSearchText } from "../../utils/search";
 import { createKeyHold } from "../../utils/key-hold";
 import { placeholderScreen } from "../../utils/map-frame";
 import { ScreenScreenshotCard } from "../canvas/screen-screenshot-card";
 import { useCanvasVisibleFrame } from "../canvas/visible-frame-provider";
 import { PhoneSheet } from "../phone/phone-chrome";
+import { PanelSearch } from "../shared/panel-search";
+import { Tooltip } from "../shared/tooltip";
 import "./screens.css";
 
 /** The statuses a tree dot marks. The Changed filter keeps only the screens whose captures differ (isCapturedChange). */
@@ -36,6 +39,10 @@ export type ScreensViewProps = {
   focus?: readonly FocusStatus[] | undefined;
   /** The phone layout: a jump bar and a Tree sheet stand in for the sidebar. */
   phone?: boolean;
+  /** A request to open the find field (`/` pressed on another canvas); a new key asks again. */
+  findRequest?: number | undefined;
+  /** The find opened for `findRequest`; the parent drops it so a later visit to Screens does not open it again. */
+  onFindRequestDone?: (() => void) | undefined;
   onSelectScreen: (id: string) => void;
   /** The tree and jump bar pick a screen without opening the Inspector; a screenshot click selects it as the canvas does. */
   onPickScreen?: ((id: string) => void) | undefined;
@@ -72,6 +79,35 @@ function writeFolded(key: string, folded: ReadonlySet<string>): void {
     if (folded.size) localStorage.setItem(key, JSON.stringify([...folded]));
     else localStorage.removeItem(key);
   } catch { /* Folds last for this visit only. */ }
+}
+
+/** The key that opens the find field: a character, not a key position, so it is read from the layout like "?". */
+export const FIND_KEY = "/";
+
+function isFindKey(event: globalThis.KeyboardEvent): boolean {
+  return event.key === FIND_KEY && !event.metaKey && !event.ctrlKey && !event.altKey;
+}
+
+/** The screens whose route or title contains the query, by id; `undefined` when there is no query. */
+function findMatches(screens: readonly Screen[], index: MapIndex, rawQuery: string): Set<string> | undefined {
+  const query = normalizeSearchText(rawQuery);
+  if (!query) return undefined;
+  return new Set(screens
+    .filter(screen => [displayPathForScreen(screen), screenLabel(screen, index), screen.title]
+      .some(text => normalizeSearchText(text).includes(query)))
+    .map(screen => screen.id));
+}
+
+/**
+ * The tree with only the matching screens and the rows above them, so a find reads as a short list in the tree's own
+ * shape; a folder or parent screen kept only for what is under it is marked, as a row outside Changed is.
+ */
+function pruneTree(nodes: readonly ScreenTreeNode[], matches: ReadonlySet<string>): ScreenTreeNode[] {
+  return nodes.flatMap((node) => {
+    const children = pruneTree(node.children, matches);
+    if (node.kind === "screen" ? matches.has(node.screenId) || children.length : children.length) return [{ ...node, children }];
+    return [];
+  });
 }
 
 function cardId(id: string): string {
@@ -249,7 +285,15 @@ export function ScreensView(props: ScreensViewProps) {
   );
   const [filter, setFilter] = useState<Filter>(props.phone && changedIds.size > 0 ? "changed" : "all");
   const [treeOpen, setTreeOpen] = useState(false);
-  const shown = filter === "changed" && changedIds.size > 0 ? changedIds : new Set(props.map.screens.map(screen => screen.id));
+  // Find: a query narrows the tree and the grid to the screens whose route or title contains it, inside Changed or All.
+  const [findOpen, setFindOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  // The phone layout has no field to show or clear a query, so a query typed on desktop does not narrow it.
+  const findQuery = findOpen && !props.phone ? query : "";
+  const matches = useMemo(() => findMatches(props.map.screens, props.index, findQuery), [props.index, props.map.screens, findQuery]);
+  const inChanged = filter === "changed" && changedIds.size > 0;
+  const inFilter = inChanged ? changedIds : new Set(props.map.screens.map(screen => screen.id));
+  const shown = matches ? new Set([...inFilter].filter(id => matches.has(id))) : inFilter;
   const sections = tree.sections
     .map(section => ({ ...section, screenIds: section.screenIds.filter(id => shown.has(id)) }))
     .filter(section => section.screenIds.length > 0);
@@ -267,9 +311,12 @@ export function ScreensView(props: ScreensViewProps) {
   const [foldedAll, setFoldedAll] = useState<ReadonlySet<string>>(() => readFolded(storageKey));
   const [foldedChanged, setFoldedChanged] = useState<ReadonlySet<string>>(foldedWithoutChanges);
   useEffect(() => writeFolded(storageKey, foldedAll), [foldedAll, storageKey]);
-  const folded = changedMode ? foldedChanged : foldedAll;
+  // While a find is on, every row stays open: the pruned tree is the result, and folding it would hide matches.
+  const folded = matches ? new Set<string>() : changedMode ? foldedChanged : foldedAll;
   const setFolded = changedMode ? setFoldedChanged : setFoldedAll;
   const toggleFold = (key: string, deep: boolean) => {
+    // The find's open rows are not the reader's folds; a fold tried there would replace them all.
+    if (matches) return;
     const fold = !folded.has(key);
     // ⌥-click folds or unfolds every row inside this one too.
     const inside = (candidate: string): boolean => {
@@ -282,7 +329,7 @@ export function ScreensView(props: ScreensViewProps) {
     setFolded(next);
   };
   const anyOpen = shape.keys.some(key => !folded.has(key));
-  const foldAll = shape.keys.length ? (
+  const foldAll = shape.keys.length && !matches ? (
     <button type="button" className="screens-tree-fold-all" aria-label={anyOpen ? "Collapse all" : "Expand all"}
       title={anyOpen ? "Collapse all" : "Expand all"}
       onClick={() => setFolded(anyOpen ? new Set(shape.keys) : new Set())}>
@@ -303,6 +350,53 @@ export function ScreensView(props: ScreensViewProps) {
     event.preventDefault();
     event.stopPropagation();
   };
+  const jumpTo = (id: string) => {
+    setTreeOpen(false);
+    if (!inFilter.has(id)) setFilter("all");
+    (props.onPickScreen ?? props.onSelectScreen)(id);
+    requestAnimationFrame(() => document.getElementById(cardId(id))?.scrollIntoView({ block: "center", behavior: "smooth" }));
+  };
+
+  const findField = useRef<HTMLDivElement>(null);
+  const focusFind = () => findField.current?.querySelector("input")?.focus();
+  const openFind = () => {
+    setFindOpen(true);
+    requestAnimationFrame(focusFind);
+  };
+  const closeFind = () => {
+    setQuery("");
+    setFindOpen(false);
+    // The field took the keyboard; hand it back to the page so its arrows work again.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  };
+  // `/` from another canvas lands here with the field open.
+  useEffect(() => {
+    if (props.findRequest === undefined) return;
+    if (!props.phone) openFind();
+    props.onFindRequestDone?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new request opens it once
+  }, [props.findRequest]);
+  const findButton = props.phone ? null : (
+    <Tooltip label="Find a screen" shortcut={FIND_KEY} placement="bottom">
+      <button type="button" className="screens-tree-find" aria-label="Find a screen" onClick={openFind}>
+        <Search aria-hidden="true" />
+      </button>
+    </Tooltip>
+  );
+  const findSearch = findOpen ? (
+    <div ref={findField} className="screens-find">
+      <PanelSearch
+        value={query}
+        placeholder="Find…"
+        ariaLabel="Find screens"
+        clearLabel="Clear find query"
+        name="screens-find"
+        autoFocus
+        onEscape={() => (query ? setQuery("") : closeFind())}
+        onChange={setQuery}
+      />
+    </div>
+  ) : null;
   const filterChips = changedIds.size > 0 ? (
     <div className="screens-filter" role="group" aria-label="Show">
       {(["changed", "all"] as const).map((value) => (
@@ -329,7 +423,9 @@ export function ScreensView(props: ScreensViewProps) {
   // A screen selected elsewhere that Changed hides shows every screen instead, as a pick in the tree does.
   // Only a new selection or request switches it; choosing Changed afterwards is the reader's call.
   useEffect(() => {
-    if (selected && !selectedShownRef.current) setFilter("all");
+    if (!selected || selectedShownRef.current) return;
+    setFilter("all");
+    setQuery("");
   }, [selected, focusKey]);
   // A selection made anywhere unfolds the rows above it, in both filters.
   useEffect(() => {
@@ -348,13 +444,6 @@ export function ScreensView(props: ScreensViewProps) {
     if (bounds.top < view.top || bounds.bottom > view.bottom) card.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [selected, selectedShown, focusKey]);
 
-  const jumpTo = (id: string) => {
-    setTreeOpen(false);
-    if (!shown.has(id)) setFilter("all");
-    (props.onPickScreen ?? props.onSelectScreen)(id);
-    requestAnimationFrame(() => document.getElementById(cardId(id))?.scrollIntoView({ block: "center", behavior: "smooth" }));
-  };
-
   // On desktop the arrow keys move through the cards: ← and → in their order on the page (`order`), as the arrows step
   // through screens in Compare, and ↑ and ↓ to the card above or below, by where the cards sit, so they follow the grid
   // at any width. A step picks the screen as the tree does, leaving the Inspector as it is, and focus follows it; with
@@ -372,6 +461,8 @@ export function ScreensView(props: ScreensViewProps) {
   pickRef.current = props.onPickScreen ?? props.onSelectScreen;
   const openRef = useRef(props.onSelectScreen);
   openRef.current = props.onSelectScreen;
+  const openFindRef = useRef(openFind);
+  openFindRef.current = openFind;
   useEffect(() => {
     if (props.phone) return;
     /** The card an arrow moves to from `from` (the pick, or the last card a hold stepped to). */
@@ -406,8 +497,29 @@ export function ScreensView(props: ScreensViewProps) {
     };
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       hold.interrupt(event);
+      if (isFindKey(event)) {
+        if (event.defaultPrevented || !shortcutsLive(event)) return;
+        event.preventDefault();
+        openFindRef.current();
+        return;
+      }
       const arrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.code);
       if (!arrow && event.key !== "Enter") return;
+      // In the find field the results below are the field's: ↓ and ↑ step the pick through them in page order while
+      // the field keeps the keyboard, and Return opens the picked one (the first match before any step).
+      // Its clear button keeps its own Return, and an input method's Return confirms the text being composed.
+      if (event.target instanceof Element && event.target.matches(".screens-find input")) {
+        if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.code === "ArrowLeft" || event.code === "ArrowRight") return;
+        const ids = orderRef.current;
+        const picked = selectedRef.current && ids.includes(selectedRef.current) ? selectedRef.current : undefined;
+        const id = !arrow ? picked ?? ids[0] : next(event.code === "ArrowDown" ? "ArrowRight" : "ArrowLeft", picked);
+        if (!id) return;
+        event.preventDefault();
+        if (!arrow) { openRef.current(id); return; }
+        pickRef.current(id);
+        requestAnimationFrame(() => document.getElementById(cardId(id))?.scrollIntoView({ block: "nearest" }));
+        return;
+      }
       // The browser's own repeat of a held arrow would scroll the page under the hold.
       if (event.repeat && hold.holding(event.code)) { event.preventDefault(); return; }
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.defaultPrevented || !shortcutsLive(event)) return;
@@ -464,9 +576,13 @@ export function ScreensView(props: ScreensViewProps) {
     ) : null;
   };
 
+  // A find inside Changed can match only screens Changed hides; the empty state says so and offers All.
+  const noMatch = `No ${inChanged ? "changed " : ""}screens match “${findQuery.trim()}”`;
+  const matchedElsewhere = matches && inChanged ? [...matches].filter(id => !inFilter.has(id)).length : 0;
+
   const treeRows = (
     <ul className="screens-tree-list" onKeyDown={onTreeKey}>
-      <TreeRows nodes={tree.tree} depth={0} index={props.index} diff={props.diff} elsewhere={props.changedElsewhere}
+      <TreeRows nodes={matches ? pruneTree(tree.tree, matches) : tree.tree} depth={0} index={props.index} diff={props.diff} elsewhere={props.changedElsewhere}
         visible={shown} selectedScreenId={props.selectedScreenId} folded={folded}
         onToggle={toggleFold} onSelect={jumpTo} />
     </ul>
@@ -507,9 +623,12 @@ export function ScreensView(props: ScreensViewProps) {
         {props.phone ? null : (
           <aside className="screens-side">
             <nav className="screens-tree" aria-label={tree.mode === "source" ? "Route files" : "Navigation"}>
-              {filterChips || foldAll ? <div className="screens-tree-head">{filterChips}{foldAll}</div> : null}
+              {findSearch ? <div className="screens-tree-head searching">{findSearch}</div>
+                : filterChips || foldAll || findButton ? <div className="screens-tree-head">{filterChips}{findButton}{foldAll}</div> : null}
               <h2>{tree.mode === "source" ? "app/" : "Explored app"}</h2>
-              {treeRows}
+              {matches && order.length === 0
+                ? <p className="screens-find-empty" role="status">{noMatch}</p>
+                : treeRows}
               {props.diff ? <Legend others={others} /> : null}
             </nav>
           </aside>
@@ -527,7 +646,13 @@ export function ScreensView(props: ScreensViewProps) {
           )) : (
             // On desktop the tree beside the page already shows the folders, so every screen sits in one evenly
             // spaced grid in the tree's order, without headings between them.
-            <div className="screens-grid">{order.map(cell)}</div>
+            matches && order.length === 0
+              ? <div className="page-empty compact-empty screens-empty" role="status"><h2>{noMatch}</h2>{matchedElsewhere
+                ? <p>{matchedElsewhere === 1 ? "1 screen outside Changed matches." : `${matchedElsewhere} screens outside Changed match.`}{" "}
+                  <button type="button" className="screens-empty-all" onPointerDown={(event) => event.preventDefault()}
+                    onClick={() => { setFilter("all"); focusFind(); }}>Show all</button></p>
+                : <p>Try part of a route, or press Esc to show every {inChanged ? "changed " : ""}screen.</p>}</div>
+              : <div className="screens-grid">{order.map(cell)}</div>
           )}
         </div>
       </div>
