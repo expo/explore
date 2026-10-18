@@ -2,6 +2,7 @@ import type { CSSProperties, MouseEventHandler, ReactNode } from "react";
 import { ImageOff, PanelRight } from "lucide-react";
 import { diffClass, type DiffStatus } from "../../utils/build-diff";
 import { ScreenPathText } from "../shared/screen-path-text";
+import { Tooltip } from "../shared/tooltip";
 import { DEFAULT_SCREENSHOT_SIZE, ScreenshotImage } from "../shared/screenshot-image";
 import { CanvasActiveFrame } from "./active-frame";
 import { DiffFrame } from "./diff-frame";
@@ -89,6 +90,9 @@ export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
             free of block children. */}
         <span className="screen-screenshot-slot">
           {props.leading}
+          {/* With a pointer, what a click does is said once, zoom-independent, in the shared tooltip
+              after its usual delay; the selected screen is already in the Inspector. */}
+          <Tooltip label="Open in Inspector" placement="top" disabled={Boolean(props.selected)}>
           <button
             type="button"
             className="screen-screenshot-target"
@@ -110,16 +114,15 @@ export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
                     fallback={missing}
                   />
                 ) : missing}
-                {/* On hover, says what a click does; on a phone's map, what the second tap does.
-                    See styles.css for when each wording shows. */}
+                {/* On a phone's map, says what the second tap on the selected screen does. */}
                 <span className="screen-open-hint" aria-hidden="true">
                   <PanelRight />
-                  <span className="screen-open-hint-long">Open in Inspector</span>
-                  <span className="screen-open-hint-short">Open</span>
+                  <span>Open</span>
                 </span>
               </span>
             </DiffFrame>
           </button>
+          </Tooltip>
           {props.trailing}
         </span>
         {props.note ? <span className="screen-node-note">{props.note}</span> : null}

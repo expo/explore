@@ -149,7 +149,9 @@ async function expectMapScreenSelectionDimming(
       return label.startsWith(`Edge from ${nodeId} to `) || label.endsWith(` to ${nodeId}`);
     }).length, hoverTargetId!);
     expect(directEdgeCount).toBeGreaterThan(0);
-    // The hovered screen and every screen it shares an edge with stay bright; the rest recede.
+    // The hovered screen and every screen it shares an edge with are marked related; nothing on
+    // the map recedes while hovering, so the only changes are the subject ring, the incident
+    // edges and the neighbours' frames.
     const neighbourIds = await allEdges.evaluateAll((edges, nodeId) => {
       const ids = new Set<string>([nodeId]);
       for (const edge of edges) {
@@ -166,14 +168,17 @@ async function expectMapScreenSelectionDimming(
     await expect.poll(() => brightNodes.evaluateAll((nodes) => (
       nodes.map((node) => node.getAttribute("data-id") ?? "").sort()
     ))).toEqual(neighbourIds);
-    const receded = page.locator(
-      ".map-canvas .react-flow__node-screen:not(.graph-node-hover-related)",
+    const unrelated = page.locator(
+      ".map-canvas .react-flow__node-screen:not(.graph-node-hover-related):not(.canvas-node-exit)",
     );
-    if (await receded.count() > 0) {
-      await expect.poll(() => receded.first().evaluate(
-        (node) => Number.parseFloat(getComputedStyle(node).opacity),
-      )).toBeGreaterThan(0.5);
-    }
+    expect(await unrelated.count()).toBeGreaterThan(0);
+    expect(await unrelated.evaluateAll((nodes) => nodes.every((node) => {
+      const style = getComputedStyle(node);
+      const image = node.querySelector(".screen-node-image img, .screen-node-image .image-placeholder");
+      return style.opacity === "1" && style.filter === "none"
+        && (image === null || getComputedStyle(image).opacity === "1");
+    }))).toBe(true);
+    await expect(page.locator(".map-canvas .screen-open-hint:visible")).toHaveCount(0);
     const activeEdges = page.locator(
       ".map-canvas .react-flow__edge.graph-edge-hover-related",
     );
