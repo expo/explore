@@ -32,6 +32,8 @@ export function normalizeSearchText(value: string): string {
 
 function resultScore(item: SearchItem, query: string): number | undefined {
   const title = normalizeSearchText(item.title);
+  // A word that is a screen's last segment ("theme" for /settings/theme) names that screen, ahead of any command.
+  if (item.kind === "screen" && title.split("/").filter(Boolean).pop() === query) return -1;
   if (title === query) return 0;
   if (title.startsWith(query)) return 1;
   if (title.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(query))) return 2;

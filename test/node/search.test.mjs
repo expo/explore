@@ -78,6 +78,12 @@ test("the palette ranks commands first for a word and screens first for a route,
   assert.deepEqual(search.searchItems([...items, open], "settings/dark").map((item) => item.id), ["screen:a", "command:open"]);
   assert.deepEqual(search.searchItems(items, "appearance").map((item) => item.id), ["command:theme"]);
   assert.deepEqual(search.searchItems(items, "zoom").map((item) => item.id), ["command:fit"]);
+
+  // A word that is a screen's last segment opens that screen; part of one still leads with the command.
+  const theme = { id: "screen:theme", kind: "screen", title: "/settings/theme", keywords: ["/settings/theme"], context: "", order: 3, screenId: "theme" };
+  assert.deepEqual(search.searchItems([...items, theme], "theme").map((item) => item.id), ["screen:theme", "command:theme"]);
+  assert.deepEqual(search.searchItems([...items, theme], "Theme ").map((item) => item.id), ["screen:theme", "command:theme"]);
+  assert.deepEqual(search.searchItems([...items, theme], "them").map((item) => item.id), ["command:theme", "screen:theme"]);
 });
 
 test("the palette's commands follow the canvas: Compare steps changes with the arrows, the Map fits its camera, and suggestions lead with the next change", async () => {
