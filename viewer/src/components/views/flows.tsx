@@ -14,6 +14,13 @@ function stoppedAt(flow: PublicFlowSide): { index: number; step: PublicFlowSide[
   return index < 0 ? undefined : { index, step: flow.steps[index]! };
 }
 
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+  return `${Math.floor(ms / 60_000)}m ${String(Math.round((ms % 60_000) / 1000)).padStart(2, "0")}s`;
+}
+
 function sideSummary(entry: PublicFlowEvidence, side: Side): string {
   const flow = entry[side];
   if (!flow) return "not run";
@@ -95,6 +102,7 @@ function Steps(props: { entry: PublicFlowEvidence; review: PublicReview }) {
                 <span className="flow-step-api">{step.api}</span> <span className="flow-step-label">{step.label}</span>
               </a>
             ) : <><span className="flow-step-api">{step.api}</span> <span className="flow-step-label">{step.label}</span></>}
+            <span className="flow-step-duration">{formatDuration(step.durationMs)}</span>
             {step.frame ? <span className="flow-step-frame">frame · {step.frame}</span> : null}
             {failed && step.error ? <span className="flow-step-error">{step.error.message}</span> : null}
           </li>
@@ -125,6 +133,7 @@ export function FlowsView(props: { review: PublicReview; phone?: boolean; onOpen
               <div>
                 <h2 id={`flow-${entry.id}`}>{entry.title}</h2>
                 <p className="flow-file">{flowSourceHref(props.review, entry.file, entry.head?.line ?? entry.base?.line) ? <a href={flowSourceHref(props.review, entry.file, entry.head?.line ?? entry.base?.line)} target="_blank" rel="noreferrer">{entry.file}</a> : entry.file}</p>
+                {(head ?? base) ? <p className="flow-meta">{(head ?? base)!.steps.length} steps · {formatDuration((head ?? base)!.steps.reduce((sum, step) => sum + step.durationMs, 0))}</p> : null}
               </div>
               <div className="flow-outcomes">
                 <span className="flow-outcome"><span className="flow-outcome-side">After</span><span className={`flow-status tone-${tone}`}>{sideSummary(entry, "head")}</span></span>

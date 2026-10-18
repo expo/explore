@@ -31,12 +31,14 @@
 .flow-frame-caption { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .flow-frame-caption strong { font-size: 13px; font-weight: 600; }
 .flow-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
-.flow-step { display: grid; grid-template-columns: 22px auto 1fr; column-gap: 8px; row-gap: 2px; align-items: baseline; padding: 6px 8px; border-radius: 8px; min-height: 44px; box-sizing: border-box; }
+.flow-step { display: grid; grid-template-columns: 22px auto 1fr auto; column-gap: 8px; row-gap: 2px; align-items: baseline; padding: 6px 8px; border-radius: 8px; min-height: 44px; box-sizing: border-box; }
 .flow-step.frame { background: #f6f8fb; }
 .flow-step.failed { background: #fdecec; }
 .flow-step.skipped { opacity: 0.45; }
 .flow-step-number { color: var(--text-muted, #6b6b6b); font-variant-numeric: tabular-nums; }
 .flow-step-api { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #444; }
 .flow-step-label { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.flow-step-duration { grid-column: 4; font-size: 11px; color: var(--text-muted, #6b6b6b); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.flow-meta { margin: 2px 0 0; font-size: 12px; color: var(--text-muted, #6b6b6b); font-variant-numeric: tabular-nums; }
 .flow-step-frame { grid-column: 2 / -1; font-size: 11px; color: #2f6fed; }
 .flow-step-error { grid-column: 2 / -1; font-size: 12px; color: #7a1c14; }
