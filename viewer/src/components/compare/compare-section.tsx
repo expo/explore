@@ -412,8 +412,9 @@ export function compareNotes(screenDiff: ScreenDiff, factCount: number, statusBa
   return [
     ...(factCount === 0 && screenDiff.status === "needs-review"
       ? ["The code for this screen changed. No visible difference was found."] : []),
-    ...(screenDiff.status === "added" ? ["This screen is new in this PR. There is no Before to compare."]
-      : screenDiff.status === "removed" ? ["This screen was removed in this PR. There is no After to compare."] : []),
+    // A capture note says why a side has no frame (a flow that stopped before it); without one the screen itself came or went.
+    ...(screenDiff.status === "added" ? [screenDiff.captureNotes?.before ?? "This screen is new in this PR. There is no Before to compare."]
+      : screenDiff.status === "removed" ? [screenDiff.captureNotes?.after ?? "This screen was removed in this PR. There is no After to compare."] : []),
     ...(statusBarIgnored
       ? ["The status bar (clock, signal, battery) differs between the captures. It is not counted as a change."] : []),
     ...(homeIndicatorIgnored

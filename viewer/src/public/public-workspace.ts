@@ -1,4 +1,4 @@
-import type { CapturedImage, PublicLaunchEvidence, PublicReview } from "../../../src/contracts/capture";
+import { flowSurfaceId, type CapturedImage, type PublicLaunchEvidence, type PublicReview } from "../../../src/contracts/capture";
 import type {
   Artifact,
   BuildComparisonEntry,
@@ -7,6 +7,7 @@ import type {
   Coverage,
   ExploreMap,
   RunTarget,
+  Transition,
 } from "../../../src/types";
 import {
   captureNotes,
@@ -442,7 +443,25 @@ function sidePayload(review: PublicReview, side: Side): { map: ExploreMap; cover
       });
       screenIds.push(frame.id);
     }
-    if (screenIds.length) map.journeys.push({ id: `flow:${entry.id}`, title: entry.title, screenIds, transitionIds: [], attemptIds: [] });
+    // The Map draws the flow as a chain: one edge per pair of consecutive frames, labelled with the step that led on.
+    const transitionIds: string[] = [];
+    if (flow) {
+      const kindOf = (api: string): Transition["actionKind"] => api.endsWith(".tap") || api.endsWith(".press") ? "press" : api.endsWith(".fill") || api.endsWith(".type") ? "fill"
+        : api.endsWith(".swipe") || api.endsWith(".scroll") ? "swipe" : api === "device.openLink" || api === "app.open" ? "deep-link" : "other";
+      const frameSteps = flow.steps.map((step, index) => ({ step, index })).filter(({ step }) => step.frame && screenIds.includes(flowSurfaceId(entry.id, step.frame)));
+      for (let i = 1; i < frameSteps.length; i += 1) {
+        const from = frameSteps[i - 1]!; const to = frameSteps[i]!;
+        const between = flow.steps.slice(from.index + 1, to.index).filter(step => !step.api.startsWith("expect.") && step.api !== "app.screenshot");
+        const action = between.find(step => kindOf(step.api) !== "other") ?? between[0];
+        const fromId = flowSurfaceId(entry.id, from.step.frame!); const toId = flowSurfaceId(entry.id, to.step.frame!);
+        const at = flow.frames[to.step.frame!]!.capturedAt;
+        const id = `flow:${side}:${toId}`;
+        map.transitions.push({ id, fromScreenId: fromId, toScreenId: toId, actionKind: action ? kindOf(action.api) : "other",
+          ...(action ? { selector: action.label } : {}), firstObservedAt: at, lastObservedAt: at, attemptIds: [] });
+        transitionIds.push(id);
+      }
+    }
+    if (screenIds.length) map.journeys.push({ id: `flow:${entry.id}`, title: entry.title, screenIds, transitionIds, attemptIds: [] });
   }
   const openGaps = map.gaps.filter((gap) => gap.status === "open");
   if (openGaps.length > 0) map.run.status = "partial";
@@ -695,7 +714,12 @@ export function publicReviewProjection(review: PublicReview): ViewerReviewProjec
         return failed ? `Not reached: the flow ${flow.status} at step ${flow.steps.indexOf(failed) + 1} (${failed.api} ${failed.label}).` : `Not taken: the flow ${flow.status} without this frame.`;
       };
       const notes = captureNotes({ before: missing("base"), after: missing("head") });
-      const status = (side: Side) => entry[side] ? `${entry[side]!.status} on ${side}` : `not run on ${side}`;
+      const status = (side: Side) => {
+        const flow = entry[side];
+        if (!flow) return `not run on ${side}`;
+        const failed = flow.status === "passed" ? undefined : flow.steps.find(step => step.status !== "passed");
+        return `${flow.status} on ${side}${failed ? ` at step ${flow.steps.indexOf(failed) + 1} (${failed.api} ${failed.label})` : ""}`;
+      };
       surfaces[frame.id] = { note: `Flow ${entry.title}: ${status("head")}${entry.base ? `, ${status("base")}` : ""}`, ...(visual ? { visual } : {}), ...(notes ? { captureNotes: notes } : {}),
         reviewerChanges: [], runtimeEvidenceRefs: [ref], noVisibleChange: frame.visual?.verdict === "unchanged" };
       evidence[ref] = {};
