@@ -1,3 +1,4 @@
+import { systemRegions } from "../contracts/capture.js";
 import type { RunTarget } from "../types.js";
 import { spawnSync } from "node:child_process";
 import { mkdir, open, readFile, realpath, writeFile } from "node:fs/promises";
@@ -369,8 +370,9 @@ export async function runCiReview(options: {
     stage = "compare";
     progress("comparing base and head captures");
     const sides = { base: await evidenceSide(join(output, "base-export")), head: await evidenceSide(join(output, "head-export")) };
-    const evidence = await assessPublicEvidence({ platform: config.app.platform, plan, ...sides, ...(options.measure ? { measure: options.measure } : {}), profile: `${config.app.easProfile}:${config.app.bundleId}`, agentDeviceCommand: agentDeviceLauncher(options.environment) });
-    const result = await prepareCaptureReview({ plan, pullRequest: pr, baseDirectory: sides.base.directory, headDirectory: sides.head.directory,
+    const system = systemRegions({ platform: config.app.platform, device: config.device.name, pose: config.device.pose });
+    const evidence = await assessPublicEvidence({ platform: config.app.platform, systemRegions: system, plan, ...sides, ...(options.measure ? { measure: options.measure } : {}), profile: `${config.app.easProfile}:${config.app.bundleId}`, agentDeviceCommand: agentDeviceLauncher(options.environment) });
+    const result = await prepareCaptureReview({ plan, pullRequest: pr, baseDirectory: sides.base.directory, headDirectory: sides.head.directory, systemRegions: system,
       runId: options.runId, runAttempt: options.runAttempt, assertCurrentHead, assessments: evidence.surfaces,
       ...(options.platforms ? { platforms: options.platforms } : {}),
       ...(config.target ? { target: config.target } : {}), ...(options.targets ? { targets: options.targets } : {}),

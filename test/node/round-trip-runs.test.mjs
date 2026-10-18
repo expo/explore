@@ -28,7 +28,7 @@ test('round trip: a push mid-review publishes the finished run under previous ru
   assert.equal(records.current.ios.headSha, newHead);
   assert.equal(records.history.length, 1);
   assert.equal(records.history[0].headSha, f.headSha);
-  assert.match(comment, new RegExp(`base \\[${f.baseSha.slice(0, 8)}\\][^\\n]*\\[${newHead.slice(0, 8)}\\]`));
+  assert.match(comment, new RegExp(`^<sub>\\[iOS\\]\\(<[^>]+>\\) · \\[${newHead.slice(0, 8)}\\]\\(<[^>]+>\\) vs \\[${f.baseSha.slice(0, 8)}\\]`, 'm'));
   assert.match(comment, /Previous runs \(1\)/);
   assert.ok(comment.includes(f.headSha.slice(0, 8)), 'the previous head is named');
   assert.ok(comment.includes('/actions/runs/1234/'), 'the previous run stays linked');
@@ -46,13 +46,12 @@ test('round trip: iOS and Android jobs of one run share a single comment: one ro
   assert.equal(records.current.ios.phase, 'ready');
   assert.equal(records.current.android.phase, 'ready');
   assert.equal(records.current.ios.runId, records.current.android.runId);
-  assert.equal((comment.match(/^\| iOS \|/gm) ?? []).length, 1);
-  assert.equal((comment.match(/^\| Android \|/gm) ?? []).length, 1);
-  assert.equal(comment.match(/^### Explore review/gm).length, 1, 'one header');
-  const routeLines = comment.split('\n').filter(line => /^- `\/(added|removed|home)`/.test(line));
+  assert.equal(comment.match(/^### /gm).length, 1, 'one header');
+  assert.match(comment, /^<sub>\[iOS\]\(<[^>]+>\) · \[Android\]\(<[^>]+>\) · /m, 'the subtitle links each platform\'s report');
+  const routeLines = comment.split('\n').filter(line => /^- (Added |Removed )?\[`\/(added|removed|home)`\]\(</.test(line));
   assert.ok(routeLines.length >= 1, `the comment lists changed routes once:\n${comment}`);
   assert.equal(routeLines.length, 6, `each changed screen is listed once:\n${comment}`);
-  for (const line of routeLines) assert.ok(/\[iOS\]\(/.test(line) && /\[Android\]\(/.test(line), `each changed route carries both platforms once: ${line}`);
+  for (const line of routeLines) assert.doesNotMatch(line, / only$|not on /, `a screen changed on both platforms names neither: ${line}`);
   const projection = publicReviewProjection(android.report.review);
   for (const surface of android.report.review.surfaces) assert.ok(projection.surfaces[surface.id], `the Viewer projects the Android surface ${surface.id}`);
   assert.ok(ios.projection.surfaces[ios.report.review.surfaces[0].id], 'the iOS report still opens');
@@ -82,5 +81,5 @@ test('round trip: a run on an old head that finishes after the new head\'s run f
   assert.ok(late.records.history.some(entry => entry.headSha === f.headSha && entry.platforms?.ios?.superseded === true || entry.superseded === true), JSON.stringify(late.records.history));
   assert.match(late.comment, /Previous runs \(2\)/);
   assert.ok(late.comment.includes('/actions/runs/1236/'), 'the late report stays reachable');
-  assert.match(late.comment, new RegExp(`base \\[${f.baseSha.slice(0, 8)}\\][^\\n]*\\[${newHead.slice(0, 8)}\\]`));
+  assert.match(late.comment, new RegExp(`^<sub>\\[iOS\\]\\(<[^>]+>\\) · \\[${newHead.slice(0, 8)}\\]\\(<[^>]+>\\) vs \\[${f.baseSha.slice(0, 8)}\\]`, 'm'));
 });

@@ -2,7 +2,7 @@ import type { EmbeddedReport } from "../../../src/contracts/standalone-report";
 import {
   ARTIFACT_LIMITS, ArtifactReportArchive, artifactIdentity, isReportPage, isReportTargetId, openCachedReport, openReportFile, previewAssetUrl,
   previewManifestUrl, previewReportsUrl, previewToken, reportDownloadUrl, reportFileName, reportTarget, ReportFileError,
-  showArchive, workflowRunUrl, type ArtifactIdentity, type ArtifactLoadProgress, type ReportFileErrorCode,
+  showArchive, targetQuery, workflowRunUrl, type ArtifactIdentity, type ArtifactLoadProgress, type ReportFileErrorCode,
 } from "./artifact-report";
 
 export type ReportSourceStatus = "checking-cache" | "downloading" | "awaiting-file" | "opening" | "ready" | "failed";
@@ -14,8 +14,12 @@ export type ReportSourceSnapshot = {
   error?: string;
   errorCode?: ReportFileErrorCode;
   fileName?: string;
-  /** Counts the reports this page has shown; a hosted preview switching targets starts a fresh Viewer per report. */
+  /** Counts the reports this page has shown; the Viewer reloads its report in place when it changes. */
   reportKey: number;
+  /** A hosted preview downloading another target while the report on screen stays: the pill shows the download. */
+  switching?: { target: string; progress: ArtifactLoadProgress };
+  /** The last switch whose download failed, while the report on screen stayed: the pill toasts why. */
+  switchError?: { target: string; error: string };
 };
 
 /** The metadata the ZIP path accepts, plus room for the manifest's list of assets and their sizes. */
@@ -47,6 +51,8 @@ export class ReportSource {
   /** Everyone waiting on a download hears its progress: a switch can join one the prefetch started. */
   private readonly loadingProgress = new Map<string, Set<(progress: ArtifactLoadProgress) => void>>();
   private current: string | undefined;
+  /** The link to the report on screen while another target downloads, for a switch that fails to go back to. */
+  private returnUrl: string | undefined;
   private generation = 0;
   private prefetched = false;
 
@@ -96,7 +102,18 @@ export class ReportSource {
     for (const listener of this.listeners) listener();
   }
 
-  private progressed = (progress: ArtifactLoadProgress): void => { this.set({ ...this.snapshot, progress }); };
+  private progressed = (progress: ArtifactLoadProgress): void => {
+    const { switching } = this.snapshot;
+    this.set(switching ? { ...this.snapshot, switching: { ...switching, progress } } : { ...this.snapshot, progress });
+  };
+
+  /** The snapshot without a switch in progress, or one that failed. */
+  private settled(): ReportSourceSnapshot {
+    const { switching, switchError, ...snapshot } = this.snapshot;
+    void switching;
+    void switchError;
+    return snapshot;
+  }
 
   /** Reopen the copy this browser kept of the linked report; otherwise wait for the file. */
   load(): Promise<void> {
@@ -119,8 +136,9 @@ export class ReportSource {
    */
   switchTarget(target: string, url: string): boolean {
     if (!this.preview || typeof window === "undefined") return false;
+    const from = window.location.href;
     window.history.pushState(null, "", url);
-    this.activateTarget(target);
+    this.activateTarget(target, from);
     return true;
   }
 
@@ -130,23 +148,34 @@ export class ReportSource {
     this.activateTarget(target);
   };
 
-  private activateTarget(target: string | undefined): void {
+  private activateTarget(target: string | undefined, from?: string): void {
     const key = target ?? "";
     const archive = this.archives.get(key);
     // Already shown (a hash-only navigation); going back to it from a switch still loading or failed shows it again.
     if (this.snapshot.status === "ready" && this.current !== undefined && archive && archive === this.archives.get(this.current)) {
       this.current = key;
+      // Back during a switch: the download it started is no longer wanted on screen.
+      if (this.snapshot.switching) {
+        this.generation += 1;
+        this.pending = undefined;
+        this.set(this.settled());
+      }
       return;
     }
     const generation = ++this.generation;
     this.pending = undefined;
     if (archive) {
-      this.set({ ...this.snapshot, reportKey: this.snapshot.reportKey + 1 });
       this.adopt(key, archive);
       return;
     }
-    this.data = undefined;
-    this.set({ status: "downloading", progress: { phase: "downloading" }, reportKey: this.snapshot.reportKey + 1 });
+    // The report on screen stays up while the other target downloads; only a page with none yet shows the loading screen.
+    if (this.snapshot.status === "ready" && this.data) {
+      this.returnUrl = from;
+      this.set({ ...this.settled(), switching: { target: key, progress: { phase: "downloading" } } });
+    } else {
+      this.data = undefined;
+      this.set({ status: "downloading", progress: { phase: "downloading" }, reportKey: this.snapshot.reportKey });
+    }
     this.pending = this.show(target, generation).finally(() => { if (generation === this.generation) this.pending = undefined; });
   }
 
@@ -160,18 +189,39 @@ export class ReportSource {
       this.adopt(key, archive);
     } catch (error) {
       if (generation !== this.generation) return;
-      this.set({ ...this.snapshot, status: "failed",
-        error: error instanceof Error && error.message ? error.message : "The report could not be downloaded.",
+      const message = error instanceof Error && error.message ? error.message : "The report could not be downloaded.";
+      // A switch away from a report on screen keeps it there: the link goes back to it, and the pill toasts why.
+      if (this.snapshot.switching && this.data) {
+        window.history.replaceState(null, "", this.returnUrl ?? this.shownLink());
+        this.returnUrl = undefined;
+        this.set({ ...this.settled(), switchError: { target: key, error: message } });
+        return;
+      }
+      this.set({ ...this.settled(), status: "failed", error: message,
         errorCode: error instanceof ReportFileError ? error.code : "invalid" });
     }
+  }
+
+  /** This page's link with the target of the report on screen: for a Back or Forward onto a target that failed. */
+  private shownLink(): string {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("platform");
+    url.searchParams.delete("target");
+    if (this.current) {
+      const [name, value] = targetQuery(this.current).split("=") as [string, string];
+      url.searchParams.set(name, value);
+    }
+    return url.href;
   }
 
   private adopt(key: string, archive: ArtifactReportArchive): void {
     this.remember(key, archive);
     showArchive(archive);
+    const shown = this.data === archive.data;
     this.data = archive.data;
     this.current = key;
-    this.set({ ...this.snapshot, status: "ready", identity: archive.identity });
+    const snapshot = this.settled();
+    this.set({ ...snapshot, status: "ready", identity: archive.identity, reportKey: shown ? snapshot.reportKey : snapshot.reportKey + 1 });
     this.schedulePrefetch();
   }
 

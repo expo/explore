@@ -3,7 +3,7 @@ import { useReactFlow, useStore } from "@xyflow/react";
 import { publishZoom, registerZoomApi, runCanvasZoomCommand } from "../../utils/canvas-zoom";
 import { isTyping, matchesShortcut, SHORTCUTS } from "../../utils/shortcuts";
 import { useCanvasVisibleFrame } from "./visible-frame-provider";
-import { createKeyHold, glideWhileHeld, type KeyHold } from "../../utils/key-hold";
+import { createKeyHold, glideWhileHeld, ZOOM_GLIDE, type KeyHold } from "../../utils/key-hold";
 import {
   canvasBoundsViewport,
   canvasPriorityProjectionBounds,
@@ -16,7 +16,7 @@ import {
 } from "./camera";
 
 const DURATION = 160;
-/** React Flow's zoomIn/zoomOut step, which a tap of + or − takes. */
+/** The step a tap of + or − takes, React Flow's own zoomIn/zoomOut step. */
 const KEY_ZOOM_STEP = 1.2;
 const PIXEL_WHEEL_ZOOM_RATE = 0.002;
 const LINE_WHEEL_ZOOM_RATE = 0.05;
@@ -216,18 +216,10 @@ export function ZoomBridge(props: {
     };
     registerZoomApi(api);
 
-    // A tap of + or − takes one eased step. Held, the OS key repeat is ignored (each repeat
-    // restarting the easing made holding slower than tapping); once the tap's step has landed the
-    // camera glides instead, frame by frame about the pane's centre, as zoomIn does, until the key
-    // is released, the hold is interrupted, or the zoom reaches its limit.
-    const zoomStep = (direction: 1 | -1): boolean => {
-      const viewport = getViewport();
-      const next = Math.min(maxZoom, Math.max(minZoom, viewport.zoom * KEY_ZOOM_STEP ** direction));
-      if (next === viewport.zoom) return false;
-      if (direction === 1) void zoomIn({ duration: DURATION });
-      else void zoomOut({ duration: DURATION });
-      return true;
-    };
+    // A tap of + or − zooms one step; held, the camera keeps gliding from that same motion, frame
+    // by frame about the pane's centre, as zoomIn does, until the key is released, the hold is
+    // interrupted, or the zoom reaches its limit. The OS key repeat is ignored (each repeat
+    // restarting an eased step made holding slower than tapping).
     const zoomGlide = (direction: 1 | -1) => (steps: number): boolean => {
       const viewport = getViewport();
       const zoom = Math.min(maxZoom, Math.max(minZoom, viewport.zoom * KEY_ZOOM_STEP ** (direction * steps)));
@@ -273,14 +265,12 @@ export function ZoomBridge(props: {
       if (!direction) return;
       event.preventDefault();
       onCameraGestureStart.current?.();
-      if (!zoomStep(direction)) return;
       // The hold only tracks the key (released, interrupted, a field or dialog taking over); the
       // glide reads it every frame and stops with it.
-      hold.begin(event.code, () => true);
-      glideWhileHeld(hold, event.code, DURATION, zoomGlide(direction));
+      glideWhileHeld(hold.begin(event.code, () => true), zoomGlide(direction), ZOOM_GLIDE);
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (hold.holding(event.code)) hold.end();
+      hold.release(event.code);
     };
 
     const onModifierWheel = (event: WheelEvent) => {

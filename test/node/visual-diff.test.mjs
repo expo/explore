@@ -82,6 +82,10 @@ test("visual diff data from a report is validated before the viewer draws it", (
   assert.deepEqual(visualDiff({ regions: [], ignoredStatusBarRegions: 2 }), { regions: [], ignoredStatusBarRegions: 2 });
   assert.deepEqual(visualDiff({ regions: [], ignoredStatusBarRegions: 0 }), { regions: [] });
   assert.deepEqual(visualDiff({ regions: [], ignoredStatusBarRegions: "2" }), { regions: [] });
+  const pill = { kind: "status-bar", x: 84.55, y: 12.24, width: 10.3, height: 10.62 };
+  assert.deepEqual(visualDiff({ regions: [], ignoredStatusBarRegions: 1, systemRegions: [pill, { kind: "home-indicator", x: 0, y: 97, width: 100, height: 3 }] }),
+    { regions: [], ignoredStatusBarRegions: 1, systemRegions: [pill, { kind: "home-indicator", x: 0, y: 97, width: 100, height: 3 }] });
+  assert.deepEqual(visualDiff({ regions: [], systemRegions: [{ kind: "notch", x: 0, y: 0, width: 10, height: 10 }, { ...pill, width: 0 }, { ...pill, x: 101 }, "pill"] }), { regions: [] });
   assert.equal(visualDiff({ regions: Array.from({ length: 200 }, () => PAYWALL[0]) }).regions.length, 64);
 });
 

@@ -1,6 +1,7 @@
 import { appearanceLabel, type Appearance } from "../../utils/appearance";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Search } from "lucide-react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { LoaderCircle, Search } from "lucide-react";
+import { toast } from "sonner";
 import { ExpoLogo } from "../shared/expo-logo";
 import { Menu } from "../shared/menu";
 import { isPreviewPath, isReportTargetId, previewReportsUrl, targetQuery } from "../../utils/artifact-report";
@@ -136,6 +137,8 @@ export function AppPill(props: AppPillProps) {
   const pillRef = useRef<HTMLDivElement>(null);
   const platformRef = useRef<HTMLButtonElement>(null);
   const [platformOpen, setPlatformOpen] = useState(false);
+  // A target still downloading: this report stays up, the trigger and the menu row say so. One that failed says why.
+  const { switching, switchError } = useSyncExternalStore(REPORT_SOURCE.subscribe, REPORT_SOURCE.getSnapshot, REPORT_SOURCE.getSnapshot);
   const appearanceRef = useRef<HTMLButtonElement>(null);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const appearanceItems = (props.appearance?.options ?? []).map(option => ({
@@ -189,8 +192,9 @@ export function AppPill(props: AppPillProps) {
     const sibling = siblings.find(entry => entry.target.id === target.id);
     return sibling ? [{
       kind: "item" as const, label: target.label,
-      description: [sibling.report?.changes === undefined ? undefined : `${sibling.report.changes} ${sibling.report.changes === 1 ? "change" : "changes"}`, sibling.report?.device]
-        .filter(Boolean).join(" · ") || (target.platform === platform ? "Same review, other device" : "Same review, other platform"),
+      description: switching?.target === target.id ? "Downloading…"
+        : [sibling.report?.changes === undefined ? undefined : `${sibling.report.changes} ${sibling.report.changes === 1 ? "change" : "changes"}`, sibling.report?.device]
+          .filter(Boolean).join(" · ") || (target.platform === platform ? "Same review, other device" : "Same review, other platform"),
       checked: false, ...numberHint(target), onSelect: () => openTarget(target.id),
     }] : [];
   }) : [];
@@ -201,6 +205,10 @@ export function AppPill(props: AppPillProps) {
   // the menu's order before there is one). The handler reads the current targets from a ref.
   const last = useLastTarget(run.current);
   const targetKeys = { siblings: siblings.map(entry => entry.target.id), order: run.targets.map(target => target.id), current: run.current, last, openTarget };
+  const failedLabel = switchError ? run.targets.find(target => target.id === switchError.target)?.label : undefined;
+  useEffect(() => {
+    if (switchError) toast.error(failedLabel ? `Couldn’t open ${failedLabel}` : "Couldn’t open the other report", { description: switchError.error });
+  }, [switchError, failedLabel]);
   const targetKeysRef = useRef(targetKeys);
   targetKeysRef.current = targetKeys;
   useEffect(() => {
@@ -236,7 +244,7 @@ export function AppPill(props: AppPillProps) {
           <button type="button" className="panel-logo-button" aria-label="Map" onClick={props.onOpenMap}>
             {appIcon ? (
               <ScreenshotImage className="panel-app-icon" src={appIcon} alt="" loading="eager" draggable={false}
-                fallback={<ExpoLogo mark />} />
+                fallback={<ExpoLogo mark />} holdPrevious />
             ) : <ExpoLogo mark />}
           </button>
         </Tooltip>
@@ -255,9 +263,12 @@ export function AppPill(props: AppPillProps) {
               <Tooltip label={`${device || targetLabel} · open another ${noun}'s report`} shortcut={formatShortcut(SHORTCUTS.target.menu)} placement="bottom">
                 <button ref={platformRef} type="button" className="collapsed-platform" aria-haspopup="menu" aria-expanded={platformOpen}
                   aria-label={`${noun === "device" ? "Device" : "Platform"}: ${targetLabel}. Open another ${noun}'s report`}
+                  aria-busy={switching ? true : undefined}
                   onClick={() => setPlatformOpen(open => !open)}>
                   {targetLabel}
-                  <svg aria-hidden="true" width="8" height="8" viewBox="0 0 8 8"><path d="M1 2.5 4 5.5 7 2.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  {switching
+                    ? <LoaderCircle aria-hidden="true" className="collapsed-platform-busy" />
+                    : <svg aria-hidden="true" width="8" height="8" viewBox="0 0 8 8"><path d="M1 2.5 4 5.5 7 2.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
                 </button>
               </Tooltip>
               <Menu items={platformItems} open={platformOpen} anchorRef={platformRef} ariaLabel={noun === "device" ? "Device" : "Platform"} onDismiss={() => setPlatformOpen(false)} />

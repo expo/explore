@@ -3,6 +3,7 @@ import { ChevronsLeftRight } from "lucide-react";
 import { formatMove, outlineRect, type VisualChange } from "../../utils/visual-diff";
 import { useMeasurementsShown } from "../../utils/measurements-setting";
 import { HOME_INDICATOR_BAND_PERCENT_BY_PLATFORM, STATUS_BAR_BAND_PERCENT } from "../../../../src/contracts/capture";
+import type { ReviewVisualDiff, SystemRegion } from "../../utils/review-model";
 import { ScreenshotImage } from "../shared/screenshot-image";
 import "./visual-diff.css";
 
@@ -43,37 +44,58 @@ export function ChangeOutlines(props: {
   );
 }
 
+const SYSTEM_REGION_COPY: Record<SystemRegion["kind"], { label: string; title: string }> = {
+  "status-bar": { label: "Status bar, not compared",
+    title: "The status bar (clock, signal, battery) differs between the captures. It is not counted as a change." },
+  "home-indicator": { label: "Home indicator, not compared",
+    title: "The home indicator at the bottom differs between the captures. It is not counted as a change." },
+};
+
 /**
- * The band CI leaves out of the verdict, blurred out over the top of a screenshot. Shown only
- * when CI reports that it ignored differences there; hovering it says why the clocks disagree.
- * The parent must be positioned.
+ * The system-drawn areas CI left out of the verdict for a screen: the ones the report names, or, for a report
+ * from before it named them, the platform's bands where CI says it ignored something. Empty when nothing was ignored.
  */
-export function StatusBarBand({ percent = STATUS_BAR_BAND_PERCENT }: { percent?: number }) {
-  return (
-    <span
-      className="visual-status-bar-band"
-      style={{ height: `${percent}%` }}
-      role="img"
-      aria-label="Status bar, not compared"
-      title="The status bar (clock, signal, battery) differs between the captures. It is not counted as a change."
-    />
-  );
+export function ignoredSystemRegions(visual: ReviewVisualDiff | undefined): SystemRegion[] {
+  if (!visual) return [];
+  const statusBar = (visual.ignoredStatusBarRegions ?? 0) > 0;
+  const homeIndicator = (visual.ignoredHomeIndicatorRegions ?? 0) > 0;
+  if (visual.systemRegions) return visual.systemRegions.filter((area) => (area.kind === "status-bar" ? statusBar : homeIndicator));
+  return [
+    ...(statusBar ? [{ kind: "status-bar" as const, x: 0, y: 0, width: 100, height: STATUS_BAR_BAND_PERCENT }] : []),
+    ...(homeIndicator ? [{ kind: "home-indicator" as const, x: 0, y: 100 - HOME_INDICATOR_BAND_PERCENT_BY_PLATFORM.ios, width: 100, height: HOME_INDICATOR_BAND_PERCENT_BY_PLATFORM.ios }] : []),
+  ];
 }
 
 /**
- * The same for the iOS home indicator, over the bottom of the screenshot: the system draws it in
- * whichever shade contrasts with the app underneath, so it changes without the app changing.
+ * The areas CI leaves out of the verdict, blurred out over a screenshot: a status-bar band across the top of a
+ * phone, the clock pill in a foldable's rail, the home indicator along the bottom. Shown only when CI reports
+ * that it ignored differences there; hovering one says why. The parent must be positioned.
  */
-export function HomeIndicatorBand({ percent = HOME_INDICATOR_BAND_PERCENT_BY_PLATFORM.ios }: { percent?: number }) {
+export function SystemRegionBands({ regions }: { regions: readonly SystemRegion[] }) {
   return (
-    <span
-      className="visual-status-bar-band visual-home-indicator-band"
-      style={{ height: `${percent}%` }}
-      role="img"
-      aria-label="Home indicator, not compared"
-      title="The home indicator at the bottom differs between the captures. It is not counted as a change."
-    />
+    <>
+      {regions.map((area, index) => (
+        <span
+          key={`${area.kind}:${index}`}
+          className={`visual-status-bar-band visual-system-region-${area.kind}`}
+          style={{ left: `${area.x}%`, top: `${area.y}%`, width: `${area.width}%`, height: `${area.height}%` }}
+          role="img"
+          aria-label={SYSTEM_REGION_COPY[area.kind].label}
+          title={SYSTEM_REGION_COPY[area.kind].title}
+        />
+      ))}
+    </>
   );
+}
+
+/** The status-bar band of a phone, for callers without a report (fixtures, stories). */
+export function StatusBarBand({ percent = STATUS_BAR_BAND_PERCENT }: { percent?: number }) {
+  return <SystemRegionBands regions={[{ kind: "status-bar", x: 0, y: 0, width: 100, height: percent }]} />;
+}
+
+/** The iOS home indicator's band, for callers without a report. */
+export function HomeIndicatorBand({ percent = HOME_INDICATOR_BAND_PERCENT_BY_PLATFORM.ios }: { percent?: number }) {
+  return <SystemRegionBands regions={[{ kind: "home-indicator", x: 0, y: 100 - percent, width: 100, height: percent }]} />;
 }
 
 export const SWIPE_STEP = 5;
@@ -91,8 +113,8 @@ export function SwipeCompare(props: {
   changes: readonly VisualChange[];
   activeIndex?: number | undefined;
   showOutlines?: boolean;
-  statusBarIgnored?: boolean;
-  homeIndicatorIgnored?: boolean;
+  /** The system-drawn areas CI left out, blurred over both frames with the outlines. */
+  systemRegions?: readonly SystemRegion[];
   position?: number;
   onPositionChange?: (position: number) => void;
   /** Before and After in the frame's bottom corners; off where the caller names them above the frame. */
@@ -160,8 +182,7 @@ export function SwipeCompare(props: {
           <span className="visual-swipe-outlines after"><ChangeOutlines changes={props.changes} activeIndex={props.activeIndex} /></span>
         </>
       ) : <ChangeOutlines changes={props.changes} activeIndex={props.activeIndex} />}
-      {props.statusBarIgnored && props.showOutlines !== false ? <StatusBarBand /> : null}
-      {props.homeIndicatorIgnored && props.showOutlines !== false ? <HomeIndicatorBand /> : null}
+      {props.systemRegions && props.showOutlines !== false ? <SystemRegionBands regions={props.systemRegions} /> : null}
       {props.labels === false ? null : (
         <>
           <span className="visual-swipe-label before" aria-hidden="true">Before</span>
