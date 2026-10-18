@@ -7,7 +7,7 @@ import test from "node:test";
 import { prepareCaptureReview } from "../../dist/review/capture-review.js";
 import { createSourceCapturePlan } from "../../dist/source/capture-plan.js";
 import { writeCiReportInput, exportCiReport } from "../../dist/report/artifact.js";
-import { collectPlatformReports, deployExplorationReport, deployFixturePreview, deployLocalReports, deployPreview, previewProjectSlug, readReportZip, whoamiAccounts, zipReportDirectory } from "../../dist/report/preview-deploy.js";
+import { collectPlatformReports, deployExplorationReport, deployFixturePreview, deployLocalReports, fixtureReports, deployPreview, previewProjectSlug, readReportZip, whoamiAccounts, zipReportDirectory } from "../../dist/report/preview-deploy.js";
 import { spawnSync } from "node:child_process";
 import { ZipReader, Uint8ArrayReader, TextWriter, configure } from "@zip.js/zip.js";
 import { viewerLinks } from "../../dist/report/viewer-links.js";
@@ -523,6 +523,27 @@ test("a fixture preview seals each platform's ZIP as is behind one alias and lis
   await assert.rejects(deployFixturePreview({ reports: [{ platform: "ios", zipPath: join(root, "ios.zip") }],
     project: "explore-viewer-pr", alias: "PR 12", exportPath, environment: deployEnvironment, transport: eas.transport, run: eas.run, verifyTimeoutMs: 1 }),
   error => error.code === "PREVIEW_ALIAS_INVALID");
+});
+
+test("fixture reports name each target's ZIP, and a listing from before targets its platform's", () => {
+  const listing = [
+    { target: "iphone", platform: "ios", label: "iPhone 17", changes: 11, device: "iPhone 17 26.5 · light + dark", source: "brentvatne/euxy#163" },
+    { target: "duo-open", platform: "ios", label: "iPhone Duo (open)", changes: 34 },
+    { target: "android", platform: "android", label: "Android", changes: 5 },
+  ];
+  assert.deepEqual(fixtureReports(listing, "/fixtures"), [
+    { platform: "ios", target: { id: "iphone", platform: "ios", label: "iPhone 17" }, zipPath: "/fixtures/iphone.zip", changes: 11, device: "iPhone 17 26.5 · light + dark" },
+    { platform: "ios", target: { id: "duo-open", platform: "ios", label: "iPhone Duo (open)" }, zipPath: "/fixtures/duo-open.zip", changes: 34 },
+    { platform: "android", target: { id: "android", platform: "android", label: "Android" }, zipPath: "/fixtures/android.zip", changes: 5 },
+  ]);
+  assert.deepEqual(fixtureReports([{ platform: "ios", changes: 3 }, { platform: "android" }], "/fixtures"), [
+    { platform: "ios", zipPath: "/fixtures/ios.zip", changes: 3 },
+    { platform: "android", zipPath: "/fixtures/android.zip" },
+  ]);
+  // reports.json comes from a hosted preview: a target that is not an id never names a file.
+  for (const bad of [[{ target: "../escape", platform: "ios" }], [{ platform: "web" }], [null], { platform: "ios" }]) {
+    assert.throws(() => fixtureReports(bad, "/fixtures"), error => error.code === "PREVIEW_REPORTS_INVALID", JSON.stringify(bad));
+  }
 });
 
 test("a deployment that does not report the requested alias is a retryable deploy failure", async t => {

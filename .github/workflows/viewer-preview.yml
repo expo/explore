@@ -76,9 +76,14 @@ jobs:
             | [$marker,
                "**Viewer preview** of \($sha)\(if $source != "" then " · reports from \($source)" else "" end)",
                "",
-               "| Platform | Changes | Open |",
+               "| Report | Changes | Open |",
                "| --- | --- | --- |",
-               ($reports[] | "| \(if .platform == "ios" then "iOS" else "Android" end)\(if .device then " · \(.device)" else "" end) | \(.changes // "–") | [Map](\($url)?platform=\(.platform)) · [Screens](\($url)?platform=\(.platform)#/screens) · [Compare](\($url)?platform=\(.platform)&view=compare) |"),
+               # One row per target, named by its label; a target named after its platform keeps ?platform= links.
+               ($reports[]
+                 | (.target // .platform) as $id
+                 | "\(if $id == "ios" or $id == "android" then "platform" else "target" end)=\($id)" as $query
+                 | ((.label // (if .platform == "ios" then "iOS" else "Android" end)) | gsub("\\|"; "\\\\|")) as $name
+                 | "| \($name)\(if .device then " · \(.device)" else "" end) | \(.changes // "–") | [Map](\($url)?\($query)) · [Screens](\($url)?\($query)#/screens) · [Compare](\($url)?\($query)&view=compare) |"),
                "",
                "The link stays the same on every push. [Deploy run](\($run))"]
             | join("\n")' "$RUNNER_TEMP/preview.json" > "$RUNNER_TEMP/comment.md"
