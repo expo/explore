@@ -5068,9 +5068,13 @@ test("/ finds screens on the Screens page: the tree and the grid narrow to the q
     .find(segment => segment && titles.filter(title => title.includes(segment)).length < titles.length)!;
   expect(query).toBeTruthy();
 
+  // Opening the field does not move the tree under it: the head keeps one height in every state.
+  const heading = grid.locator(".screens-tree h2");
+  const headingTop = (await heading.boundingBox())!.y;
   await page.keyboard.press("/");
   const field = grid.getByRole("searchbox", { name: "Find screens" });
   await expect(field).toBeFocused();
+  expect((await heading.boundingBox())!.y).toBe(headingTop);
   await field.fill(query);
   const matching = titles.filter(title => title.toLowerCase().includes(query.toLowerCase()));
   await expect(cells).toHaveCount(matching.length);
