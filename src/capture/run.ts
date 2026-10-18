@@ -700,7 +700,13 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           ...(options.sleep ? { sleep: options.sleep } : {}) })) throw new CiError({ code: "CONTROLLER_FOLD_UNVERIFIED", stage: "session",
           message: `${options.device} did not show the ${options.devicePose} display after folding: ${(folded.stderr || folded.stdout).trim().split("\n").at(-1) ?? ""}`.trim(),
           nextAction: "Rerun; if it persists, check that this Xcode's simulator supports folding the device." });
-      } else fold();
+      } else {
+        // agent-device folds only inside a session, and `install` opens none (SESSION_NOT_FOUND on EAS Simulator when the
+        // fold came first): the app opens once to start the session. Argent's bridge folds without one.
+        if (controller !== "argent") runner({ command: controllerCommand, args: ["open", options.bundleId, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
+          cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 5 * 60_000 });
+        fold();
+      }
     }
     runtimeStage = "runtime";
     setStage(runtimeStage);

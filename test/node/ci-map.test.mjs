@@ -510,8 +510,9 @@ test('device.pose folds the device first, before the app is opened, read or capt
     assert.equal(folds.length, 1);
     assert.deepEqual(folds[0].args.slice(0, 2), ['fold', 'open']);
     const foldAt = controller.indexOf(folds[0]);
-    // The fold comes first: the app is installed but not opened, read or captured before it, so the controller starts on the lit panel.
-    assert.deepEqual(controller.slice(0, foldAt).map(request => request.args[0]).filter(command => command !== '--version' && command !== 'install'), []);
+    // The fold comes first: the app is installed but not read or captured before it, so the controller starts on the lit panel.
+    // agent-device folds only inside a session, so one open (and nothing else) starts it; Argent folds without one.
+    assert.deepEqual(controller.slice(0, foldAt).map(request => request.args[0]).filter(command => command !== '--version' && command !== 'install'), argent ? [] : ['open']);
     // Argent's bridge is told the pose, so it captures the opened panel's landscape UI upright.
     if (argent) for (const request of controller) assert.equal(request.environment.EXPLORE_ARGENT_POSE, 'open');
   }
