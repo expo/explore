@@ -61,10 +61,12 @@
     "readme:screenshots": "node scripts/readme-screenshots.mjs"
   },
   "dependencies": {
+    "@e2e-dev/mobile": "0.12.3",
     "@expo/repack-app": "0.10.1",
     "@types/node": "^22.19.19",
     "@zip.js/zip.js": "2.16.0",
     "ajv": "^8.17.1",
+    "e2e": "0.21.2",
     "pngjs": "7.0.0",
     "typescript": "^5.9.3",
     "yaml": "^2.9.0",

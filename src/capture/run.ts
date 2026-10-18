@@ -3,6 +3,7 @@ import { assertNoCaptureHealthIssues, captureHealthIssues, partitionCaptureHealt
 import { type RouteResetSetting } from "./route-reset.js";
 import { defaultReadinessSeconds } from "./readiness.js";
 import { captureLaunch, ffmpegRecordingTools, launchDirectory, type LaunchSetting, type RecordingTools } from "./launch-capture.js";
+import { runFlows } from "./flows/run-flows.js";
 import { createHash } from "node:crypto";
 import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -82,6 +83,8 @@ export type CiMapOptions = {
   progress?: Progress;
   /** Stops the capture between steps (before the build, the session and each route); a session it started is still stopped. */
   signal?: AbortSignal;
+  /** The app's e2e flows to run after the routes (`only`: instead of them), as paths or globs from the app directory. */
+  flows?: { tests: readonly string[]; only?: boolean; agent?: { provider: "openai" | "anthropic"; model: string } };
 };
 export type SimulatorRuntimeMetadata = {
   provider: "eas-simulator" | "local-simulator"; controller: "agent-device" | "argent"; controllerPackageVersion: string;
@@ -189,7 +192,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     const route = row[`${side}Surface`];
     return route ? [route] : [];
   });
-  const routes = inventory.filter(route => selected.has(route.id));
+  const routes = options.flows?.only ? [] : inventory.filter(route => selected.has(route.id));
   const setup = revisionSetup(options.setup ?? [], plan, side);
   const runner = options.runner ?? defaultRunner;
   const sourceEnvironment = options.environment ?? process.env;
@@ -389,6 +392,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       runtimeProfile: metadata ? { deviceModel: metadata.deviceModel, osVersion: metadata.osVersion, locale: metadata.locale,
         orientation: metadata.orientation, colorScheme: metadata.colorScheme, ...(metadata.colorSchemes ? { colorSchemes: metadata.colorSchemes.join(",") } : {}) } : null, images, outcomes, procedure: { reset: options.reset ?? "root-link", readinessSeconds: options.readinessSeconds ?? defaultReadinessSeconds(options.platform) },
       ...(Object.keys(launchRecords).length ? { launch: launchRecords } : {}),
+      ...(flowRecords ? { flows: flowRecords } : {}),
       ...(options.agent ? { captureContexts: Object.fromEntries(selectedIds.filter(id => outcomes[id]?.status === "captured" && options.agent!.contexts[id])
         .map(id => [id, options.agent!.contexts[id]!])), agentAcceptance: { policy: AGENT_ACCEPTANCE_POLICY,
           frames: Object.fromEntries(Object.keys(images).map(id => [id, acceptedFrames[id]!])) } } : {}) };
@@ -403,7 +407,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       simulatorSessionId: sessionId ?? null, simulatorRuntime: metadata, mapDirectory, outputDirectory,
       runStatus: routes.length === 0 ? "complete" : map.run.status, app, outcomes };
   };
-  if (!missingRoutes.length || !options.agent && !missingRoutes.some(hasConcreteRoutePath)) {
+  if (!options.flows && (!missingRoutes.length || !options.agent && !missingRoutes.some(hasConcreteRoutePath))) {
     for (const route of missingRoutes) outcomes[route.id] = { ...unavailableRoute(route), attempts: 0, landing: "unverified" };
     return finish();
   }
@@ -426,7 +430,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     ...(profile.projectIdentity.buildNumber ? { buildNumber: profile.projectIdentity.buildNumber } : {}) };
   projectId = profile.projectIdentity.projectId;
   appIcon = await loadAppIcon(project, configValue.appConfig, options.platform) ?? appIcon;
-  if (!scheme && !options.agent) {
+  if (!scheme && !options.agent && !options.flows) {
     for (const route of missingRoutes) outcomes[route.id] = { ...unavailableRoute(route), attempts: 0, landing: "unverified" };
     return finish();
   }
@@ -579,6 +583,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   }
   let primaryError: unknown;
   let runtimeStage = "session";
+  let flowRecords: CaptureBundle["flows"] | undefined;
+  const captureStartedAt = (options.now ?? Date.now)();
   try {
     setStage(runtimeStage);
     let connection: SimulatorConnection | undefined;
@@ -763,6 +769,16 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     }
     runtime.colorScheme = colorSchemes[0]!;
     Object.assign(outcomes, mergeSchemeOutcomes(passes, colorSchemes));
+    if (options.flows) {
+      runtimeStage = "flows";
+      // The flows share the deadline the routes had; a flow that fails or runs out of time keeps the frames it took.
+      const remainingMs = Math.max(60_000, options.maxDurationMinutes * 60_000 - ((options.now ?? Date.now)() - captureStartedAt));
+      const result = await runFlows({ project, tests: options.flows.tests, platform: options.platform, bundleId: options.bundleId, connection,
+        ...(connection ? {} : { stateDir: join(simulatorProject, "agent-device-state") }), deviceId: runtime.controllerDeviceId,
+        workDirectory: simulatorProject, outputDirectory, runner, environment: controllerEnvironment, timeoutMs: remainingMs,
+        agent: options.flows.agent, progress: say, ...(options.environment?.EXPLORE_FLOWS_ENGINE_MODULE ? { engineModule: options.environment.EXPLORE_FLOWS_ENGINE_MODULE } : {}) });
+      flowRecords = result.flows;
+    }
   } catch (error) { primaryError = toCiError(error, { code: `CAPTURE_${runtimeStage.toUpperCase()}_FAILED`, stage: runtimeStage,
     nextAction: "Inspect the capture diagnostic, correct the failing prerequisite, and rerun Explore." }); }
   finally {

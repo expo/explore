@@ -20,7 +20,7 @@ export type PublicCommentState = {
   phase: PublicCommentPhase;
   pullRequest: ReviewPresentation;
   mode: "all" | "changes";
-  executionMode: "deterministic" | "agent";
+  executionMode: "deterministic" | "agent" | "flows";
   /** Repository-relative path of the reviewed configuration file. */
   configPath: string;
   links: ViewerLinks;

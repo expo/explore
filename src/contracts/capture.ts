@@ -62,6 +62,30 @@ export type BundleLaunchCapture = {
   video?: LaunchVideo;
 };
 
+/** A frame a flow took with `app.screenshot(label)`; stored and verified like a launch frame. */
+export type FlowFrame = LaunchFrame;
+export type FlowStatus = "passed" | "failed" | "skipped" | "flaky" | "timed-out" | "interrupted" | "blocked";
+export type FlowStepStatus = "passed" | "failed" | "blocked" | "timed-out" | "cancelled";
+export type BundleFlowStep = {
+  /** The e2e step API (`locator.tap`, `expect.toBeVisible`, `app.screenshot`, `agent.act`). */
+  api: string; label: string; status: FlowStepStatus; durationMs: number;
+  /** The key under `frames` of the screenshot this step took. */
+  frame?: string;
+  error?: { code: string; message: string };
+};
+/**
+ * One flow (an e2e test) the capture ran on this revision: its outcome, its steps, and the frames it took. The frames
+ * are review surfaces of their own (`flow:<id>/<key>`), never attributed to a source route.
+ */
+export type BundleFlow = {
+  file: string; title: string; status: FlowStatus; durationMs: number;
+  error?: { code: string; message: string };
+  steps: BundleFlowStep[];
+  frames: Record<string, FlowFrame>;
+};
+/** The review surface id of a flow frame. */
+export const flowSurfaceId = (flowId: string, key: string): string => `flow:${flowId}/${key}`;
+
 export type LaunchFilmstrip = LaunchFrame & {
   /** When each tile was on screen, in milliseconds from the launch transition (negative before it). */
   frameTimesMs: number[];
@@ -84,6 +108,8 @@ export type CaptureBundle = {
   outcomes: Record<string, CaptureOutcome>;
   /** Launch evidence per appearance (`light`/`dark`), when the capture observed the app launch. */
   launch?: Record<string, BundleLaunchCapture>;
+  /** The app's e2e flows run on this revision, by flow id, when the config names flows. */
+  flows?: Record<string, BundleFlow>;
   /** How route frames were produced; absent in bundles from before `capture.reset` existed (root-link was not applied). */
   procedure?: { reset: "root-link" | "none"; readinessSeconds?: number };
   /** Committed destination goals used for this capture, including cached evidence. */

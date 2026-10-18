@@ -1,0 +1,262 @@
+{
+  "schemaVersion": "report-1",
+  "run": {
+    "id": "01a14c4a-51de-7ee0-bfc7-69e8c5353071",
+    "specVersion": "0.1",
+    "runner": {
+      "name": "e2e",
+      "version": "0.21.2"
+    },
+    "status": "passed",
+    "exitCode": 0,
+    "startedAt": "2026-10-17T23:55:01.510Z",
+    "finishedAt": "2026-10-17T23:55:01.530Z",
+    "project": {
+      "id": "e2e-probe",
+      "configDigest": "b61c15749f8acd2d3a2e2fe22cd35ef0b1c1496b94871dc26075448c0c47043a"
+    },
+    "environment": {
+      "ci": false,
+      "trustNoticeShown": false,
+      "os": "linux 6.8.0-1061-aws",
+      "arch": "x64",
+      "runtime": "node v24.12.0"
+    },
+    "targets": [
+      {
+        "id": "fake",
+        "index": 0,
+        "platform": "fake",
+        "environment": "test",
+        "engine": {
+          "name": "fake",
+          "version": "0.0.1",
+          "spiVersion": 1
+        },
+        "capabilities": [
+          "actions",
+          "artifacts",
+          "location",
+          "observation"
+        ],
+        "artifactCapabilities": [
+          "screenshot"
+        ],
+        "stateCapability": false
+      }
+    ],
+    "serialGroups": [],
+    "results": [
+      {
+        "id": "eb3881d095c951b6922752e35a8485fa329ff482a49cc0bef3088675c1b34b35",
+        "testId": "tests/goal.e2e.ts::goal%20without%20model",
+        "kind": "test",
+        "declarationIndex": 0,
+        "titlePath": [
+          "goal without model"
+        ],
+        "file": "tests/goal.e2e.ts",
+        "source": {
+          "file": "tests/goal.e2e.ts",
+          "line": 2,
+          "column": 1
+        },
+        "targetId": "fake",
+        "platform": "fake",
+        "agent": "default",
+        "repeat": 0,
+        "tags": [],
+        "selected": false,
+        "status": "skipped",
+        "skip": {
+          "cause": "filtered",
+          "reason": "file not selected by a positional argument"
+        },
+        "attempts": []
+      },
+      {
+        "id": "09af3c698e01af961caa47df553e9242887a9c799a28a1f39aa236cc85831150",
+        "testId": "tests/send.e2e.ts::send%20money%20reaches%20contacts",
+        "kind": "test",
+        "declarationIndex": 0,
+        "titlePath": [
+          "send money reaches contacts"
+        ],
+        "file": "tests/send.e2e.ts",
+        "source": {
+          "file": "tests/send.e2e.ts",
+          "line": 2,
+          "column": 1
+        },
+        "targetId": "fake",
+        "platform": "fake",
+        "agent": "default",
+        "repeat": 0,
+        "tags": [],
+        "selected": true,
+        "status": "passed",
+        "attempts": [
+          {
+            "id": "01a14c4a-520d-76c6-9013-1d2dbc51ebc5",
+            "index": 0,
+            "status": "passed",
+            "startedAt": "2026-10-17T23:55:01.517Z",
+            "durationMs": 12,
+            "artifacts": [
+              {
+                "id": "01a14c4a-520d-76c6-9013-1d2dbc51ebc5:artifact:0",
+                "kind": "screenshot",
+                "mediaType": "image/png",
+                "redaction": "complete",
+                "producer": {
+                  "kind": "step",
+                  "stepId": "01a14c4a-520d-76c6-9013-1d2dbc51ebc5:0"
+                },
+                "path": "send-money-reaches-contacts-09af3c698e01af96/attempt-1/screenshots/001.png",
+                "size": 70,
+                "sha256": "497790947d4666760ce38f3c00e852c71fdb66cae849bae8e9ede352719e1581"
+              },
+              {
+                "id": "01a14c4a-520d-76c6-9013-1d2dbc51ebc5:artifact:1",
+                "kind": "screenshot",
+                "mediaType": "image/png",
+                "redaction": "complete",
+                "producer": {
+                  "kind": "step",
+                  "stepId": "01a14c4a-520d-76c6-9013-1d2dbc51ebc5:3"
+                },
+                "path": "send-money-reaches-contacts-09af3c698e01af96/attempt-1/screenshots/002.png",
+                "size": 70,
+                "sha256": "497790947d4666760ce38f3c00e852c71fdb66cae849bae8e9ede352719e1581"
+              }
+            ],
+            "secondaryErrors": [],
+            "cleanup": "complete",
+            "steps": [
+              {
+                "id": "01a14c4a-520d-76c6-9013-1d2dbc51ebc5:0",
+                "index": 0,
+                "kind": "app",
+                "api": "app.screenshot",
+                "label": "home",
+                "status": "passed",
+                "startedAt": "2026-10-17T23:55:01.520Z",
+                "durationMs": 1,
+                "events": [],
+                "artifacts": [
+                  "01a14c4a-520d-76c6-9013-1d2dbc51ebc5:artifact:0"
+                ],
+                "source": {
+                  "file": "tests/send.e2e.ts",
+                  "line": 3,
+                  "column": 13
+                }
+              },
+              {
+                "id": "01a14c4a-520d-76c6-9013-1d2dbc51ebc5:1",
+                "index": 1,
+                "kind": "locator",
+                "api": "locator.tap",
+                "label": "getByTestId(\"home-send\")",
+                "status": "passed",
+                "startedAt": "2026-10-17T23:55:01.521Z",
+                "durationMs": 1,
+                "events": [
+                  {
+                    "kind": "engine",
+                    "name": "tap",
+                    "startedAt": "2026-10-17T23:55:01.522Z",
+                    "durationMs": 0,
+                    "status": "passed",
+                    "detail": "tap button \"Send\""
+                  }
+                ],
+                "artifacts": [],
+                "source": {
+                  "file": "tests/send.e2e.ts",
+                  "line": 4,
+                  "column": 41
+                }
+              },
+              {
+                "id": "01a14c4a-520d-76c6-9013-1d2dbc51ebc5:2",
+                "index": 2,
+                "kind": "assertion",
+                "api": "expect.toBeVisible",
+                "label": "getByRole(\"heading\", name: \"Your contacts\")",
+                "status": "passed",
+                "startedAt": "2026-10-17T23:55:01.523Z",
+                "durationMs": 0,
+                "events": [
+                  {
+                    "kind": "poll",
+                    "name": "expect",
+                    "startedAt": "2026-10-17T23:55:01.523Z",
+                    "durationMs": 0,
+                    "status": "passed",
+                    "count": 1
+                  }
+                ],
+                "artifacts": [],
+                "source": {
+                  "file": "tests/send.e2e.ts",
+                  "line": 5,
+                  "column": 62
+                }
+              },
+              {
+                "id": "01a14c4a-520d-76c6-9013-1d2dbc51ebc5:3",
+                "index": 3,
+                "kind": "app",
+                "api": "app.screenshot",
+                "label": "contacts",
+                "status": "passed",
+                "startedAt": "2026-10-17T23:55:01.523Z",
+                "durationMs": 0,
+                "events": [],
+                "artifacts": [
+                  "01a14c4a-520d-76c6-9013-1d2dbc51ebc5:artifact:1"
+                ],
+                "source": {
+                  "file": "tests/send.e2e.ts",
+                  "line": 6,
+                  "column": 13
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "errors": [],
+    "summary": {
+      "discovered": 2,
+      "selected": 1,
+      "executed": 1,
+      "passed": 1,
+      "failed": 0,
+      "interrupted": 0,
+      "flaky": 0,
+      "skipped": 0
+    },
+    "limits": {
+      "maxAgentContextBytes": 16384,
+      "maxLedgerBytes": 8192,
+      "maxObservationBytes": 262144,
+      "maxEventsPerStep": 1000,
+      "maxModelTokensPerCall": 64000
+    },
+    "usage": {
+      "discoveredResults": 2,
+      "maxAgentContextBytes": 0,
+      "maxLedgerBytes": 0,
+      "maxObservationBytes": 0,
+      "artifactBytes": 140,
+      "downloads": 0,
+      "events": 2,
+      "modelTokens": 0,
+      "maxModelCallsInStep": 0,
+      "maxActionStepsInStep": 0
+    }
+  }
+}

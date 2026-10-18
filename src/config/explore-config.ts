@@ -71,7 +71,8 @@ export function isTargetId(value: unknown): value is string {
 
 /** Source discovery never consumes a user-authored screen inventory. */
 export type ExploreConfig = {
-  mode: "deterministic" | "agent";
+  /** `flows` runs setup and the configured flows only; `deterministic` with `flows` runs the route links and then the flows. */
+  mode: "deterministic" | "agent" | "flows";
   app: { name?: string; platform: ExplorePlatform; bundleId: string; easProfile: string; scheme?: string };
   navigation: { provider: "auto" | "expo-router" | "react-navigation"; entry?: string };
   /**
@@ -102,6 +103,8 @@ export type ExploreConfig = {
     simulator?: "local" };
   parameters?: Record<string, Record<string, string>>;
   setup?: ExploreSetupAction[];
+  /** The app's e2e flows (test files of the `e2e` package) the capture runs on each revision, as paths or globs from the app directory. */
+  flows?: { tests: string[] };
   agent?: { provider: "openai" | "anthropic"; model: string; instructions?: string };
   /** Hosted previews: one token-gated EAS Hosting deployment per review, see docs/private-review.md. */
   report?: { preview?: { hosting: "eas"; /** null: the link never expires; the deployment lives until someone deletes it. */ expiresAfterDays: number | null; owner?: string; project?: string } };
@@ -271,10 +274,28 @@ function parameters(value: unknown): Record<string, Record<string, string>> {
   }));
 }
 
+/** The flows the capture runs: the app's e2e test files. `flows` mode needs them; agent mode has no room for them yet. */
+function flowsConfig(value: unknown, mode: ExploreConfig["mode"]): ExploreConfig["flows"] {
+  if (value === undefined) {
+    if (mode === "flows") fail("flows.tests is required in flows mode", "flows", "List the e2e test files (or globs) the capture runs, for example `flows: { tests: [e2e/**/*.e2e.ts] }`.");
+    return undefined;
+  }
+  if (mode === "agent") fail("flows cannot be combined with agent mode", "flows", "Use mode: flows, or mode: deterministic with flows, so the agent and the flows do not drive the device at once.");
+  const input = record(value, "flows");
+  exactKeys(input, ["tests"], "flows");
+  const tests = Array.isArray(input.tests) ? input.tests : input.tests === undefined ? [] : [input.tests];
+  if (!tests.length || tests.length > 100) fail("flows.tests must list between 1 and 100 test files or globs", "flows.tests");
+  return { tests: tests.map((entry, index) => {
+    const path = text(entry, `flows.tests[${index}]`, 512);
+    if (isAbsolute(path) || path.split(/[\\/]/).includes("..") || /[\u0000-\u001f]/.test(path)) fail(`flows.tests[${index}] must be a path or glob inside the app directory`, `flows.tests[${index}]`);
+    return path.replace(/\\/g, "/");
+  }) };
+}
+
 /** Validate and normalize plain data; credential validation is a separate execution gate. */
 export function validateExploreConfig(value: unknown): ExploreConfig {
   const root = record(value, "config");
-  exactKeys(root, ["mode", "app", "navigation", "device", "platforms", "targets", "exploration", "capture", "parameters", "setup", "agent", "report", "ci"], "config");
+  exactKeys(root, ["mode", "app", "navigation", "device", "platforms", "targets", "exploration", "capture", "parameters", "setup", "flows", "agent", "report", "ci"], "config");
   const app = record(root.app, "app");
   exactKeys(app, ["name", "platform", "bundleId", "easProfile", "scheme"], "app");
   const device = record(root.device, "device");
@@ -288,7 +309,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
   exactKeys(capture, ["maxMinutes", "maxActions", "repack", "appearance", "launch", "reset", "unattributed", "readinessSeconds", "controller", "simulator"], "capture");
   const controller = literal(capture.controller, ["agent-device", "argent"] as const, "capture.controller", "agent-device");
   const simulator = literal(capture.simulator, ["eas", "local"] as const, "capture.simulator", "eas");
-  const mode = literal(root.mode, ["deterministic", "agent"] as const, "mode", "deterministic");
+  const mode = literal(root.mode, ["deterministic", "agent", "flows"] as const, "mode", "deterministic");
   const name = optionalText(app.name, "app.name", 128);
   const scheme = app.scheme === undefined ? undefined : customScheme(app.scheme, "app.scheme");
   const platform = literal(app.platform, EXPLORE_PLATFORMS, "app.platform", "ios");
@@ -309,6 +330,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
     if (mode === "agent" && !agent.instructions) fail("agent.instructions is required in agent mode", "agent.instructions",
       "Use the explore-setup skill to write app-specific instructions and set agent.instructions to their repository-relative path.");
   }
+  const flows = flowsConfig(root.flows, mode);
   const report = reportConfig(root.report);
   const ci = ciConfig(root.ci);
   return {
@@ -343,6 +365,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
     },
     ...(root.parameters === undefined ? {} : { parameters: parameters(root.parameters) }),
     ...(root.setup === undefined ? {} : { setup: setupActions(root.setup, scheme) }),
+    ...(flows === undefined ? {} : { flows }),
     ...(agent === undefined ? {} : { agent }),
     ...(report === undefined ? {} : { report }),
     ...(ci === undefined ? {} : { ci }),

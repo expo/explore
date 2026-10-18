@@ -16,7 +16,7 @@ export async function prepareCiExploration(config: ExploreConfig, project: strin
   if (!active) return { instructionsSha256: instructions?.sha256, agent: undefined };
   const inputs = createExplorationInputs({ ...(instructions ? { instructions: instructions.text } : {}),
     ...(config.setup ? { setup: config.setup } : {}), environment });
-  if (config.mode === "deterministic") return { instructionsSha256: undefined, agent: undefined };
+  if (config.mode !== "agent") return { instructionsSha256: undefined, agent: undefined };
   if (!options.subscription) assertExecutionMode(config, environment);
   const tracked = spawnSync("git", ["-C", project, "ls-files", "--error-unmatch", "--", config.agent!.instructions!], { encoding: "utf8" });
   if (tracked.status !== 0) throw new CiError({ code: "AGENT_INSTRUCTIONS_UNCOMMITTED", stage: "preflight",

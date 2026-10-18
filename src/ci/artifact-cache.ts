@@ -35,6 +35,7 @@ export function captureRecipeConfig(config: ExploreConfig, instructionsSha256?: 
     app: { platform: config.app.platform, bundleId: config.app.bundleId, easProfile: config.app.easProfile,
       ...(config.app.scheme === undefined ? {} : { scheme: config.app.scheme }) },
     device: config.device, parameters: config.parameters, setup: config.setup ?? [],
+    ...(config.flows ? { flows: config.flows } : {}),
     // The repack as it resolves, so a config that leaves it to the default keeps the recipe it had when the default was written out.
     capture: { ...config.capture, repack: captureRepack(config) },
     // agent-device recipes stay as they were; an Argent capture is keyed to the Argent release that drove it.

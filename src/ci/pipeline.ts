@@ -70,6 +70,7 @@ function captureOptions(config: ExploreConfig, environment: NodeJS.ProcessEnv, r
     maxScreens: 5000, maxActions: config.capture.maxActions, maxDurationMinutes: config.capture.maxMinutes,
     setup: config.setup ?? [], forceFreshBuild: false, confirmExternalRun: true, confirmTrustedSource: true, repack: captureRepack(config), appearance: config.capture.appearance, launch: config.capture.launch, reset: config.capture.reset, unattributed: config.capture.unattributed, ...(config.capture.readinessSeconds !== undefined ? { readinessSeconds: config.capture.readinessSeconds } : {}), ...(config.capture.controller ? { controller: config.capture.controller } : {}),
     ...(config.capture.simulator ? { simulator: config.capture.simulator } : {}),
+    ...(config.flows ? { flows: { tests: config.flows.tests, only: config.mode === "flows", ...(config.agent ? { agent: { provider: config.agent.provider, model: config.agent.model } } : {}) } } : {}),
     environment, ...(runner ? { runner } : {}), easCommand: packageBin("eas-cli", "eas"), agentDeviceCommand: agentDeviceLauncher(environment), repackCommand: packageBin("@expo/repack-app", "repack-app") };
 }
 /**
