@@ -389,7 +389,14 @@ test("the manifest and asset routes let the Viewer open a report before any scre
   const asset = await site.get(`/${name}`);
   assert.equal(asset.status, 200);
   assert.equal(asset.headers.get("content-type"), "image/png");
-  assert.equal(asset.headers.get("cache-control"), "private, max-age=31536000, immutable");
+  // Kept by this browser until the link expires, never by a shared cache.
+  const secondsLeft = Math.floor((Date.parse(reviewEnv.EXPLORE_PREVIEW_EXPIRES_AT!) - Date.now()) / 1000);
+  const maxAge = Number(/^private, max-age=(\d+), immutable$/.exec(asset.headers.get("cache-control") ?? "")?.[1]);
+  assert.ok(Math.abs(maxAge - Math.min(secondsLeft, 365 * 24 * 60 * 60)) <= 5, asset.headers.get("cache-control") ?? "");
+  const nearExpiry = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(review) }, reviewEnv, () => Date.parse("2029-12-31T23:59:00Z"));
+  assert.equal((await nearExpiry.get(`/${name}`)).headers.get("cache-control"), "private, max-age=60, immutable");
+  const never = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(review) }, { ...reviewEnv, EXPLORE_PREVIEW_EXPIRES_AT: undefined });
+  assert.equal((await never.get(`/${name}`)).headers.get("cache-control"), "private, max-age=31536000, immutable");
   assert.equal(asset.headers.get("content-length"), String(entry.size));
   assert.equal(asset.headers.get("etag"), `"${name.slice("assets/".length, "assets/".length + 64)}"`);
   const bytes = new Uint8Array(await asset.arrayBuffer());

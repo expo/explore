@@ -140,8 +140,12 @@ export type PreviewRequestOptions = {
 const ROUTE = /^\/p\/([a-z2-7]{32})(?:\/|\/(report\.zip|reports\.json|manifest\.json|llms\.txt)|(\/api\/v1(?:\/[A-Za-z0-9._:@-]{1,200}){0,2}\/?)|\/assets\/([a-f0-9]{64}\.(?:png|jpg|mp4)))?$/;
 /** The manifest the Viewer opens instead of the whole ZIP: the report's metadata file plus every asset's size. */
 export const PREVIEW_MANIFEST_FORMAT = "explore.preview-manifest/1";
-/** Content-addressed and token-gated: this browser may keep an asset for as long as it likes, shared caches may not. */
-const ASSET_CACHE_CONTROL = "private, max-age=31536000, immutable";
+/** Content-addressed and token-gated: this browser may keep an asset until the link expires (a year at most); shared caches may not. */
+const MAX_ASSET_AGE_SECONDS = 365 * 24 * 60 * 60;
+function assetCacheControl(expiresAt: number | null, now: number): string {
+  const untilExpiry = expiresAt === null ? MAX_ASSET_AGE_SECONDS : Math.floor((expiresAt - now) / 1000);
+  return `private, max-age=${Math.max(0, Math.min(MAX_ASSET_AGE_SECONDS, untilExpiry))}, immutable`;
+}
 const ASSET_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", mp4: "video/mp4" };
 const MAX_ASSET_BYTES = 32 * 1024 * 1024;
 const reportCache = new Map<string, Promise<LoadedReport | undefined>>();
@@ -203,7 +207,7 @@ export async function previewResponse(request: Request, options: PreviewRequestO
     const headers = baseHeaders("application/json; charset=utf-8");
     return new Response(manifestBody(loaded.loaded), { headers });
   }
-  if (route === "asset") return assetResponse(loaded.loaded, match[4]!);
+  if (route === "asset") return assetResponse(loaded.loaded, match[4]!, assetCacheControl(config.expiresAt, (options.now ?? Date.now)()));
   const context = agentContext(pageUrl, config, report);
   if (route === undefined || route === "llms.txt") {
     const headers = baseHeaders("text/markdown; charset=utf-8");
@@ -260,13 +264,13 @@ export function manifestBody(loaded: LoadedReport): string {
 }
 
 /** One asset of the report, inflated from the decrypted ZIP the isolate holds. */
-async function assetResponse(loaded: LoadedReport, file: string): Promise<Response> {
+async function assetResponse(loaded: LoadedReport, file: string, cacheControl: string): Promise<Response> {
   const entry = loaded.entries.get(`assets/${file}`);
   if (!entry) return previewNotFound();
   const bytes = await readZipEntry(loaded.zip, entry, MAX_ASSET_BYTES);
   if (!bytes) return previewNotFound();
   const headers = baseHeaders(ASSET_TYPES[file.slice(file.lastIndexOf(".") + 1)] ?? "application/octet-stream");
-  headers.set("Cache-Control", ASSET_CACHE_CONTROL);
+  headers.set("Cache-Control", cacheControl);
   headers.set("Content-Length", String(bytes.byteLength));
   headers.set("ETag", `"${file.slice(0, 64)}"`);
   return new Response(bytes as BodyInit, { headers });
