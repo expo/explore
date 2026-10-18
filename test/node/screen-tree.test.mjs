@@ -209,3 +209,18 @@ test("in a black-box tree, a screen with screens opened from it folds under its 
   assert.deepEqual(shape.screensUnder.get("screen:seq"), ["new"]);
   assert.deepEqual(shape.ancestors.get("new"), ["screen:seq"]);
 });
+
+test("flow frames stay out of the Screens tree in both modes: the Flows view shows them, the Map draws their chain", () => {
+  const screens = [
+    screen("home", "Home", 0, { route: "/" }),
+    screen("flow:send-money/contacts", "Send money › contacts", 1, { route: "send-money", state: "contacts" }),
+    screen("removed:aaaaaaaa:screen:flow:send-money/review", "Send money › review", 2, { route: "send-money", state: "review" }),
+  ];
+  const routeFiles = new Map([["home", "src/app/index.tsx"]]);
+  for (const tree of [screenTree(screens, indexMap(map({ screens })), routeFiles), screenTree(screens, indexMap(map({ screens })))]) {
+    const listed = tree.sections.flatMap((section) => section.screenIds);
+    assert.deepEqual(listed.filter((id) => id.includes("flow:")), []);
+    assert.deepEqual(treeScreenOrder(tree).filter((id) => id.includes("flow:")), []);
+    assert.ok(listed.includes("home"));
+  }
+});
