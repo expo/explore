@@ -421,14 +421,15 @@ test("status-bar glyph differences never count as an app change", async (t) => {
   assert.deepEqual([android.ignoredTop, android.ignoredBottom, android.measurement.match], [0, 0, false]);
 
   // A region that crosses the band's edge is clipped to its pixels below the band, read from the frames themselves:
-  // in a 100x874 frame the iOS band is 56 rows, so a glyph drawn over rows 50-59 keeps only its 4 rows below.
+  // in a 100x874 frame the iOS band is 56 rows, so a glyph drawn over rows 50-59 keeps only its 4 rows below. The
+  // band still counts as ignored, so the Viewer marks the pixels left out of the comparison.
   const frame = (paint) => { const png = new PngImage({ width: 100, height: 874 }); png.data.fill(255); paint?.(png); return png; };
   const paintRows = (from, to) => (png) => { for (let y = from; y < to; y += 1) for (let x = 10; x < 20; x += 1) png.data.fill(0, (y * 100 + x) * 4, (y * 100 + x) * 4 + 3); };
   const frames = (to) => () => ({ baseline: frame(), current: frame(paintRows(50, to)), distance: 0.1 * Math.sqrt(3 * 255 ** 2) });
   const straddling = (height, pixels) => ({ index: 0, rect: { x: 10, y: 50, width: 10, height }, normalizedRect: { x: 10, y: 5.72, width: 10, height: (height / 874) * 100 }, differentPixels: pixels, shareOfDiffPercentage: 100, densityPercentage: 100, shape: "block", size: "small", location: "top-left", dominantChange: "darker" });
   const whole = { ...statusBarOnly, totalPixels: 87400, differentPixels: 100, mismatchPercentage: 0.11, regions: [straddling(10, 100)] };
   const clipped = ignoreSystemBands(whole, { top: statusBarBandPercent("ios"), bottom: 0 }, frames(60));
-  assert.deepEqual([clipped.ignoredTop, clipped.measurement.match, clipped.measurement.differentPixels, clipped.measurement.mismatchPercentage], [0, false, 40, 0.05]);
+  assert.deepEqual([clipped.ignoredTop, clipped.measurement.match, clipped.measurement.differentPixels, clipped.measurement.mismatchPercentage], [1, false, 40, 0.05]);
   assert.deepEqual(clipped.measurement.regions.map((entry) => [entry.rect.y, entry.rect.height, entry.differentPixels, entry.shareOfDiffPercentage]), [[56, 4, 40, 100]]);
   assert.equal(clipped.measurement.regions[0].normalizedRect.y, 6.41);
   const glyph = ignoreSystemBands({ ...whole, differentPixels: 60, regions: [straddling(7, 60)] }, { top: statusBarBandPercent("ios"), bottom: 0 }, frames(56));
@@ -440,7 +441,7 @@ test("status-bar glyph differences never count as an app change", async (t) => {
   const merged = { ...straddling(21, 200), rect: { x: 0, y: 40, width: 100, height: 21 }, normalizedRect: { x: 0, y: 4.58, width: 100, height: 2.4 } };
   const battery = { ...straddling(10, 200), index: 1, rect: { x: 70, y: 40, width: 20, height: 10 }, normalizedRect: { x: 70, y: 4.58, width: 20, height: 1.14 } };
   const overlapping = ignoreSystemBands({ ...whole, differentPixels: 400, regions: [merged, battery] }, { top: statusBarBandPercent("ios"), bottom: 0 }, overlapFrames);
-  assert.deepEqual([overlapping.ignoredTop, overlapping.measurement.match, overlapping.measurement.differentPixels], [1, false, 100]);
+  assert.deepEqual([overlapping.ignoredTop, overlapping.measurement.match, overlapping.measurement.differentPixels], [2, false, 100]);
   assert.deepEqual(overlapping.measurement.regions.map((entry) => [entry.rect.y, entry.rect.height, entry.differentPixels]), [[56, 5, 100]]);
   const unreadable = ignoreSystemBands(whole, { top: statusBarBandPercent("ios"), bottom: 0 }, () => undefined);
   assert.deepEqual([unreadable.ignoredTop, unreadable.measurement.differentPixels], [0, 100]);

@@ -225,6 +225,8 @@ export function ignoreSystemBands(measurement: ScreenshotDiffMeasurement, bands:
       ignoredPixels += region.differentPixels;
       continue;
     }
+    // Its pixels inside the band were left out too, so the band is marked as not compared, as for a dropped region.
+    if (inside > 0) { if (top) ignoredTop += 1; if (bottom) ignoredBottom += 1; }
     ignoredPixels += inside;
     const round = (value: number) => Math.round(value * 100) / 100;
     remaining.push({ ...region, rect, differentPixels,

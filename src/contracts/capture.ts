@@ -189,9 +189,9 @@ export type PublicVisualVerdict = {
    * content. Absent when any region changed, or moves were not measured.
    */
   allRegionsMoved?: true;
-  /** Diff regions inside the iOS status-bar band that were excluded from the verdict. */
+  /** Diff regions inside the status-bar band that were excluded from the verdict, or clipped to their part below it. */
   ignoredStatusBarRegions?: number;
-  /** Diff regions that lay entirely inside the home-indicator band and were left out of the verdict. */
+  /** Diff regions that lay inside the home-indicator band and were left out of the verdict, or clipped to their part above it. */
   ignoredHomeIndicatorRegions?: number;
 };
 /**
