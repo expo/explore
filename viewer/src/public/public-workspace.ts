@@ -677,6 +677,30 @@ export function publicReviewProjection(review: PublicReview): ViewerReviewProjec
       reviewerChanges: [], runtimeEvidenceRefs: [ref], noVisibleChange: entry.visual?.verdict === "unchanged" };
     evidence[ref] = {};
   }
+  for (const entry of Array.isArray(review.flows) ? review.flows : []) {
+    for (const frame of entry.frames) {
+      const ref = `public:${frame.id}`;
+      const visual = frame.visual && frame.visual.verdict !== "unchanged"
+        ? visualDiff({
+          ...(frame.visual.mismatchPercentage !== undefined ? { mismatchPercentage: frame.visual.mismatchPercentage } : {}),
+          ...(frame.visual.ignoredStatusBarRegions ? { ignoredStatusBarRegions: frame.visual.ignoredStatusBarRegions } : {}),
+          ...(frame.visual.ignoredHomeIndicatorRegions ? { ignoredHomeIndicatorRegions: frame.visual.ignoredHomeIndicatorRegions } : {}),
+          regions: (frame.visual.regions ?? []).map((region) => ({ ...region.normalizedRect, share: region.shareOfDiffPercentage })),
+        })
+        : undefined;
+      const missing = (side: Side) => {
+        const flow = entry[side];
+        if (!flow || flow.frames[frame.key]) return undefined;
+        const failed = flow.steps.find(step => step.status !== "passed");
+        return failed ? `Not reached: the flow ${flow.status} at step ${flow.steps.indexOf(failed) + 1} (${failed.api} ${failed.label}).` : `Not taken: the flow ${flow.status} without this frame.`;
+      };
+      const notes = captureNotes({ before: missing("base"), after: missing("head") });
+      const status = (side: Side) => entry[side] ? `${entry[side]!.status} on ${side}` : `not run on ${side}`;
+      surfaces[frame.id] = { note: `Flow ${entry.title}: ${status("head")}${entry.base ? `, ${status("base")}` : ""}`, ...(visual ? { visual } : {}), ...(notes ? { captureNotes: notes } : {}),
+        reviewerChanges: [], runtimeEvidenceRefs: [ref], noVisibleChange: frame.visual?.verdict === "unchanged" };
+      evidence[ref] = {};
+    }
+  }
   return {
     pullRequest: {
       ...(review.pullRequest.origin === "local" || review.pullRequest.origin === "compare" ? { origin: review.pullRequest.origin } : {}),

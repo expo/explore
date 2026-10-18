@@ -26,6 +26,8 @@ export function screenLabel(screen: Pick<Screen, "route" | "title">, index: Pick
 
 export function displayPathForScreen(screen: Pick<Screen, "route" | "title">): string {
   const route = screen.route?.trim();
+  // A flow frame has no path: its route names the flow, and its title (`<flow> › <frame>`) is what to show.
+  if (route?.startsWith("flow:")) return screen.title;
   if (route && !MOBBIN_CAPTURE_ROUTE.test(route)) {
     return route.startsWith("/") ? route : `/${route}`;
   }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, ListTree } from "lucide-react";
-import { artifactUrl, isLaunchScreen, type ExploreMap, type MapIndex, type Screen } from "../../utils/model";
+import { artifactUrl, isFlowScreen, isLaunchScreen, type ExploreMap, type MapIndex, type Screen } from "../../utils/model";
 import { primaryScreenshotForScreen, screenshotSize, typicalScreenshotSize, type ScreenshotSize } from "../../utils/screen-images";
 import { diffClass, type BuildDiff, type DiffStatus } from "../../utils/build-diff";
 import { focusStatusOf, isCapturedChange } from "../../utils/changed-screens";
@@ -129,7 +129,7 @@ function ScreenCell(props: {
         className="screens-card"
         ariaLabel={props.screen.title}
         title={props.screen.title}
-        path={displayPathForScreen(props.screen)}
+        path={isFlowScreen(props.screen) ? props.screen.state ?? displayPathForScreen(props.screen) : displayPathForScreen(props.screen)}
         {...(props.index.plainTitles ? { plainTitle: true } : {})}
         {...(url ? { screenshot: url } : {})}
         {...(size ? size : {})}
@@ -188,7 +188,7 @@ function TreeRows(props: {
     if (!screen) return null;
     const dot = dotClass(props.diff, props.elsewhere, screen.id);
     const launch = isLaunchScreen(screen);
-    const label = launch ? "Cold start" : screenLabel(screen, props.index);
+    const label = launch ? "Cold start" : isFlowScreen(screen) ? screen.state ?? screenLabel(screen, props.index) : screenLabel(screen, props.index);
     return (
       <li key={node.screenId} className={key ? "screens-tree-parent" : undefined}>
         <button type="button" style={style}

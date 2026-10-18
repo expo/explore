@@ -136,6 +136,11 @@ export function isLaunchScreen(screen: Pick<Screen, "id">): boolean {
   return screen.id === LAUNCH_SURFACE_ID || screen.id.startsWith(`${LAUNCH_SURFACE_ID}@`);
 }
 
+/** A frame an e2e flow took (`flow:<flow id>/<key>`): shown with the screens, grouped by flow, outside the route graph. */
+export function isFlowScreen(screen: Pick<Screen, "id">): boolean {
+  return /^(?:(?:removed|baseline-context):.+?:screen:)?flow:/.test(screen.id);
+}
+
 /** The order of the Screens canvas and list: the launch first, then by depth, then by title. */
 export function screensInListOrder<T extends Pick<Screen, "id" | "depth" | "title">>(screens: readonly T[]): T[] {
   return [...screens].sort(

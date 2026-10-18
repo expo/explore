@@ -1,5 +1,5 @@
 import { sourceScreenId } from "./build-diff";
-import { cleanControlLabel, isLaunchScreen, screensInListOrder, transitionLabel, type MapIndex, type Screen, type Transition } from "./model";
+import { cleanControlLabel, isFlowScreen, isLaunchScreen, screensInListOrder, transitionLabel, type MapIndex, type Screen, type Transition } from "./model";
 
 /** One row of the Screens tree: a screen, or a folder of route files (source mode only). */
 export type ScreenTreeNode =
@@ -59,6 +59,21 @@ function launchSection(launch: Screen[]): ScreenSection[] {
   return launch.length ? [{ id: LAUNCH_SECTION, title: "Launch", path: false, subtitle: "cold start", screenIds: launch.map(screen => screen.id) }] : [];
 }
 
+/** The sidebar rows of the flows: a folder per flow, its frames inside, after the route folders. */
+function flowNodes(flows: Screen[]): ScreenTreeNode[] {
+  return flowSections(flows).map(section => ({ kind: "folder" as const, id: section.id, label: section.title,
+    children: section.screenIds.map(screenId => ({ kind: "screen" as const, screenId, children: [] })) }));
+}
+
+/** One section per e2e flow, its frames in step order; the flow's title is the part before the frame label. */
+function flowSections(flows: Screen[]): ScreenSection[] {
+  const byFlow = new Map<string, Screen[]>();
+  for (const screen of flows) byFlow.set(screen.route ?? "", [...(byFlow.get(screen.route ?? "") ?? []), screen]);
+  return [...byFlow.entries()].map(([route, screens]) => ({
+    id: `flow:${route}`, title: screens[0]!.title.split(" › ")[0]!, path: false, subtitle: "flow", screenIds: screens.map(screen => screen.id),
+  }));
+}
+
 /** A screen's route file; a removed screen keeps the one its baseline surface was read from. */
 function routeFileOf(routeFiles: ReadonlyMap<string, string>, id: string): string | undefined {
   return routeFiles.get(id) ?? routeFiles.get(sourceScreenId(id));
@@ -66,10 +81,11 @@ function routeFileOf(routeFiles: ReadonlyMap<string, string>, id: string): strin
 
 function sourceTree(screens: Screen[], routeFiles: ReadonlyMap<string, string>): ScreenTree {
   const launch = screens.filter(isLaunchScreen);
+  const flows = screens.filter(isFlowScreen);
   const byFolder = new Map<string, string[]>();
   const other: string[] = [];
   for (const screen of screens) {
-    if (isLaunchScreen(screen)) continue;
+    if (isLaunchScreen(screen) || isFlowScreen(screen)) continue;
     const file = routeFileOf(routeFiles, screen.id);
     if (!file) { other.push(screen.id); continue; }
     const folder = routeFolder(file);
@@ -92,6 +108,7 @@ function sourceTree(screens: Screen[], routeFiles: ReadonlyMap<string, string>):
       screenIds: ids,
     })),
     ...(other.length ? [{ id: "other", title: "Other screens", path: false, subtitle: "no route file", screenIds: other }] : []),
+    ...flowSections(flows),
   ];
 
   // The sidebar nests folders by segment: (tabs) → (patterns) → its screens.
@@ -113,6 +130,7 @@ function sourceTree(screens: Screen[], routeFiles: ReadonlyMap<string, string>):
     for (const id of ids) children.push({ kind: "screen", screenId: id, children: [] });
   }
   for (const id of other) root.push({ kind: "screen", screenId: id, children: [] });
+  root.push(...flowNodes(flows));
   return { mode: "source", sections, tree: root, via: new Map() };
 }
 
@@ -126,7 +144,8 @@ function viaLabel(transition: Transition, index: MapIndex): string | undefined {
 
 function observedTree(screens: Screen[], index: MapIndex): ScreenTree {
   const launch = screens.filter(isLaunchScreen);
-  const routes = screens.filter(screen => !isLaunchScreen(screen));
+  const flows = screens.filter(isFlowScreen);
+  const routes = screens.filter(screen => !isLaunchScreen(screen) && !isFlowScreen(screen));
   const order = new Map(routes.map((screen, position) => [screen.id, position]));
   // A tab is a screen the explorer reached by pressing a tab-bar control.
   const tabs = new Set<string>();
@@ -179,6 +198,7 @@ function observedTree(screens: Screen[], index: MapIndex): ScreenTree {
 
   const sections: ScreenSection[] = [
     ...launchSection(launch),
+    ...flowSections(flows),
     ...roots.map(screen => ({
       id: `screen:${screen.id}`,
       title: screen.title,
@@ -193,6 +213,7 @@ function observedTree(screens: Screen[], index: MapIndex): ScreenTree {
     ...launch.map(screen => ({ kind: "screen" as const, screenId: screen.id, children: [] })),
     ...roots.map(screen => node(screen.id)),
     ...unreached.map(id => ({ kind: "screen" as const, screenId: id, children: [] })),
+    ...flowNodes(flows),
   ];
   return { mode: "observed", sections, tree, via };
 }
