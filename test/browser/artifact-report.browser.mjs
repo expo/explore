@@ -1467,7 +1467,7 @@ test("the Inspector stacks Before over After for a landscape screenshot; Swipe a
   const report = reportFixture();
   for (const side of ["baseImage", "headImage"]) Object.assign(report.review.surfaces[0][side], { width: 951, height: 669 });
   const { bytes } = await imageArchive([capture], 0, report);
-  const { page, errors } = await harness(t, Buffer.from(bytes), { app: true });
+  const { page, errors } = await harness(t, Buffer.from(bytes), { app: true, fault: holdScreenshotHashes(capture.length) });
   await expect(page.locator(".app-shell")).toBeVisible();
   const stage = page.locator(".sidebar-review-stage");
   const box = locator => locator.evaluate(element => {
@@ -1476,9 +1476,15 @@ test("the Inspector stacks Before over After for a landscape screenshot; Swipe a
   });
   const frames = page.locator(".sidebar-review .compare-frame");
   await expect(frames).toHaveCount(2);
+  // The report's recorded size shapes the pair before the screenshots load: no side-by-side flash.
+  await expect(frames.first().locator("img")).toHaveAttribute("data-screenshot-state", "loading");
+  await expect(stage).toHaveClass(/landscape/);
+  const waiting = await Promise.all([box(frames.nth(0)), box(frames.nth(1))]);
+  await page.evaluate(() => window.releaseScreenshotHashes());
   await expect(frames.first().locator("img")).toHaveAttribute("data-screenshot-state", "ready");
   await expect(stage).toHaveClass(/landscape/);
   const [before, after] = await Promise.all([box(frames.nth(0)), box(frames.nth(1))]);
+  assert.deepEqual([before, after], waiting, "The frames do not move or resize when the screenshots load");
   const panel = await box(stage);
   // Each frame takes the review's width; After sits under Before, not beside it.
   assert.ok(Math.abs(before.width - panel.width) <= 2, `Before spans the panel: ${JSON.stringify({ before, panel })}`);

@@ -52,6 +52,8 @@ export type ScreenDiff = {
   note?: string;
   beforeScreenshot?: string;
   afterScreenshot?: string;
+  /** The compared screenshot's recorded width over its height (After's when it has one), so a frame takes its shape before it loads. */
+  screenshotAspect?: number;
   /** The CI pixel comparison of the two screenshots, when both captures were verified. */
   visual?: ReviewVisualDiff;
   /** Why a side that exists in its revision has no screenshot. */
@@ -335,6 +337,7 @@ export function buildDiff(options: {
     const after = screen.after
       ? artifactUrl(screen.after.artifact, screen.after.buildId)
       : undefined;
+    const recorded = recordedAspect(screen.after?.artifact) ?? recordedAspect(screen.before?.artifact);
     const reviewSurface = reviewSurfaceFor(review, [
       screen.id,
       screen.sourceScreenId,
@@ -354,10 +357,15 @@ export function buildDiff(options: {
     };
     const baseDestination = destinationIn(baselineIndex);
     const headDestination = destinationIn(index);
-    const borrowed = {
-      before: baseDestination ? artifactUrl(screenshotForScreen(baseDestination, baselineIndex), baselineBuild.id) : undefined,
-      after: headDestination ? artifactUrl(screenshotForScreen(headDestination, index)) : undefined,
+    const borrowedArtifacts = {
+      before: baseDestination ? screenshotForScreen(baseDestination, baselineIndex) : undefined,
+      after: headDestination ? screenshotForScreen(headDestination, index) : undefined,
     };
+    const borrowed = {
+      before: baseDestination ? artifactUrl(borrowedArtifacts.before, baselineBuild.id) : undefined,
+      after: headDestination ? artifactUrl(borrowedArtifacts.after) : undefined,
+    };
+    const screenshotAspect = recorded ?? recordedAspect(borrowedArtifacts.after) ?? recordedAspect(borrowedArtifacts.before);
     screens.set(screen.id, {
       status: screen.status,
       changeSummary: screen.changeSummary,
@@ -370,6 +378,7 @@ export function buildDiff(options: {
       ...(screen.status === "modified" && reviewSurface?.pixelsUnchanged ? { accessibilityOnly: true as const } : {}),
       ...(before ?? borrowed.before ? { beforeScreenshot: (before ?? borrowed.before)! } : {}),
       ...(after ?? borrowed.after ? { afterScreenshot: (after ?? borrowed.after)! } : {}),
+      ...(screenshotAspect ? { screenshotAspect } : {}),
       ...(redirectTo && (borrowed.before || borrowed.after) ? { redirectTo } : {}),
       ...(redirectTargets?.length ? { redirectTargets } : {}),
       ...(screen.baselineScreenId ? { baselineScreenId: screen.baselineScreenId } : {}),
@@ -384,12 +393,14 @@ export function buildDiff(options: {
   }
 
   for (const screen of baselineContext) {
-    const before = artifactUrl(screenshotForScreen(screen, baselineIndex), baselineBuild.id);
+    const artifact = screenshotForScreen(screen, baselineIndex);
+    const before = artifactUrl(artifact, baselineBuild.id);
+    const screenshotAspect = recordedAspect(artifact);
     const reviewSurface = reviewSurfaceFor(review, [screen.id]);
     screens.set(baselineContextScreenId(baselineBuild.id, screen.id), {
       status: "not-compared", changeSummary: "Captured as navigation context in the previous revision; not compared.",
       ...(reviewSurface?.note ? { note: reviewSurface.note } : {}),
-      ...(before ? { beforeScreenshot: before } : {}), baselineScreenId: screen.id,
+      ...(before ? { beforeScreenshot: before } : {}), ...(screenshotAspect ? { screenshotAspect } : {}), baselineScreenId: screen.id,
       reviewerChanges: reviewSurface?.reviewerChanges ?? [], runtimeEvidenceRefs: reviewSurface?.runtimeEvidenceRefs ?? [],
       noVisibleChange: false,
     });
@@ -397,4 +408,9 @@ export function buildDiff(options: {
 
   return { baselineId: baselineBuild.id, screens, map, index,
     counts: { ...projection.counts, "not-compared": projection.counts["not-compared"] + baselineContext.length } };
+}
+
+/** A screenshot's recorded width over its height, when the report recorded both. */
+function recordedAspect(artifact: Pick<Artifact, "width" | "height"> | undefined): number | undefined {
+  return artifact?.width && artifact.height && artifact.width > 0 && artifact.height > 0 ? artifact.width / artifact.height : undefined;
 }

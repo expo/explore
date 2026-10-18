@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { ImageOff, ScanSearch } from "lucide-react";
 import type { ChangesMenuData } from "../panels/changes-menu";
 import { diffLabel, ACCESSIBILITY_ONLY_HIGHLIGHT, type BuildDiff, type ScreenDiff } from "../../utils/build-diff";
@@ -135,7 +135,15 @@ export function useCompareController(options: CompareControllerOptions) {
   const [flipSide, setFlipSide] = useState<"before" | "after">("after");
   const [swipePosition, setSwipePosition] = useState(50);
   const [factsOpen, setFactsOpen] = useState(false);
-  const [aspect, setAspect] = useState(DEFAULT_SCREENSHOT_RATIO);
+  // The frame takes the recorded screenshot's shape at once, then the loaded image's (they agree
+  // unless the report's record is off), so a landscape pair stacks before its pixels arrive.
+  const recordedAspect = screenDiff?.screenshotAspect ?? DEFAULT_SCREENSHOT_RATIO;
+  const [loadedAspect, setLoadedAspect] = useState<{ screenId: string; aspect: number }>();
+  const aspect = loadedAspect?.screenId === options.screenId ? loadedAspect.aspect : recordedAspect;
+  const setAspect = useCallback(
+    (value: number) => setLoadedAspect({ screenId: options.screenId, aspect: value }),
+    [options.screenId],
+  );
 
   // Each screen starts whole: no area selected, After showing, the facts closed.
   useEffect(() => {
