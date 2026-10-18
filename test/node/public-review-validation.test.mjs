@@ -286,3 +286,13 @@ test('allRegionsMoved is only true, and only where every published region carrie
     assert.throws(() => assertPublicReview(input), /visual verdict is inconsistent/, label);
   }
 });
+
+test("an excluded surface carries no capture evidence", () => {
+  const excluded = review();
+  excluded.surfaces[1].excluded = true;
+  assert.throws(() => assertPublicReview(excluded), /excluded surface carries capture evidence/);
+  for (const key of ["baseImage", "headImage", "baseOutcome", "headOutcome", "review"]) delete excluded.surfaces[1][key];
+  assert.doesNotThrow(() => assertPublicReview(excluded));
+  excluded.surfaces[1].excluded = false;
+  assert.throws(() => assertPublicReview(excluded), /excluded surface carries capture evidence/);
+});

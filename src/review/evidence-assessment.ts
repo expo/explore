@@ -26,7 +26,7 @@ import {
   type VisualEvidenceAssessment,
 } from "./visual-evidence.js";
 import { AGENT_DEVICE_VERSION } from "../shared/agent-device-version.js";
-import { STATUS_BAR_BAND_PERCENT } from "../shared/png-evidence.js";
+import { STATUS_BAR_BAND_PERCENT, decodePng, differentPixelsInRect, maxColorDistance, type DecodedFrame } from "../shared/png-evidence.js";
 import { measureRegionShifts } from "./region-shift.js";
 
 export const DEFAULT_VISUAL_THRESHOLD = 0.1;
@@ -171,23 +171,42 @@ export function ignoreStatusBar(measurement: ScreenshotDiffMeasurement, bandPerc
   return { measurement: bands.measurement, ignored: bands.ignoredTop };
 }
 
+/** Both frames a measurement compared, decoded on demand: only a region that crosses a band's edge needs them. */
+export type SystemBandFrames = { baseline: DecodedFrame; current: DecodedFrame; distance: number };
+export type SystemBandFrameLoader = () => SystemBandFrames | undefined;
+
+/** Reads the measurement's two screenshots when a band's edge has to be resolved pixel by pixel. */
+export function systemBandFrameLoader(measurement: ScreenshotDiffMeasurement, threshold: number): SystemBandFrameLoader {
+  return () => {
+    try {
+      const baseline = decodePng(readFileSync(measurement.baselinePath)); const current = decodePng(readFileSync(measurement.currentPath));
+      if (!baseline || !current || baseline.width !== current.width || baseline.height !== current.height) return undefined;
+      return { baseline, current, distance: maxColorDistance(threshold) };
+    } catch { return undefined; }
+  };
+}
+
 /** `ignoreSystemRegions` for the plain case: a status-bar band across the top and a home-indicator band along the bottom. */
-export function ignoreSystemBands(measurement: ScreenshotDiffMeasurement, bands: { top: number; bottom: number }):
+export function ignoreSystemBands(measurement: ScreenshotDiffMeasurement, bands: { top: number; bottom: number }, frames?: SystemBandFrameLoader):
 { measurement: ScreenshotDiffMeasurement; ignoredTop: number; ignoredBottom: number } {
   const regions: SystemRegion[] = [
     ...(bands.top > 0 ? [{ kind: "status-bar" as const, x: 0, y: 0, width: 100, height: bands.top }] : []),
     ...(bands.bottom > 0 ? [{ kind: "home-indicator" as const, x: 0, y: 100 - bands.bottom, width: 100, height: bands.bottom }] : []),
   ];
-  const result = ignoreSystemRegions(measurement, regions);
+  const result = ignoreSystemRegions(measurement, regions, frames);
   return { measurement: result.measurement, ignoredTop: result.ignoredStatusBar, ignoredBottom: result.ignoredHomeIndicator };
 }
 
 /**
- * Leaves out of a measurement every diff region that lies entirely inside a system-drawn area: the status bar (a
- * band across the top of a phone, a pill in the rail of a foldable) and, on iOS, the home indicator at the bottom.
- * Both differ between captures without the app having changed. A region that crosses into the app's area is kept whole.
+ * Leaves out of a measurement every diff region that lies inside a system-drawn area: the status bar (a band across
+ * the top of a phone, a pill in the rail of a foldable) and, on iOS, the home indicator at the bottom. Both differ
+ * between captures without the app having changed. A region that crosses the edge of a band across the whole width
+ * is clipped to the part outside it when the frames can be read: its pixels inside the band are dropped, and it stays
+ * only for what differs in the app's area. Without frames, and across a pill's edge, such a region is kept whole.
+ * (A region's pixel count is its own cluster's, while its rect can overlap other regions, so what it keeps is counted
+ * outside the band and clamped to its own count.)
  */
-export function ignoreSystemRegions(measurement: ScreenshotDiffMeasurement, system: readonly SystemRegion[]):
+export function ignoreSystemRegions(measurement: ScreenshotDiffMeasurement, system: readonly SystemRegion[], frames?: SystemBandFrameLoader):
 { measurement: ScreenshotDiffMeasurement; ignoredStatusBar: number; ignoredHomeIndicator: number } {
   if (measurement.match || measurement.regions.length === 0 || system.length === 0) return { measurement, ignoredStatusBar: 0, ignoredHomeIndicator: 0 };
   // agent-device rounds each of x, y, width and height to 0.01%, so an edge it reports can be up to 0.01% past the real one.
@@ -197,21 +216,58 @@ export function ignoreSystemRegions(measurement: ScreenshotDiffMeasurement, syst
     return rect.x >= area.x - slack && rect.y >= area.y - slack
       && rect.x + rect.width <= area.x + area.width + slack && rect.y + rect.height <= area.y + area.height + slack;
   };
-  const kindOf = (region: VisualDiffRegion) => system.find((area) => inside(region, area))?.kind;
-  const ignoredRegions = measurement.regions.filter((region) => kindOf(region) !== undefined);
-  if (ignoredRegions.length === 0) return { measurement, ignoredStatusBar: 0, ignoredHomeIndicator: 0 };
-  const ignoredPixels = ignoredRegions.reduce((total, region) => total + region.differentPixels, 0);
+  const across = system.filter((area) => area.x <= slack && area.x + area.width >= 100 - slack);
+  const topBand = across.find((area) => area.y <= slack);
+  const bottomBand = across.find((area) => area !== topBand && area.y + area.height >= 100 - slack);
+  const crossesTop = (region: VisualDiffRegion) => topBand !== undefined && region.normalizedRect.y < topBand.y + topBand.height - slack;
+  const crossesBottom = (region: VisualDiffRegion) => bottomBand !== undefined && region.normalizedRect.y + region.normalizedRect.height > bottomBand.y + slack;
+  let loaded: SystemBandFrames | undefined | null = null;
+  const load = () => { if (loaded === null) loaded = frames?.() ?? undefined; return loaded; };
+  const ignored: Record<SystemRegion["kind"], number> = { "status-bar": 0, "home-indicator": 0 };
+  let ignoredPixels = 0;
+  const remaining: VisualDiffRegion[] = [];
+  for (const region of measurement.regions) {
+    const area = system.find((candidate) => inside(region, candidate));
+    if (area) { ignored[area.kind] += 1; ignoredPixels += region.differentPixels; continue; }
+    const top = crossesTop(region) ? topBand : undefined; const bottom = crossesBottom(region) ? bottomBand : undefined;
+    const decoded = top || bottom ? load() : undefined;
+    if (!decoded) { remaining.push(region); continue; }
+    const { height, width } = decoded.baseline;
+    const rect = { ...region.rect };
+    if (top) {
+      const bandRows = Math.floor((height * (top.y + top.height)) / 100);
+      const rows = Math.max(0, Math.min(rect.y + rect.height, bandRows) - rect.y); rect.y += rows; rect.height -= rows;
+    }
+    if (bottom) rect.height = Math.min(rect.y + rect.height, height - Math.floor((height * bottom.height) / 100)) - rect.y;
+    // Counted in what is left of the rect, not in what the band takes: the rect can enclose another region's pixels,
+    // which can only add to what is kept (up to the region's own count), never take from it.
+    const differentPixels = rect.height > 0 ? Math.min(region.differentPixels, differentPixelsInRect(decoded.baseline, decoded.current, rect, decoded.distance)) : 0;
+    const inBand = region.differentPixels - differentPixels;
+    if (differentPixels === 0) {
+      ignored[(top ?? bottom)!.kind] += 1;
+      ignoredPixels += region.differentPixels;
+      continue;
+    }
+    // Its pixels inside the band were left out too, so the band is marked as not compared, as for a dropped region.
+    if (inBand > 0) { if (top) ignored[top.kind] += 1; if (bottom) ignored[bottom.kind] += 1; }
+    ignoredPixels += inBand;
+    const round = (value: number) => Math.round(value * 100) / 100;
+    remaining.push({ ...region, rect, differentPixels,
+      normalizedRect: { x: round((rect.x / width) * 100), y: round((rect.y / height) * 100), width: round((rect.width / width) * 100), height: round((rect.height / height) * 100) } });
+  }
+  if (ignoredPixels === 0) return { measurement, ignoredStatusBar: 0, ignoredHomeIndicator: 0 };
   const differentPixels = Math.max(0, measurement.differentPixels - ignoredPixels);
-  const remaining = measurement.regions.filter((region) => kindOf(region) === undefined);
+  const regions = remaining.map((region) => ({ ...region,
+    shareOfDiffPercentage: differentPixels > 0 ? Math.round((region.differentPixels / differentPixels) * 10000) / 100 : 0 }));
   return {
-    ignoredStatusBar: ignoredRegions.filter((region) => kindOf(region) === "status-bar").length,
-    ignoredHomeIndicator: ignoredRegions.filter((region) => kindOf(region) === "home-indicator").length,
+    ignoredStatusBar: ignored["status-bar"],
+    ignoredHomeIndicator: ignored["home-indicator"],
     measurement: {
       ...measurement,
       differentPixels,
       mismatchPercentage: measurement.totalPixels > 0 ? Math.round((differentPixels / measurement.totalPixels) * 10000) / 100 : 0,
-      match: differentPixels === 0 || remaining.length === 0,
-      regions: remaining,
+      match: differentPixels === 0 || regions.length === 0,
+      regions,
     },
   };
 }
@@ -495,7 +551,7 @@ export async function assessPublicEvidence(options: {
       } else {
         try {
           const raw = await measure(basePath, headPath);
-          const { measurement, ignoredStatusBar: ignoredTop, ignoredHomeIndicator: ignoredBottom } = ignoreSystemRegions(raw, system);
+          const { measurement, ignoredStatusBar: ignoredTop, ignoredHomeIndicator: ignoredBottom } = ignoreSystemRegions(raw, system, systemBandFrameLoader(raw, threshold));
           assessment = assessVisualMeasurements({
             baselineSamples: 1,
             currentSamples: 1,
@@ -564,7 +620,8 @@ export async function assessPublicEvidence(options: {
     const basePath = localEvidencePath(options.base, baseLaunch.splash.path); const headPath = localEvidencePath(options.head, headLaunch.splash.path);
     if (!basePath || !headPath) continue;
     try {
-      const { measurement, ignoredStatusBar: ignoredTop, ignoredHomeIndicator: ignoredBottom } = ignoreSystemRegions(await measure(basePath, headPath), system);
+      const raw = await measure(basePath, headPath);
+      const { measurement, ignoredStatusBar: ignoredTop, ignoredHomeIndicator: ignoredBottom } = ignoreSystemRegions(raw, system, systemBandFrameLoader(raw, threshold));
       const visual = visualVerdict(assessVisualMeasurements({ baselineSamples: 1, currentSamples: 1, requiredSamples: 1,
         baselineWithin: [], currentWithin: [], crossBuild: [measurement], representative: measurement }), threshold);
       if (ignoredTop > 0) visual.ignoredStatusBarRegions = ignoredTop;

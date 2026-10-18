@@ -171,6 +171,7 @@ function titleFor(entry: Pick<NonNullable<Surface["head"]>, "route">): string {
 
 function captureStatus(review: PublicReview, surface: Surface, side: Side): string {
   if (!surface[side]) return "Absent from this source revision";
+  if (surface.excluded) return "Excluded by exploration.exclude; never captured";
   const outcome = side === "base" ? surface.baseOutcome : surface.headOutcome;
   if (imageFor(surface, side)) {
     if (verifiedCapture(surface, side)) return "Captured; destination verified";
@@ -358,14 +359,14 @@ function sidePayload(review: PublicReview, side: Side): { map: ExploreMap; cover
     if (!verifiedCapture(surface, side)) {
       const outcome = side === "base" ? surface.baseOutcome : surface.headOutcome;
       const outsideCaptureContext = review.mode === "changes" && selected !== undefined && !selected.has(surface.id);
-      const deliberatelyOmitted = !image && !outcome && (entry.kind === "redirect" || outsideCaptureContext
+      const deliberatelyOmitted = !image && !outcome && (entry.kind === "redirect" || surface.excluded === true || outsideCaptureContext
         || (!navigation && review.mode === "changes" && surface.status === "unchanged"));
       map.gaps.push({
         id: `capture:${side}:${surface.id}`,
         screenId: surface.id,
         kind: "coverage",
         status: deliberatelyOmitted ? "accepted" : "open",
-        message: deliberatelyOmitted && outsideCaptureContext && entry.kind !== "redirect"
+        message: deliberatelyOmitted && outsideCaptureContext && entry.kind !== "redirect" && !surface.excluded
           ? "Not compared; no capture was recorded" : captureStatus(review, surface, side),
         createdAt: review.createdAt,
       });

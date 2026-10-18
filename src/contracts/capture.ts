@@ -144,11 +144,13 @@ export function assertAgentAcceptance(bundle: CaptureBundle,
  * capture, and the Android emulator's clock and indicators sit inside the same fraction of a
  * Pixel frame. Its glyphs differ between sessions even after `--normalize-status-bar`, and within one
  * session whenever the clock or an indicator redraws, so evidence never treats a difference that
- * lies entirely inside this band as an app change. The Viewer marks the same band.
+ * lies entirely inside this band as an app change; a difference that crosses its edge counts only for
+ * its pixels below it. The Viewer marks the same band. Android: the glyphs of `sdk_gphone64` on Android 15
+ * (720x1600) reach 6.4 % of the frame, measured on euxy #164, so its band is 7.
  */
 export const STATUS_BAR_BAND_PERCENT = 6.5;
 /** The top band of a portrait screenshot that holds the system status bar, per platform. */
-export const STATUS_BAR_BAND_PERCENT_BY_PLATFORM: Record<"ios" | "android", number> = { ios: STATUS_BAR_BAND_PERCENT, android: 5 };
+export const STATUS_BAR_BAND_PERCENT_BY_PLATFORM: Record<"ios" | "android", number> = { ios: STATUS_BAR_BAND_PERCENT, android: 7 };
 export function statusBarBandPercent(platform: "ios" | "android" | undefined): number {
   return STATUS_BAR_BAND_PERCENT_BY_PLATFORM[platform ?? "ios"];
 }
@@ -228,9 +230,9 @@ export type PublicVisualVerdict = {
    * content. Absent when any region changed, or moves were not measured.
    */
   allRegionsMoved?: true;
-  /** Diff regions inside the iOS status-bar band that were excluded from the verdict. */
+  /** Diff regions inside the status-bar band that were excluded from the verdict, or clipped to their part below it. */
   ignoredStatusBarRegions?: number;
-  /** Diff regions that lay entirely inside the home-indicator band and were left out of the verdict. */
+  /** Diff regions that lay inside the home-indicator band and were left out of the verdict, or clipped to their part above it. */
   ignoredHomeIndicatorRegions?: number;
   /** The system-drawn areas the verdict left out, present when a difference inside one was ignored. */
   systemRegions?: SystemRegion[];
@@ -322,6 +324,8 @@ export type PublicReview = {
     note?: PublicChangeNote;
     /** The appearance this surface rendered in; a secondary appearance is its own surface, `<id>@<scheme>`. */
     colorScheme?: "light" | "dark";
+    /** Named in `exploration.exclude`: kept for its neighbors' navigation context, never captured on either side. */
+    excluded?: true;
   }>;
 };
 export function validateCapturePlan(value: unknown): SourceCapturePlan {

@@ -416,6 +416,38 @@ test("the Screens tree folds by row, by keyboard, and all at once, and remembers
   assert.deepEqual(errors, []);
 });
 
+test("a fold tried during a find changes nothing: the tree's own folds come back, and are what a reload remembers", { timeout: 60_000 }, async t => {
+  const { page, url, errors } = await openReport(t, { width: 1440, height: 900 });
+  await page.goto(`${url}#/screens`);
+  const tree = page.locator(".screens-tree");
+  await tree.getByRole("button", { name: /^All/ }).click();
+  const folder = tree.locator(".screens-tree-row.folder", { hasText: "onboarding/" });
+  const other = tree.locator(".screens-tree-row.folder").filter({ hasNotText: "onboarding/" }).first();
+  await expect(other).toHaveAttribute("aria-expanded", "true");
+  await folder.click();
+  await expect(folder).toHaveAttribute("aria-expanded", "false");
+
+  // While a find is on every row stays open; folding one there neither shows nor sticks.
+  await page.keyboard.press("/");
+  const field = page.getByRole("searchbox", { name: "Find screens" });
+  await field.fill("/");
+  await expect(folder).toHaveAttribute("aria-expanded", "true");
+  await other.click();
+  await page.keyboard.press("ArrowLeft");
+  await expect(other).toHaveAttribute("aria-expanded", "true");
+  await field.press("Escape");
+  await field.press("Escape");
+  await expect(field).toHaveCount(0);
+  await expect(folder).toHaveAttribute("aria-expanded", "false");
+  await expect(other).toHaveAttribute("aria-expanded", "true");
+
+  await page.reload();
+  await tree.getByRole("button", { name: /^All/ }).click();
+  await expect(folder).toHaveAttribute("aria-expanded", "false");
+  await expect(other).toHaveAttribute("aria-expanded", "true");
+  assert.deepEqual(errors, []);
+});
+
 test("dev opens the report ZIP named by EXPLORE_REPORT and preserves the explicit map API proxy", { timeout: 90_000 }, async t => {
   const reportDev = await launcher(t, "scripts/dev-viewer.mjs", [], {
     EXPLORE_DIR: "", EXPLORE_REPORT: fileURLToPath(REPORT), EXPLORE_DEV_PORT: String(await freePort()),

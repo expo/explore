@@ -26,7 +26,14 @@
 .panel-search input {
   width: 100%;
   min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 0;
   border: 0;
+  /* A search field's own look on macOS sets its text low in the box; the flex row centers plain text. */
+  appearance: none;
+  -webkit-appearance: none;
+  line-height: normal;
   outline: 0;
   color: var(--text);
   background: transparent;

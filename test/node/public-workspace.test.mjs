@@ -825,3 +825,63 @@ test("a target's review carries its target and the run's targets into the map; a
   assert.equal(oddRun.target, undefined, "a malformed target is dropped, and the report reads as its platform's");
   assert.equal(oddRun.targets, undefined);
 });
+
+test("an excluded route leaves the map with an accepted gap, like a redirect", () => {
+  const review = navigationReview();
+  const excluded = review.surfaces.find(surface => surface.id === "games-pro");
+  excluded.status = "modified";
+  excluded.excluded = true;
+  for (const side of ["base", "head"]) { delete excluded[`${side}Image`]; delete excluded[`${side}Outcome`]; }
+  const { current } = workspaceSides(publicReviewToWorkspace(review));
+  const graph = buildViewerGraph(current.map, indexMap(current.map));
+  assert.equal(graph.screens.some(screen => screen.id === "games-pro"), false, "never captured, so not a card on the map");
+  assert.ok(current.map.screens.some(screen => screen.id === "games-pro"), "the inventory still knows the route");
+  const gap = current.map.gaps.find(gap => gap.screenId === "games-pro");
+  assert.equal(gap.status, "accepted");
+  assert.equal(gap.message, "Excluded by exploration.exclude; never captured");
+  assert.equal(
+    indexMap(current.map).screenNotes.get("games-pro"),
+    "Excluded by exploration.exclude; never captured",
+    "the inspector's placeholder says why there is no screenshot",
+  );
+  const projection = publicReviewProjection(review);
+  assert.equal(projection.runtimeEvidence["public:games-pro"].current.groups.capture.find((row) => row.label === "Capture").value,
+    "Excluded by exploration.exclude; never captured");
+});
+
+test("an unchanged excluded route outside the capture context still says it was excluded", () => {
+  const review = navigationReview();
+  const excluded = review.surfaces.find(surface => surface.id === "games-pro");
+  excluded.excluded = true;
+  for (const side of ["base", "head"]) { delete excluded[`${side}Image`]; delete excluded[`${side}Outcome`]; }
+  const { current } = workspaceSides(publicReviewToWorkspace(review));
+  const gap = current.map.gaps.find(gap => gap.screenId === "games-pro");
+  assert.equal(gap.status, "accepted");
+  assert.equal(gap.message, "Excluded by exploration.exclude; never captured");
+  assert.equal(diffFor(review).index.screenNotes.get("games-pro"), "Excluded by exploration.exclude; never captured");
+});
+
+test("a screen's note is its first open gap of any kind, and an accepted gap only when nothing is open", () => {
+  // A redirect on base that became a screen whose head capture failed: the comparison carries both sides' gaps.
+  const review = verifyImages(fixture());
+  const home = review.surfaces.find(surface => surface.id === "home");
+  home.status = "modified";
+  home.head = entry("home", "/", "fresh");
+  home.headOutcome = { status: "failed", attempts: 1, landing: "unverified", reason: "Configured UI prerequisites did not complete." };
+  const diff = diffFor(review);
+  const messages = diff.map.gaps.filter(gap => gap.screenId === "home").map(gap => [gap.status, gap.message]);
+  assert.deepEqual(messages.map(([status]) => status), ["open", "accepted"]);
+  assert.equal(indexMap(diff.map).screenNotes.get("home"), messages[0][1], "the head's failure, not the baseline's redirect");
+  assert.equal(presentScreensByPath(diff.map).index.screenNotes.get("home"), messages[0][1]);
+
+  const { current } = workspaceSides(publicReviewToWorkspace(verifyImages(fixture())));
+  const gap = (id, kind, status, message) => ({ id, kind, status, message, screenId: "games-free", createdAt: review.createdAt });
+  const open = [gap("parse-1", "controller-parse", "open", "Unreadable element tree"), gap("parse-2", "controller-parse", "open", "Second warning")];
+  const accepted = gap("accepted", "coverage", "accepted", "Not compared; no capture was recorded");
+  const resolved = gap("resolved", "coverage", "resolved", "Captured on retry");
+  for (const gaps of [[...open, accepted, resolved], [resolved, accepted, ...open]]) {
+    assert.equal(indexMap({ ...current.map, gaps }).screenNotes.get("games-free"), "Unreadable element tree");
+  }
+  assert.equal(indexMap({ ...current.map, gaps: [resolved, accepted] }).screenNotes.get("games-free"), accepted.message);
+  assert.equal(indexMap({ ...current.map, gaps: [resolved] }).screenNotes.has("games-free"), false);
+});

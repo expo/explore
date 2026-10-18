@@ -67,7 +67,8 @@
 .screens-tree ul { margin: 0; padding: 0; list-style: none; }
 /* Changed / All filter the tree and the grid alike, so they sit in the tree's head as one segmented control,
    beside the button that folds or unfolds every folder. */
-.screens-tree-head { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; }
+/* One height in every state (chips, the find field, or only the icons), so opening the find does not move the tree. */
+.screens-tree-head { display: flex; height: 34px; flex: none; align-items: center; gap: 6px; margin: 0 0 10px; }
 .screens-tree-head > .screens-filter {
   flex: 1;
   gap: 2px;
@@ -337,3 +338,26 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-tree.phone .screens-tree-row { min-height: 34px; font-size: var(--phone-body-size); }
 .screens-tree.phone .screens-tree-label.path { font-size: var(--phone-body-mono-size); }
 .screens-tree.phone .screens-tree-kind { font-size: var(--phone-micro-size); }
+
+/* ── Find: `/` or the magnifier turns the tree's head into a field; the tree and the grid narrow to its matches ── */
+.screens-tree-head > .tooltip-anchor { display: flex; flex: none; margin-left: auto; }
+.screens-tree-head > .tooltip-anchor + .screens-tree-fold-all { margin-left: 0; }
+.screens-tree-find {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--secondary);
+  background: transparent;
+}
+.screens-tree-find:hover { color: var(--text); background: var(--panel-hover); }
+.screens-tree-find > svg { width: 16px; height: 16px; }
+.screens-tree-head.searching { gap: 4px; }
+.screens-find { display: flex; min-width: 0; flex: 1; }
+.screens-find .panel-search { height: 34px; border-radius: 9px; }
+.screens-find-empty { margin: 0; padding: 4px 8px; color: var(--tertiary); font-size: 12px; }
+.screens-empty { min-height: 240px; flex: 1; }
+.screens-empty-all { padding: 0; color: var(--accent); font: inherit; background: transparent; }
+.screens-empty-all:hover { text-decoration-line: underline; text-underline-offset: 3px; }
