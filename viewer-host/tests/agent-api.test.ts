@@ -5,7 +5,7 @@ import { deflateRawSync } from "node:zlib";
 import { readFileSync } from "node:fs";
 import { previewResponse, type PreviewEnvironment } from "../src/server/preview";
 import { agentApiReply, agentIndexMarkdown, loadReport, prefersHtml, prefersMarkdown } from "../../src/report/agent-api";
-import { manifestBody } from "../../src/report/preview-manifest";
+import { manifestBody, MAX_MANIFEST_BYTES, reportFromManifest } from "../../src/report/preview-manifest";
 import { readZipDirectory } from "../../src/report/zip-reader";
 
 const token = "abcdefghijklmnopqrstuvwxyz234567";
@@ -81,7 +81,7 @@ async function deployment(reports: Record<string, Uint8Array>, env: PreviewEnvir
     return body ? new Response(body as BodyInit, { headers: { "content-length": String(body.byteLength) } }) : new Response("missing", { status: 404 });
   }) as typeof fetch;
   const options = { env, indexHtml: html, fetchImpl, cache: new Map(), loading: new Map() };
-  return { calls, files, get: (path: string, accept?: string) => previewResponse(new Request(`${origin}/p/${token}${path}`, accept === undefined ? {} : { headers: { accept } }), options) };
+  return { calls, files, cache: options.cache, get: (path: string, accept?: string) => previewResponse(new Request(`${origin}/p/${token}${path}`, accept === undefined ? {} : { headers: { accept } }), options) };
 }
 
 const reviewEnv: PreviewEnvironment = { EXPLORE_PREVIEW_TOKEN: token, EXPLORE_PREVIEW_REPORT: `/p/${token}/targets/report.json` };
@@ -196,7 +196,9 @@ test("the API serves a PR review: summary, filtered and paged screens, detail, t
 
   const raw = await site.get("/api/v1/raw");
   assert.equal(raw.status, 200);
-  assert.equal((await raw.json()).review.contract, "explore.review", "raw is the file as written, review nested under `review`");
+  const rawBytes = new Uint8Array(await raw.arrayBuffer());
+  assert.deepEqual(rawBytes, (await loadReport(review))!.raw, "raw is review.json byte for byte, as the ZIP held it");
+  assert.equal(JSON.parse(new TextDecoder().decode(rawBytes)).review.contract, "explore.review");
   // The manifest once, and the one screenshot asked for, read from the same static file the Viewer loads.
   assert.deepEqual(site.calls, [`${origin}${reviewEnv.EXPLORE_PREVIEW_REPORT}`, `${origin}/p/${token}/assets/${sha}.png`]);
 });
@@ -407,4 +409,55 @@ test("the shell and the agent API share one fetch of a manifest, kept within the
   assert.equal((await site.get("/manifest.json?target=duo-open")).status, 200);
   assert.equal((await site.get("/manifest.json?target=duo-open")).status, 200);
   assert.equal(site.calls.length, 3);
+});
+
+test("a manifest is parsed once and keeps the report's own bytes; another key order still opens; one the Viewer would refuse does not", async () => {
+  const loaded = (await loadReport(review))!;
+  const read = async () => undefined;
+  const written = new TextEncoder().encode(manifestBody(loaded, "stamp"));
+  const parsed = reportFromManifest(written, read)!;
+  assert.equal(parsed.kind, "pr-review");
+  assert.deepEqual(parsed.raw, loaded.raw);
+  assert.equal(parsed.raw.buffer, written.buffer, "the report's bytes are a view of the manifest, not a copy");
+  assert.equal(parsed.entries.size, [...loaded.entries.keys()].filter(name => name.startsWith("assets/")).length);
+  // Another writer's layout: parsed whole, the report re-serialized.
+  const reordered = JSON.parse(new TextDecoder().decode(written));
+  const other = reportFromManifest(new TextEncoder().encode(JSON.stringify({ report: reordered.report, format: reordered.format, file: reordered.file, entries: reordered.entries })), read)!;
+  assert.equal(other.kind, "pr-review");
+  assert.deepEqual(other.json, parsed.json);
+  // A nested `"report"` key before the report's own is not where the report starts.
+  const nested = `{"format":"explore.preview-manifest/1","extra":{"a":1,"report":2},"file":"review.json","entries":{},"report":${new TextDecoder().decode(loaded.raw)}}`;
+  const fromNested = reportFromManifest(new TextEncoder().encode(nested), read)!;
+  assert.equal(fromNested.kind, "pr-review");
+  assert.deepEqual(fromNested.json, parsed.json);
+  for (const bad of ['{"format":"explore.preview-manifest/1","file":"review.json","entries":{"../x":1},"report":{}}', '{"format":"other","file":"review.json","entries":{},"report":{}}', "not json"]) {
+    assert.equal(reportFromManifest(new TextEncoder().encode(bad), read), undefined, bad);
+  }
+  assert.equal(reportFromManifest(new Uint8Array(MAX_MANIFEST_BYTES + 1), read), undefined, "larger than the Viewer opens");
+});
+
+test("an agent's screenshot the Worker cannot fetch this time is a 503; one the report does not hold is a 404", async () => {
+  const site = await deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: review }, reviewEnv);
+  const loaded = (await loadReport(review))!;
+  const name = [...loaded.entries.keys()].find(entry => /^assets\/[a-f0-9]{64}\.png$/.test(entry))!;
+  const sha = name.slice(7, 71);
+  const manifest = site.files[reviewEnv.EXPLORE_PREVIEW_REPORT!]!;
+  const failing = (status: number) => previewResponse(new Request(`${origin}/p/${token}/api/v1/assets/${sha}`), { env: reviewEnv, indexHtml: html, cache: new Map(), loading: new Map(),
+    fetchImpl: (async (input: RequestInfo | URL) => String(input).endsWith(".json") ? new Response(manifest as BodyInit) : new Response("upstream", { status })) as typeof fetch });
+  const unavailable = await failing(502);
+  assert.equal(unavailable.status, 503);
+  assert.equal((await unavailable.json()).error, "unavailable");
+  assert.equal((await failing(404)).status, 404);
+});
+
+test("kept manifests count their parsed size against the cache: the oldest goes when the next would not fit", async () => {
+  const big = (label: string) => zip({ "exploration.json": new TextEncoder().encode(JSON.stringify({ ...explorationReport, padding: label.repeat(6 * 1024 * 1024) })), [`assets/${pngSha}.png`]: png });
+  const listing = ["first", "second"].map(target => ({ target, platform: "ios", label: target, path: `/p/${token}/targets/${target}.json` }));
+  const env: PreviewEnvironment = { ...reviewEnv, EXPLORE_PREVIEW_REPORT: undefined, EXPLORE_PREVIEW_REPORTS: JSON.stringify(listing) };
+  const site = await deployment({ [listing[0]!.path]: big("a"), [listing[1]!.path]: big("b") }, env);
+  assert.equal((await site.get("/api/v1?target=first")).status, 200);
+  assert.deepEqual([...site.cache.keys()], [`${origin}${listing[0]!.path}`]);
+  // Two 6 MB manifests are about 36 MB once parsed, over the 32 MB the isolate keeps.
+  assert.equal((await site.get("/api/v1?target=second")).status, 200);
+  assert.deepEqual([...site.cache.keys()], [`${origin}${listing[1]!.path}`]);
 });

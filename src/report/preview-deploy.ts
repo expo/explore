@@ -143,11 +143,21 @@ const DEPLOY_ATTEMPTS = 3;
 const ALIAS_LIMIT = /reached the limit of \d+ aliases[^\n]*/;
 const DEPLOY_RETRY_DELAYS_MS = [5_000, 15_000] as const;
 
-/** The tail of what a command printed, stderr first, without the EXPO_TOKEN should eas ever echo it. */
-function commandOutput(result: ReturnType<CommandRunner>, token: string | undefined): string {
+/**
+ * EAS Hosting serves static files with its own headers, so the screenshots and manifests cannot carry the Worker's
+ * `noindex`; this keeps crawlers from fetching them. The page and API stay crawlable, so a crawler still sees their `noindex`.
+ */
+export const PREVIEW_ROBOTS = "User-agent: *\nDisallow: /p/*/assets/\nDisallow: /p/*/targets/\n";
+
+/**
+ * The tail of what a command printed, stderr first, without the secrets: the EXPO_TOKEN should eas ever echo it, and the
+ * link's token, which every static file's path carries (eas names the file whose upload failed).
+ */
+function commandOutput(result: ReturnType<CommandRunner>, secrets: Array<string | undefined>): string {
   const lines = `${result.stderr}\n${result.stdout}`.split("\n").map(line => line.trimEnd()).filter(Boolean);
-  const tail = lines.slice(-30).join("\n");
-  return token ? tail.split(token).join("***") : tail;
+  let tail = lines.slice(-30).join("\n");
+  for (const secret of secrets) if (secret) tail = tail.split(secret).join("***");
+  return tail;
 }
 
 /** `eas whoami` has no JSON output; its account list is one `• name (Role: …)` line per account. */
@@ -331,7 +341,8 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
   const first = inputs[0]!.input; const review = first.publicReview; const pr = review.pullRequest;
   if (!first.preview) throw new CiError({ code: "PREVIEW_NOT_CONFIGURED", stage: "preflight",
     message: "This review did not request a hosted preview", nextAction: "Set report.preview.hosting: eas in .expo-explore/config.yaml, or remove the deploy job." });
-  if (first.preview.expiresAfterIgnored) warnIgnoredExpiry("report.preview.expiresAfter", environment);
+  // `expiresAfterDays` is what a capture from before Explore stopped setting an expiry recorded.
+  if (first.preview.expiresAfterIgnored || "expiresAfterDays" in first.preview) warnIgnoredExpiry("report.preview.expiresAfter", environment);
   if (!environment.EXPO_TOKEN?.trim()) throw new CiError({ code: "EXPO_TOKEN_MISSING", stage: "preflight",
     message: "EXPO_TOKEN is required to deploy a hosted preview", nextAction: "Pass the EXPO_TOKEN secret to the deploy job; it must be able to create projects in the app's Expo account." });
   if (!environment.GITHUB_TOKEN?.trim()) throw new CiError({ code: "GITHUB_TOKEN_MISSING", stage: "preflight",
@@ -438,10 +449,12 @@ export const HOSTED_TOKEN = /^[a-z2-7]{32}$/;
  * Returns, per report, the manifest written and one asset to fetch back.
  */
 async function writeReportFiles(client: string, token: string, reports: HostedReportInput[], deployment: string): Promise<Array<{ manifest: string; asset?: string }>> {
+  await writeFile(join(client, "robots.txt"), PREVIEW_ROBOTS);
   const root = join(client, "p", token);
   await mkdir(join(root, "targets"), { recursive: true });
   await mkdir(join(root, "assets"), { recursive: true });
-  const assets = new Set<string>();
+  // Each asset's size as written: a target that shares the file must list the same size in its manifest.
+  const assets = new Map<string, number>();
   const written: Array<{ manifest: string; asset?: string }> = [];
   for (const report of reports) {
     const loaded = await loadReport(report.zip);
@@ -449,18 +462,20 @@ async function writeReportFiles(client: string, token: string, reports: HostedRe
     const manifest = manifestBody(loaded, deployment);
     await writeFile(join(root, "targets", `${report.file}.json`), manifest);
     let first: string | undefined;
-    for (const name of loaded.entries.keys()) {
+    for (const [name, entry] of loaded.entries) {
       const sha = PREVIEW_ASSET.exec(name)?.[1];
       if (!sha) continue;
       first ??= name;
-      if (assets.has(name)) continue;
-      const bytes = await loaded.read(name, MAX_ASSET_BYTES);
-      if (!bytes || createHash("sha256").update(bytes).digest("hex") !== sha) {
-        throw deployError("REPORT_ZIP_FAILED", `The report's ${name} is unreadable, larger than ${MAX_ASSET_BYTES / 1024 / 1024} MiB, or does not match its name.`,
-          "Capture the report again; its screenshots are named by their SHA-256.");
+      const bad = () => deployError("REPORT_ZIP_FAILED", `The report's ${name} is unreadable, larger than ${MAX_ASSET_BYTES / 1024 / 1024} MiB, or does not match its name.`,
+        "Capture the report again; its screenshots are named by their SHA-256.");
+      if (assets.has(name)) {
+        if (assets.get(name) !== entry.size) throw bad();
+        continue;
       }
+      const bytes = await loaded.read(name, MAX_ASSET_BYTES);
+      if (!bytes || bytes.byteLength !== entry.size || createHash("sha256").update(bytes).digest("hex") !== sha) throw bad();
       await writeFile(join(root, name), bytes);
-      assets.add(name);
+      assets.set(name, bytes.byteLength);
     }
     written.push({ manifest, ...(first ? { asset: first } : {}) });
   }
@@ -541,15 +556,15 @@ async function deployReports(options: {
       if (aliasLimit) {
         throw deployError("PREVIEW_ALIAS_LIMIT", `EAS Hosting could not assign the alias ${options.alias}: ${aliasLimit[0]}`,
           `Delete the aliases of closed pull requests on @${owner}/${project} (eas deploy:alias:delete pr-<n> --non-interactive) or raise the account's plan, then rerun the deploy job.`,
-          { retryable: false, details: { project, owner, alias: options.alias, output: commandOutput(deploy, environment.EXPO_TOKEN) } });
+          { retryable: false, details: { project, owner, alias: options.alias, output: commandOutput(deploy, [environment.EXPO_TOKEN, token]) } });
       }
-      process.stderr.write(`eas deploy attempt ${attempt} of ${DEPLOY_ATTEMPTS} failed (exit ${deploy.status}):\n${commandOutput(deploy, environment.EXPO_TOKEN)}\n`);
+      process.stderr.write(`eas deploy attempt ${attempt} of ${DEPLOY_ATTEMPTS} failed (exit ${deploy.status}):\n${commandOutput(deploy, [environment.EXPO_TOKEN, token])}\n`);
       if (attempt < DEPLOY_ATTEMPTS) await sleep(DEPLOY_RETRY_DELAYS_MS[attempt - 1] ?? DEPLOY_RETRY_DELAYS_MS.at(-1)!);
     }
     if (!deploymentUrl) {
       throw deployError("PREVIEW_DEPLOY_FAILED", `EAS Hosting deployment failed ${DEPLOY_ATTEMPTS} times: ${lastLine(deploy.stderr || deploy.stdout)}`,
         "Check the EAS Hosting status for the preview project and rerun the deploy job; the eas output of every attempt is in the job log.",
-        { retryable: true, details: { project, owner, attempts: DEPLOY_ATTEMPTS, output: commandOutput(deploy, environment.EXPO_TOKEN) } });
+        { retryable: true, details: { project, owner, attempts: DEPLOY_ATTEMPTS, output: commandOutput(deploy, [environment.EXPO_TOKEN, token]) } });
     }
     const aliasUrl = options.alias ? hostedOrigin(deployment.aliases?.find(candidate => candidate.name === options.alias)?.url) : undefined;
     if (options.alias && !aliasUrl) {
@@ -849,6 +864,11 @@ async function verifyDeployment(check: { origin: string; token: string; reports:
   const api = await get(`/p/${check.token}/api/v1`);
   if (api.status !== 200 || !(api.headers.get("content-type") ?? "").startsWith("application/json")) {
     throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview did not answer the agent API (HTTP ${api.status}).`, "Rerun the deploy job; if the deployment keeps failing verification, inspect it in the EAS Hosting dashboard.", { retryable: true });
+  }
+  const robots = await get("/robots.txt");
+  if (robots.status !== 200 || await robots.text() !== PREVIEW_ROBOTS) {
+    throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview did not serve its robots.txt (HTTP ${robots.status}), which keeps crawlers away from the screenshots.`,
+      "Rerun the deploy job; if it keeps failing, inspect the deployment in the EAS Hosting dashboard.", { retryable: true });
   }
   // The deployment itself serves exactly what was deployed or it failed; the alias was checked while it was polled.
   if (!check.alias) { const failure = await mismatch(); if (failure) throw failure; }

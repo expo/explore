@@ -7,7 +7,7 @@
  * public and identical to the central host's.
  */
 import { AGENT_API_VERSION, agentApiReply, agentIndexHtml, agentIndexMarkdown, prefersHtml, type AgentContext, type LoadedReport } from "../../../src/report/agent-api";
-import { MAX_ASSET_BYTES, reportFromManifest } from "../../../src/report/preview-manifest";
+import { MAX_ASSET_BYTES, MAX_MANIFEST_BYTES, reportFromManifest } from "../../../src/report/preview-manifest";
 
 export type PreviewEnvironment = {
   /** Lowercase base32 path token the review comment links to. */
@@ -117,7 +117,7 @@ function sameToken(a: string, b: string): boolean {
 }
 
 /** A parsed manifest, kept so the shell and the agent API do not fetch and parse it on every request. */
-type ParsedManifest = { text: string; loaded: LoadedReport };
+type ParsedManifest = { bytes: Uint8Array; loaded: LoadedReport };
 type ManifestResult = ParsedManifest | "unavailable" | undefined;
 
 export type PreviewRequestOptions = {
@@ -132,9 +132,10 @@ export type PreviewRequestOptions = {
 };
 
 const ROUTE = /^\/p\/([a-z2-7]{32})(?:\/|\/(reports\.json|manifest\.json|llms\.txt)|(\/api\/v1(?:\/[A-Za-z0-9._:@-]{1,200}){0,2}\/?))?$/;
-/** A manifest carries the report's metadata, at most MAX_METADATA_BYTES; parsed ones are kept within this many bytes of text. */
+/** Parsed manifests are kept within this much of the isolate's 128 MB. */
 const MANIFEST_CACHE_BYTES = 32 * 1024 * 1024;
-const MAX_MANIFEST_BYTES = 66 * 1024 * 1024;
+/** What a kept manifest holds: its bytes, and its parsed metadata at about 1.6 times their size. */
+const heldBytes = (manifest: ParsedManifest) => 3 * manifest.bytes.byteLength;
 const manifestCache = new Map<string, ParsedManifest>();
 const manifestLoading = new Map<string, Promise<ManifestResult>>();
 
@@ -250,7 +251,7 @@ export function shellWithIndex(indexHtml: string, indexBlock: string): string {
 async function manifestResponse(origin: string, report: PreviewReport, options: PreviewRequestOptions): Promise<Response> {
   const headers = baseHeaders("application/json; charset=utf-8");
   const kept = (options.cache ?? manifestCache).get(`${origin}${report.path}`);
-  if (kept) return new Response(kept.text, { headers });
+  if (kept) return new Response(kept.bytes as BodyInit, { headers });
   const upstream = await staticFile(origin, report.path, options);
   if (upstream === "unavailable") return previewUnavailable();
   if (!upstream) return previewNotFound();
@@ -300,13 +301,13 @@ async function parsedManifest(origin: string, report: PreviewReport, options: Pr
     void pending.finally(() => { if (loading.get(key) === pending) loading.delete(key); });
   }
   const parsed = await pending;
-  if (parsed && parsed !== "unavailable" && !cache.has(key) && parsed.text.length <= MANIFEST_CACHE_BYTES) {
-    let held = parsed.text.length;
-    for (const kept of cache.values()) held += kept.text.length;
+  if (parsed && parsed !== "unavailable" && !cache.has(key) && heldBytes(parsed) <= MANIFEST_CACHE_BYTES) {
+    let held = heldBytes(parsed);
+    for (const kept of cache.values()) held += heldBytes(kept);
     for (const [oldest, kept] of cache) {
       if (held <= MANIFEST_CACHE_BYTES) break;
       cache.delete(oldest);
-      held -= kept.text.length;
+      held -= heldBytes(kept);
     }
     cache.set(key, parsed);
   }
@@ -318,14 +319,14 @@ async function fetchManifest(origin: string, report: PreviewReport, options: Pre
   if (!upstream || upstream === "unavailable") return upstream;
   const bytes = await bodyBytes(upstream, MAX_MANIFEST_BYTES);
   if (!bytes) return undefined;
-  const text = new TextDecoder().decode(bytes);
   // The agent API reads screenshots from the same static files the Viewer does, next to the manifest's target directory.
   const base = new URL(report.path.replace(/\/targets\/[^/]+$/, "/"), origin);
-  const loaded = reportFromManifest(text, async (name, limit) => {
+  const loaded = reportFromManifest(bytes, async (name, limit) => {
     const asset = await staticFile(origin, new URL(name, base).pathname, options);
-    return asset && asset !== "unavailable" ? bodyBytes(asset, Math.min(limit, MAX_ASSET_BYTES)) : undefined;
+    if (asset === "unavailable") throw new Error(`${name} is unavailable`);
+    return asset ? bodyBytes(asset, Math.min(limit, MAX_ASSET_BYTES)) : undefined;
   });
-  return loaded ? { text, loaded } : undefined;
+  return loaded ? { bytes, loaded } : undefined;
 }
 
 /** Requests the Viewer shell never issues; identical to the token-less answer. */

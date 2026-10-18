@@ -24,7 +24,7 @@ export type LoadedReport = {
   json: Json;
   /** Every file of the report by name (`assets/<sha256>.png`), with its size. */
   entries: Map<string, { size: number }>;
-  /** One file's bytes, at most `limit` of them; undefined when there is no such file or it is larger. */
+  /** One file's bytes, at most `limit` of them; undefined when there is no such file or it is larger. Rejects when it cannot be read now. */
   read: (name: string, limit: number) => Promise<Uint8Array | undefined>;
 };
 
@@ -53,9 +53,14 @@ export async function loadReport(zip: Uint8Array): Promise<LoadedReport | undefi
 
 /** The report a metadata file describes, with its files and a way to read them; undefined when it is not a report this API reads. */
 export function reportFrom(file: string, raw: Uint8Array, entries: Map<string, { size: number }>, read: LoadedReport["read"]): LoadedReport | undefined {
-  if (file !== "review.json" && file !== "exploration.json") return undefined;
   let parsed: unknown;
   try { parsed = JSON.parse(new TextDecoder().decode(raw)); } catch { return undefined; }
+  return reportFromJson(file, raw, parsed, entries, read);
+}
+
+/** `reportFrom` for a metadata file already parsed: `parsed` is `raw` as JSON. */
+export function reportFromJson(file: string, raw: Uint8Array, parsed: unknown, entries: Map<string, { size: number }>, read: LoadedReport["read"]): LoadedReport | undefined {
+  if (file !== "review.json" && file !== "exploration.json") return undefined;
   const root = rec(parsed);
   if (file === "review.json") {
     const review = rec(root.review);
@@ -478,7 +483,9 @@ export async function agentApiReply(context: AgentContext, loaded: LoadedReport,
     case "assets": {
       if (id === undefined) return notFound();
       if (!loaded.entries.has(`assets/${id}.png`)) return notFound();
-      const bytes = await loaded.read(`assets/${id}.png`, MAX_ASSET_BYTES);
+      let bytes: Uint8Array | undefined;
+      try { bytes = await loaded.read(`assets/${id}.png`, MAX_ASSET_BYTES); }
+      catch { return json({ error: "unavailable", message: "The screenshot could not be read; retry shortly" }, 503); }
       if (!bytes) return notFound();
       return { status: 200, contentType: "image/png", body: bytes as BodyInit, headers: { ETag: `"${id}"`, "Content-Length": String(bytes.byteLength) } };
     }

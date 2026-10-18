@@ -73,7 +73,7 @@ async function exportFixture(t, options) {
 }
 
 /** A fake EAS CLI plus a fake deployment: `deploy` captures the sealed report and .env, then serves them like the Worker would. */
-function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", aliasOrigin = "https://acme-explore--bluesky.expo.app", accounts = ["brent-org"], failDeploy = false, aliasServes = true, aliasListing, existingComment, manifestServes = true } = {}) {
+function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", aliasOrigin = "https://acme-explore--bluesky.expo.app", accounts = ["brent-org"], failDeploy = false, aliasServes = true, aliasListing, existingComment, manifestServes = true, robotsServes = true } = {}) {
   let deploys = 0;
   let latestComment = existingComment;
   const calls = []; const captured = {};
@@ -88,6 +88,11 @@ function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", alia
     if (args[0] === "deploy") {
       deploys += 1;
       if (failDeploy === "alias-limit") return { status: 1, stdout: "", stderr: "✔ Created deployment\n✖ Failed to assign pr-7 alias to deployment\nThis account has reached the limit of 5 aliases from the Free plan. Upgrade your plan to raise the limit on the amount of aliases you can create for your deployments. https://expo.dev/accounts/acme/settings/billing\nRequest ID: 341b47a1\n    Error: GraphQL request failed." };
+      // eas names the file whose upload failed, and every static file's path carries the link's token.
+      if (failDeploy === "upload-path") {
+        const token = /EXPLORE_PREVIEW_TOKEN=(\S+)/.exec(readFileSyncUtf8(join(options.cwd, ".env")))[1];
+        return { status: 1, stdout: "", stderr: `Upload of "client/p/${token}/assets/${sha256}.png" failed: 502\n    Upload failed` };
+      }
       if (failDeploy === true || deploys <= failDeploy) return { status: 1, stdout: "", stderr: "Error: GraphQL request failed.\n    Upload failed" };
       captured.env = Object.fromEntries(readFileSyncUtf8(join(options.cwd, ".env")).trim().split("\n").map(line => line.split(/=(.*)/s).slice(0, 2)));
       captured.listing = captured.env.EXPLORE_PREVIEW_REPORTS ? JSON.parse(captured.env.EXPLORE_PREVIEW_REPORTS) : [{ platform: "ios", path: captured.env.EXPLORE_PREVIEW_REPORT }];
@@ -95,6 +100,7 @@ function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", alia
       const tokenDirectory = join(options.cwd, "dist", "client", "p", captured.env.EXPLORE_PREVIEW_TOKEN);
       captured.files = Object.fromEntries(readdirTree(tokenDirectory).map(file => [`/p/${captured.env.EXPLORE_PREVIEW_TOKEN}/${file}`, readFileSyncBytes(join(tokenDirectory, file))]));
       captured.hasViewer = existsSyncLocal(join(options.cwd, "dist", "client", "viewer", "index.html"));
+      captured.robots = existsSyncLocal(join(options.cwd, "dist", "client", "robots.txt")) ? readFileSyncUtf8(join(options.cwd, "dist", "client", "robots.txt")) : undefined;
       const alias = args.includes("--alias") ? args[args.indexOf("--alias") + 1] : undefined;
       captured.alias = alias;
       const aliases = alias ? [{ id: "al1", url: aliasOrigin, name: alias }] : undefined;
@@ -110,6 +116,7 @@ function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", alia
     if (url.origin === origin || (captured.alias && url.origin === aliasOrigin)) {
       // EAS Hosting serves a deployment's static file before the Worker sees the request.
       if (captured.files?.[url.pathname]) return new Response(captured.files[url.pathname], { status: 200 });
+      if (url.pathname === "/robots.txt" && captured.robots !== undefined && robotsServes) return new Response(captured.robots, { status: 200, headers: { "content-type": "text/plain" } });
       const match = /^\/p\/([a-z2-7]{32})(?:\/(reports\.json|manifest\.json|api\/v1))?$/.exec(url.pathname);
       if (!captured.env || !match || match[1] !== captured.env.EXPLORE_PREVIEW_TOKEN) return new Response("Not found", { status: 404 });
       // The token page negotiates like the real Worker: only a request that asks for HTML gets the shell.
@@ -185,11 +192,13 @@ test("ci:deploy seals the exact report, deploys it with the preview export, veri
   const assets = Object.keys(eas.captured.files).filter(path => path.includes("/assets/"));
   assert.deepEqual(assets.map(path => path.slice(`/p/${token}/`.length)).sort(), Object.keys(manifest.entries).sort());
   for (const path of assets) assert.equal(createHash("sha256").update(eas.captured.files[path]).digest("hex"), /([a-f0-9]{64})\./.exec(path)[1]);
+  // EAS Hosting cannot put noindex on static files, so robots.txt keeps crawlers off the screenshots and manifests, not the page.
+  assert.equal(eas.captured.robots, "User-agent: *\nDisallow: /p/*/assets/\nDisallow: /p/*/targets/\n");
   // Verification hit the gate and its negatives before the comment was published.
   const previewPaths = eas.requests.filter(request => request.url.origin === "https://acme-explore--1lcbdcpwn3.expo.app").map(request => request.url.pathname.replace(/[a-f0-9]{64}/, "<sha256>"));
   const wrong = token.endsWith("a") ? `${token.slice(0, -1)}b` : `${token.slice(0, -1)}a`;
   // What the Viewer opens: the manifest, then one screenshot, a static file.
-  assert.deepEqual(previewPaths, [`/p/${token}`, `/p/${token}/api/v1`, `/p/${token}/manifest.json`, `/p/${token}/assets/<sha256>.png`,
+  assert.deepEqual(previewPaths, [`/p/${token}`, `/p/${token}/api/v1`, "/robots.txt", `/p/${token}/manifest.json`, `/p/${token}/assets/<sha256>.png`,
     "/", `/p/${wrong}`, `/p/${wrong}/manifest.json`, `/p/${token}/viewer/index.html`]);
   assert.ok(eas.requests.every(request => request.url.origin !== "https://acme-explore--1lcbdcpwn3.expo.app" || request.options.cache === "no-store"));
   const posted = eas.requests.find(request => request.options.method === "POST");
@@ -344,7 +353,7 @@ test("ci:deploy fans several platforms' reports into one sealed deployment, veri
   assert.equal(result.reportSha256, result.reports[0].reportSha256);
   const previewPaths = eas.requests.filter(request => request.url.origin === "https://acme-explore--1lcbdcpwn3.expo.app").map(request => (request.url.pathname + request.url.search).replace(/[a-f0-9]{64}/, "<sha256>"));
   const wrong = token.endsWith("a") ? `${token.slice(0, -1)}b` : `${token.slice(0, -1)}a`;
-  assert.deepEqual(previewPaths, [`/p/${token}`, `/p/${token}/api/v1`,
+  assert.deepEqual(previewPaths, [`/p/${token}`, `/p/${token}/api/v1`, "/robots.txt",
     ...["ios", "android"].flatMap(platform => [`/p/${token}/manifest.json?platform=${platform}`, `/p/${token}/assets/<sha256>.png`]),
     `/p/${token}/reports.json`,
     "/", `/p/${wrong}`, `/p/${wrong}/manifest.json`, `/p/${token}/viewer/index.html`]);
@@ -416,6 +425,14 @@ test("a preview sets no expiry of its own: an old config's expiresAfter is noted
   assert.match(body, /^Preview links work for anyone who has them until the deployment is deleted\. · Managed via /m);
   assert.doesNotMatch(body, /works until/);
   assert.ok(warnings.some(line => line.includes("report.preview.expiresAfter no longer applies: a hosted preview lasts as long as its EAS Hosting deployment")), warnings.join(""));
+
+  // A capture from an earlier version recorded the expiry as expiresAfterDays: still accepted, and noted the same way.
+  const legacy = await exportFixture(t, { preview: { hosting: "eas", expiresAfterDays: 7 } });
+  warnings.length = 0;
+  const again = easFixture();
+  assert.equal((await deployPreview({ inputPath: legacy.inputPath, reportPath: legacy.reportPath, artifactUrl, exportPath: legacy.exportPath, environment: deployEnvironment,
+    transport: again.transport, run: again.run, now: () => now, verifyTimeoutMs: 1 })).expiresAt, null);
+  assert.ok(warnings.some(line => line.includes("report.preview.expiresAfter no longer applies")), warnings.join(""));
 });
 
 test("a standalone report deploys to a fixed alias with a fixed token, verifies both hosts, and prints the alias link", async t => {
@@ -774,4 +791,36 @@ test("ci:deploy fails a deployment whose Worker serves the ZIP but not the manif
     error => error.code === "PREVIEW_VERIFY_FAILED" && /manifest and screenshots/.test(error.message) && error.details.status === 404);
   const posted = eas.requests.filter(request => request.options.method === "POST" || request.options.method === "PATCH").map(request => JSON.parse(request.options.body).body);
   assert.ok(posted.every(body => !body.includes(`/p/${eas.captured.env.EXPLORE_PREVIEW_TOKEN}`)), posted.join("\n---\n"));
+});
+
+test("a deployment that does not serve its robots.txt fails verification", async t => {
+  const { inputPath, reportPath, exportPath } = await exportFixture(t);
+  const eas = easFixture({ robotsServes: false });
+  await assert.rejects(deployPreview({ inputPath, reportPath, exportPath, artifactUrl, environment: deployEnvironment, transport: eas.transport, run: eas.run, now: () => now, verifyTimeoutMs: 1 }),
+    error => error.code === "PREVIEW_VERIFY_FAILED" && /robots\.txt/.test(error.message));
+});
+
+test("eas output that names an upload's path keeps the link's token out of the log and the error", async t => {
+  const { inputPath, reportPath, exportPath } = await exportFixture(t);
+  const eas = easFixture({ failDeploy: "upload-path" });
+  const logged = [];
+  t.mock.method(process.stderr, "write", chunk => { logged.push(String(chunk)); return true; });
+  const error = await deployPreview({ inputPath, reportPath, artifactUrl, exportPath, environment: deployEnvironment, transport: eas.transport, run: eas.run,
+    now: () => now, verifyTimeoutMs: 1, sleep: async () => {} }).catch(caught => caught);
+  assert.equal(error.code, "PREVIEW_DEPLOY_FAILED");
+  assert.ok(logged.some(line => line.includes('Upload of "client/p/***/assets/')), logged.join(""));
+  for (const text of [...logged, error.details.output, error.message]) assert.doesNotMatch(text, /p\/[a-z2-7]{32}\//, text);
+});
+
+test("targets that share a screenshot must agree on its size, or the deploy refuses the report", async t => {
+  const { reportPath, exportPath } = await exportFixture(t);
+  const zip = await zipReportDirectory(reportPath);
+  const broken = await mkdtemp(join(tmpdir(), "explore-broken-")); t.after(() => rm(broken, { recursive: true, force: true }));
+  await cp(reportPath, broken, { recursive: true });
+  await writeFile(join(broken, "assets", `${sha256}.png`), png.subarray(0, 10));
+  const eas = easFixture();
+  await assert.rejects(deployLocalReports({ reports: [{ platform: "ios", zip }, { platform: "android", zip: await zipReportDirectory(broken) }], project: "acme-explore", exportPath,
+    environment: deployEnvironment, transport: eas.transport, run: eas.run, now: () => now, verifyTimeoutMs: 1 }),
+    error => error.code === "REPORT_ZIP_FAILED" && error.message.includes(`assets/${sha256}.png`));
+  assert.equal(eas.calls.filter(call => call.args[0] === "deploy").length, 0, "nothing is deployed");
 });
