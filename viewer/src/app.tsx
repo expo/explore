@@ -1189,7 +1189,9 @@ function ViewerApp() {
   const flowsOnly = hasFlows && map !== undefined && map.screens.length > 0 && map.screens.every((screen) => isFlowScreen(screen));
   useEffect(() => {
     if (flowsOnly && (route.canvas === "map" || route.canvas === "screens")) navigate({ canvas: "flows" }, { replace: true });
-  }, [flowsOnly, route.canvas, navigate]);
+    // A Flows link into a review that ran none (or an old link to the retired canvas) lands on the map.
+    if (loadedPublicReview && !hasFlows && route.canvas === "flows") navigate({ canvas: "map" }, { replace: true });
+  }, [flowsOnly, hasFlows, loadedPublicReview, route.canvas, navigate]);
   // Focus singles out diff states, so it means nothing without a baseline to diff against.
   const focusFilter = diff ? route.focus : [];
   const focusCounts = useMemo(() => countFocusStatuses(diff), [diff]);

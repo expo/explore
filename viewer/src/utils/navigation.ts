@@ -168,7 +168,9 @@ function parseLegacyHash(hash: string): CanvasView | undefined {
   if (first === "screens" && !second) return "screens";
   // "workspace" was the original name of the Changes panel, which once named the hash's panel.
   if (first !== "workspace" && first !== "changes") return undefined;
-  return second === "graph" ? "map" : isCanvas(second) ? second : "map";
+  // The hash era had a "flows" canvas that was retired; those links land on the map.
+  if (second === "graph" || second === "flows") return "map";
+  return isCanvas(second) ? second : "map";
 }
 
 /** Settles the states the URL cannot express together, and drops what the context does not know. */

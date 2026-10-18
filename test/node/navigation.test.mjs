@@ -196,9 +196,10 @@ test("a screen without a route, or one the map does not know yet, travels as an 
 test("legacy hashes still parse", () => {
   assert.deepEqual(parse("/#workspace"), base);
   assert.deepEqual(parse("/#workspace/screens"), { ...base, canvas: "screens" });
-  // Flows was retired; its links land on the map.
+  // The hash-era Flows canvas was retired; its links land on the map. The path form is the
+  // current Flows view (the app sends it to the map when the review ran no flows).
   assert.deepEqual(parse("/#workspace/flows"), base);
-  assert.deepEqual(parse("/flows?flow=derived-apps"), base);
+  assert.deepEqual(parse("/flows?flow=derived-apps"), { ...base, canvas: "flows" });
   assert.deepEqual(parse("/#workspace/graph"), base);
   assert.deepEqual(parse("/map?panel=workspace"), base);
   assert.equal(nav.formatRoute(parse("/map?panel=workspace"), ctx), "/map");
