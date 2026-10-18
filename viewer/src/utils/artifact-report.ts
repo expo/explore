@@ -1,4 +1,4 @@
-import { BlobReader, ZipReader, type FileEntry } from "@zip.js/zip.js";
+import type { FileEntry } from "@zip.js/zip.js";
 import type { ArtifactReport } from "../../../src/contracts/artifact-report";
 import { normalizePublicReviewForReading } from "../../../src/contracts/review-validation";
 import { reportContractGap } from "../public/public-workspace";
@@ -316,6 +316,8 @@ export class ArtifactReportArchive {
   /** Bind the ZIP to the linked run when there is one; a bare page takes the run the report names. */
   static async open(blob: Blob, identity?: ArtifactIdentity, fileName?: string): Promise<ArtifactReportArchive> {
     await checkReportFile(blob, fileName);
+    // The ZIP reader is loaded on first use: a hosted preview opens its manifest and never needs it.
+    const { BlobReader, ZipReader } = await import("@zip.js/zip.js");
     const reader = new ZipReader(new BlobReader(blob), { strictness: "strict", useWebWorkers: false });
     try {
       const files = new Map<string, FileEntry>();
