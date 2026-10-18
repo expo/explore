@@ -17,7 +17,7 @@ import type {
   ObservedElement,
   Screen,
 } from "../types.js";
-import type { VisualEvidenceAssessment } from "./visual-evidence.js";
+import type { VisualDiffRegion, VisualEvidenceAssessment } from "./visual-evidence.js";
 import { CAPTURE_OBSERVER_IDENTIFIER, parseCaptureDestination } from "../capture/observer.js";
 
 export type StableReviewerElementAnnotation = {
@@ -925,9 +925,18 @@ function visualFact(
       fact: supported({ kind: "visual-changed", scope: { kind: "landmark", label } }, refs),
     };
   }
+  const near = nearEdge(input.visualAssessment.representative?.regions ?? []);
   return {
-    fact: supported({ kind: "visual-changed", scope: { kind: "main-content" } }, refs),
+    fact: supported({ kind: "visual-changed", scope: { kind: "main-content", ...(near ? { near } : {}) } }, refs),
   };
+}
+
+/** Which edge every diff region hugs, when all of them sit in the outer 12 % of the frame: not "the main content". */
+function nearEdge(regions: readonly VisualDiffRegion[]): "top" | "bottom" | undefined {
+  if (regions.length === 0) return undefined;
+  if (regions.every((region) => region.normalizedRect.y + region.normalizedRect.height <= 12)) return "top";
+  if (regions.every((region) => region.normalizedRect.y >= 88)) return "bottom";
+  return undefined;
 }
 
 function comparisonForAdded(head: RuntimeEvidence): RuntimeEvidenceComparison {

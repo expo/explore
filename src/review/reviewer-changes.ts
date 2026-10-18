@@ -121,7 +121,7 @@ export type VisualReviewerChange = {
   kind: "visual-changed";
   scope:
     | { kind: "landmark"; label: string }
-    | { kind: "main-content" };
+    | { kind: "main-content"; near?: "top" | "bottom" };
 };
 
 /**
@@ -466,7 +466,7 @@ function buildFact(change: SupportedReviewerChange, evidenceRefs: string[]): Can
         fact: {
           category: "visual",
           templateId: "visual.main-content-changed",
-          bullet: "Updated visual styling in the main content area.",
+          bullet: change.scope.near ? `Updated visual styling near the ${change.scope.near} of the screen.` : "Updated visual styling in the main content area.",
           subjectRole: "content",
           subjectLabel: "Main content",
           priority: PRIORITY.visual,
