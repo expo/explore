@@ -2,8 +2,8 @@ import type { PublicReview } from "../contracts/capture.js";
 import type { RunTarget } from "../types.js";
 import type { SimulatorRuntimeMetadata } from "../capture/run.js";
 import { CI_COMMENT_MARKER } from "./pr-comment.js";
-import { CHANGE_GROUPS, MAX_COMMENT_TARGETS, changeCountText, compareTargets, defaultTargetLabel, foldRecord, strongerGroup, historyLine, orderedRecords, readCommentRecords, recordLabel, recordLine, recordSummary, recordTarget,
-  type ChangeGroup, type CommentTarget, type CommentRecords, type HistoryEntry, type PlatformRecord } from "./pr-comment-record.js";
+import { CHANGE_GROUPS, MAX_COMMENT_TARGETS, MAX_NAVIGATION_EDGES, MAX_NAVIGATION_NODES, changeCountText, compareTargets, defaultTargetLabel, foldRecord, strongerGroup, historyLine, orderedRecords, readCommentRecords, recordLabel, recordLine, recordSummary, recordTarget,
+  type ChangeGroup, type CommentNavigation, type CommentTarget, type CommentRecords, type HistoryEntry, type NavigationGroup, type NavigationKind, type PlatformRecord } from "./pr-comment-record.js";
 import { isAccessibilityOnlyChange } from "../contracts/review-validation.js";
 import type { PublicCaptureHealth, PublicEvidenceSummary } from "../review/evidence-assessment.js";
 import type { ReviewPresentation } from "../contracts/review.js";
@@ -57,6 +57,8 @@ export type PublicCommentState = {
   artifactOnly?: boolean;
   /** The PR moved while this run worked; the comment keeps its report under previous runs. */
   superseded?: boolean;
+  /** report.comment.map: draw the map of the changed screens. */
+  map?: true;
 };
 
 type ReviewGroup = ChangeGroup;
@@ -310,6 +312,8 @@ export function platformRecordOf(state: PublicCommentState, target?: CommentTarg
       const scheme = schemeOf(surface.id);
       record.changes.push({ id: surface.id, route: routeOf(surface), group, description: descriptionOf(surface, group), ...(scheme ? { scheme } : {}) });
     }
+    const navigation = state.map ? navigationOf(state.review, new Map(record.changes.map(change => [change.id, change.group]))) : undefined;
+    if (navigation) record.navigation = navigation;
     const notCompared = state.review.surfaces.filter(notComparedChange).length;
     if (notCompared) record.notCompared = notCompared;
     record.context = contextLines(state.review).filter(line => line.length);
@@ -334,6 +338,104 @@ export function platformRecordOf(state: PublicCommentState, target?: CommentTarg
   if (state.failure) record.failure = { step: state.failure.step, message: state.failure.message };
   if (state.superseded) record.superseded = true;
   return record;
+}
+
+const NAVIGATION_GROUPS: NavigationGroup[] = ["added", "removed", "modified"];
+const NAVIGATION_KINDS: NavigationKind[] = ["push", "replace", "navigate", "dismissTo", "redirect"];
+
+/** "/p/[d]" for the route file app/(tabs)/(patterns)/p/[d].tsx: the route without its groups, which a dynamic route's variants share. */
+function routePattern(route: NonNullable<Surface["head"]>): string {
+  const path = `/${route.logicalPath.replace(/^\/+/, "")}`.split("/").filter(segment => !/^\(.*\)$/.test(segment)).join("/");
+  return plainText(path.replace(/\/index$/, ""), MAX_ROUTE_LENGTH) || "/";
+}
+
+/**
+ * The map the comment draws: every route added, removed or changed visually (a screen whose source changed but looks
+ * the same is not one), the routes one step before them, and the transitions among those. A route's appearances and
+ * variants are one node. Switching tabs reaches every tab from every other, so tab transitions are not edges: the
+ * routes a tab switch shows are grouped instead. Removed routes and the transitions into them come from the base.
+ */
+function navigationOf(review: PublicReview, groups: Map<string, ChangeGroup>): CommentNavigation | undefined {
+  if (!review.navigation) return undefined;
+  const keyOf = new Map<string, string>();
+  const groupOf = new Map<string, NavigationGroup>();
+  for (const surface of review.surfaces) {
+    const route = surface.head ?? surface.base;
+    if (!route || route.kind === "redirect") continue;
+    const key = routePattern(route);
+    keyOf.set(surface.id.replace(/@(light|dark)$/, ""), key);
+    const group = groups.get(surface.id);
+    if (group !== "added" && group !== "removed" && group !== "modified") continue;
+    const current = groupOf.get(key);
+    if (!current || NAVIGATION_GROUPS.indexOf(group) < NAVIGATION_GROUPS.indexOf(current)) groupOf.set(key, group);
+  }
+  if (!groupOf.size || groupOf.size > MAX_NAVIGATION_NODES) return undefined;
+  const tabs = new Set<string>();
+  const links = new Map<string, { from: string; to: string; kinds: Set<NavigationKind>; base: boolean }>();
+  const add = (edge: NonNullable<PublicReview["navigation"]>["head"]["edges"][number], base: boolean) => {
+    const from = keyOf.get(edge.from), to = keyOf.get(edge.to);
+    if (!from || !to || from === to) return;
+    if (edge.kind === "tab") { tabs.add(to); return; }
+    const link = links.get(`${from}\n${to}`) ?? { from, to, kinds: new Set(), base };
+    link.kinds.add(edge.kind);
+    links.set(`${from}\n${to}`, link);
+  };
+  for (const edge of review.navigation.head.edges) add(edge, false);
+  for (const edge of review.navigation.base.edges) if (groupOf.get(keyOf.get(edge.to) ?? "") === "removed") add(edge, true);
+  // The routes that lead to the most changed ones first, while the map has room.
+  const leads = new Map<string, number>();
+  for (const link of links.values()) if (groupOf.has(link.to) && !groupOf.has(link.from)) leads.set(link.from, (leads.get(link.from) ?? 0) + 1);
+  const before = [...leads].sort(([a, m], [b, n]) => n - m || (a < b ? -1 : 1)).slice(0, MAX_NAVIGATION_NODES - groupOf.size).map(([key]) => key);
+  const keys = [...groupOf.keys(), ...before].sort();
+  const index = new Map(keys.map((key, position) => [key, position]));
+  const edges = [...links.values()].filter(link => index.has(link.from) && index.has(link.to))
+    .sort((a, b) => Number(groupOf.has(b.to)) - Number(groupOf.has(a.to)) || index.get(a.from)! - index.get(b.from)! || index.get(a.to)! - index.get(b.to)!)
+    .slice(0, MAX_NAVIGATION_EDGES)
+    .sort((a, b) => index.get(a.from)! - index.get(b.from)! || index.get(a.to)! - index.get(b.to)!)
+    .map(link => ({ from: index.get(link.from)!, to: index.get(link.to)!, kinds: NAVIGATION_KINDS.filter(kind => link.kinds.has(kind)), ...(link.base ? { base: true as const } : {}) }));
+  if (!edges.length) return undefined;
+  return { nodes: keys.map(key => ({ route: key, ...(groupOf.has(key) ? { group: groupOf.get(key)! } : {}), ...(tabs.has(key) ? { tab: true as const } : {}) })), edges };
+}
+
+/** A route as a quoted Mermaid label, with Mermaid's entity codes for what would end the label, the line or the fence. */
+function mermaidLabel(route: string): string {
+  return `"${plainText(route, MAX_ROUTE_LENGTH).replace(/#/g, "#35;").replace(/"/g, "#quot;").replace(/</g, "#lt;").replace(/>/g, "#gt;").replace(/`/g, "#96;")}"`;
+}
+
+/** Outlines, not fills: GitHub draws Mermaid in the reader's theme, and a fixed fill is wrong in one of them. */
+const MAP_CLASSES: Record<NavigationGroup, string> = {
+  added: "stroke:#1a7f37,stroke-width:3px",
+  modified: "stroke:#bc4c00,stroke-width:3px",
+  removed: "stroke:#cf222e,stroke-width:2px,stroke-dasharray:5 4",
+};
+
+function mermaidMap(navigation: CommentNavigation): string[] {
+  const node = (index: number) => `n${index}[${mermaidLabel(navigation.nodes[index]!.route)}]`;
+  const tabs = navigation.nodes.flatMap((entry, index) => entry.tab ? [index] : []);
+  const lines = ["```mermaid", "flowchart LR"];
+  if (tabs.length) lines.push(`  subgraph tabs["Tabs"]`, ...tabs.map(index => `    ${node(index)}`), "  end");
+  lines.push(...navigation.nodes.flatMap((entry, index) => entry.tab ? [] : [`  ${node(index)}`]));
+  lines.push(...navigation.edges.map(edge => `  n${edge.from} ${edge.base ? "-.->" : "-->"}|${edge.kinds.join(", ")}| n${edge.to}`));
+  for (const group of ["added", "modified", "removed"] as const) {
+    const members = navigation.nodes.flatMap((entry, index) => entry.group === group ? [`n${index}`] : []);
+    if (members.length) lines.push(`  classDef ${group} ${MAP_CLASSES[group]}`, `  class ${members.join(",")} ${group}`);
+  }
+  return [...lines, "```"];
+}
+
+/** One collapsed map per distinct navigation: targets with the same routes share one, named when the targets' maps differ. */
+function mapSection(ready: PlatformRecord[]): string[] {
+  const maps = new Map<string, { navigation: CommentNavigation; records: PlatformRecord[] }>();
+  for (const record of ready) {
+    if (!record.navigation) continue;
+    const key = JSON.stringify(record.navigation);
+    maps.set(key, { navigation: record.navigation, records: [...(maps.get(key)?.records ?? []), record] });
+  }
+  return [...maps.values()].flatMap(({ navigation, records }) => {
+    const named = maps.size > 1 || records.length < ready.length ? `${records.map(labelOf).join(" · ")} · ` : "";
+    return details(`${named}Map (${plural(navigation.nodes.length, "screen")})`, ["", ...mermaidMap(navigation), "",
+      "Outlined: green added, orange changed, red dashed removed; the others lead to them. Tabs groups the screens a tab switch shows.", ""]);
+  });
 }
 
 const commitLink = (repository: string, sha: string) => link(inlineText(sha.slice(0, 8), 8), `https://github.com/${repository.split("/").map(encodeURIComponent).join("/")}/commit/${encodeURIComponent(sha)}`);
@@ -431,7 +533,7 @@ function renderChangeRow(row: ChangeRow, records: PlatformRecord[]): string {
   return `- ${route} — ${inlineText(row.description, MAX_DESCRIPTION_LENGTH)}${where.length ? ` · ${where.join(" · ")}` : ""}`;
 }
 
-function changesSection(records: PlatformRecord[], rowCap: number): string[] {
+function changesSection(records: PlatformRecord[], rowCap: number, withMap: boolean): string[] {
   const ready = records.filter(record => record.phase === "ready");
   if (!ready.length) return [];
   const groups = changeRows(ready);
@@ -454,6 +556,7 @@ function changesSection(records: PlatformRecord[], rowCap: number): string[] {
     content.push("");
     lines.push(...details(`${GROUP_LABEL[group]} (${rows.length})`, content));
   }
+  if (withMap) lines.push(...mapSection(ready));
   const seen = new Set<string>();
   for (const record of ready) for (const line of record.context ?? []) {
     if (seen.has(line)) continue;
@@ -594,13 +697,13 @@ export function renderCommentRecords(records: CommentRecords, existing?: string,
     ...historySection("", records.history)].join("\n");
   const first = current[0]!;
   const repository = repositoryOf(first.links.run);
-  const render = (rowCap: number): string => {
+  const render = (rowCap: number, withMap: boolean): string => {
     const lines: string[] = [...hidden, heading(current), "",
       `<sub>base ${commitLink(repository, first.baseSha)} → ${commitLink(repository, first.headSha)}</sub>`, ""];
     if (first.superseded) lines.push(SUPERSEDED_NOTE, "");
     lines.push(`| | Device | Result | Report |`, `|---|---|---|---|`,
       ...current.map(record => `| ${labelOf(record)} | ${deviceCell(record)} | ${resultCell(record)} | ${reportCell(record)} |`), "");
-    lines.push(...changesSection(current, rowCap));
+    lines.push(...changesSection(current, rowCap, withMap));
     lines.push(...validationSection(current));
     lines.push(...historySection(repository, records.history));
     const expiries = current.filter(record => record.phase === "ready" && record.links.expiresAt !== undefined).map(record => record.links.expiresAt);
@@ -613,9 +716,11 @@ export function renderCommentRecords(records: CommentRecords, existing?: string,
     lines.push(footer.join(" · "));
     return lines.join("\n");
   };
+  // The map goes first when the body is over budget, then the change lists shrink.
   let rowCap = MAX_ROWS_PER_GROUP;
-  let body = render(rowCap);
-  while (body.length > budget && rowCap > 1) { rowCap = Math.max(1, Math.floor(rowCap / 2)); body = render(rowCap); }
+  let body = render(rowCap, true);
+  if (body.length > budget) body = render(rowCap, false);
+  while (body.length > budget && rowCap > 1) { rowCap = Math.max(1, Math.floor(rowCap / 2)); body = render(rowCap, false); }
   return body;
 }
 

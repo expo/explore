@@ -1,4 +1,4 @@
-// Regenerates the Viewer screenshots in docs/screenshots from a review report, in light and dark
+// Regenerates the README's pictures in docs/screenshots from a review report, in light and dark
 // (the README shows them with <picture>; GitHub Mobile ignores the dark source and shows light). The reference app is euxy
 // (github.com/brentvatne/euxy): skills/readme-refresh/SKILL.md says which report to pass and how.
 //
@@ -7,8 +7,10 @@
 //
 //   --report   a sealed review report (the hosted link's report.zip?platform=ios, or the PR's zip artifact)
 //   --select   the route selected on the hero Map (opens the Inspector); default /settings. The hero zooms in around it
-//              (--zoom, default 73%) and is framed as a window on a soft stage, like the PR comment
-//   --compare  the Compare key of a modified screen: the slug in the Viewer's #/compare/<key> URL; default patterns
+//              (--zoom, default 73%) and is an animated SVG of a window on a soft stage (readme-animations.mjs): the
+//              Map's cards appear, its transitions wipe in, and a click on this screen opens the Inspector
+//   --compare  the Compare key of a modified screen: the slug in the Viewer's #/compare/<key> URL; default patterns.
+//              It becomes readme-compare-*.svg, its before capture wiping to its after capture
 //   --pr       a GitHub PR URL whose Explore comment becomes readme-pr-comment-light.png (public repository): the comment
 //              at its own size on a soft stage, cut off with a fade after the list of changed screens
 import { chromium } from "@playwright/test";
@@ -16,6 +18,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { startReportViewer } from "../test/ci/lib/report-viewer.mjs";
+import { captureHeroFrames, compareSurface, compareSvg, heroSvg, openReport } from "./readme-animations.mjs";
 
 const { values: args } = parseArgs({
   options: {
@@ -33,15 +36,22 @@ if (!args.report) {
 
 const out = fileURLToPath(new URL("../docs/screenshots/", import.meta.url));
 const SHOTS = [
-  { file: "readme-hero", hash: "#/map", viewport: { width: 1376, height: 774 }, click: "Fit canvas", select: args.select, zoom: Number(args.zoom), framed: true },
-  { file: "readme-compare", hash: `#/compare/${args.compare}`, viewport: { width: 1760, height: 1000 } },
+  { file: "readme-hero", hash: "#/map", viewport: { width: 1376, height: 774 }, click: "Fit canvas", select: args.select, zoom: Number(args.zoom), animated: true },
   { file: "readme-screens", hash: "#/screens", viewport: { width: 1760, height: 1000 } },
 ];
 
 const bytes = await readFile(args.report);
+const report = await openReport(bytes);
 const { server, url } = await startReportViewer({ bytes, watch: false });
 const browser = await chromium.launch();
 try {
+  for (const theme of ["light", "dark"]) {
+    const surface = compareSurface(report.review, args.compare, theme);
+    const path = `${out}readme-compare-${theme}.svg`;
+    await writeFile(path, await compareSvg(browser, report, surface, theme,
+      `The ${surface.head.route} screen of euxy wiping from its capture before the pull request to its capture after it, with the changed regions outlined`));
+    console.log(path);
+  }
   for (const theme of ["light", "dark"]) for (const shot of SHOTS) {
     const context = await browser.newContext({ viewport: shot.viewport, deviceScaleFactor: 2, colorScheme: theme });
     await context.addInitScript(value => localStorage.setItem("expo-explore:theme", value), theme);
@@ -54,8 +64,8 @@ try {
       await page.mouse.move(400, shot.viewport.height - 30);
       await page.waitForTimeout(1500);
     }
-    if (shot.select) {
-      // Selecting a screen opens the Inspector without moving the fitted camera.
+    if (shot.select && !shot.animated) {
+      // Selecting a screen opens the Inspector without moving the fitted camera. The animated hero selects it last.
       await page.locator(`.screen-screenshot-target[title="${shot.select}"]`).click();
       await page.mouse.move(400, shot.viewport.height - 30);
       await page.waitForTimeout(1500);
@@ -76,12 +86,12 @@ try {
       await page.mouse.move(shot.viewport.width - 60, shot.viewport.height / 2);
       await page.waitForTimeout(1200);
     }
-    if (shot.hash.startsWith("#/compare/") && !page.url().includes(shot.hash)) {
-      throw new Error(`Compare key ${args.compare} is not a screen of this report (the Viewer went to ${page.url()}); pass --compare <key> from a #/compare/<key> URL.`);
-    }
-    const path = `${out}${shot.file}-${theme}.png`;
-    if (shot.framed) await writeFile(path, await stagedWindow(browser, await page.screenshot(), shot.viewport, theme));
-    else await page.screenshot({ path });
+    const path = `${out}${shot.file}-${theme}.${shot.animated ? "svg" : "png"}`;
+    if (shot.animated) {
+      const frames = await captureHeroFrames(page, { select: shot.select, viewport: shot.viewport });
+      await writeFile(path, heroSvg(frames, theme,
+        `Explore's Map of a euxy pull request: the screen cards appear row by row, the transitions between them wipe in, then a click selects ${shot.select} and the Inspector opens on it`));
+    } else await page.screenshot({ path });
     console.log(path);
     await context.close();
   }
@@ -112,26 +122,6 @@ try {
 } finally {
   await browser.close();
   await server.close?.();
-}
-
-/**
- * A Viewer screenshot as a window on a rounded 1600×900 stage (drawn at 2x), with a hairline border and a soft shadow,
- * as the post about Explore frames it. The corners outside the stage stay transparent, so it sits on either GitHub theme.
- */
-async function stagedWindow(browser, shot, viewport, theme) {
-  const dark = theme === "dark";
-  const stage = dark ? "#151B23" : "#F6F8FA";
-  const border = dark ? "#3D444D" : "#D1D9E0";
-  const shadow = dark ? "0 2px 4px rgba(1,4,9,0.4), 0 30px 70px rgba(1,4,9,0.6)" : "0 2px 4px rgba(17,17,17,0.04), 0 30px 70px rgba(17,17,17,0.14)";
-  const context = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 2 });
-  const page = await context.newPage();
-  await page.setContent(`<!doctype html><html><body style="margin:0;background:transparent">
-    <div id="stage" style="position:relative;width:1600px;height:900px;background:${stage};border-radius:22px;overflow:hidden">
-      <img src="data:image/png;base64,${shot.toString("base64")}" style="position:absolute;left:${(1600 - viewport.width) / 2}px;top:${(900 - viewport.height) / 2}px;width:${viewport.width}px;height:${viewport.height}px;box-sizing:border-box;border:1px solid ${border};border-radius:14px;box-shadow:${shadow}">
-    </div></body></html>`);
-  const png = await page.locator("#stage").screenshot({ omitBackground: true });
-  await context.close();
-  return png;
 }
 
 /**

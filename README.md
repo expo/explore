@@ -3,29 +3,29 @@
 Explore maps your app: a screenshot of every screen, connected by the taps between them. On each pull request it captures the screens the PR changes, before and after, on EAS Simulator, and posts a visual review. On your Mac it can also run on a local simulator.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-hero-dark.png">
-  <img alt="Explore's Map of a euxy pull request, zoomed in on the new About screen, marked Added among the modified Patterns screens, with its transitions highlighted and the Inspector open on it, shown as a window on a soft stage" src="docs/screenshots/readme-hero-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-hero-dark.svg">
+  <img alt="Explore's Map of a euxy pull request, animated: the screen cards appear row by row, the new About screen marked Added among the modified Patterns screens, the transitions between them wipe in, then a click selects About, its transitions light up and the Inspector slides in on it, shown as a window on a soft stage" src="docs/screenshots/readme-hero-light.svg">
 </picture>
 
 **See a real report:** [euxy](https://explore-example--euxy.expo.app/p/rfcoic27ccgnrmzgijubxkmuzmptcrva?platform=ios), a MIDI sequencer, reviewed by Explore. It is redeployed with the current Viewer on every merge to main.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-compare-dark.svg">
+  <img alt="The euxy Patterns screen wiping from its capture before the pull request to its capture after it: each pattern row's tempo moves out of the subtitle into its own column on the right, then the changed subtitles are outlined" src="docs/screenshots/readme-compare-light.svg">
+</picture>
+
+**Compare**: each changed screen before and after, with the changed regions outlined.
+
 <table>
 <tr>
-<td width="33%" valign="top">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-compare-dark.png">
-  <img width="100%" alt="The Compare view with the euxy Patterns screen's before and after captures side by side: each pattern row's tempo moved out of the subtitle into its own column on the right, the changed subtitles outlined in both" src="docs/screenshots/readme-compare-light.png">
-</picture>
-<strong>Compare</strong>: each changed screen before and after, with the changed regions outlined.
-</td>
-<td width="33%" valign="top">
+<td width="50%" valign="top">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-screens-dark.png">
   <img width="100%" alt="The Screens view of a euxy review: the app/ route tree on the left under Changed 9 and All 19, and a grid of screen cards beside it in the same order, each with its route below the screenshot and a dot before it: green for the new /about, orange for modified screens such as /activity-log, /settings and /patterns, red for the removed /channel-surf" src="docs/screenshots/readme-screens-light.png">
 </picture>
 <strong>Screens</strong>: every capture in one grid, beside the route tree, with a dot for what changed.
 </td>
-<td width="33%" valign="top">
+<td width="50%" valign="top">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-pr-comment-dark.png">
   <img width="100%" alt="Explore's GitHub PR comment on a euxy PR: the heading links to the iOS and Android reports, a table with one row per platform giving device, result and an Open link, the Added, Removed, Modified, Needs review and Source-affected screens as collapsed lists, fading out below them" src="docs/screenshots/readme-pr-comment-light.png">
@@ -80,7 +80,10 @@ describes, never for a password in chat. Open the report, and if I need to log i
 something first, tell me the command.
 ```
 
-You need Node.js 24.12+. Reviewing a change needs an Expo account and an Expo SDK 57+ app with Expo Router or React Navigation: it is built on EAS and captured on EAS Simulator ([join the waitlist](https://expo.dev/services/simulators)) or, with Xcode, on a simulator on your Mac. Exploring a build needs a Claude Code or Codex login, and EAS Simulator or a simulator on your Mac; on your Mac, no Expo account. No API keys, no CI.
+You need Node.js 24.12+. Reviewing a change needs an Expo account and an Expo SDK 57+ app with Expo Router or React Navigation: it is built on EAS and captured on EAS Simulator or, with Xcode, on a simulator on your Mac. Exploring a build needs a Claude Code or Codex login, and EAS Simulator or a simulator on your Mac; on your Mac, no Expo account. No API keys, no CI.
+
+> [!NOTE]
+> EAS Simulator is in preview. [Join the waitlist](https://expo.dev/services/simulators), or pass `--simulator local` to capture on a simulator on your Mac.
 
 <details>
 <summary><strong>Run it yourself</strong></summary>
@@ -123,6 +126,9 @@ Explore starts an EAS Simulator, installs the build, taps through the app with y
 
 </details>
 
+> [!WARNING]
+> A review runs both commits' code on your machine, as you: it installs their dependencies, evaluates the app config and bundles the JavaScript. Review only commits you would run yourself, and someone else's branch only if you trust it.
+
 Every run is kept on your machine for 30 days. `npx @expo/explore reports` lists your local reviews, explorations and uploaded reports with their commits, and reopens or hosts one without capturing again:
 
 <picture>
@@ -141,7 +147,6 @@ npx @expo/explore capture --base v1.3.0 --head v1.4.0 --scope all --upload
 
 - It checks out both commits as temporary worktrees, installs their dependencies, captures every configured platform or [target](#targets) on EAS Simulator or a [local simulator](#simulator), and opens the report in a local Viewer. `--target` or `--platform` picks some; they run at once, at most `--parallel N` at a time. `--upload` hosts it for 30 days (`--expires-in` changes that) and prints the link; `report:upload <report.zip>` hosts one you already have.
 - Your checkout, index and branches are never touched. Your uncommitted changes, untracked files included, are reviewed as `eas build` would upload them; `--committed`, or `cli.requireCommit: true` in `eas.json`, leaves them out.
-- It runs both commits' code on your machine, as you: installing their dependencies, evaluating the app config, and bundling the JavaScript. That is what checking them out and running them would do, so review only commits you would run, and someone else's branch only if you trust it.
 - Installs run without credential environment variables, which keeps tokens out of reach of a registry a commit's `.npmrc` names; that is not a sandbox. A registry that needs `${NPM_TOKEN}` in the project's `.npmrc` must be authenticated in your own `~/.npmrc`.
 - Captures are cached in `~/.cache/expo-explore`, so the same base is not captured twice (`--no-cache` skips it); a capture unused for 30 days goes, and the cache stays under 2 GB. Ctrl+C stops the run's simulator sessions and local devices; when a run is stopped harder than that, the next local run stops what it left running.
 - Like a CI review, it builds on EAS (reusing a matching build) and, unless it captures on a local simulator, runs EAS Simulator sessions: expect several minutes and EAS usage.
@@ -512,11 +517,28 @@ curl -s "$LINK/api/v1/screens?status=modified" | jq '.items[] | {route, status, 
 <details>
 <summary><strong>How it works</strong></summary>
 
-1. The review workflow runs on open, non-draft PRs from the repository whose author has write access. Bots such as Devin go under `ci.trustedAuthors` in `.expo-explore/config.yaml`.
-2. Explore reads the diff and your router source to pick the affected screens.
-3. It builds both revisions on EAS (reusing a build with the same native fingerprint) and captures each screen on EAS Simulator (or, on your machine, a local simulator), reusing a baseline of the base commit when one exists. If EAS fails to start a session, Explore starts a new one, up to five times within 30 minutes.
-4. It compares the captures. A screen with a source change is **Modified** if its captures differ.
-5. It uploads the report to GitHub Actions and posts a PR comment.
+```mermaid
+sequenceDiagram
+  autonumber
+  participant PR as Pull request
+  participant GA as GitHub Actions
+  participant B as EAS Build
+  participant S as EAS Simulator
+  PR->>GA: opened or updated
+  GA->>GA: read the diff and router source, pick the affected screens
+  GA->>B: build base and head
+  Note over B: reuses a build with the same native fingerprint
+  B-->>GA: simulator builds
+  GA->>S: capture each affected screen, in each appearance
+  Note over S: the base reuses its baseline when one exists
+  S-->>GA: screenshots
+  GA->>GA: compare the captures, outline the changed regions
+  GA->>PR: upload the report, comment with its links
+```
+
+- The review workflow runs on open, non-draft PRs from the repository whose author has write access. Bots such as Devin go under `ci.trustedAuthors` in `.expo-explore/config.yaml`.
+- A screen with a source change is **Modified** if its captures differ.
+- If EAS fails to start a session, Explore starts a new one, up to five times within 30 minutes. On your machine, a local simulator can stand in for EAS Simulator.
 
 The same review runs for any two commits without a PR ([`explore-compare.yml`](#compare-any-two-commits), linking the report from the run summary) and on your machine (`capture`, [above](#quick-start)). The workflows' logic lives in `expo-explore ci:*` commands, so a fix reaches CI with the `@expo/explore` version the workflows pin.
 
