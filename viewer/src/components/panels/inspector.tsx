@@ -470,7 +470,9 @@ function FlowSection(props: { context: { flow: PublicFlowEvidence; key: string }
   const { flow, key } = props.context;
   const side = flow.head ?? flow.base;
   const steps = side?.steps ?? [];
-  const stepIndex = steps.findIndex(step => step.frame === key);
+  // A secondary-appearance frame (`<key>@<scheme>`) belongs to the step that took the primary one.
+  const frameKey = key.replace(/@(?:light|dark)$/, "");
+  const stepIndex = steps.findIndex(step => step.frame === frameKey);
   const fileHref = flowSourceHref(props.review, flow.file, side?.line);
   const outcome = (name: "base" | "head") => {
     const run = flow[name];
