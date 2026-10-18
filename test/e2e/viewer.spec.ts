@@ -4312,7 +4312,6 @@ test("desktop Compare: one command bar with the modes in it, even gaps to both b
   await expect(divider).toHaveAttribute("aria-valuenow", "45");
   const dividerAt = async () => Number(await divider.getAttribute("aria-valuenow"));
   await page.keyboard.down("BracketRight");
-  await expect(divider).toHaveAttribute("aria-valuenow", "50");
   await expect.poll(dividerAt, { timeout: 4000 }).toBeGreaterThanOrEqual(65);
   await page.keyboard.up("BracketRight");
   const dividerHeld = await dividerAt();

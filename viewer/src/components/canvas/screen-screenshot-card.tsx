@@ -108,6 +108,7 @@ export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
                     decoding="async"
                     loading={props.loading ?? "lazy"}
                     fallback={missing}
+                    holdPrevious
                   />
                 ) : missing}
                 {/* On hover, says what a click does; on a phone's map, what the second tap does.

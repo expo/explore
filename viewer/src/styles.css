@@ -2356,6 +2356,7 @@ html [data-sonner-toaster][data-sonner-theme] {
   background: var(--element); color: var(--secondary); font: inherit; font-size: 12.5px; font-weight: 500; line-height: 16px; white-space: nowrap; cursor: pointer;
 }
 .collapsed-platform > svg { width: 9px; height: 9px; }
+.collapsed-platform > .collapsed-platform-busy { width: 11px; height: 11px; animation: spin 1s linear infinite; }
 .collapsed-platform:hover, .collapsed-platform[aria-expanded="true"] { color: var(--text); background: var(--hover); }
 .collapsed-platform:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
