@@ -4488,7 +4488,7 @@ test.describe("phone layout", () => {
     await page.goto("/map");
     await page.getByRole("button", { name: "Search", exact: true }).tap();
     await page.keyboard.type("c");
-    await expect(page.locator(".search-command-section-label")).toBeVisible();
+    await expect(page.locator(".search-command-section-label").first()).toBeVisible();
     expect(await offScaleText(page, ".search-command")).toEqual([]);
     // iOS zooms into any field under 16px.
     expect(await page.locator(".search-command-input-row input").evaluate((element) => getComputedStyle(element).fontSize))
