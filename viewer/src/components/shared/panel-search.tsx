@@ -10,6 +10,8 @@ type PanelSearchProps = {
   name?: string;
   autoFocus?: boolean;
   onEscape?: () => void;
+  /** Return in the field, when the host acts on the first match. */
+  onEnter?: () => void;
   onChange: (value: string) => void;
 };
 
@@ -30,9 +32,10 @@ export function PanelSearch(props: PanelSearchProps) {
         aria-label={props.ariaLabel}
         value={props.value}
         onKeyDown={(event) => {
-          if (event.key !== "Escape" || !props.onEscape) return;
+          const handler = event.key === "Escape" ? props.onEscape : event.key === "Enter" ? props.onEnter : undefined;
+          if (!handler) return;
           event.preventDefault();
-          props.onEscape();
+          handler();
         }}
         onChange={(event) => props.onChange(event.target.value)}
       />

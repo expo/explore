@@ -5053,3 +5053,48 @@ test("the theme is Auto until the toggle picks one: it follows the system, then 
   await expect(html).toHaveAttribute("data-theme", "light");
   await expect(page.getByRole("button", { name: "Toggle theme" })).toHaveAttribute("data-theme-preference", "light");
 });
+
+test("/ finds screens on the Screens page: the tree and the grid narrow to the query, Enter picks the first match, Esc clears then closes", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/screens");
+  const grid = page.getByRole("main", { name: "Screens" });
+  const cells = grid.locator(".screens-grid .screens-cell");
+  const treeRows = grid.locator(".screens-tree-row[data-screen-id]");
+  await expect(cells.first()).toBeVisible();
+  const all = await cells.count();
+  const titles = await cells.locator(".screen-node-title").allTextContents();
+  // A query that keeps some screens and drops others: the last path segment of a route only some routes share.
+  const query = titles.map(title => title.split("/").filter(Boolean).at(-1) ?? "")
+    .find(segment => segment && titles.filter(title => title.includes(segment)).length < titles.length)!;
+  expect(query).toBeTruthy();
+
+  await page.keyboard.press("/");
+  const field = grid.getByRole("searchbox", { name: "Find screens" });
+  await expect(field).toBeFocused();
+  await field.fill(query);
+  const matching = titles.filter(title => title.toLowerCase().includes(query.toLowerCase()));
+  await expect(cells).toHaveCount(matching.length);
+  for (const title of await cells.locator(".screen-node-title").allTextContents()) expect(title.toLowerCase()).toContain(query.toLowerCase());
+  await expect(treeRows).toHaveCount(matching.length);
+  // Every row stays open while finding, so the fold-all control steps aside.
+  await expect(grid.locator(".screens-tree-fold-all")).toHaveCount(0);
+
+  await field.press("Enter");
+  await expect(cells.first().locator(".screen-screenshot-card")).toHaveClass(/selected/);
+  await expect(cells).toHaveCount(matching.length);
+
+  await field.fill("no-such-route-anywhere");
+  await expect(grid.getByRole("status").filter({ hasText: "No screens match" }).first()).toBeVisible();
+  await field.press("Escape");
+  await expect(field).toHaveValue("");
+  await expect(cells).toHaveCount(all);
+  await field.press("Escape");
+  await expect(field).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: "Find a screen" })).toBeVisible();
+
+  // From the Map, "/" opens Screens with the field focused.
+  await chooseCanvasView(page, "Map");
+  await expect(page.getByRole("main", { name: "Screens" })).toHaveCount(0);
+  await page.keyboard.press("/");
+  await expect(page.getByRole("main", { name: "Screens" }).getByRole("searchbox", { name: "Find screens" })).toBeFocused();
+});

@@ -16,7 +16,7 @@ import { changedScreens, focusCounts as countFocusStatuses, isCapturedChange, ty
 import { MapView } from "./components/views/semantic-map";
 import { RightPanel } from "./components/panels/right";
 import { SearchCommand } from "./components/search-command";
-import { ScreensView } from "./components/views/screens";
+import { FIND_KEY, ScreensView } from "./components/views/screens";
 import { publicReviewProjection, publicReviewToWorkspace } from "./public/public-workspace";
 import type { PublicReview } from "../../src/contracts/capture";
 import {
@@ -322,6 +322,8 @@ function ViewerApp() {
   const focusSeq = useRef(0);
   const landed = useRef(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  /** `/` on another canvas: Screens opens with its find field focused; each press is a new request. */
+  const [findRequest, setFindRequest] = useState<number>();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Compare steps through the changed screens in review order. Callbacks read it from a ref,
   // because they are created before the diff that produces it.
@@ -1003,6 +1005,14 @@ function ViewerApp() {
         setShortcutsOpen(true);
         return;
       }
+      // "/" finds a screen: on Screens the page itself opens its field; elsewhere it goes to Screens with the field open.
+      if (event.key === FIND_KEY && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        if (routeRef.current.canvas === "screens" || phoneRef.current) return;
+        event.preventDefault();
+        selectCanvas("screens");
+        setFindRequest((count) => (count ?? 0) + 1);
+        return;
+      }
       if (matchesShortcut(event, SHORTCUTS.app.handoff)) {
         if (!handoffAvailableRef.current) return;
         setHandoffOpen(true);
@@ -1564,6 +1574,7 @@ function ViewerApp() {
               {...(focusRequest ? { focusRequest } : {})}
               focus={focusFilter}
               phone={phone}
+              findRequest={findRequest}
               onSelectScreen={selectScreenOnCanvas}
               onPickScreen={pickScreenInPlace}
               onClearSelection={clearSelectedScreen}
