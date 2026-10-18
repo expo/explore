@@ -110,7 +110,7 @@
   /* How far an item the Changes filter does not cover falls back. Low enough to read as
      background at a glance, high enough that the canvas keeps its shape. */
   --dim-out: 0.35;
-  --hover-recede: 0.6;
+  --hover-neighbour-frame: color-mix(in srgb, var(--accent) 55%, var(--border-subtle));
   --shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.025), 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 10px 20px rgba(0, 0, 0, 0.1), 0 3px 6px rgba(0, 0, 0, 0.05);
 
@@ -517,13 +517,14 @@ code {
   opacity: 1;
   --map-card-opacity: 1;
 }
-/* Hover isolates the subject and its directly incident transitions. These selectors come after
-   diff focus so the pointer's immediate context is always the strongest signal. */
-.graph-canvas .react-flow__node.graph-node-hover-related {
+/* Hover never recedes anything, but where focus or a selection has already dimmed the map, the
+   hovered screen and the screens it connects to come back up, with the transitions between them,
+   so the neighbourhood reads. These come after both dimming rules so the pointer's context wins. */
+.connection-canvas-surface.canvas-hovering .react-flow__node-screen.graph-node-hover-related {
   opacity: 1;
   --map-card-opacity: 1;
-  filter: none;
 }
+.connection-canvas-surface.canvas-hovering .react-flow__edge.graph-edge-hover-related { opacity: 1; }
 /* Re-layout: the canvas blinks out whole — nodes, edges and labels together — so the graph can
    change shape and the camera can cut unseen, then comes straight back. Both transitions live
    inside their class, so once the sequence ends the stylesheet owns opacity again. */
@@ -555,6 +556,10 @@ code {
 /* The screenshot's positioned diff frame paints after the leading handle in tree order; lift
    both handles over the image while the diff label (z-index 2) still covers them. */
 .screen-screenshot-slot > .react-flow__handle { z-index: 1; }
+/* The tooltip anchor around the screenshot button is layout-transparent: it takes the slot's
+   remaining height and hands it on, and stays static so the diff label and the handles keep
+   anchoring to the slot (or, on Screens, the card). */
+.screen-screenshot-slot > .tooltip-anchor { position: static; display: flex; width: 100%; min-height: 0; flex: 1; flex-direction: column; }
 .screen-screenshot-target {
   display: flex;
   width: 100%;
@@ -733,26 +738,22 @@ code {
   opacity: 1;
 }
 
-/* Hover is transient canvas state. One container class dims the field; only the symmetric
-   difference of related nodes/edges receives a class, avoiding a React commit across the graph.
-   The hovered screen and the screens it connects to stay as they are; the rest recede a little,
-   enough to read the neighbourhood without losing the map. */
-.connection-canvas-surface.canvas-hovering .react-flow__node-screen {
-  opacity: var(--hover-recede);
-  --map-card-opacity: var(--hover-recede);
-  transition: opacity 90ms ease;
-}
-.connection-canvas-surface.canvas-hovering .react-flow__node-screen.graph-node-hover-related,
-.connection-canvas-surface.canvas-hovering .react-flow__node-screen.graph-node-hover-subject {
-  opacity: 1;
-  --map-card-opacity: 1;
-}
-.connection-canvas-surface.canvas-hovering .react-flow__edge { opacity: 0.3; }
-.connection-canvas-surface.canvas-hovering .react-flow__edge.graph-edge-hover-related { opacity: 1; }
+/* Hover is transient canvas state. Nothing recedes: the pointer's screen gets its ring, the
+   transitions into and out of it turn accent, and the screens at their other ends take a tinted
+   frame, so the neighbourhood reads without the rest of the map changing. Only the symmetric
+   difference of related nodes/edges receives a class, avoiding a React commit across the graph. */
 .connection-canvas-surface.canvas-hovering .graph-edge-hover-related .transition-edge-path {
   stroke: var(--accent) !important;
   stroke-width: 2.2 !important;
   stroke-dasharray: none !important;
+}
+.connection-canvas-surface.canvas-hovering .react-flow__node-screen.graph-node-hover-related:not(.graph-node-hover-subject)
+  .screen-screenshot-card:not(.selected, .diff-added, .diff-modified, .diff-removed) {
+  --screen-frame: var(--hover-neighbour-frame);
+}
+.connection-canvas-surface.canvas-hovering .react-flow__node-screen.graph-node-hover-related:not(.graph-node-hover-subject)
+  .screen-screenshot-card:not(.selected, .diff-added, .diff-modified, .diff-removed) .screen-node-image :is(img, .image-placeholder) {
+  border-color: var(--hover-neighbour-frame);
 }
 
 /* Semantic Map: an area is a meaningful destination, never an anonymous "X states" step. */
@@ -925,10 +926,9 @@ code {
   transition-duration: 0ms;
 }
 
-/* Hovering a screenshot says what a click does: it opens the screen in the Inspector. The hint
-   sits in the middle of the screenshot, so it is always on the image whatever the slot's shape.
-   With a pointer, an already selected screen is in the Inspector. On a phone's map the first tap
-   only selects, so the hint sits on the selected screen and says what the next tap does. */
+/* The phone map's open hint. The first tap there only selects, so the pill sits in the middle of
+   the selected screenshot (always on the image whatever the slot's shape) and says what the next
+   tap does. In a wider window the card's tooltip carries the message and nothing covers the image. */
 .screen-screenshot-target { cursor: pointer; }
 .screen-open-hint {
   position: absolute;
@@ -952,21 +952,12 @@ code {
   backdrop-filter: blur(6px);
 }
 .screen-open-hint > svg { width: 14px; height: 14px; flex: none; }
-.screen-open-hint-short { display: none; }
-@media (hover: hover) and (pointer: fine) {
-  .screen-screenshot-card:not(.selected) .screen-screenshot-target:hover .screen-open-hint {
-    display: inline-flex;
-    animation: screen-open-hint-in 140ms ease-out;
-  }
-}
-@media (hover: none) {
-  .phone-layout .map-canvas .screen-screenshot-card.selected .screen-open-hint {
-    display: inline-flex;
-    animation: screen-open-hint-in 140ms ease-out;
-  }
-  /* Phone map screens are narrow, so the hint is one word there and stays on the screenshot. */
-  .phone-layout .map-canvas .screen-open-hint-long { display: none; }
-  .phone-layout .map-canvas .screen-open-hint-short { display: inline; }
+/* Only the phone layout's map shows the pill, on the selected screen, where a second tap or click
+   opens the Inspector. That layout is a width, not a device, and has no tooltips, so a narrow
+   desktop window shows it too. Elsewhere the screenshot button's tooltip says it instead. */
+.phone-layout .map-canvas .screen-screenshot-card.selected .screen-open-hint {
+  display: inline-flex;
+  animation: screen-open-hint-in 140ms ease-out;
 }
 @keyframes screen-open-hint-in { from { opacity: 0; transform: translate(-50%, -40%); } }
 @media (prefers-reduced-motion: reduce) { .screen-open-hint { animation: none !important; } }

@@ -2,6 +2,7 @@ import type { CSSProperties, MouseEventHandler, ReactNode } from "react";
 import { ImageOff, PanelRight } from "lucide-react";
 import { diffClass, type DiffStatus } from "../../utils/build-diff";
 import { ScreenPathText } from "../shared/screen-path-text";
+import { Tooltip } from "../shared/tooltip";
 import { DEFAULT_SCREENSHOT_SIZE, ScreenshotImage } from "../shared/screenshot-image";
 import { CanvasActiveFrame } from "./active-frame";
 import { DiffFrame } from "./diff-frame";
@@ -30,6 +31,8 @@ export type ScreenScreenshotCardProps = {
   loading?: "eager" | "lazy";
   leading?: ReactNode;
   trailing?: ReactNode;
+  /** Where the "Open in Inspector" tooltip sits: away from the route heading, which is above the screenshot on the Map. */
+  tooltipPlacement?: "top" | "bottom";
   /** Short lines about the screen, inside the card after its screenshot (Screens: how it was reached, where else it changed). */
   note?: ReactNode;
   onClick: MouseEventHandler<HTMLButtonElement>;
@@ -89,10 +92,13 @@ export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
             free of block children. */}
         <span className="screen-screenshot-slot">
           {props.leading}
+          {/* With a pointer, what a click does is said once, zoom-independent, in the shared tooltip
+              after its usual delay; the selected screen is already in the Inspector. The button has
+              no title of its own, so no native tooltip joins it; the heading names the screen. */}
+          <Tooltip label="Open in Inspector" placement={props.tooltipPlacement ?? "top"} disabled={Boolean(props.selected)}>
           <button
             type="button"
             className="screen-screenshot-target"
-            title={props.plainTitle ? props.title : props.path}
             aria-label={props.ariaLabel ?? `Open ${props.plainTitle ? props.title : props.path}`}
             {...(props.ariaPressed !== undefined ? { "aria-pressed": props.ariaPressed } : {})}
             onClick={props.onClick}>
@@ -111,16 +117,15 @@ export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
                     holdPrevious
                   />
                 ) : missing}
-                {/* On hover, says what a click does; on a phone's map, what the second tap does.
-                    See styles.css for when each wording shows. */}
+                {/* On a phone's map, says what the second tap on the selected screen does. */}
                 <span className="screen-open-hint" aria-hidden="true">
                   <PanelRight />
-                  <span className="screen-open-hint-long">Open in Inspector</span>
-                  <span className="screen-open-hint-short">Open</span>
+                  <span>Open</span>
                 </span>
               </span>
             </DiffFrame>
           </button>
+          </Tooltip>
           {props.trailing}
         </span>
         {props.note ? <span className="screen-node-note">{props.note}</span> : null}

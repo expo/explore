@@ -102,7 +102,7 @@ test("a recorded review opens on the real map and before/after evidence and surv
   await expect(page.locator(".collapsed-pr")).toContainText("PR #1");
   // The map is one card per screen; changed screens carry their diff status on the card.
   await expect(page.locator(".map-canvas .react-flow__node-screen")).toHaveCount(33);
-  await expect(page.locator('.map-canvas .screen-screenshot-target[title="/games"]')).toBeVisible();
+  await expect(page.locator('.map-canvas .screen-node-title[aria-label="Copy deep link /games"]')).toBeVisible();
   await expect(page.getByText("No report open")).toHaveCount(0);
   const menu = await openChangesMenu(page);
   // Changes lists the screens with something to see: the three with pixel changes, the added and the removed one.
