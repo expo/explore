@@ -263,7 +263,10 @@ export type CaptureReviewOptions = {
   /** The target this report captures, and every target config.yaml captures (this one among them), when more than one. */
   target?: RunTarget;
   targets?: RunTarget[];
-  /** The system-drawn areas the verdict left out of each screenshot; absent, the platform's bands. */
+  /**
+   * The system-drawn areas the verdict left out of each screenshot; absent, the platform's bands, as the assessment's
+   * default. A bundle does not record a foldable's pose, so its panel is not guessed here.
+   */
   systemRegions?: SystemRegion[];
 };
 
@@ -303,7 +306,7 @@ async function constructCaptureReview(options: CaptureReviewOptions, store: Scre
     runtime: { projectId: head.bundle.easProjectId ?? "", buildId: head.bundle.easBuildId ?? "", gitCommit: plan.headSha,
       platform: head.bundle.platform ?? "ios", ...(head.bundle.controller === "argent" ? { controller: "argent" as const } : {}), statusBarBandPercent: statusBarBandPercent(head.bundle.platform),
       ...(homeIndicatorBandPercent(head.bundle.platform) > 0 ? { homeIndicatorBandPercent: homeIndicatorBandPercent(head.bundle.platform) } : {}),
-      systemRegions: (options.systemRegions ?? systemRegions({ platform: head.bundle.platform, device: head.bundle.runtimeProfile?.deviceModel })).map((area) => ({ ...area })),
+      systemRegions: (options.systemRegions ?? systemRegions({ platform: head.bundle.platform })).map((area) => ({ ...area })),
       ...(options.platforms && options.platforms.length > 1 ? { platforms: [...options.platforms] } : {}),
       ...(options.target ? { target: { ...options.target } } : {}),
       ...(options.targets && options.targets.length > 1 ? { targets: options.targets.map(target => ({ ...target })) } : {}),
