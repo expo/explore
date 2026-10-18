@@ -55,6 +55,36 @@ test("a comment or whitespace-only edit to an imported file changes no surface; 
   assert.equal(plan({ base: jsx("a"), head: jsx("{/* note */}a"), changes: [{ status: "modified", path: "app/one.tsx" }] }).surfaces[0].status, "unchanged");
 });
 
+test("a line break, JSX space or compiler comment that changes the program is a change; re-wrapping is not", () => {
+  const status = (path, before, after) => plan({ base: [[path, before]], head: [[path, after]], changes: [{ status: "modified", path }] }).surfaces[0].status;
+  const screen = (body) => `import {Text, View} from "react-native"; export default function Screen({ n, a, b }) { ${body} }`;
+  // Automatic semicolon insertion: the same tokens, a different program.
+  for (const [before, after] of [
+    ['return "hello";', 'return\n"hello";'],
+    ['return /* x */ "hello";', 'return /*\n*/ "hello";'],
+    ["return (\n<View/>);", "return\n(<View/>);"],
+    ["a\n++b; return null;", "a++\nb; return null;"],
+  ]) assert.equal(status("app/one.tsx", screen(before), screen(after)), "modified", after);
+  // The JSX transform keeps space within a line, and trims it only where a line breaks.
+  for (const [before, after] of [["<Text>a</Text>", "<Text> a</Text>"], ["<Text>{n} items</Text>", "<Text>{n}items</Text>"], ["<Text>{a} {b}</Text>", "<Text>{a}   {b}</Text>"]]) {
+    assert.equal(status("app/one.tsx", screen(`return ${before};`), screen(`return ${after};`)), "modified", after);
+  }
+  for (const [before, after] of [
+    ["return (<View><Text>hello world</Text></View>);", "return (\n  <View>\n    <Text>\n      hello\n      world\n    </Text>\n  </View>\n);"],
+    ["return f(a, b);", "return f(\n  a,\n  b\n);"],
+  ]) assert.equal(status("app/one.tsx", screen(before), screen(after)), "unchanged", after);
+  // A comment a compiler or bundler reads is not trivia.
+  for (const [before, after] of [
+    ["/** @jsxImportSource react */\n", "/** @jsxImportSource other */\n"],
+    ["/** @jsx h */\n", "/** @jsx g */\n"],
+    ["", "// @flow\n"],
+  ]) assert.equal(status("app/one.jsx", `${before}export default () => <a/>;`, `${after}export default () => <a/>;`), "modified", after);
+  assert.equal(status("app/one.tsx", screen("return f();"), screen("return /*#__PURE__*/ f();")), "modified");
+  assert.equal(status("app/one.tsx", screen("return <Text>a</Text>;"), screen("return <Text>{/* @jsx h */}a</Text>;")), "modified");
+  // An ordinary JSDoc tag is still a comment.
+  assert.equal(status("app/one.tsx", `/** @param n a count */\n${screen("return null;")}`, `/**\n * @param n the count\n * @returns nothing\n */\n${screen("return null;")}`), "unchanged");
+});
+
 test("source snapshots detect modifications even when a caller omits a diff entry", () => {
   const result=plan({base:[["app/one.tsx",page]],head:[["app/one.tsx",page.replace("null","<View/>")]]});
   assert.equal(result.surfaces[0].status,"modified");
