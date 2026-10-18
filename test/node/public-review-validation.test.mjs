@@ -310,3 +310,13 @@ test('a large move publishes as one region where the content is now, with its me
   assert.equal(withChanges.regions.length, 8);
   assert.deepEqual(withChanges.regions[0].shift, { x: 350, y: 0 });
 });
+
+test("an excluded surface carries no capture evidence", () => {
+  const excluded = review();
+  excluded.surfaces[1].excluded = true;
+  assert.throws(() => assertPublicReview(excluded), /excluded surface carries capture evidence/);
+  for (const key of ["baseImage", "headImage", "baseOutcome", "headOutcome", "review"]) delete excluded.surfaces[1][key];
+  assert.doesNotThrow(() => assertPublicReview(excluded));
+  excluded.surfaces[1].excluded = false;
+  assert.throws(() => assertPublicReview(excluded), /excluded surface carries capture evidence/);
+});

@@ -268,6 +268,7 @@ export type CaptureReviewOptions = {
 /** Build the validated review independently of where its metadata and images will be stored. */
 async function constructCaptureReview(options: CaptureReviewOptions, store: ScreenshotStore) {
   const plan = validateCapturePlan(options.plan);
+  const excluded = new Set(plan.excludedSurfaceIds ?? []);
   const pr = projectReviewPresentation(options.pullRequest);
   if (pr.head.sha !== plan.headSha || pr.base.sha !== plan.baseSha) throw new Error("PR identity differs from capture plan");
   const run = `${identifier(options.runId)}-${identifier(options.runAttempt)}`;
@@ -341,6 +342,7 @@ async function constructCaptureReview(options: CaptureReviewOptions, store: Scre
       return { id, status, base: headOnly ? null : withId(s.baseSurface), head: withId(s.headSurface),
         ...(colorSchemes.length > 1 ? { colorScheme: scheme } : {}),
         ...(s.sourceChange ? { sourceChange: s.sourceChange } : {}),
+        ...(excluded.has(s.id) ? { excluded: true as const } : {}),
         ...(impactKinds(s).length ? { sourceImpact: impactKinds(s) } : {}),
         ...(!headOnly && surfaceSourceScope(s) ? { sourceScope: surfaceSourceScope(s)! } : {}),
         ...(baseOutcome ? { baseOutcome } : {}),

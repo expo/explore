@@ -351,6 +351,10 @@ function validatePublicReview(review: PublicReview, enforceComparisonEvidence: b
       throw new Error("Public review source presence or status is inconsistent");
     }
     ids.add(surface.id);
+    if (surface.excluded !== undefined && (surface.excluded !== true
+      || surface.baseImage || surface.headImage || surface.baseOutcome || surface.headOutcome || surface.visual)) {
+      throw new Error("Public review excluded surface carries capture evidence");
+    }
     assertReviewFields(surface, enforceComparisonEvidence);
     assertChangeNote(surface, review);
     if (surface.sourceChange) {
