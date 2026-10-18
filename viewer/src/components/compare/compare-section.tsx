@@ -12,7 +12,8 @@ import { usePhoneLayout } from "../../utils/phone-layout";
 import { ToggleGroup } from "../shared/toggle-group";
 import { Tooltip } from "../shared/tooltip";
 import { DEFAULT_SCREENSHOT_RATIO, ScreenshotImage, ScreenshotPlaceholder } from "../shared/screenshot-image";
-import { ChangeOutlines, HomeIndicatorBand, StatusBarBand, SwipeCompare, SWIPE_STEP } from "../panels/visual-diff";
+import { ChangeOutlines, ignoredSystemRegions, SwipeCompare, SystemRegionBands, SWIPE_STEP } from "../panels/visual-diff";
+import type { SystemRegion } from "../../utils/review-model";
 import { placeholderFor, presentedChanges, splitForAssistiveTechnology } from "../../utils/presented-changes";
 import { CompareNav, WhatChangedPopover } from "./compare-header";
 import "./compare-section.css";
@@ -255,6 +256,7 @@ export function useCompareController(options: CompareControllerOptions) {
   const shownOutlines = outlines && areas.length > 0;
   const statusBarIgnored = (screenDiff?.visual?.ignoredStatusBarRegions ?? 0) > 0;
   const homeIndicatorIgnored = (screenDiff?.visual?.ignoredHomeIndicatorRegions ?? 0) > 0;
+  const systemRegions = useMemo(() => ignoredSystemRegions(screenDiff?.visual), [screenDiff]);
   const modeOptions = compareModeOptions();
   // The switch shows the mode the reviewer chose, not the one-screenshot view a screen with nothing
   // to compare falls back to. Such a screen turns the whole switch off, with nothing current, so
@@ -263,7 +265,7 @@ export function useCompareController(options: CompareControllerOptions) {
   const modesDisabled = !comparable;
   return {
     screen, screenDiff, route, position, previous, next, comparable, areas, facts, split, layoutShift, measurable,
-    mode, chosenMode, modesDisabled, chooseMode, modeOptions, outlines, shownOutlines, statusBarIgnored, homeIndicatorIgnored, toggleOutlines,
+    mode, chosenMode, modesDisabled, chooseMode, modeOptions, outlines, shownOutlines, statusBarIgnored, homeIndicatorIgnored, systemRegions, toggleOutlines,
     activeArea, setActiveArea, stepArea, flipSide, flip, swipePosition, setSwipePosition,
     aspect, setAspect, factsOpen, setFactsOpen,
   };
@@ -318,7 +320,7 @@ export function CompareSection(props: CompareSectionProps) {
   const compare = useCompareController(props);
   const {
     screen, screenDiff, route, areas, facts, mode, chooseMode, modeOptions, outlines, shownOutlines,
-    statusBarIgnored, homeIndicatorIgnored, toggleOutlines, activeArea, flipSide, flip, swipePosition, setSwipePosition, aspect,
+    statusBarIgnored, homeIndicatorIgnored, systemRegions, toggleOutlines, activeArea, flipSide, flip, swipePosition, setSwipePosition, aspect,
     setAspect, factsOpen, setFactsOpen,
   } = compare;
   const sectionRef = useRef<HTMLElement>(null);
@@ -336,8 +338,7 @@ export function CompareSection(props: CompareSectionProps) {
   const overlay = shownOutlines ? (
     <>
       <ChangeOutlines changes={areas} activeIndex={activeArea} />
-      {statusBarIgnored ? <StatusBarBand /> : null}
-      {homeIndicatorIgnored ? <HomeIndicatorBand /> : null}
+      <SystemRegionBands regions={systemRegions} />
     </>
   ) : null;
 
@@ -390,8 +391,7 @@ export function CompareSection(props: CompareSectionProps) {
           areas={areas}
           activeArea={activeArea}
           showOutlines={shownOutlines}
-          statusBarIgnored={statusBarIgnored}
-          homeIndicatorIgnored={homeIndicatorIgnored}
+          systemRegions={systemRegions}
           overlay={overlay}
           flipSide={flipSide}
           onFlip={flip}
@@ -441,8 +441,7 @@ type StageProps = {
   areas: VisualChange[];
   activeArea: number | undefined;
   showOutlines: boolean;
-  statusBarIgnored: boolean;
-  homeIndicatorIgnored: boolean;
+  systemRegions: readonly SystemRegion[];
   overlay: ReactNode;
   flipSide: "before" | "after";
   onFlip: () => void;
@@ -477,8 +476,7 @@ export function CompareStage(props: StageProps) {
           changes={props.areas}
           activeIndex={props.activeArea}
           showOutlines={props.showOutlines}
-          statusBarIgnored={props.statusBarIgnored}
-          homeIndicatorIgnored={props.homeIndicatorIgnored}
+          systemRegions={props.systemRegions}
           position={props.swipePosition}
           onPositionChange={props.onSwipePosition}
           labels={props.swipeLabels !== "above"}

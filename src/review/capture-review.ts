@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { assertDecodedPng } from "../shared/png-evidence.js";
-import { assertAgentAcceptance, validateCapturePlan, type AppIconImage, type BundleLaunchCapture, type CaptureBundle, type CaptureOutcome, type CapturedImage, type LaunchFilmstrip, type LaunchFrame, type PublicLaunchSide, type PublicReview, homeIndicatorBandPercent, launchSurfaceId, statusBarBandPercent } from "../contracts/capture.js";
+import { assertAgentAcceptance, validateCapturePlan, type AppIconImage, type BundleLaunchCapture, type CaptureBundle, type CaptureOutcome, type CapturedImage, type LaunchFilmstrip, type LaunchFrame, type PublicLaunchSide, type PublicReview, homeIndicatorBandPercent, launchSurfaceId, statusBarBandPercent, systemRegions, type SystemRegion } from "../contracts/capture.js";
 import { COLOR_SCHEMES } from "../capture/appearance.js";
 import { launchDirectory } from "../capture/launch-capture.js";
 import { APP_ICON_FILE, APP_ICON_MAX_SIZE } from "../capture/app-icon.js";
@@ -263,6 +263,11 @@ export type CaptureReviewOptions = {
   /** The target this report captures, and every target config.yaml captures (this one among them), when more than one. */
   target?: RunTarget;
   targets?: RunTarget[];
+  /**
+   * The system-drawn areas the verdict left out of each screenshot; absent, the platform's bands, as the assessment's
+   * default. A bundle does not record a foldable's pose, so its panel is not guessed here.
+   */
+  systemRegions?: SystemRegion[];
 };
 
 /** Build the validated review independently of where its metadata and images will be stored. */
@@ -302,6 +307,7 @@ async function constructCaptureReview(options: CaptureReviewOptions, store: Scre
     runtime: { projectId: head.bundle.easProjectId ?? "", buildId: head.bundle.easBuildId ?? "", gitCommit: plan.headSha,
       platform: head.bundle.platform ?? "ios", ...(head.bundle.controller === "argent" ? { controller: "argent" as const } : {}), statusBarBandPercent: statusBarBandPercent(head.bundle.platform),
       ...(homeIndicatorBandPercent(head.bundle.platform) > 0 ? { homeIndicatorBandPercent: homeIndicatorBandPercent(head.bundle.platform) } : {}),
+      systemRegions: (options.systemRegions ?? systemRegions({ platform: head.bundle.platform })).map((area) => ({ ...area })),
       ...(options.platforms && options.platforms.length > 1 ? { platforms: [...options.platforms] } : {}),
       ...(options.target ? { target: { ...options.target } } : {}),
       ...(options.targets && options.targets.length > 1 ? { targets: options.targets.map(target => ({ ...target })) } : {}),

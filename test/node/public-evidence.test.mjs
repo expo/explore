@@ -5,9 +5,9 @@ import { join } from "node:path";
 import test from "node:test";
 import { PNG as PngImage } from "pngjs";
 
-import { assessPublicEvidence, presenceDescription, ignoreStatusBar, ignoreSystemBands, readExportedMap } from "../../dist/review/evidence-assessment.js";
+import { assessPublicEvidence, presenceDescription, ignoreStatusBar, ignoreSystemBands, ignoreSystemRegions, readExportedMap } from "../../dist/review/evidence-assessment.js";
 import { STATUS_BAR_BAND_PERCENT } from "../../dist/shared/png-evidence.js";
-import { homeIndicatorBandPercent, statusBarBandPercent } from "../../dist/contracts/capture.js";
+import { homeIndicatorBandPercent, statusBarBandPercent, systemRegions } from "../../dist/contracts/capture.js";
 import { AGENT_DEVICE_VERSION } from "../../dist/capture/run.js";
 
 const BASE_SHA = "a".repeat(40);
@@ -524,4 +524,78 @@ test("a presence verdict for a long route (an encoded share link) stays within t
     assert.ok(description.startsWith(`${prefix}/p/AAA`) && description.endsWith(`\u2026${suffix}`));
   }
   assert.equal(presenceDescription("Added ", "/home", " screen."), "Added /home screen.");
+});
+
+test("a foldable's rail clock pill is left out of the verdict like a phone's status bar", () => {
+  // Measured on EAS Simulator captures of an iPhone Duo (iOS 27.1): a 40×64 pt clock + Wi-Fi pill 28 pt from the right edge.
+  const closed = systemRegions({ platform: "ios", device: "iPhone Duo", pose: "closed" });
+  const open = systemRegions({ platform: "ios", device: "iPhone Duo", pose: "open" });
+  assert.deepEqual(closed, [{ kind: "status-bar", x: 84.55, y: 12.24, width: 10.3, height: 10.62 }, { kind: "home-indicator", x: 0, y: 97, width: 100, height: 3 }]);
+  assert.deepEqual(open[0], { kind: "status-bar", x: 92.43, y: 4.48, width: 5.05, height: 10.76 });
+  assert.deepEqual(systemRegions({ platform: "ios", device: "iPhone Duo", pose: "half-open" })[0], open[0]);
+  assert.deepEqual(systemRegions({ platform: "ios", device: "iPhone Duo" })[0], closed[0], "a foldable boots closed");
+  assert.deepEqual(systemRegions({ platform: "ios", device: "iPhone 17" }), [{ kind: "status-bar", x: 0, y: 0, width: 100, height: 6.5 }, { kind: "home-indicator", x: 0, y: 97, width: 100, height: 3 }]);
+  assert.deepEqual(systemRegions({ platform: "android" }), [{ kind: "status-bar", x: 0, y: 0, width: 100, height: 7 }]);
+
+  // Diff regions from a comment-only PR's report: the ticking clock on each panel, in that report's normalized rects.
+  const region = (rect, location) => ({ index: 0, rect: { x: 0, y: 0, width: 1, height: 1 }, normalizedRect: rect, differentPixels: 400, shareOfDiffPercentage: 100, densityPercentage: 50, shape: "wide", size: "small", location, dominantChange: "brighter" });
+  const closedClock = region({ x: 85.12, y: 12.78, width: 9.08, height: 1.77 }, "middle-right");
+  const openClock = region({ x: 92.71, y: 5.08, width: 4.45, height: 1.79 }, "top-right");
+  const measurement = (regions) => ({ baselinePath: "b", currentPath: "h", totalPixels: 2843532, differentPixels: 400 * regions.length, mismatchPercentage: 0.01, match: false, regions });
+
+  const closedOnly = ignoreSystemRegions(measurement([closedClock]), closed);
+  assert.equal(closedOnly.ignoredStatusBar, 1);
+  assert.equal(closedOnly.measurement.match, true);
+  assert.deepEqual(closedOnly.measurement.regions, []);
+  assert.equal(ignoreSystemRegions(measurement([openClock]), open).measurement.match, true);
+  // Each panel's pill is only ignored on that panel: the other pose's clock is app content there.
+  assert.equal(ignoreSystemRegions(measurement([openClock]), closed).ignoredStatusBar, 0);
+  assert.equal(ignoreSystemRegions(measurement([closedClock]), open).ignoredStatusBar, 0);
+  // The phone's top band never reached the closed panel's pill, and the open clock's bottom edge (6.9%) crossed it.
+  assert.equal(ignoreSystemBands(measurement([closedClock, openClock]), { top: 6.5, bottom: 0 }).ignoredTop, 0);
+  // The app's own rail control just below the pill is kept whole, as is a region that straddles the pill's edge.
+  const railButton = region({ x: 85.4, y: 25.2, width: 8.6, height: 7.4 }, "middle-right");
+  const straddling = region({ x: 83, y: 12.78, width: 11.2, height: 1.77 }, "middle-right");
+  const mixed = ignoreSystemRegions(measurement([closedClock, railButton, straddling]), closed);
+  assert.equal(mixed.ignoredStatusBar, 1);
+  // What is kept shares the remaining difference between them.
+  assert.deepEqual(mixed.measurement.regions, [railButton, straddling].map((kept) => ({ ...kept, shareOfDiffPercentage: 50 })));
+  assert.equal(mixed.measurement.differentPixels, 800);
+  assert.equal(mixed.measurement.match, false);
+  // A region inside the home indicator counts under its own kind.
+  const indicator = region({ x: 40, y: 97.5, width: 20, height: 1 }, "bottom-center");
+  const both = ignoreSystemRegions(measurement([closedClock, indicator]), closed);
+  assert.deepEqual([both.ignoredStatusBar, both.ignoredHomeIndicator, both.measurement.match], [1, 1, true]);
+});
+
+test("only an iPhone foldable gets the rail pill, and a region reaching the right edge stays inside a band", () => {
+  // An Android device whose name matches keeps its own top band; the iPhone Duo's rail is not on its screen.
+  assert.deepEqual(systemRegions({ platform: "android", device: "Surface Duo", pose: "open" }), [{ kind: "status-bar", x: 0, y: 0, width: 100, height: 7 }]);
+
+  // agent-device rounds x and width to 0.01% each, so a region that ends at the right edge can read as ending at 100.01%.
+  const region = (rect) => ({ index: 0, rect: { x: 0, y: 0, width: 1, height: 1 }, normalizedRect: rect, differentPixels: 400, shareOfDiffPercentage: 100, densityPercentage: 50, shape: "wide", size: "small", location: "top-right", dominantChange: "brighter" });
+  const measurement = (regions) => ({ baselinePath: "b", currentPath: "h", totalPixels: 2843532, differentPixels: 400 * regions.length, mismatchPercentage: 0.01, match: false, regions });
+  const battery = region({ x: 0.63, y: 2, width: 99.38, height: 2 }); // minX 9 of 1440 px
+  assert.equal(ignoreSystemBands(measurement([battery]), { top: 6.5, bottom: 0 }).ignoredTop, 1);
+  const indicator = region({ x: 0.63, y: 97.5, width: 99.38, height: 1 });
+  assert.equal(ignoreSystemRegions(measurement([indicator]), systemRegions({ platform: "ios", device: "iPhone 17" })).ignoredHomeIndicator, 1);
+  // The slack is the rounding, no more: a region a tenth of a percent past the band is still kept.
+  assert.equal(ignoreSystemBands(measurement([region({ x: 10, y: 2, width: 20, height: 4.6 })]), { top: 6.5, bottom: 0 }).ignoredTop, 0);
+});
+
+test("on a foldable a region across the pill's edge is kept whole, and one across the home indicator's edge is clipped", () => {
+  const duo = systemRegions({ platform: "ios", device: "iPhone Duo", pose: "closed" });
+  const region = (rect, normalizedRect, differentPixels) => ({ index: 0, rect, normalizedRect, differentPixels, shareOfDiffPercentage: 100, densityPercentage: 100, shape: "block", size: "small", location: "middle-right", dominantChange: "darker" });
+  const measurement = (regions) => ({ baselinePath: "b", currentPath: "h", totalPixels: 87400, differentPixels: regions.reduce((total, entry) => total + entry.differentPixels, 0), mismatchPercentage: 0.11, match: false, regions });
+  // A pill is not a band: what crosses its edge is the app's own rail, so the frames are never read for it.
+  const belowPill = region({ x: 85, y: 190, width: 10, height: 20 }, { x: 85, y: 21.74, width: 10, height: 2.29 }, 200);
+  const kept = ignoreSystemRegions(measurement([belowPill]), duo, () => assert.fail("a pill's edge needs no frames"));
+  assert.deepEqual([kept.ignoredStatusBar, kept.measurement.match, kept.measurement.regions], [0, false, [belowPill]]);
+  // The home indicator is a band across the width, as on a phone: in a 100x874 frame its 3% is the last 26 rows, from 848.
+  const frame = (paint) => { const png = new PngImage({ width: 100, height: 874 }); png.data.fill(255); paint?.(png); return png; };
+  const painted = (png) => { for (let y = 840; y < 850; y += 1) for (let x = 10; x < 20; x += 1) png.data.fill(0, (y * 100 + x) * 4, (y * 100 + x) * 4 + 3); };
+  const crossing = region({ x: 10, y: 840, width: 10, height: 10 }, { x: 10, y: 96.11, width: 10, height: 1.14 }, 100);
+  const clipped = ignoreSystemRegions(measurement([crossing]), duo, () => ({ baseline: frame(), current: frame(painted), distance: 0.1 * Math.sqrt(3 * 255 ** 2) }));
+  assert.deepEqual([clipped.ignoredStatusBar, clipped.ignoredHomeIndicator, clipped.measurement.match, clipped.measurement.differentPixels], [0, 1, false, 80]);
+  assert.deepEqual(clipped.measurement.regions.map((entry) => [entry.rect.y, entry.rect.height, entry.differentPixels, entry.shareOfDiffPercentage]), [[840, 8, 80, 100]]);
 });

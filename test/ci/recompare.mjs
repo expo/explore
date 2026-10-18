@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { parse } from 'yaml';
 import { assessPublicEvidence, readExportedMap } from '../../dist/review/evidence-assessment.js';
+import { systemRegions } from '../../dist/contracts/capture.js';
 import { prepareCaptureReview, readCaptureBundle } from '../../dist/review/capture-review.js';
 import { parseRuntimeExecutionContext } from '../../dist/review/runtime-adapter.js';
 import { generateAgentChangeNotes } from '../../dist/capture/agent/change-notes.js';
@@ -28,11 +29,13 @@ export async function recompare(runDirectory) {
   const existing = (await readdir(join(run, 'artifacts'))).filter(name => /^recompare-\d+$/.test(name)).length;
   const label = `recompare-${existing + 1}`;
   const sides = { base: await side(join(capture, 'base-export')), head: await side(join(capture, 'head-export')) };
-  const evidence = await assessPublicEvidence({ plan, ...sides, profile: `${config.app.easProfile}:${config.app.bundleId}`,
+  // The run's own device and pose, as its comparison had them: a foldable's rail pill, or the platform's bands.
+  const system = systemRegions({ platform: config.app.platform, device: config.device.name, pose: config.device.pose });
+  const evidence = await assessPublicEvidence({ platform: config.app.platform, systemRegions: system, plan, ...sides, profile: `${config.app.easProfile}:${config.app.bundleId}`,
     agentDeviceCommand: join(repository, 'node_modules/.bin/agent-device') });
   const state = { ...previous.commentState };
   let { review, assets } = await prepareCaptureReview({ plan, pullRequest: state.pullRequest,
-    baseDirectory: sides.base.directory, headDirectory: sides.head.directory, runId: previous.publicReview.runId,
+    baseDirectory: sides.base.directory, headDirectory: sides.head.directory, systemRegions: system, runId: previous.publicReview.runId,
     runAttempt: previous.publicReview.runAttempt, assertCurrentHead: async () => {}, assessments: evidence.surfaces,
     app: { ...(state.build?.appVersion ? { version: state.build.appVersion } : {}),
       ...(state.build?.appBuildNumber ? { buildNumber: state.build.appBuildNumber } : {}) } });
