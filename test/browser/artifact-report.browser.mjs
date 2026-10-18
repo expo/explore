@@ -1458,3 +1458,57 @@ test("local run ZIP opens and reloads without a fabricated GitHub identity", asy
   await expect(localRun).toHaveText("Local");
   assert.deepEqual(errors, []);
 });
+
+test("the Inspector stacks Before over After for a landscape screenshot; Swipe and Flip keep one frame", async t => {
+  // An opened iPhone Duo's inner display, as a screenshot: wider than tall.
+  const picture = new PNG({ width: 951, height: 669 });
+  picture.data.fill(255);
+  const capture = PNG.sync.write(picture);
+  const report = reportFixture();
+  for (const side of ["baseImage", "headImage"]) Object.assign(report.review.surfaces[0][side], { width: 951, height: 669 });
+  const { bytes } = await imageArchive([capture], 0, report);
+  const { page, errors } = await harness(t, Buffer.from(bytes), { app: true });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const stage = page.locator(".sidebar-review-stage");
+  const box = locator => locator.evaluate(element => {
+    const { left, top, width, height } = element.getBoundingClientRect();
+    return { left, top, width, height };
+  });
+  const frames = page.locator(".sidebar-review .compare-frame");
+  await expect(frames).toHaveCount(2);
+  await expect(frames.first().locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(stage).toHaveClass(/landscape/);
+  const [before, after] = await Promise.all([box(frames.nth(0)), box(frames.nth(1))]);
+  const panel = await box(stage);
+  // Each frame takes the review's width; After sits under Before, not beside it.
+  assert.ok(Math.abs(before.width - panel.width) <= 2, `Before spans the panel: ${JSON.stringify({ before, panel })}`);
+  assert.ok(Math.abs(after.width - panel.width) <= 2, `After spans the panel: ${JSON.stringify({ after, panel })}`);
+  assert.ok(after.top >= before.top + before.height, `After is under Before: ${JSON.stringify({ before, after })}`);
+  assert.ok(Math.abs(before.width / before.height - 951 / 669) < 0.02, `The frame keeps the screenshot's shape: ${JSON.stringify(before)}`);
+  // Swipe and Flip show one frame the panel's width, as before.
+  for (const mode of ["Swipe", "Flip"]) {
+    await page.locator(".sidebar-review-modes").getByRole("button", { name: mode, exact: true }).click();
+    const frame = await box(page.locator(".sidebar-review :is(.visual-swipe, .compare-frame)").first());
+    assert.ok(Math.abs(frame.width - panel.width) <= 2, `${mode} spans the panel: ${JSON.stringify({ frame, panel })}`);
+  }
+  await page.locator(".sidebar-review-modes").getByRole("button", { name: "Split", exact: true }).click();
+  await expect(frames).toHaveCount(2);
+  assert.deepEqual(errors, []);
+});
+
+test("the Inspector keeps a portrait pair side by side", async t => {
+  const { page, errors } = await harness(t, await archive(), { app: true });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const frames = page.locator(".sidebar-review .compare-frame");
+  await expect(frames).toHaveCount(2);
+  await expect(frames.first().locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(page.locator(".sidebar-review-stage")).not.toHaveClass(/landscape/);
+  const box = locator => locator.evaluate(element => {
+    const { left, top, width } = element.getBoundingClientRect();
+    return { left, top, width };
+  });
+  const [before, after] = await Promise.all([box(frames.nth(0)), box(frames.nth(1))]);
+  assert.equal(after.top, before.top, `Before and After share a row: ${JSON.stringify({ before, after })}`);
+  assert.ok(after.left >= before.left + before.width, `After is beside Before: ${JSON.stringify({ before, after })}`);
+  assert.deepEqual(errors, []);
+});

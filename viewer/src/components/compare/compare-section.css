@@ -496,6 +496,13 @@
 .sidebar-review-stage.mode-flip {
   --compare-frame-height: min(calc(100cqw / var(--compare-aspect)), 70dvh);
 }
+/* A landscape screenshot (an opened iPhone Duo, an iPad on its side) is too wide for two frames to
+   share the panel: Before stacks over After, each the panel's width. */
+.sidebar-review-stage.mode-split.landscape {
+  flex-direction: column;
+  align-items: stretch;
+  --compare-frame-height: calc(100cqw / var(--compare-aspect));
+}
 /* Split's labels sit inside the frames here, as Swipe's do. */
 .compare-side-tag {
   position: absolute;
