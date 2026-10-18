@@ -144,11 +144,13 @@ export function assertAgentAcceptance(bundle: CaptureBundle,
  * capture, and the Android emulator's clock and indicators sit inside the same fraction of a
  * Pixel frame. Its glyphs differ between sessions even after `--normalize-status-bar`, and within one
  * session whenever the clock or an indicator redraws, so evidence never treats a difference that
- * lies entirely inside this band as an app change. The Viewer marks the same band.
+ * lies entirely inside this band as an app change; a difference that crosses its edge counts only for
+ * its pixels below it. The Viewer marks the same band. Android: the glyphs of `sdk_gphone64` on Android 15
+ * (720x1600) reach 6.4 % of the frame, measured on euxy #164, so its band is 7.
  */
 export const STATUS_BAR_BAND_PERCENT = 6.5;
 /** The top band of a portrait screenshot that holds the system status bar, per platform. */
-export const STATUS_BAR_BAND_PERCENT_BY_PLATFORM: Record<"ios" | "android", number> = { ios: STATUS_BAR_BAND_PERCENT, android: 5 };
+export const STATUS_BAR_BAND_PERCENT_BY_PLATFORM: Record<"ios" | "android", number> = { ios: STATUS_BAR_BAND_PERCENT, android: 7 };
 export function statusBarBandPercent(platform: "ios" | "android" | undefined): number {
   return STATUS_BAR_BAND_PERCENT_BY_PLATFORM[platform ?? "ios"];
 }
