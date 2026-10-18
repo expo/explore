@@ -105,7 +105,7 @@ device:
 exploration:
   scope: changes # changes | all
 capture:
-  # controller: agent-device # agent-device (default) | argent (one appearance per capture on EAS Simulator until Argent can switch it; --controller overrides it for one run)
+  # controller: agent-device # agent-device (default) | argent (one appearance per capture on Android EAS Simulator until Argent can switch it; --controller overrides it for one run)
   # simulator: eas # eas (EAS Simulator, default) | local (a simulator or emulator Explore starts on this machine with Xcode or the Android SDK; --simulator overrides it for one run)
   maxMinutes: 30
   maxActions: 500
@@ -286,7 +286,7 @@ The provider selects the runtime that owns the navigation loop:
 | `anthropic` | Claude Code through `@anthropic-ai/claude-agent-sdk` 0.3.285 and its platform-native package | `ANTHROPIC_API_KEY` |
 | `openai` | Codex app-server from `@openai/codex` 0.159.2 and its platform-native package | `OPENAI_API_KEY` |
 
-Both runtimes use Explore's device tools to operate the existing EAS Simulator through official `agent-device` 0.21.28. The runtime and native binaries come from the pinned tools installation. CI does not use the development-only `node_modules/.bin/claude` executable or an interactive subscription login.
+Both runtimes use Explore's device tools to operate the existing EAS Simulator through official `agent-device` 0.21.29-nightly.20261018.74. The runtime and native binaries come from the pinned tools installation. CI does not use the development-only `node_modules/.bin/claude` executable or an interactive subscription login.
 
 Create and commit the nonempty English prose file named by `agent.instructions`. The shared setup skill authors it from source and asks for missing test data or environment inputs. Describe how to reach the app's screens, necessary prerequisites, the representative state to use on both revisions, readiness signals, and actions to avoid. This file guides the runtime agent; it is not a list of mandatory YAML steps or a second screen inventory.
 

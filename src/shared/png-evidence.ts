@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createRequire } from "node:module";
 import { inflateSync } from "node:zlib";
 import { STATUS_BAR_BAND_PERCENT } from "../contracts/capture.js";
 
@@ -6,6 +7,22 @@ export { STATUS_BAR_BAND_PERCENT };
 
 /** Decoded RGBA pixels of one frame, as pngjs returns them (four bytes per pixel, row by row). */
 export type DecodedFrame = { width: number; height: number; data: Buffer };
+
+/**
+ * Whether a screenshot is a single flat colour: a capture-protected screen (black on Android), or a display that is lit
+ * but not drawn (an iPhone Duo's inner panel after its first fold on EAS). Every 97th pixel is enough to tell.
+ */
+export function solidColour(png: Buffer): boolean {
+  let frame: DecodedFrame;
+  try { frame = createRequire(import.meta.url.replace(/\?.*$/, ""))("pngjs").PNG.sync.read(png, { checkCRC: false }) as DecodedFrame; }
+  catch { return false; }
+  const { data } = frame;
+  if (data.length < 4) return false;
+  for (let offset = 0; offset + 3 < data.length; offset += 4 * 97) {
+    if (data[offset] !== data[0] || data[offset + 1] !== data[1] || data[offset + 2] !== data[2]) return false;
+  }
+  return true;
+}
 
 /**
  * Whether a coordinate tap at normalized height `y` would act on a changed frame. Differences inside

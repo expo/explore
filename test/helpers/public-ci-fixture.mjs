@@ -179,7 +179,14 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
         }
         return ok(identity(device));
       }
-      if (command === 'fold') return ok({ action: 'fold', pose: request.args[1] });
+      if (command === 'fold') { device.pose = request.args[1]; return ok({ action: 'fold', pose: request.args[1] }); }
+      // The display a fold lit, as a pose check reads it: landscape when opened, and drawn.
+      if (command === 'screenshot' && request.args[1].endsWith('/pose.png')) {
+        const display = new PNG(device.pose === 'open' ? { width: 24, height: 16 } : { width: 16, height: 24 });
+        display.data[0] = 255;
+        writeFileSync(request.args[1], PNG.sync.write(display));
+        return ok({ path: request.args[1] });
+      }
       if (command === 'install') {
         const app = request.args[1];
         device.build = platform === 'android' ? readFileSync(app, 'utf8') : readFileSync(join(app, 'build-id'), 'utf8');

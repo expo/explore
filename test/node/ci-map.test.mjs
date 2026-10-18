@@ -112,6 +112,10 @@ async function fixture(t, settings = {}) {
   const requests = [];
   let current = '/'; let snapshots = 0; let sessionName; let screenshotAttempts = 0; let splashLeft = 0; let recordingPath = ''; let alert = null; let appearance = 'light'; let alertReads = 0;
   let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let deviceLost = false; let relaunchedAfterForeign = false; let serverStarts = 0; let unreadableLeft = settings.unreadableAfterFold ?? 0;
+  // startsErrored / startsUnnamed: how many session starts EAS fails, after naming the session (it ERRORS) or before.
+  let starts = 0; let currentSession = 'session-1'; const erroredSessions = new Set(); let foldUnverifiedLeft = settings.foldUnverified ?? 0;
+  // blackAfterFold: the first so many folds of an EAS agent-device session light the panel but draw nothing.
+  let folds = 0;
   const deviceName = settings.android ? 'Pixel 7' : 'iPhone 17 Pro';
   const platform = settings.android ? 'android' : 'ios';
   // A local simulator is the one the capture created, named for Explore.
@@ -182,6 +186,14 @@ async function fixture(t, settings = {}) {
         appConfig: { name: 'Example', slug: 'example', owner: 'acme', ...(settings.userInterfaceStyle ? { userInterfaceStyle: settings.userInterfaceStyle } : {}), scheme: settings.noScheme ? undefined : 'sample',
           ...(settings.android ? { android: { package: 'com.example.app' } } : { ios: { bundleIdentifier: 'com.example.app' } }), extra: { eas: { projectId: PROJECT_ID } } } });
       if (command === 'simulator:availability') return json({ available: settings.available !== false });
+      // controlActions: what the session's serve-sim offers through simulator:control (none unless a test names them).
+      if (command === 'simulator:control') {
+        assert.equal(value(request, '--id'), currentSession, 'simulator:control names the session');
+        if (request.args.includes('--list')) return json(Object.fromEntries((settings.controlActions ?? []).map(action => [action, { type: 'object' }])));
+        assert.ok((settings.controlActions ?? []).includes(request.args[1]), `${request.args[1]} is offered by the session`);
+        if (request.args[1] === 'appearance.set') appearance = request.args.at(-1);
+        return json({ id: currentSession, action: request.args[1], output: '' });
+      }
       if (command === 'fingerprint:generate') return json({ hash: 'source-fingerprint' });
       const buildMetadata = settings.buildMetadata ? { appVersion: '2.1.0', appBuildVersion: '42' } : {};
       if (command === 'build:list') return json(settings.reuse ? [{ id: 'native-build', ...buildMetadata }] : []);
@@ -211,13 +223,23 @@ async function fixture(t, settings = {}) {
       }
       if (command === 'simulator:start') {
         sessionName = value(request, '--name');
-        writeFileSync(join(request.cwd, '.env.eas-simulator'), HEADER + "EAS_SIMULATOR_SESSION_ID='session-1'\n" + (settings.argent
+        starts += 1; currentSession = `session-${starts}`;
+        if (starts <= (settings.startsUnnamed ?? 0)) { writeFileSync(join(request.cwd, '.env.eas-simulator'), HEADER); throw new Error('GraphQL request failed.'); }
+        if (starts <= (settings.startsErrored ?? 0)) erroredSessions.add(currentSession);
+        writeFileSync(join(request.cwd, '.env.eas-simulator'), HEADER + `EAS_SIMULATOR_SESSION_ID='${currentSession}'\n` + (settings.argent
           ? "ARGENT_TOOLS_URL='https://controller.example/session'\nARGENT_AUTH_TOKEN='" + DAEMON_TOKEN + "'\n"
           : "AGENT_DEVICE_DAEMON_BASE_URL='https://controller.example/session'\nAGENT_DEVICE_DAEMON_AUTH_TOKEN='" + DAEMON_TOKEN + "'\n"));
         if (settings.startFailure) throw new Error('start reported failure after allocation');
+        if (erroredSessions.has(currentSession)) throw new Error('Simulator session errored while starting');
         return { stdout: 'ready', stderr: '' };
       }
-      if (command === 'simulator:get') return json({ id: 'session-1', name: sessionName, type: settings.argent ? 'argent' : 'agent-device', platform: settings.android ? 'ANDROID' : 'IOS', status: 'IN_PROGRESS',
+      // orphanFromFailedStart: a start that failed before naming the session had still created one.
+      if (command === 'simulator:list') return json({ sessions: settings.orphanFromFailedStart && value(request, '--name') === sessionName ? [{ id: 'orphan-1', name: sessionName,
+        type: settings.argent ? 'argent' : 'agent-device', status: 'STARTING', platform: 'IOS',
+        // orphanUnproven: the session by that name does not show it belongs to this project.
+        deviceRunSessionUrl: `https://expo.dev/accounts/${settings.orphanUnproven ? 'someone-else' : 'acme'}/projects/example/simulator-sessions/orphan-1` }] : [], pageInfo: {} });
+      if (command === 'simulator:get') return json({ id: value(request, '--id'), name: sessionName, type: settings.argent ? 'argent' : 'agent-device', platform: settings.android ? 'ANDROID' : 'IOS',
+        status: erroredSessions.has(value(request, '--id')) ? 'ERRORED' : 'IN_PROGRESS',
         app: { id: settings.wrongProject ? 'foreign-project' : PROJECT_ID, slug: 'example', ownerAccount: { name: 'acme' } },
         remoteConfig: { ...(settings.argent ? { toolsUrl: 'https://controller.example/session', toolsAuthToken: DAEMON_TOKEN }
           : { agentDeviceRemoteSessionUrl: 'https://controller.example/session', agentDeviceRemoteSessionToken: DAEMON_TOKEN }),
@@ -226,7 +248,7 @@ async function fixture(t, settings = {}) {
           ...(settings.previewApiUrl ? { previewApiUrl: settings.previewApiUrl } : {}) } });
       if (command === 'simulator:stop') {
         if (settings.stopFailure) throw new Error('stop unavailable');
-        return json({ id: 'session-1', status: 'STOPPED' });
+        return json({ id: value(request, '--id'), status: 'STOPPED' });
       }
     }
     if (request.command === 'fake-repack') {
@@ -241,6 +263,7 @@ async function fixture(t, settings = {}) {
     // An Argent capture runs its per-run bridge in place of agent-device; the bridge answers in agent-device's envelopes.
     if (request.command === 'fake-controller' || (settings.argent && request.command.endsWith('/argent-controller'))) {
       if (command === '--version') return { stdout: settings.argent ? '0.29.0' : AGENT_DEVICE_VERSION, stderr: '' };
+      if (command === 'reset-reader') return json({ success: true, data: { action: 'reset-reader', stopped: ['AXService:device'] } });
       if (command === 'open') {
         // unreadableAfterFold: Argent's reader stayed on the outer panel, so the first app opens find no readable app.
         if (unreadableLeft > 0 && !request.args[2]?.startsWith('sample://')) { unreadableLeft -= 1;
@@ -274,6 +297,11 @@ async function fixture(t, settings = {}) {
       // An EAS session starts empty while the app is repacked; the controller installs the app from this machine.
       if (command === 'install') { assert.ok(existsSync(request.args[1]), 'the repacked app is on this machine'); return ok({ installed: true, appBundleId: 'com.example.app' }); }
       // agent-device 0.21.15 cannot read Xcode 27.1's hinge angle back, so a local fold reports a failure after folding.
+      // foldUnverified: the bridge's reader stayed on the dark panel through its own reset, for that many folds.
+      // The bridge exits non-zero, and the runner throws its structured error, as defaultRunner does.
+      if (command === 'fold') folds += 1;
+      if (command === 'fold' && foldUnverifiedLeft > 0) { foldUnverifiedLeft -= 1;
+        throw controllerCommandFailure(json({ success: false, error: { code: 'CONTROLLER_FOLD_UNVERIFIED', message: 'Argent kept reading the other panel after folding the device open, and after its device helpers were reset.' } }).stdout, 'fold'); }
       if (command === 'fold') return settings.local ? json({ success: false, error: { code: 'COMMAND_FAILED', message: "CoreDevice reported no hinge angle sample: Unknown option '--device'" } })
         : ok({ action: 'fold', pose: request.args[1] });
       if (command === 'record' && settings.recording) {
@@ -346,6 +374,13 @@ async function fixture(t, settings = {}) {
       if (command === 'settings') {
         if (request.args[1] === 'appearance') appearance = request.args[2];
         return ok({ setting: request.args[1], value: request.args[2] });
+      }
+      // The display after a fold, as agent-device's screenshot shows it on EAS: in the pose's shape, drawn or black.
+      if (command === 'screenshot' && request.args[1]?.endsWith('/pose.png')) {
+        const display = new PNG(settings.devicePose === 'open' ? { width: 30, height: 20 } : { width: 20, height: 30 });
+        if (folds > (settings.blackAfterFold ?? 0)) display.data[0] = 255;
+        writeFileSync(request.args[1], PNG.sync.write(display));
+        return ok({ path: request.args[1] });
       }
       if (command === 'screenshot') {
         screenshotAttempts += 1;
@@ -468,7 +503,7 @@ test('an Argent capture starts an argent session, drives it through the bridge, 
   }
   // Argent cannot switch appearance yet: one pass, no `settings appearance`, and a warning naming what was skipped.
   assert.equal(f.requests.some(request => request.args[0] === 'settings'), false);
-  assert.ok(lines.some(line => /Argent cannot switch appearance yet .*capturing light only, skipped dark/.test(line)), lines.join('\n'));
+  assert.ok(lines.some(line => /Argent cannot switch appearance on this session; capturing light only, skipped dark/.test(line)), lines.join('\n'));
   const map = JSON.parse(await readFile(join(f.options.outputDirectory, 'screen-map.json'), 'utf8'));
   assert.equal(map.run.controller, 'argent');
   assert.equal(map.run.environment.colorSchemes, undefined);
@@ -480,6 +515,150 @@ test('an Argent capture starts an argent session, drives it through the bridge, 
   assert.equal(execution.controllerPackageVersion, '0.29.0');
 });
 
+test('on an EAS iOS session with serve-sim\'s appearance.set, an Argent capture records every appearance', async t => {
+  const f = await fixture(t, { argent: true, userInterfaceStyle: 'automatic', controlActions: ['appearance.set'] });
+  const lines = [];
+  assert.equal((await runCiMap({ ...f.options, progress: line => lines.push(line) })).runStatus, 'complete');
+  assert.equal(lines.some(line => /Argent cannot switch appearance/.test(line)), false, lines.join('\n'));
+  assert.deepEqual(f.requests.filter(request => request.args[0] === 'simulator:control' && request.args[1] === 'appearance.set').map(request => request.args.at(-1)), ['light', 'dark']);
+  const map = JSON.parse(await readFile(join(f.options.outputDirectory, 'screen-map.json'), 'utf8'));
+  assert.deepEqual(map.run.environment.colorSchemes, ['light', 'dark']);
+});
+
+test('an EAS iOS session approves the app\'s link scheme after installing it and before any link opens', async t => {
+  for (const argent of [false, true]) {
+    const f = await fixture(t, { argent, controlActions: ['app.approveUrlScheme'] });
+    assert.equal((await runCiMap(f.options)).runStatus, 'complete');
+    const approve = f.requests.findIndex(request => request.args[0] === 'simulator:control' && request.args[1] === 'app.approveUrlScheme');
+    assert.ok(approve >= 0, argent ? 'Argent' : 'agent-device');
+    assert.deepEqual(f.requests[approve].args.slice(f.requests[approve].args.indexOf('--') + 1), ['com.example.app', 'sample']);
+    const controller = f.requests.map((request, index) => ({ request, index })).filter(({ request }) => request.command === 'fake-controller' || request.command.endsWith('/argent-controller'));
+    const install = controller.find(({ request }) => request.args[0] === 'install');
+    const firstLink = controller.find(({ request }) => request.args[0] === 'open' && request.args[2]?.startsWith('sample://'));
+    assert.ok(install.index < approve && approve < firstLink.index, 'installed, then approved, then the first link');
+  }
+  // A session whose serve-sim predates the action keeps the controllers' prompt handling, and is not asked.
+  const older = await fixture(t, { argent: true });
+  assert.equal((await runCiMap(older.options)).runStatus, 'complete');
+  assert.equal(older.requests.some(request => request.args[0] === 'simulator:control' && !request.args.includes('--list')), false);
+});
+
+test('when Argent cannot read the app after a fold on EAS, the capture resets its device helpers, then restarts SpringBoard, and never stops the tool-server', async t => {
+  const actions = ['springboard.restart'];
+  for (const [unreadable, completes, resets, restarts] of [[1, true, 1, 0], [2, true, 2, 1], [3, false, 2, 1]]) {
+    const f = await fixture(t, { argent: true, devicePose: 'open', unreadableAfterFold: unreadable, controlActions: actions });
+    const lines = [];
+    const run = runCiMap({ ...f.options, progress: line => lines.push(line), sleep: () => {} });
+    if (completes) assert.equal((await run).runStatus, 'complete', `${unreadable} unreadable opens`);
+    else await assert.rejects(run, error => JSON.stringify(error).includes('CONTROLLER_READER_STUCK'));
+    assert.equal(f.requests.filter(request => request.command.endsWith('/argent-controller') && request.args[0] === 'reset-reader').length, resets);
+    assert.equal(f.requests.filter(request => request.args[0] === 'simulator:control' && request.args[1] === 'springboard.restart').length, restarts);
+    assert.equal(f.requests.some(request => request.args.join(' ').includes('server stop')), false, 'the session\'s tool-server is never stopped');
+    assert.ok(lines.some(line => /resetting Argent's device helpers/.test(line)), lines.join('\n'));
+  }
+  // Without springboard.restart (an older serve-sim), a second unreadable open is reported after the reset alone.
+  const older = await fixture(t, { argent: true, devicePose: 'open', unreadableAfterFold: 2 });
+  await assert.rejects(runCiMap({ ...older.options, sleep: () => {} }), error => JSON.stringify(error).includes('CONTROLLER_READER_STUCK'));
+});
+
+test('when a fold on EAS leaves Argent reading the dark panel, the capture restarts SpringBoard and folds again, once', async t => {
+  for (const [unverified, completes] of [[1, true], [2, false]]) {
+    const f = await fixture(t, { argent: true, devicePose: 'open', foldUnverified: unverified, controlActions: ['springboard.restart'] });
+    const run = runCiMap({ ...f.options, sleep: () => {} });
+    if (completes) assert.equal((await run).runStatus, 'complete');
+    else await assert.rejects(run, error => JSON.stringify(error).includes('CONTROLLER_READER_STUCK'));
+    assert.equal(f.requests.filter(request => request.command.endsWith('/argent-controller') && request.args[0] === 'fold').length, 2);
+    assert.equal(f.requests.filter(request => request.args[0] === 'simulator:control' && request.args[1] === 'springboard.restart').length, 1);
+  }
+});
+
+test('a session EAS ends while starting is replaced by a new one, under a name of its own, up to five times with a growing wait', async t => {
+  const f = await fixture(t, { startsErrored: 1 });
+  const lines = []; const waits = [];
+  const result = await runCiMap({ ...f.options, progress: line => lines.push(line), sleep: ms => { waits.push(ms); } });
+  assert.equal(result.runStatus, 'complete');
+  const started = f.requests.filter(request => request.args[0] === 'simulator:start').map(request => value(request, '--name'));
+  assert.equal(started.length, 2);
+  assert.notEqual(started[0], started[1], 'the new session has a name of its own');
+  assert.ok(lines.some(line => /EAS ended simulator session session-1 \(ERRORED\) before it was ready; starting a new EAS Simulator session in 10 s \(1\/5\)/.test(line)), lines.join('\n'));
+  assert.equal(lines.filter(line => /while the app is repacked/.test(line)).length, 1, 'only the first start runs beside the repack');
+  assert.equal(result.simulatorSessionId, 'session-2');
+  assert.ok(waits.includes(10_000));
+  // Five new sessions at most, waiting 10 s, 20 s, 40 s, 80 s and 120 s before them; then the failure to start is reported as one.
+  const always = await fixture(t, { startsErrored: 6 });
+  const backoff = [];
+  await assert.rejects(runCiMap({ ...always.options, sleep: ms => { if (ms >= 10_000) backoff.push(ms); } }),
+    error => error.code === 'SIMULATOR_START_FAILED' && /6 sessions ended before they were ready \(the last, session-6, ERRORED\)/.test(error.message)
+      && error.details.endedSessions.length === 6 && error.details.attempts === 6);
+  assert.equal(always.requests.filter(request => request.args[0] === 'simulator:start').length, 6);
+  assert.deepEqual(backoff, [10_000, 20_000, 40_000, 80_000, 120_000]);
+  assert.equal(new Set(always.requests.filter(request => request.args[0] === 'simulator:start').map(request => value(request, '--name'))).size, 6, 'every session has its own name');
+  // One session that ended is a failure to start too, not a question of ownership.
+  const once = await fixture(t, { startsErrored: 6 });
+  await assert.rejects(runCiMap({ ...once.options, sleep: () => {}, runner: request => {
+    if (request.args[0] === 'simulator:start' && once.requests.filter(r => r.args[0] === 'simulator:start').length >= 1) throw new Error('Controller simulator:start exited with status 1: quota exhausted');
+    return once.options.runner(request);
+  } }), error => error.code === 'SIMULATOR_START_FAILED');
+});
+
+test('new sessions stay within 30 minutes of the first failed start, each start capped by what is left', async t => {
+  const f = await fixture(t, { startsErrored: 6 });
+  let clock = Date.parse('2026-10-18T00:00:00Z');
+  const timeouts = [];
+  await assert.rejects(runCiMap({ ...f.options, now: () => clock, sleep: ms => { clock += ms; }, runner: request => {
+    // Each start takes 10 minutes before EAS ends the session.
+    if (request.args[0] === 'simulator:start') { timeouts.push(request.timeoutMs); clock += 10 * 60_000; }
+    return f.options.runner(request);
+  } }), error => error.code === 'SIMULATOR_START_FAILED');
+  // The budget runs from the first failure, at 10:00, to 40:00. The start at 10:10 fits whole; those at 20:30 and 31:10
+  // get only what is left (19:30, then 8:50); after 41:10 none starts.
+  assert.deepEqual(timeouts, [20 * 60_000, 20 * 60_000, 19.5 * 60_000, (8 * 60 + 50) * 1000]);
+});
+
+test('Ctrl+C while waiting for a new session stops the review instead of starting one', async t => {
+  const f = await fixture(t, { startsErrored: 6 });
+  const controller = new AbortController();
+  await assert.rejects(runCiMap({ ...f.options, signal: controller.signal, sleep: () => controller.abort(new Error('interrupted')) }));
+  assert.equal(f.requests.filter(request => request.args[0] === 'simulator:start').length, 1);
+});
+
+test('a start that fails before naming a session stops any session of that name first, then starts a new one', async t => {
+  const f = await fixture(t, { startsUnnamed: 1, orphanFromFailedStart: true });
+  assert.equal((await runCiMap({ ...f.options, sleep: () => {} })).runStatus, 'complete');
+  const order = f.requests.map(request => request.args[0] === 'simulator:stop' && value(request, '--id') === 'orphan-1' ? 'stop-orphan' : request.args[0] === 'simulator:start' ? 'start' : undefined).filter(Boolean);
+  assert.deepEqual(order, ['start', 'stop-orphan', 'start']);
+  // The last failed start is accounted for as well, though no new session follows it.
+  const always = await fixture(t, { startsUnnamed: 6, orphanFromFailedStart: true });
+  await assert.rejects(runCiMap({ ...always.options, sleep: () => {} }), error => error.code === 'SIMULATOR_START_FAILED');
+  assert.equal(always.requests.filter(request => request.args[0] === 'simulator:stop' && value(request, '--id') === 'orphan-1').length, 6);
+});
+
+test('a session of that name Explore cannot prove is its own is never stopped or replaced', async t => {
+  const f = await fixture(t, { startsUnnamed: 1, orphanFromFailedStart: true, orphanUnproven: true });
+  await assert.rejects(runCiMap({ ...f.options, sleep: () => {} }), error => error.code === 'SIMULATOR_START_FAILED');
+  assert.equal(f.requests.filter(request => request.args[0] === 'simulator:start').length, 1);
+  assert.equal(f.requests.some(request => request.args[0] === 'simulator:stop'), false);
+});
+
+test('a session Explore cannot prove is its own is never replaced, even one that ERRORED', async t => {
+  const f = await fixture(t, { wrongProject: true, startsErrored: 1 });
+  await assert.rejects(runCiMap(f.options), error => /SESSION_HANDOFF_UNVERIFIED/.test(JSON.stringify(error)));
+  assert.equal(f.requests.filter(request => request.args[0] === 'simulator:start').length, 1);
+});
+
+test('account failures to start are not retried; temporary ones and timeouts are', async t => {
+  for (const [message, retried] of [['GraphQL request failed: not authorized', false], ['quota exhausted', false], ['GraphQL request failed.', true], ['No simulator capacity for iPhone Duo', true]]) {
+    const f = await fixture(t);
+    let starts = 0;
+    const run = runCiMap({ ...f.options, sleep: () => {}, runner: request => {
+      if (request.args[0] === 'simulator:start' && ++starts === 1) { writeFileSync(join(request.cwd, '.env.eas-simulator'), HEADER); throw new Error(`Controller simulator:start exited with status 1: ${message}`); }
+      return f.options.runner(request);
+    } });
+    if (retried) assert.equal((await run).runStatus, 'complete', message); else await assert.rejects(run, error => error.code === 'SIMULATOR_START_FAILED', message);
+    assert.equal(starts, retried ? 2 : 1, message);
+  }
+});
+
 test('an Argent capture of an app pinned to dark is labelled dark and is not warned about', async t => {
   const f = await fixture(t, { argent: true, userInterfaceStyle: 'dark' });
   const lines = [];
@@ -489,20 +668,45 @@ test('an Argent capture of an app pinned to dark is labelled dark and is not war
   assert.equal(execution.colorScheme, 'dark');
 });
 
-test('device.pose folds the device first, before the app is opened, read or captured', async t => {
-  for (const argent of [false, true]) {
-    const f = await fixture(t, { devicePose: 'open', argent });
-    assert.equal((await runCiMap(f.options)).runStatus, 'complete');
-    const controller = f.requests.filter(request => request.command === 'fake-controller' || request.command.endsWith('/argent-controller'));
-    const folds = controller.filter(request => request.args[0] === 'fold');
-    assert.equal(folds.length, 1);
-    assert.deepEqual(folds[0].args.slice(0, 2), ['fold', 'open']);
-    const foldAt = controller.indexOf(folds[0]);
-    // The fold comes first: the app is installed but not opened, read or captured before it, so the controller starts on the lit panel.
-    assert.deepEqual(controller.slice(0, foldAt).map(request => request.args[0]).filter(command => command !== '--version' && command !== 'install'), []);
-    // Argent's bridge is told the pose, so it captures the opened panel's landscape UI upright.
-    if (argent) for (const request of controller) assert.equal(request.environment.EXPLORE_ARGENT_POSE, 'open');
+test('device.pose with Argent folds the device first, before the app is opened, read or captured', async t => {
+  const f = await fixture(t, { devicePose: 'open', argent: true });
+  assert.equal((await runCiMap(f.options)).runStatus, 'complete');
+  const controller = f.requests.filter(request => request.command.endsWith('/argent-controller'));
+  const folds = controller.filter(request => request.args[0] === 'fold');
+  assert.equal(folds.length, 1);
+  assert.deepEqual(folds[0].args.slice(0, 2), ['fold', 'open']);
+  const foldAt = controller.indexOf(folds[0]);
+  // The fold comes first: the app is installed but not opened, read or captured before it, so the controller starts on the lit panel.
+  assert.deepEqual(controller.slice(0, foldAt).map(request => request.args[0]).filter(command => command !== '--version' && command !== 'install'), []);
+  // Argent's bridge is told the pose, so it captures the opened panel's landscape UI upright.
+  for (const request of controller) assert.equal(request.environment.EXPLORE_ARGENT_POSE, 'open');
+});
+
+test('device.pose with agent-device on EAS opens the app, folds, and checks the display it lit', async t => {
+  const f = await fixture(t, { devicePose: 'open' });
+  assert.equal((await runCiMap({ ...f.options, sleep: () => {} })).runStatus, 'complete');
+  const controller = f.requests.filter(request => request.command === 'fake-controller').map(request => request.args[0] === 'screenshot' && request.args[1].endsWith('/pose.png') ? 'pose' : request.args[0]);
+  // agent-device folds only inside a session, so the app opens first; the fold's hinge readback is not trusted, the display is.
+  assert.deepEqual(controller.filter(command => command !== '--version' && command !== 'install').slice(0, 3), ['open', 'fold', 'pose']);
+  assert.equal(f.requests.some(request => request.args[0] === 'simulator:control' && request.args[1] === 'springboard.restart'), false);
+});
+
+test('when an agent-device fold on EAS lights a black panel, the capture restarts SpringBoard, reopens the app and folds again, once', async t => {
+  for (const [black, completes] of [[1, true], [2, false]]) {
+    const f = await fixture(t, { devicePose: 'open', blackAfterFold: black, controlActions: ['springboard.restart'] });
+    const lines = [];
+    const run = runCiMap({ ...f.options, sleep: () => {}, progress: line => lines.push(line) });
+    if (completes) assert.equal((await run).runStatus, 'complete');
+    else await assert.rejects(run, error => JSON.stringify(error).includes('CONTROLLER_READER_STUCK'));
+    const controller = f.requests.filter(request => request.command === 'fake-controller');
+    assert.equal(controller.filter(request => request.args[0] === 'fold').length, 2);
+    assert.ok(controller.some(request => request.args[0] === 'open' && request.args.includes('--relaunch')), 'the app is reopened after SpringBoard');
+    assert.equal(f.requests.filter(request => request.args[0] === 'simulator:control' && request.args[1] === 'springboard.restart').length, 1);
+    assert.ok(lines.some(line => /did not draw the open display after the fold; restarting SpringBoard/.test(line)), lines.join('\n'));
   }
+  // Without springboard.restart (an older serve-sim), a black panel is reported at once.
+  const older = await fixture(t, { devicePose: 'open', blackAfterFold: 1 });
+  await assert.rejects(runCiMap({ ...older.options, sleep: () => {} }), error => JSON.stringify(error).includes('CONTROLLER_FOLD_UNVERIFIED'));
 });
 
 test('a local simulator capture creates its own iOS simulator, installs the repacked app there, and deletes the simulator', async t => {

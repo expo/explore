@@ -22,14 +22,16 @@ import { loadAppIcon, loadCachedAppIcon, storeAppIcon } from "./app-icon.js";
 import { defaultRunner, runAgentControllerCommand } from "./controller.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
 import { assertCaptureEasProfile, assertSimulatorAvailable, fingerprintFrom, hasEasEnvironmentFetchFailure, nativeBuildFrom, existingBuild, repackProfileFrom, prepareExactSourceBuild, type RepackMode } from "./eas-build.js";
-import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, controllerVersion, simulatorOsVersion, type ActiveSimulatorRuntime, type SimulatorConnection } from "./simulator.js";
+import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, endedOwnSimulatorSession, liveSimulatorSessionsNamed, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, controllerVersion, simulatorOsVersion, type ActiveSimulatorRuntime, type SimulatorConnection } from "./simulator.js";
 import { argentControllerInvocation } from "./controller-invocation.js";
 import { sharedBuild } from "./shared-build.js";
 import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, agentDeviceClaims, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
   deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, approveLinkScheme, localPoseShown,
-  setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
+  pngSize, setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
 import { ensureArgentToolServer } from "../shared/controller-cache.js";
 import { openLocalCaptureRecord } from "./local-registry.js";
+import { approveSessionUrlSchemes, simulatorControl, simulatorControlActions, type EasCommand } from "./simulator-control.js";
+import { solidColour } from "../shared/png-evidence.js";
 import { type UnattributedSetting } from "./unattributed.js";
 import { appScheme, hasConcreteRoutePath, unavailableRoute, capturePlannedRoutes, deviceArgs } from "./route-capture.js";
 
@@ -98,6 +100,20 @@ export type CiMapResult = {
 };
 
 
+/** New EAS sessions a capture starts in place of one EAS failed to start (ERRORED while booting, or never named). */
+const SESSION_START_RETRIES = 5;
+/**
+ * The most time, from the first failed start, that replacement sessions may take, waits included. It keeps a review
+ * inside its CI job (90 minutes for a baseline) with a native build, a repack and both captures still to run.
+ */
+const SESSION_RETRY_BUDGET_MS = 30 * 60_000;
+/** How long one `eas simulator:start` may take: eas-cli waits up to 15 minutes for a session, not counting the queue. */
+const SESSION_START_TIMEOUT_MS = 20 * 60_000;
+/** The wait before each of them: 10 s, doubling, at most 2 minutes. */
+export function sessionRetryDelayMs(retry: number): number {
+  return Math.min(10_000 * 2 ** (retry - 1), 120_000);
+}
+
 /**
  * Minutes an EAS session is asked for beyond the capture's own budget. The session starts beside the repack, and the
  * capture deadline only starts once the app is installed, so the session also has to outlast a slow or queued hosted
@@ -111,6 +127,17 @@ const SESSION_PREPARATION_MINUTES = 20;
 function sessionDurationLimit(error: unknown): number | undefined {
   const match = /max duration must not exceed (\d+(?:\.\d+)?) minutes/i.exec(error instanceof Error ? error.message : String(error));
   return match ? Math.floor(Number(match[1])) : undefined;
+}
+
+/**
+ * A start failure EAS may not repeat on the next try: a failed request, a dropped connection, a timeout, or no capacity
+ * right now. An account's quota, plan or permissions are not, and fail at once rather than after every retry.
+ */
+function transientSessionStartFailure(error: unknown): boolean {
+  if (error instanceof CiError && error.code === "CONTROLLER_REQUEST_TIMEOUT") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  if (/not authori[sz]ed|unauthori[sz]ed|forbidden|permission|quota|billing|max duration/i.test(message)) return false;
+  return /GraphQL request failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|timed out|\b50[234]\b|capacity/i.test(message);
 }
 
 function positiveInteger(value: number, name: string): number {
@@ -411,17 +438,26 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   say(`reading EAS build profile ${options.easProfile}`);
   const eas = (args: string[], timeoutMs = 5 * 60_000, cwd = project) => runner({ command: options.easCommand, args,
     cwd, environment: easEnvironment, timeoutMs });
+  // `eas simulator:control` names the session by id, from the session's own project directory.
+  const sessionEas: EasCommand = (args, commandOptions) => runner({ command: options.easCommand, args, cwd: simulatorProject, environment: easEnvironment,
+    timeoutMs: commandOptions?.timeoutMs ?? 5 * 60_000, ...(commandOptions?.allowFailure ? { allowFailure: true } : {}) });
+  // What the EAS session's host can do through simulator:control (iOS sessions on serve-sim 0.10.0 or later).
+  let controlActions = new Set<string>();
   const configResult = eas(["config", "--platform", options.platform, "--profile", options.easProfile, "--json", "--non-interactive"]);
   const profile = repackProfileFrom(configResult.stdout);
   const configValue = parseJson(configResult.stdout, "eas config") as { appConfig: Record<string, unknown>; buildProfile: Record<string, unknown> };
   scheme ??= appScheme(configValue.appConfig.scheme);
   colorSchemes = resolveColorSchemes(options.appearance ?? "auto", configValue.appConfig, options.platform);
-  // Argent cannot switch the appearance itself; on a local device the host switches it (simctl, adb), so it is kept.
-  if (controller === "argent" && !local) {
-    const single = argentColorSchemes(colorSchemes, configValue.appConfig, options.platform);
-    if (single.skipped.length) say(`Argent cannot switch appearance yet (software-mansion/argent#1509); capturing ${single.schemes[0]} only, skipped ${single.skipped.join(", ")}`);
-    colorSchemes = single.schemes;
-  }
+  // Argent cannot switch the appearance itself. On a local device the host switches it (simctl, adb); on an EAS iOS
+  // session serve-sim does (appearance.set), which is known once the session starts; otherwise one appearance is captured.
+  let argentSchemes = controller === "argent" && !local ? argentColorSchemes(colorSchemes, configValue.appConfig, options.platform) : undefined;
+  const narrowToArgentScheme = () => {
+    if (!argentSchemes) return;
+    if (argentSchemes.skipped.length) say(`Argent cannot switch appearance on this session; capturing ${argentSchemes.schemes[0]} only, skipped ${argentSchemes.skipped.join(", ")}`);
+    colorSchemes = argentSchemes.schemes;
+    argentSchemes = undefined;
+  };
+  if (options.platform !== "ios") narrowToArgentScheme();
   app = { name: profile.projectIdentity.name, ...(profile.projectIdentity.version ? { version: profile.projectIdentity.version } : {}),
     ...(profile.projectIdentity.buildNumber ? { buildNumber: profile.projectIdentity.buildNumber } : {}) };
   projectId = profile.projectIdentity.projectId;
@@ -491,19 +527,23 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     }
   } catch (error) { await stopEarlyDevice().catch(() => undefined); throw error; }
   // The session is named before its app exists: an EAS session starts while the app is repacked (startSession).
-  const sessionName = simulatorSessionName({ mapName: options.name, mapId: options.buildId, gitCommit: options.gitCommit, easBuildId: local ? "local" : "installed",
-    runIdentity: JSON.stringify({ mapDirectory, outputDirectory, run: sourceEnvironment.GITHUB_RUN_ID, attempt: sourceEnvironment.GITHUB_RUN_ATTEMPT }) });
+  // A session EAS failed to start is replaced once (see the session block), under a name of its own.
+  const sessionNameFor = (retry: number) => simulatorSessionName({ mapName: options.name, mapId: options.buildId, gitCommit: options.gitCommit, easBuildId: local ? "local" : "installed",
+    runIdentity: JSON.stringify({ mapDirectory, outputDirectory, run: sourceEnvironment.GITHUB_RUN_ID, attempt: sourceEnvironment.GITHUB_RUN_ATTEMPT, ...(retry ? { sessionRetry: retry } : {}) }) });
+  let sessionRetries = 0;
+  let sessionName = sessionNameFor(0);
   /**
    * Starts the EAS Simulator session in the background, empty, once the build to repack is known (not while a native
    * build runs, which can take most of an hour of session time). The app is installed through the controller when both
    * are ready. Resolves with the start command's failure, if any; the session block verifies what EAS handed over.
    */
-  const startSession = () => {
+  const startSession = (retry?: { timeoutMs: number }) => {
     if (local || sessionStart) return;
-    say(`starting an EAS Simulator session (${options.device}) while the app is repacked`);
+    if (!retry) say(`starting an EAS Simulator session (${options.device}) while the app is repacked`);
     const request = (minutes: number) => ({ command: options.easCommand, args: ["simulator:start", "--name", sessionName, "--platform", options.platform, "--device", options.device,
       "--type", controller, "--package-version", controllerVersion(controller), "--public-link",
-      "--max-duration-minutes", String(minutes), "--out-config-type", "dotenv", "--non-interactive"], cwd: simulatorProject, environment: easEnvironment, timeoutMs: 20 * 60_000 });
+      "--max-duration-minutes", String(minutes), "--out-config-type", "dotenv", "--non-interactive"], cwd: simulatorProject, environment: easEnvironment,
+      timeoutMs: retry?.timeoutMs ?? SESSION_START_TIMEOUT_MS });
     // An injected runner (tests) answers synchronously; a real start runs beside the repack.
     const start = async (minutes: number) => options.runner ? options.runner(request(minutes)) : runAgentControllerCommand(request(minutes), options.signal ?? new AbortController().signal);
     sessionStart = writeFile(dotenvPath, SIMULATOR_DOTENV_HEADER, { flag: "wx", mode: 0o600 })
@@ -597,8 +637,72 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       throw new Error("The local device did not start before capture");
     } else {
       if (!localApp || !sessionStart) throw new Error("An EAS Simulator session needs the instrumented app on this machine");
-      const startError = await sessionStart;
-      const handoff = await readSimulatorDotenvHandoff(dotenvPath);
+      let startError = await sessionStart;
+      let handoff = await readSimulatorDotenvHandoff(dotenvPath);
+      // EAS sometimes fails to start a session: it errors while booting, or the start request fails before a session is
+      // named. After every failed start, whatever it may have left running is accounted for; then, when the failure is
+      // provably EAS's, a new session replaces it, up to SESSION_START_RETRIES times within SESSION_RETRY_BUDGET_MS, with
+      // a growing wait. A session Explore cannot prove is its own is never replaced or stopped: that stays a handoff
+      // failure below, as does a lookup that fails.
+      const clock = options.now ?? Date.now;
+      const endedSessions: string[] = [];
+      let ended: { sessionId: string; status: string } | undefined;
+      let retryDeadline: number | undefined;
+      for (;;) {
+        const easRead = (args: string[]) => {
+          try { return runner({ command: options.easCommand, args, cwd: project, environment: easEnvironment, timeoutMs: 2 * 60_000, allowFailure: true }).stdout; }
+          catch { return ""; }
+        };
+        let reason: string | undefined;
+        ended = undefined;
+        if (handoff.sessionId) {
+          const status = endedOwnSimulatorSession(easRead(["simulator:get", "--id", handoff.sessionId, "--json", "--non-interactive"]),
+            { sessionId: handoff.sessionId, sessionName, project: profile.projectIdentity, type: controller, platform: options.platform });
+          if (status) {
+            ended = { sessionId: handoff.sessionId, status };
+            endedSessions.push(handoff.sessionId);
+            reason = `EAS ended simulator session ${handoff.sessionId} (${status}) before it was ready`;
+          }
+        } else if (startError && transientSessionStartFailure(startError)) {
+          // The failed request may still have created a session: any by this exact name is stopped, so none is left running.
+          const live = liveSimulatorSessionsNamed(easRead(["simulator:list", "--name", sessionName, "--status", "new", "--status", "queued", "--status", "starting",
+            "--status", "in-progress", "--limit", "100", "--json", "--non-interactive"]), sessionName, profile.projectIdentity);
+          if (live) {
+            for (const id of live) assertSimulatorStopped(eas(["simulator:stop", "--id", id, "--json", "--non-interactive"], 2 * 60_000).stdout, id);
+            reason = `EAS could not start the simulator session (${simulatorStartFailure(startError, [options.expoToken]).message})`;
+          }
+        }
+        if (!reason || sessionRetries >= SESSION_START_RETRIES) break;
+        retryDeadline ??= clock() + SESSION_RETRY_BUDGET_MS;
+        const delayMs = sessionRetryDelayMs(sessionRetries + 1);
+        // A new start needs at least a minute of the budget after its wait; one started later could not finish in it.
+        const startTimeoutMs = Math.min(SESSION_START_TIMEOUT_MS, retryDeadline - clock() - delayMs);
+        if (startTimeoutMs < 60_000) break;
+        sessionRetries += 1;
+        say(`${reason}; starting a new EAS Simulator session in ${Math.round(delayMs / 1000)} s (${sessionRetries}/${SESSION_START_RETRIES})`);
+        options.signal?.throwIfAborted();
+        // Asynchronous and cancellable, so targets capturing beside this one keep running and Ctrl+C stops the wait.
+        if (options.sleep) options.sleep(delayMs);
+        else await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => { options.signal?.removeEventListener("abort", abort); resolve(); }, delayMs);
+          const abort = () => { clearTimeout(timer); reject(options.signal!.reason); };
+          options.signal?.addEventListener("abort", abort, { once: true });
+        });
+        options.signal?.throwIfAborted();
+        await rm(dotenvPath, { force: true });
+        sessionName = sessionNameFor(sessionRetries);
+        sessionStart = undefined;
+        startSession({ timeoutMs: startTimeoutMs });
+        startError = await sessionStart;
+        handoff = await readSimulatorDotenvHandoff(dotenvPath);
+      }
+      // Every session EAS ended is its own failure to start, never a question of ownership.
+      if (ended) throw new CiError({ code: "SIMULATOR_START_FAILED", stage: "session",
+        message: `EAS could not start a simulator session: ${endedSessions.length === 1 ? `session ${ended.sessionId} ended (${ended.status}) before it was ready`
+          : `${endedSessions.length} sessions ended before they were ready (the last, ${ended.sessionId}, ${ended.status})`}.`,
+        nextAction: "Rerun Explore. If sessions keep failing to start, check the EAS Simulator status and the sessions' logs on expo.dev.",
+        retryable: true, details: { attempts: sessionRetries + 1, endedSessions, ...(startError ? { startFailure: simulatorStartFailure(startError, [options.expoToken]) } : {}) },
+        ...(startError ? { cause: startError } : {}) });
       const startSecrets = [options.expoToken, ...(handoff.connection ? [handoff.connection.daemonAuthToken] : [])];
       const startFailure = startError ? simulatorStartFailure(startError, startSecrets) : undefined;
       if (handoff.sessionId) {
@@ -628,6 +732,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       if (!handoff.connection) throw new Error("Simulator handoff is missing its controller connection");
       connection = handoff.connection;
       await rm(dotenvPath, { force: true });
+      if (options.platform === "ios") controlActions = simulatorControlActions(sessionEas, sessionId);
+      if (!controlActions.has("appearance.set")) narrowToArgentScheme();
     }
     const controllerConfig = join(simulatorProject, "agent-device.json");
     await writeFile(controllerConfig, "{}\n", { flag: "wx", mode: 0o400 });
@@ -655,14 +761,22 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       say(`installing the app on session ${sessionId}`);
       runner({ command: controllerCommand, args: ["install", localApp, "--session", CONTROLLER_SESSION, ...deviceArgs({ platform: options.platform, deviceModel: options.device }),
         "--platform", options.platform, "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 15 * 60_000 });
+      // Before any link opens, as a local capture does with simctl: the app's own links then open without the prompt.
+      if (sessionId && scheme) {
+        const approved = approveSessionUrlSchemes(sessionEas, sessionId, controlActions, options.bundleId, [scheme]);
+        if (approved.length) say(`approved ${approved.map(item => `${item}://`).join(", ")} links on session ${sessionId}`);
+      }
     }
     if (options.devicePose) {
       // A fold relights the other panel and resizes the window. It comes before the app is first opened or read, so the
       // controller's accessibility reader starts on the lit panel: Argent's, started on the outer panel, can stay there.
       say(`folding ${options.device} ${options.devicePose}`);
       const target = deviceArgs({ platform: options.platform, deviceModel: options.device, ...(localDevice() ? { provider: "local-simulator" as const, controllerDeviceId: localDevice()! } : {}) });
+      // agent-device reads the hinge back after folding and fails to (locally and on EAS); its display is checked instead.
+      const easAgentDevice = !!sessionId && controller === "agent-device";
       const fold = () => runner({ command: controllerCommand, args: ["fold", options.devicePose!, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
-        cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000, ...(localSimulator ? { allowFailure: true } : {}) });
+        cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000, ...(localSimulator || easAgentDevice ? { allowFailure: true } : {}) });
+      const pause = options.sleep ?? (milliseconds => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); });
       if (localSimulator && controller === "argent") {
         // Argent folds without a session and checks the fold against its own reader; this machine also checks the display.
         fold();
@@ -680,6 +794,59 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           ...(options.sleep ? { sleep: options.sleep } : {}) })) throw new CiError({ code: "CONTROLLER_FOLD_UNVERIFIED", stage: "session",
           message: `${options.device} did not show the ${options.devicePose} display after folding: ${(folded.stderr || folded.stdout).trim().split("\n").at(-1) ?? ""}`.trim(),
           nextAction: "Rerun; if it persists, check that this Xcode's simulator supports folding the device." });
+      } else if (easAgentDevice && sessionId) {
+        // On EAS, agent-device also folds only inside a session, so the app opens first. The first fold of a fresh session
+        // can leave the panel it lights black, as it does for Argent: the controller then reads the old panel and a
+        // relaunch draws nothing. The display is the check, through the controller's own screenshot: in the pose's shape
+        // and drawn. If it is not, SpringBoard is restarted, the app reopened and the device folded again, once.
+        const open = (relaunch: boolean) => runner({ command: controllerCommand, args: ["open", options.bundleId, ...(relaunch ? ["--relaunch"] : []), "--session", CONTROLLER_SESSION,
+          ...target, "--platform", options.platform, "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 15 * 60_000 });
+        const shown = async () => {
+          if (options.devicePose !== "open" && options.devicePose !== "closed") return true;
+          const file = join(simulatorProject, "pose.png");
+          // The display relights and resizes over a moment after the hinge moves.
+          for (let attempt = 0; attempt < 10; attempt += 1) {
+            if (attempt) pause(1_000);
+            runner({ command: controllerCommand, args: ["screenshot", file, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
+              cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000, allowFailure: true });
+            const png = await readFile(file).catch(() => Buffer.alloc(0));
+            await rm(file, { force: true });
+            const size = pngSize(png);
+            if (size && (options.devicePose === "open" ? size.width > size.height : size.height > size.width) && !solidColour(png)) return true;
+          }
+          return false;
+        };
+        open(false);
+        fold();
+        if (!await shown()) {
+          if (!controlActions.has("springboard.restart")) throw new CiError({ code: "CONTROLLER_FOLD_UNVERIFIED", stage: "session",
+            message: `${options.device} did not show the ${options.devicePose} display after folding.`, nextAction: "Rerun the capture on a new session." });
+          say(`${options.device} did not draw the ${options.devicePose} display after the fold; restarting SpringBoard and folding ${options.devicePose} again`);
+          simulatorControl(sessionEas, sessionId, "springboard.restart");
+          pause(8_000);
+          open(true);
+          fold();
+          if (!await shown()) throw new CiError({ code: "CONTROLLER_READER_STUCK", stage: "session",
+            message: `${options.device} did not draw the ${options.devicePose} display after folding, nor after SpringBoard was restarted and it was folded again.`,
+            nextAction: "Rerun the capture; if it keeps happening, report it to Explore with the session's link." });
+        }
+      } else if (controller === "argent" && sessionId && controlActions.has("springboard.restart")) {
+        // The bridge has already reset Argent's device helpers once when its reader stayed on the dark panel. On EAS the
+        // tool-server cannot be restarted, so the next step is SpringBoard, then the same fold and check again.
+        try { fold(); }
+        catch (error) {
+          if (toCiError(error).code !== "CONTROLLER_FOLD_UNVERIFIED") throw error;
+          say(`Argent kept reading the other panel after the fold; restarting SpringBoard and folding ${options.devicePose} again`);
+          simulatorControl(sessionEas, sessionId, "springboard.restart");
+          pause(8_000);
+          try { fold(); }
+          catch (retry) {
+            if (toCiError(retry).code !== "CONTROLLER_FOLD_UNVERIFIED") throw retry;
+            throw new CiError({ code: "CONTROLLER_READER_STUCK", stage: "session",
+              message: `Argent's accessibility reader kept reading the panel the fold turned off, after its device helpers were reset and SpringBoard was restarted.`,
+              nextAction: "Rerun the capture; if it keeps happening, report it to Explore: this session's Argent tool-server needs a restart that EAS cannot do yet.", cause: retry });
+          }
+        }
       } else fold();
     }
     runtimeStage = "runtime";
@@ -690,9 +857,28 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     // (APP_NOT_READY). On this machine the capture runs that reader, so it recovers in two steps, each followed by one more
     // open: a fresh tool-server, whose reader starts on the lit panel; then, as XcodeBuildMCP#537 found for this panel,
     // SpringBoard restarted as well. The bridge's cached view of the device goes with the old server.
+    // On EAS the tool-server is the session's and must never be stopped, so the recovery there resets Argent's device
+    // helpers (reset-reader), then restarts SpringBoard as well, and then gives up with a reason rather than retrying.
+    const easArgentRecovery = !local && controller === "argent" && !!sessionId && options.platform === "ios";
     for (let recovery = 0; ; recovery += 1) try { runtime = collect(); break; }
     catch (error) {
-      if (!localArgent || recovery === 2 || toCiError(error).code !== "APP_NOT_READY") throw error;
+      if (toCiError(error).code !== "APP_NOT_READY") throw error;
+      if (easArgentRecovery && sessionId) {
+        if (recovery === 2 || recovery === 1 && !controlActions.has("springboard.restart")) throw new CiError({ code: "CONTROLLER_READER_STUCK", stage: "session",
+          message: "Argent's accessibility reader kept reading the panel the fold turned off, after its device helpers were reset"
+            + `${recovery === 2 ? " and SpringBoard was restarted" : ""}.`,
+          nextAction: "Rerun the capture; if it keeps happening, report it to Explore: this session's Argent tool-server needs a restart that EAS cannot do yet.", cause: error });
+        if (recovery === 1) {
+          say("Argent still did not read the app; restarting SpringBoard, then resetting Argent's device helpers and opening the app again");
+          simulatorControl(sessionEas, sessionId, "springboard.restart");
+          // SpringBoard takes a moment to come back, and sends the app to the background; the next open brings it back.
+          (options.sleep ?? (milliseconds => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }))(8_000);
+        } else say("Argent did not read the app after starting it; resetting Argent's device helpers and opening the app again");
+        runner({ command: controllerCommand, args: ["reset-reader", "--session", CONTROLLER_SESSION, "--platform", options.platform, "--json"],
+          cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000 });
+        continue;
+      }
+      if (!localArgent || recovery === 2) throw error;
       say(recovery === 0 ? "Argent did not read the app after starting it; restarting Argent's tool-server and opening the app again"
         : "Argent still did not read the app; restarting SpringBoard and Argent's tool-server and opening the app again");
       stopLocalArgentServer(localArgent);
@@ -729,10 +915,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     const passes: CaptureBundle["outcomes"][] = [];
     const recordingTools = launchSetting === "off" ? undefined : options.recordingTools === undefined ? ffmpegRecordingTools() : options.recordingTools ?? undefined;
     for (const [index, colorScheme] of colorSchemes.entries()) {
-      // Argent cannot switch the appearance yet (software-mansion/argent#1509): on EAS its single pass runs as the device
-      // starts, and on this machine the host switches it.
+      // Argent cannot switch the appearance yet (software-mansion/argent#1509): the host does, simctl or adb on this
+      // machine and serve-sim on an EAS iOS session; elsewhere its single pass runs as the device starts.
       if (controller !== "argent") runner({ command: controllerCommand, args: [...appearanceArgs(colorScheme), "--session", CONTROLLER_SESSION, ...deviceArgs(runtime), "--platform", options.platform],
         cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
+      else if (sessionId && controlActions.has("appearance.set")) simulatorControl(sessionEas, sessionId, "appearance.set", [colorScheme]);
       else if (localSimulator) setLocalSimulatorAppearance({ runner, udid: localSimulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
       else if (localEmulator) setLocalEmulatorAppearance({ runner, serial: localEmulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
       // A scheme change recreates the Android activity in place, and the sheets it re-presents lose their inset; a

@@ -639,8 +639,12 @@ test("doctor checks each target where it runs: local tools for local targets, EA
     targets: { phone: { platform: "ios" }, cloud: { platform: "ios", device: "iPhone 17 Pro", simulator: "eas", controller: "argent" } } });
   assert.deepEqual(devices(mixed), ["iPhone 17"]);
   assert.equal(check(mixed, "eas-simulator")[0].status, "pass");
-  // The target's Argent is reported as a top-level one would be.
-  assert.equal(check(mixed, "controller")[0].code, "CONTROLLER_APPEARANCE_FIXED");
+  // The target's Argent is reported as a top-level one would be: on an iOS EAS session the host switches its appearance.
+  assert.equal(check(mixed, "controller")[0].status, "pass");
+  // Only Argent on an Android EAS session records a single appearance.
+  const android = await doctor({ ...baseConfig, targets: { phone: { platform: "ios" },
+    droid: { platform: "android", device: "pixel_7", bundleId: "com.example.app", easProfile: "explore-android", controller: "argent" } } });
+  assert.equal(check(android, "controller")[0].code, "CONTROLLER_APPEARANCE_FIXED");
   // --simulator and --controller decide for every target, as they do in a capture.
   const forced = await doctor({ ...baseConfig, targets: { phone: { platform: "ios", simulator: "local", controller: "argent" } } }, { simulator: "eas", controller: "agent-device" });
   assert.deepEqual(devices(forced), []);

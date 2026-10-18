@@ -474,7 +474,8 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   checks.push(config.mode === "agent"
     ? { step: 3, id: "mode", status: "pass", message: `Agent mode with ${config.agent!.provider} ${config.agent!.model}. Capture navigation uses the model and is billed to your ${config.agent!.provider} account.` }
     : { step: 3, id: "mode", status: "pass", message: "Deterministic mode: capture replays config.yaml without a model, so it needs no API key and has no AI charges." });
-  if (runTargets(config, { controller: options.controller }).some(target => target.capture.controller === "argent")) checks.push(argentCheck(environment));
+  const argentTargets = runTargets(config, { controller: options.controller }).filter(target => target.capture.controller === "argent");
+  if (argentTargets.length) checks.push(argentCheck(environment, argentTargets.some(target => target.app.platform === "android" && target.capture.simulator !== "local")));
   if (config.capture.launch !== "off") {
     const ffmpeg = run("ffmpeg", ["-version"], project);
     checks.push(ffmpeg.status === 0
@@ -630,13 +631,20 @@ export function summarizeCaptureCheck(plan: SourceCapturePlan, bundle: CaptureBu
  * Capture the committed HEAD the way the baseline workflow does, with the local EAS login. This is
  * the only doctor step that starts an EAS build and a simulator session.
  */
-/** An Argent capture records one appearance, and fetches the pinned Argent release on first use. agent-device, the default, is not reported. */
-function argentCheck(environment: NodeJS.ProcessEnv): DoctorCheck {
+/**
+ * Argent fetches its pinned release on first use, and cannot switch the appearance itself (software-mansion/argent#1509):
+ * the host does, through `simulator:control` on an iOS EAS session or simctl and adb on this Mac. Only an Android EAS
+ * session has no host to ask, so its captures record one appearance. agent-device, the default, is not reported.
+ */
+function argentCheck(environment: NodeJS.ProcessEnv, androidOnEas: boolean): DoctorCheck {
   const cached = controllerCached("argent", environment);
-  return { step: 3, id: "controller", status: "warn", code: "CONTROLLER_APPEARANCE_FIXED",
-    message: `Device controller: Argent ${ARGENT_VERSION} (${cached ? "cached on this machine" : "fetched from npm on the first capture, about 27 MB"}). `
-      + "Argent cannot switch the simulator's appearance yet (software-mansion/argent#1509), so each capture records one appearance: the app's forced one, else light.",
-    nextAction: "Nothing to do unless you need dark-mode screenshots; use agent-device (the default) for those." };
+  const release = `Device controller: Argent ${ARGENT_VERSION} (${cached ? "cached on this machine" : "fetched from npm on the first capture, about 27 MB"}). `;
+  return androidOnEas
+    ? { step: 3, id: "controller", status: "warn", code: "CONTROLLER_APPEARANCE_FIXED",
+      message: `${release}Argent cannot switch the appearance on an Android EAS Simulator session yet (software-mansion/argent#1509), so those captures record one appearance: the app's forced one, else light.`,
+      nextAction: "Nothing to do unless you need dark-mode screenshots on Android; use agent-device (the default) for those." }
+    : { step: 3, id: "controller", status: "pass",
+      message: `${release}The simulator's host switches the appearance, so every appearance the config asks for is captured.` };
 }
 
 export async function runCaptureCheck(options: { project: string; output: string; platform?: ExplorePlatform; controller?: string | undefined; simulator?: string | undefined; repack?: string | undefined; target?: string | undefined; environment?: NodeJS.ProcessEnv; runner?: CommandRunner; progress?: Progress }): Promise<CaptureCheckResult> {
