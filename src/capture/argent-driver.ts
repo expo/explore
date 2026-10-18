@@ -301,7 +301,8 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
 
   /** Reads are resent after a transport failure (they change nothing); a UI action is sent once, after a health check. */
   const call = async (tool: string, args: Record<string, unknown> = {}, options?: { out?: string }): Promise<Record<string, unknown>> => {
-    const withDevice = tool === "list-devices" ? args : { udid: state.udid, ...args };
+    // Tools that name devices their own way (or none) take no udid.
+    const withDevice = tool === "list-devices" || tool === "stop-all-simulator-servers" ? args : { udid: state.udid, ...args };
     for (let attempt = 0; ; attempt++) {
       try { return record(await context.call(tool, withDevice, options)); }
       catch (error) {
@@ -619,6 +620,10 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         const posture = positional[0];
         if (posture !== "closed" && posture !== "half-open" && posture !== "open") throw new BridgeFailure("INVALID_ARGS", "fold needs closed, half-open or open.");
         await beforeAction();
+        // Helpers the tool-server started before a fold can leave the panel it lights black and unread: on a fresh EAS
+        // session, whose tool-server started them at boot, the first fold opened to a black inner panel every time
+        // without this, and read the panel at once with it. A local tool-server is Explore's own and starts clean.
+        await call("stop-all-simulator-servers", { devices: [state.udid] });
         const folded = await call("fold", { posture });
         // The other panel lights at another size: every stored coordinate and element reference is stale.
         delete state.screen;
@@ -630,15 +635,32 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         const lit = record(folded.screen);
         if (finite(lit.width) && finite(lit.height) && lit.height > 0) {
           const litRatio = lit.width / lit.height;
-          let followed = false;
-          for (let poll = 0; poll < 10 && !followed; poll++) {
-            const shape = (await tree()).screen;
-            followed = !!shape && shape.height > 0 && Math.abs(shape.width / shape.height - litRatio) < 0.004;
-            if (!followed) await context.sleep(1_000);
+          const follows = async () => {
+            for (let poll = 0; poll < 10; poll++) {
+              const shape = (await tree()).screen;
+              if (shape && shape.height > 0 && Math.abs(shape.width / shape.height - litRatio) < 0.004) return true;
+              await context.sleep(1_000);
+            }
+            return false;
+          };
+          // A reader still stuck on the dark panel is reset once more (the device's helpers, as reset-reader does): it is
+          // cheap and leaves the app alone. If that is not enough, capture restarts SpringBoard and folds again.
+          if (!await follows() && !await call("stop-all-simulator-servers", { devices: [state.udid] }).then(follows, () => false)) {
+            throw new BridgeFailure("CONTROLLER_FOLD_UNVERIFIED", `Argent kept reading the other panel after folding the device ${posture}, and after its device helpers were reset.`);
           }
-          if (!followed) throw new BridgeFailure("CONTROLLER_FOLD_UNVERIFIED", `Argent kept reading the other panel after folding the device ${posture}.`);
         }
         return success({ action: "fold", pose: posture, ...(folded.panel !== undefined ? { panel: folded.panel } : {}) });
+      }
+      case "reset-reader": {
+        // Stops the device's Argent helpers, among them the accessibility service describe reads through; the
+        // tool-server starts fresh ones on the next call. It is how a reader stuck on the panel a fold turned off is
+        // reset where the tool-server itself cannot be restarted, as on EAS (it started it; never stop it there).
+        await ensureDevice();
+        const stopped = await call("stop-all-simulator-servers", { devices: [state.udid] });
+        delete state.screen;
+        delete state.refs;
+        state.generation += 1;
+        return success({ action: "reset-reader", stopped: Array.isArray(stopped.stopped) ? stopped.stopped.filter(item => typeof item === "string") : [] });
       }
       case "apps": return success({ apps: [] });
       case "session": return success({ sessions: [] });

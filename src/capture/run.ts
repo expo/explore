@@ -30,6 +30,7 @@ import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, agentDeviceC
   setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
 import { ensureArgentToolServer } from "../shared/controller-cache.js";
 import { openLocalCaptureRecord } from "./local-registry.js";
+import { approveSessionUrlSchemes, simulatorControl, simulatorControlActions, type EasCommand } from "./simulator-control.js";
 import { type UnattributedSetting } from "./unattributed.js";
 import { appScheme, hasConcreteRoutePath, unavailableRoute, capturePlannedRoutes, deviceArgs } from "./route-capture.js";
 
@@ -411,17 +412,26 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   say(`reading EAS build profile ${options.easProfile}`);
   const eas = (args: string[], timeoutMs = 5 * 60_000, cwd = project) => runner({ command: options.easCommand, args,
     cwd, environment: easEnvironment, timeoutMs });
+  // `eas simulator:control` names the session by id, from the session's own project directory.
+  const sessionEas: EasCommand = (args, commandOptions) => runner({ command: options.easCommand, args, cwd: simulatorProject, environment: easEnvironment,
+    timeoutMs: commandOptions?.timeoutMs ?? 5 * 60_000, ...(commandOptions?.allowFailure ? { allowFailure: true } : {}) });
+  // What the EAS session's host can do through simulator:control (iOS sessions on serve-sim 0.10.0 or later).
+  let controlActions = new Set<string>();
   const configResult = eas(["config", "--platform", options.platform, "--profile", options.easProfile, "--json", "--non-interactive"]);
   const profile = repackProfileFrom(configResult.stdout);
   const configValue = parseJson(configResult.stdout, "eas config") as { appConfig: Record<string, unknown>; buildProfile: Record<string, unknown> };
   scheme ??= appScheme(configValue.appConfig.scheme);
   colorSchemes = resolveColorSchemes(options.appearance ?? "auto", configValue.appConfig, options.platform);
-  // Argent cannot switch the appearance itself; on a local device the host switches it (simctl, adb), so it is kept.
-  if (controller === "argent" && !local) {
-    const single = argentColorSchemes(colorSchemes, configValue.appConfig, options.platform);
-    if (single.skipped.length) say(`Argent cannot switch appearance yet (software-mansion/argent#1509); capturing ${single.schemes[0]} only, skipped ${single.skipped.join(", ")}`);
-    colorSchemes = single.schemes;
-  }
+  // Argent cannot switch the appearance itself. On a local device the host switches it (simctl, adb); on an EAS iOS
+  // session serve-sim does (appearance.set), which is known once the session starts; otherwise one appearance is captured.
+  let argentSchemes = controller === "argent" && !local ? argentColorSchemes(colorSchemes, configValue.appConfig, options.platform) : undefined;
+  const narrowToArgentScheme = () => {
+    if (!argentSchemes) return;
+    if (argentSchemes.skipped.length) say(`Argent cannot switch appearance on this session; capturing ${argentSchemes.schemes[0]} only, skipped ${argentSchemes.skipped.join(", ")}`);
+    colorSchemes = argentSchemes.schemes;
+    argentSchemes = undefined;
+  };
+  if (options.platform !== "ios") narrowToArgentScheme();
   app = { name: profile.projectIdentity.name, ...(profile.projectIdentity.version ? { version: profile.projectIdentity.version } : {}),
     ...(profile.projectIdentity.buildNumber ? { buildNumber: profile.projectIdentity.buildNumber } : {}) };
   projectId = profile.projectIdentity.projectId;
@@ -628,6 +638,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       if (!handoff.connection) throw new Error("Simulator handoff is missing its controller connection");
       connection = handoff.connection;
       await rm(dotenvPath, { force: true });
+      if (options.platform === "ios") controlActions = simulatorControlActions(sessionEas, sessionId);
+      if (!controlActions.has("appearance.set")) narrowToArgentScheme();
     }
     const controllerConfig = join(simulatorProject, "agent-device.json");
     await writeFile(controllerConfig, "{}\n", { flag: "wx", mode: 0o400 });
@@ -655,6 +667,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       say(`installing the app on session ${sessionId}`);
       runner({ command: controllerCommand, args: ["install", localApp, "--session", CONTROLLER_SESSION, ...deviceArgs({ platform: options.platform, deviceModel: options.device }),
         "--platform", options.platform, "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 15 * 60_000 });
+      // Before any link opens, as a local capture does with simctl: the app's own links then open without the prompt.
+      if (sessionId && scheme) {
+        const approved = approveSessionUrlSchemes(sessionEas, sessionId, controlActions, options.bundleId, [scheme]);
+        if (approved.length) say(`approved ${approved.map(item => `${item}://`).join(", ")} links on session ${sessionId}`);
+      }
     }
     if (options.devicePose) {
       // A fold relights the other panel and resizes the window. It comes before the app is first opened or read, so the
@@ -680,6 +697,23 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           ...(options.sleep ? { sleep: options.sleep } : {}) })) throw new CiError({ code: "CONTROLLER_FOLD_UNVERIFIED", stage: "session",
           message: `${options.device} did not show the ${options.devicePose} display after folding: ${(folded.stderr || folded.stdout).trim().split("\n").at(-1) ?? ""}`.trim(),
           nextAction: "Rerun; if it persists, check that this Xcode's simulator supports folding the device." });
+      } else if (controller === "argent" && sessionId && controlActions.has("springboard.restart")) {
+        // The bridge has already reset Argent's device helpers once when its reader stayed on the dark panel. On EAS the
+        // tool-server cannot be restarted, so the next step is SpringBoard, then the same fold and check again.
+        try { fold(); }
+        catch (error) {
+          if (toCiError(error).code !== "CONTROLLER_FOLD_UNVERIFIED") throw error;
+          say(`Argent kept reading the other panel after the fold; restarting SpringBoard and folding ${options.devicePose} again`);
+          simulatorControl(sessionEas, sessionId, "springboard.restart");
+          (options.sleep ?? (milliseconds => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }))(8_000);
+          try { fold(); }
+          catch (retry) {
+            if (toCiError(retry).code !== "CONTROLLER_FOLD_UNVERIFIED") throw retry;
+            throw new CiError({ code: "CONTROLLER_READER_STUCK", stage: "session",
+              message: `Argent's accessibility reader kept reading the panel the fold turned off, after its device helpers were reset and SpringBoard was restarted.`,
+              nextAction: "Rerun the capture; if it keeps happening, report it to Explore: this session's Argent tool-server needs a restart that EAS cannot do yet.", cause: retry });
+          }
+        }
       } else fold();
     }
     runtimeStage = "runtime";
@@ -690,9 +724,28 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     // (APP_NOT_READY). On this machine the capture runs that reader, so it recovers in two steps, each followed by one more
     // open: a fresh tool-server, whose reader starts on the lit panel; then, as XcodeBuildMCP#537 found for this panel,
     // SpringBoard restarted as well. The bridge's cached view of the device goes with the old server.
+    // On EAS the tool-server is the session's and must never be stopped, so the recovery there resets Argent's device
+    // helpers (reset-reader), then restarts SpringBoard as well, and then gives up with a reason rather than retrying.
+    const easArgentRecovery = !local && controller === "argent" && !!sessionId && options.platform === "ios";
     for (let recovery = 0; ; recovery += 1) try { runtime = collect(); break; }
     catch (error) {
-      if (!localArgent || recovery === 2 || toCiError(error).code !== "APP_NOT_READY") throw error;
+      if (toCiError(error).code !== "APP_NOT_READY") throw error;
+      if (easArgentRecovery && sessionId) {
+        if (recovery === 2 || recovery === 1 && !controlActions.has("springboard.restart")) throw new CiError({ code: "CONTROLLER_READER_STUCK", stage: "session",
+          message: "Argent's accessibility reader kept reading the panel the fold turned off, after its device helpers were reset"
+            + `${recovery === 2 ? " and SpringBoard was restarted" : ""}.`,
+          nextAction: "Rerun the capture; if it keeps happening, report it to Explore: this session's Argent tool-server needs a restart that EAS cannot do yet.", cause: error });
+        if (recovery === 1) {
+          say("Argent still did not read the app; restarting SpringBoard, then resetting Argent's device helpers and opening the app again");
+          simulatorControl(sessionEas, sessionId, "springboard.restart");
+          // SpringBoard takes a moment to come back, and sends the app to the background; the next open brings it back.
+          (options.sleep ?? (milliseconds => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }))(8_000);
+        } else say("Argent did not read the app after starting it; resetting Argent's device helpers and opening the app again");
+        runner({ command: controllerCommand, args: ["reset-reader", "--session", CONTROLLER_SESSION, "--platform", options.platform, "--json"],
+          cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000 });
+        continue;
+      }
+      if (!localArgent || recovery === 2) throw error;
       say(recovery === 0 ? "Argent did not read the app after starting it; restarting Argent's tool-server and opening the app again"
         : "Argent still did not read the app; restarting SpringBoard and Argent's tool-server and opening the app again");
       stopLocalArgentServer(localArgent);
@@ -729,10 +782,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     const passes: CaptureBundle["outcomes"][] = [];
     const recordingTools = launchSetting === "off" ? undefined : options.recordingTools === undefined ? ffmpegRecordingTools() : options.recordingTools ?? undefined;
     for (const [index, colorScheme] of colorSchemes.entries()) {
-      // Argent cannot switch the appearance yet (software-mansion/argent#1509): on EAS its single pass runs as the device
-      // starts, and on this machine the host switches it.
+      // Argent cannot switch the appearance yet (software-mansion/argent#1509): the host does, simctl or adb on this
+      // machine and serve-sim on an EAS iOS session; elsewhere its single pass runs as the device starts.
       if (controller !== "argent") runner({ command: controllerCommand, args: [...appearanceArgs(colorScheme), "--session", CONTROLLER_SESSION, ...deviceArgs(runtime), "--platform", options.platform],
         cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
+      else if (sessionId && controlActions.has("appearance.set")) simulatorControl(sessionEas, sessionId, "appearance.set", [colorScheme]);
       else if (localSimulator) setLocalSimulatorAppearance({ runner, udid: localSimulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
       else if (localEmulator) setLocalEmulatorAppearance({ runner, serial: localEmulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
       // A scheme change recreates the Android activity in place, and the sheets it re-presents lose their inset; a

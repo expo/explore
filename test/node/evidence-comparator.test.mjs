@@ -130,7 +130,7 @@ function runtimeFor(side, map, expectedSamples = 3, capturedSamples = expectedSa
       observationId: observation.id,
       expectedSampleCount: expectedSamples,
       controllerPackageVersion: "0.20.2",
-      easCliVersion: "25.0.0",
+      easCliVersion: "25.2.0",
     },
     runtime: {
       kind: "eas-agent-device-raw",
