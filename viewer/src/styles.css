@@ -549,8 +549,9 @@ code {
    both handles over the image while the diff label (z-index 2) still covers them. */
 .screen-screenshot-slot > .react-flow__handle { z-index: 1; }
 /* The tooltip anchor around the screenshot button is layout-transparent: it takes the slot's
-   remaining height and hands it on. */
-.screen-screenshot-slot > .tooltip-anchor { display: flex; width: 100%; min-height: 0; flex: 1; flex-direction: column; }
+   remaining height and hands it on, and stays static so the diff label and the handles keep
+   anchoring to the slot (or, on Screens, the card). */
+.screen-screenshot-slot > .tooltip-anchor { position: static; display: flex; width: 100%; min-height: 0; flex: 1; flex-direction: column; }
 .screen-screenshot-target {
   display: flex;
   width: 100%;
