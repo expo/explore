@@ -8,6 +8,9 @@ import { join } from 'node:path';
 import { appEnvironment, captureCacheDirectory, defaultBase, installDependencies, keepCapture, localInstallCommand, localReviewConfig, reportRef, reviewHeadSource, runLocalReview, snapshotWorkingTree, stopRecordedSessions } from '../../dist/ci/local-review.js';
 import { mkdir, readdir } from 'node:fs/promises';
 import { startLocalReportServer } from '../../dist/report/local-report-server.js';
+import { loadReport } from '../../dist/report/agent-api.js';
+import { manifestBody } from '../../dist/report/preview-manifest.js';
+import { createHash } from 'node:crypto';
 import { fixture, git } from '../helpers/public-ci-fixture.mjs';
 import { writeCaptureObserverPackages } from '../helpers/capture-observer-fixture.mjs';
 
@@ -227,6 +230,28 @@ test('the local Viewer serves each target of a run, by ?target= or, for links fr
   assert.equal((await fetch(`${server.url}/report.zip?target=phone&platform=ios`)).status, 404);
   assert.deepEqual((await (await fetch(`${server.url}/reports.json`)).json()).map(entry => [entry.target, entry.label]),
     [['phone', 'iPhone 17'], ['duo-open', 'iPhone Duo (open)'], ['android', 'Android']]);
+});
+
+test('the local Viewer serves the manifest and assets the Viewer opens, the same bytes the hosted Worker serves', async t => {
+  const viewerRoot = await scratch(t, 'explore-local-viewer-');
+  await writeFile(join(viewerRoot, 'index.html'), '<!doctype html><title>Viewer</title>');
+  const review = new Uint8Array(await readFile(new URL('../fixtures/example-review-artifact.zip', import.meta.url)));
+  const reports = [{ platform: 'ios', zip: review }, { platform: 'android', zip: new Uint8Array([4]) }];
+  const server = await startLocalReportServer({ reports, viewerRoot });
+  t.after(() => server.close());
+  const loaded = await loadReport(review);
+  const manifest = await fetch(`${server.url}/manifest.json`);
+  assert.equal(manifest.status, 200);
+  assert.match(manifest.headers.get('content-type') ?? '', /^application\/json/);
+  assert.equal(await manifest.text(), manifestBody(loaded));
+  const [asset] = Object.keys(JSON.parse(manifestBody(loaded)).entries);
+  const served = await fetch(`${server.url}/${asset}?platform=ios`);
+  assert.equal(served.status, 200);
+  assert.equal(served.headers.get('content-type'), 'image/png');
+  assert.equal(createHash('sha256').update(new Uint8Array(await served.arrayBuffer())).digest('hex'), asset.slice('assets/'.length, 'assets/'.length + 64));
+  for (const path of [`/${asset}?platform=android`, `/assets/${'0'.repeat(64)}.png`, '/assets/review.json', '/manifest.json?platform=android', '/manifest.json?target=tablet']) {
+    assert.equal((await fetch(`${server.url}${path}`)).status, 404, path);
+  }
 });
 
 test('a local review captures two commits of the repository in its own worktrees and packages a report', async t => {

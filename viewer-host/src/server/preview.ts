@@ -6,7 +6,7 @@
  * bundle under /viewer/ is public and identical to the central host's.
  */
 import { AGENT_API_VERSION, agentApiReply, agentIndexHtml, agentIndexMarkdown, loadReport, prefersHtml, type AgentContext, type LoadedReport } from "../../../src/report/agent-api";
-import { readZipEntry } from "../../../src/report/zip-reader";
+import { manifestBody, previewAsset } from "../../../src/report/preview-manifest";
 
 export type PreviewEnvironment = {
   /** Lowercase base32 path token the review comment links to. */
@@ -133,22 +133,30 @@ export type PreviewRequestOptions = {
   /** Same-deployment fetch of static files; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
   subtle?: SubtleCrypto;
-  /** Decrypted and parsed reports by path, kept for the life of the isolate; defaults to a module-level cache. */
+  /** Decrypted and parsed reports by path, the most recently used MAX_LOADED_REPORTS of them; defaults to a module-level cache. */
   cache?: Map<string, Promise<LoadedReport | undefined>>;
+  /** Manifest bodies by path, kept for the life of the isolate; defaults to a module-level cache. */
+  manifests?: Map<string, string>;
 };
 
 const ROUTE = /^\/p\/([a-z2-7]{32})(?:\/|\/(report\.zip|reports\.json|manifest\.json|llms\.txt)|(\/api\/v1(?:\/[A-Za-z0-9._:@-]{1,200}){0,2}\/?)|\/assets\/([a-f0-9]{64}\.(?:png|jpg|mp4)))?$/;
-/** The manifest the Viewer opens instead of the whole ZIP: the report's metadata file plus every asset's size. */
-export const PREVIEW_MANIFEST_FORMAT = "explore.preview-manifest/1";
-/** Content-addressed and token-gated: this browser may keep an asset until the link expires (a year at most); shared caches may not. */
-const MAX_ASSET_AGE_SECONDS = 365 * 24 * 60 * 60;
+/**
+ * Content-addressed and token-gated: this browser may keep an asset until the link expires, and for a week at most (as
+ * long as the Viewer kept a whole report in Cache Storage before assets were served one by one); shared caches may not.
+ */
+const MAX_ASSET_AGE_SECONDS = 7 * 24 * 60 * 60;
 function assetCacheControl(expiresAt: number | null, now: number): string {
   const untilExpiry = expiresAt === null ? MAX_ASSET_AGE_SECONDS : Math.floor((expiresAt - now) / 1000);
   return `private, max-age=${Math.max(0, Math.min(MAX_ASSET_AGE_SECONDS, untilExpiry))}, immutable`;
 }
-const ASSET_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", mp4: "video/mp4" };
-const MAX_ASSET_BYTES = 32 * 1024 * 1024;
+/**
+ * An isolate keeps the whole decrypted ZIP of the reports it serves screenshots from, so it keeps only the two most
+ * recently used: the Viewer prefetches every target's manifest, and all of them held at once can exceed the isolate's
+ * memory. A manifest is small and is kept for every target, so a prefetch decrypts a report once without holding it.
+ */
+const MAX_LOADED_REPORTS = 2;
 const reportCache = new Map<string, Promise<LoadedReport | undefined>>();
+const manifestCache = new Map<string, string>();
 
 /**
  * `GET /p/<token>` serves the Viewer shell to browsers and the report's Markdown index to anything
@@ -195,17 +203,19 @@ export async function previewResponse(request: Request, options: PreviewRequestO
   const report = selectReport(config, url);
   if (!report) return previewNotFound();
   if (route === "report.zip") return decryptedReport(url.origin, report.path, config, options);
+  if (route === "manifest.json") {
+    const body = await manifestFor(url.origin, report, config, options);
+    return body === undefined ? previewUnavailable() : new Response(body, { headers: baseHeaders("application/json; charset=utf-8") });
+  }
   const loaded = await loadedReport(url.origin, report, config, options);
+  // The token and the target are right, so a report that cannot be read now is the Worker's failure, and the Viewer retries.
+  if (!loaded && route === "asset") return previewUnavailable();
   if (!loaded) {
     if (route !== undefined) return previewNotFound();
     const headers = baseHeaders("text/html; charset=utf-8");
     headers.set("Link", linkHeader);
     headers.set("Vary", "Accept");
     return new Response(options.indexHtml, { headers });
-  }
-  if (route === "manifest.json") {
-    const headers = baseHeaders("application/json; charset=utf-8");
-    return new Response(manifestBody(loaded.loaded), { headers });
   }
   if (route === "asset") return assetResponse(loaded.loaded, match[4]!, assetCacheControl(config.expiresAt, (options.now ?? Date.now)()));
   const context = agentContext(pageUrl, config, report);
@@ -256,24 +266,35 @@ export function shellWithPreload(indexHtml: string, manifestPath: string): strin
   return at === -1 ? indexHtml : `${indexHtml.slice(0, at)}${link}${indexHtml.slice(at)}`;
 }
 
-/** The metadata file verbatim plus the size of every asset, so the Viewer opens the report before any screenshot. */
-export function manifestBody(loaded: LoadedReport): string {
-  const entries: Record<string, number> = {};
-  for (const [name, entry] of loaded.entries) if (name.startsWith("assets/")) entries[name] = entry.size;
-  return `{"format":"${PREVIEW_MANIFEST_FORMAT}","file":"${loaded.file}","entries":${JSON.stringify(entries)},"report":${new TextDecoder().decode(loaded.raw)}}`;
+/** The manifest of one target: kept once built, from the isolate's copy of the report or from one it decrypts and lets go. */
+async function manifestFor(origin: string, report: PreviewReport, config: PreviewConfig, options: PreviewRequestOptions): Promise<string | undefined> {
+  const manifests = options.manifests ?? manifestCache;
+  const key = `${origin}${report.path}`;
+  const known = manifests.get(key);
+  if (known !== undefined) return known;
+  const loaded = await loadedReport(origin, report, config, options, { keep: false });
+  if (!loaded) return undefined;
+  const body = manifestBody(loaded.loaded);
+  manifests.set(key, body);
+  return body;
+}
+
+/** A report route that could not read the report this time; the same token and target work once it can. */
+function previewUnavailable(): Response {
+  const headers = baseHeaders("text/plain; charset=utf-8");
+  headers.set("Retry-After", "1");
+  return new Response("Unavailable", { status: 503, headers });
 }
 
 /** One asset of the report, inflated from the decrypted ZIP the isolate holds. */
 async function assetResponse(loaded: LoadedReport, file: string, cacheControl: string): Promise<Response> {
-  const entry = loaded.entries.get(`assets/${file}`);
-  if (!entry) return previewNotFound();
-  const bytes = await readZipEntry(loaded.zip, entry, MAX_ASSET_BYTES);
-  if (!bytes) return previewNotFound();
-  const headers = baseHeaders(ASSET_TYPES[file.slice(file.lastIndexOf(".") + 1)] ?? "application/octet-stream");
+  const asset = await previewAsset(loaded, `assets/${file}`);
+  if (!asset) return previewNotFound();
+  const headers = baseHeaders(asset.type);
   headers.set("Cache-Control", cacheControl);
-  headers.set("Content-Length", String(bytes.byteLength));
+  headers.set("Content-Length", String(asset.bytes.byteLength));
   headers.set("ETag", `"${file.slice(0, 64)}"`);
-  return new Response(bytes as BodyInit, { headers });
+  return new Response(asset.bytes as BodyInit, { headers });
 }
 
 /** The agent index as the shell's initial `#root` content; the Viewer replaces it when it renders. */
@@ -284,15 +305,27 @@ export function shellWithIndex(indexHtml: string, indexBlock: string): string {
   return body === -1 ? indexHtml : `${indexHtml.slice(0, body)}${indexBlock}${indexHtml.slice(body)}`;
 }
 
-async function loadedReport(origin: string, report: PreviewReport | undefined, config: PreviewConfig, options: PreviewRequestOptions): Promise<{ report: PreviewReport; loaded: LoadedReport } | undefined> {
+/** A report decrypted and parsed, from the isolate's cache; `keep: false` reads one that is not cached without keeping it. */
+async function loadedReport(origin: string, report: PreviewReport | undefined, config: PreviewConfig, options: PreviewRequestOptions,
+  { keep = true }: { keep?: boolean } = {}): Promise<{ report: PreviewReport; loaded: LoadedReport } | undefined> {
   if (!report) return undefined;
   const cache = options.cache ?? reportCache;
   const key = `${origin}${report.path}`;
   let pending = cache.get(key);
-  if (!pending) {
-    pending = decryptedBytes(origin, report.path, config, options).then(bytes => (bytes ? loadReport(bytes) : undefined));
+  if (pending) {
+    // Most recently used last, so the oldest is the first to go.
+    cache.delete(key);
     cache.set(key, pending);
-    pending.then(loaded => { if (!loaded) cache.delete(key); }, () => cache.delete(key));
+  } else {
+    pending = decryptedBytes(origin, report.path, config, options).then(bytes => (bytes ? loadReport(bytes) : undefined));
+    if (keep) {
+      cache.set(key, pending);
+      for (const oldest of cache.keys()) {
+        if (cache.size <= MAX_LOADED_REPORTS) break;
+        cache.delete(oldest);
+      }
+      pending.then(loaded => { if (!loaded && cache.get(key) === pending) cache.delete(key); }, () => { if (cache.get(key) === pending) cache.delete(key); });
+    }
   }
   const loaded = await pending;
   return loaded ? { report, loaded } : undefined;

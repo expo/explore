@@ -253,7 +253,7 @@ function remoteEntry(url: string, size: number): SourceEntry {
   } };
 }
 
-/** The hosted preview manifest (viewer-host PREVIEW_MANIFEST_FORMAT): the metadata file plus every asset's size. */
+/** The report page's manifest (src/report/preview-manifest.ts): the metadata file plus every asset's size. */
 export const PREVIEW_MANIFEST_FORMAT = "explore.preview-manifest/1";
 type PreviewManifest = { format: typeof PREVIEW_MANIFEST_FORMAT; file: "review.json" | "exploration.json"; entries: Record<string, number>; report: unknown };
 
@@ -564,6 +564,13 @@ export class ArtifactReportArchive {
   /** Keep a released URL; beyond either limit the least recently released ones are revoked. */
   private retain(sha256: string, url: string): void {
     const bytes = this.images.get(sha256)!.metadata.byteLength;
+    // A decode a trim left behind can finish after a later one for the same screenshot; nothing uses a kept URL, so the older one goes.
+    const replaced = this.retained.get(sha256);
+    if (replaced) {
+      this.retained.delete(sha256);
+      this.retainedBytes -= replaced.bytes;
+      if (replaced.url !== url) URL.revokeObjectURL(replaced.url);
+    }
     this.retained.set(sha256, { url, bytes });
     this.retainedBytes += bytes;
     for (const [oldest, old] of this.retained) {

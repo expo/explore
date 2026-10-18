@@ -82,7 +82,7 @@ function deployment(files: Record<string, Uint8Array<ArrayBuffer>>, env: Preview
     const body = files[url.pathname];
     return body ? new Response(body, { headers: { "content-length": String(body.byteLength) } }) : new Response("missing", { status: 404 });
   }) as typeof fetch;
-  const options = { env, indexHtml: html, fetchImpl, subtle, cache: new Map(), ...(now ? { now } : {}) };
+  const options = { env, indexHtml: html, fetchImpl, subtle, cache: new Map(), manifests: new Map(), ...(now ? { now } : {}) };
   return { calls, get: (path: string, accept?: string) => previewResponse(new Request(`${origin}/p/${token}${path}`, accept === undefined ? {} : { headers: { accept } }), options) };
 }
 
@@ -389,14 +389,12 @@ test("the manifest and asset routes let the Viewer open a report before any scre
   const asset = await site.get(`/${name}`);
   assert.equal(asset.status, 200);
   assert.equal(asset.headers.get("content-type"), "image/png");
-  // Kept by this browser until the link expires, never by a shared cache.
-  const secondsLeft = Math.floor((Date.parse(reviewEnv.EXPLORE_PREVIEW_EXPIRES_AT!) - Date.now()) / 1000);
-  const maxAge = Number(/^private, max-age=(\d+), immutable$/.exec(asset.headers.get("cache-control") ?? "")?.[1]);
-  assert.ok(Math.abs(maxAge - Math.min(secondsLeft, 365 * 24 * 60 * 60)) <= 5, asset.headers.get("cache-control") ?? "");
+  // Kept by this browser for a week, and never past the link's expiry; never by a shared cache.
+  assert.equal(asset.headers.get("cache-control"), "private, max-age=604800, immutable");
   const nearExpiry = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(review) }, reviewEnv, () => Date.parse("2029-12-31T23:59:00Z"));
   assert.equal((await nearExpiry.get(`/${name}`)).headers.get("cache-control"), "private, max-age=60, immutable");
   const never = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(review) }, { ...reviewEnv, EXPLORE_PREVIEW_EXPIRES_AT: undefined });
-  assert.equal((await never.get(`/${name}`)).headers.get("cache-control"), "private, max-age=31536000, immutable");
+  assert.equal((await never.get(`/${name}`)).headers.get("cache-control"), "private, max-age=604800, immutable");
   assert.equal(asset.headers.get("content-length"), String(entry.size));
   assert.equal(asset.headers.get("etag"), `"${name.slice("assets/".length, "assets/".length + 64)}"`);
   const bytes = new Uint8Array(await asset.arrayBuffer());
@@ -408,4 +406,49 @@ test("the manifest and asset routes let the Viewer open a report before any scre
   }
   // The sealed file is still decrypted once per isolate.
   assert.deepEqual(site.calls, [`${origin}${reviewEnv.EXPLORE_PREVIEW_REPORT}`]);
+});
+
+test("a ZIP's directory records are not assets: the manifest the Viewer validates names files only", async () => {
+  const withDirectory = zip({ "exploration.json": new TextEncoder().encode(JSON.stringify(explorationReport)), "assets/": new Uint8Array(), [`assets/${pngSha}.png`]: png });
+  assert.ok(readZipDirectory(withDirectory)!.has("assets/"));
+  const site = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: await sealed(withDirectory) }, reviewEnv);
+  const body = await (await site.get("/manifest.json")).json() as { entries: Record<string, number> };
+  assert.deepEqual(body.entries, { [`assets/${pngSha}.png`]: png.byteLength });
+});
+
+test("a report the Worker cannot read right now answers 503 on the Viewer's routes, which the Viewer retries", async () => {
+  const site = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: new Uint8Array(64) as Uint8Array<ArrayBuffer> }, reviewEnv);
+  for (const path of ["/manifest.json", `/assets/${pngSha}.png`]) {
+    const response = await site.get(path);
+    assert.equal(response.status, 503, path);
+    assert.equal(response.headers.get("retry-after"), "1");
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+  }
+  // A wrong token or an unknown target is still the same 404 as any other path.
+  assert.equal((await site.get("/manifest.json?target=pixel")).status, 404);
+});
+
+test("an isolate keeps every target's manifest but the decrypted ZIPs of only the two it last served screenshots from", async () => {
+  const listing = ["iphone", "duo-open", "duo-closed"].map(target => ({ target, platform: "ios", label: target, path: `/_report/abcdefghijklmnop/${target}.zip.enc` }));
+  const env: PreviewEnvironment = { ...reviewEnv, EXPLORE_PREVIEW_REPORT: undefined, EXPLORE_PREVIEW_REPORTS: JSON.stringify(listing) };
+  const site = deployment(Object.fromEntries(await Promise.all(listing.map(async entry => [entry.path, await sealed(explorationZip)] as const))), env);
+  const decrypts = () => site.calls.length;
+  // The prefetch: every target's manifest, each report decrypted once and let go.
+  for (const { target } of listing) assert.equal((await site.get(`/manifest.json?target=${target}`)).status, 200);
+  assert.equal(decrypts(), 3);
+  for (const { target } of listing) await site.get(`/manifest.json?target=${target}`);
+  assert.equal(decrypts(), 3, "manifests are kept");
+  const asset = (target: string) => site.get(`/assets/${pngSha}.png?target=${target}`).then(response => response.status);
+  assert.equal(await asset("iphone"), 200);
+  assert.equal(await asset("iphone"), 200);
+  assert.equal(decrypts(), 4, "the report a reviewer looks at is kept");
+  assert.equal(await asset("duo-open"), 200);
+  assert.equal(await asset("iphone"), 200);
+  assert.equal(decrypts(), 5);
+  assert.equal(await asset("duo-closed"), 200);
+  assert.equal(decrypts(), 6, "a third report evicts the least recently used, duo-open");
+  assert.equal(await asset("iphone"), 200);
+  assert.equal(decrypts(), 6);
+  assert.equal(await asset("duo-open"), 200);
+  assert.equal(decrypts(), 7);
 });

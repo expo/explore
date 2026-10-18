@@ -200,7 +200,9 @@ export class ReportSource {
 
   /** The Worker's answer for this link: the bytes, or why there are none. */
   private async download(url: string, onProgress?: (progress: ArtifactLoadProgress) => void): Promise<BlobPart[]> {
-    const response = await fetch(url, { credentials: "same-origin" });
+    let response = await fetch(url, { credentials: "same-origin" });
+    // A 503 is the Worker not reading the report this time; the next request usually does.
+    if (response.status >= 500) response = await fetch(url, { credentials: "same-origin" });
     if (response.status === 410) throw new ReportFileError("invalid", `This preview link expired${await expiredOn(response)}. Download the report from the pull request or workflow run instead, or rerun Explore for a fresh link.`);
     if (response.status === 404) throw new ReportFileError("invalid", "This preview link is not valid, or its deployment was deleted. Ask for a new review, or download the report from the pull request or workflow run.");
     if (!response.ok || !response.body) throw new ReportFileError("invalid", `The report could not be downloaded (HTTP ${response.status}).`);

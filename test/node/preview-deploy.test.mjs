@@ -12,6 +12,8 @@ import { spawnSync } from "node:child_process";
 import { createDecipheriv } from "node:crypto";
 import { ZipReader, Uint8ArrayReader, TextWriter, configure } from "@zip.js/zip.js";
 import { viewerLinks } from "../../dist/report/viewer-links.js";
+import { loadReport } from "../../dist/report/agent-api.js";
+import { manifestBody, previewAsset } from "../../dist/report/preview-manifest.js";
 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
 const sha256 = createHash("sha256").update(png).digest("hex");
@@ -53,6 +55,12 @@ async function fixture(t, { verified = true, preview = { hosting: "eas", expires
 configure({ useWebWorkers: false });
 const TOKEN_RE = /^[a-z2-7]{32}$/;
 
+/** The fixture report as an explore:binary exploration the Worker (and so the deploy check) can open: exploration.json, same assets. */
+async function asExploration(reportPath) {
+  await rm(join(reportPath, "review.json"));
+  await writeFile(join(reportPath, "exploration.json"), JSON.stringify({ kind: "explore.exploration-report", map: { screens: [] } }));
+}
+
 async function exportFixture(t, options) {
   const { root, inputPath } = await fixture(t, options);
   const reportPath = join(root, "report");
@@ -66,7 +74,7 @@ async function exportFixture(t, options) {
 }
 
 /** A fake EAS CLI plus a fake deployment: `deploy` captures the sealed report and .env, then serves them like the Worker would. */
-function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", aliasOrigin = "https://acme-explore--bluesky.expo.app", accounts = ["brent-org"], failDeploy = false, aliasServes = true, aliasListing, existingComment } = {}) {
+function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", aliasOrigin = "https://acme-explore--bluesky.expo.app", accounts = ["brent-org"], failDeploy = false, aliasServes = true, aliasListing, existingComment, manifestServes = true } = {}) {
   let deploys = 0;
   let latestComment = existingComment;
   const calls = []; const captured = {};
@@ -100,7 +108,7 @@ function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", alia
     // An alias that has not moved to the new deployment yet: it answers for an earlier token, so this one is 404.
     if (!aliasServes && url.origin === aliasOrigin) return new Response("Not found", { status: 404 });
     if (url.origin === origin || (captured.alias && url.origin === aliasOrigin)) {
-      const match = /^\/p\/([a-z2-7]{32})(?:\/(report\.zip|reports\.json|api\/v1))?$/.exec(url.pathname);
+      const match = /^\/p\/([a-z2-7]{32})(?:\/(report\.zip|reports\.json|manifest\.json|api\/v1|assets\/[a-f0-9]{64}\.(?:png|jpg|mp4)))?$/.exec(url.pathname);
       if (!captured.env || !match || match[1] !== captured.env.EXPLORE_PREVIEW_TOKEN) return new Response("Not found", { status: 404 });
       // The token page negotiates like the real Worker: only a request that asks for HTML gets the shell.
       if (!match[2]) return (options.headers?.accept ?? "").includes("text/html")
@@ -119,6 +127,14 @@ function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", alia
       const decipher = createDecipheriv("aes-256-gcm", key, sealed.subarray(0, 12));
       decipher.setAAD(Buffer.from("expo-explore-preview/1")); decipher.setAuthTag(sealed.subarray(-16));
       const plain = Buffer.concat([decipher.update(sealed.subarray(12, -16)), decipher.final()]);
+      // The manifest and assets the Viewer opens, as the Worker builds them; manifestServes: false is a Worker that cannot.
+      if (match[2] === "manifest.json" || match[2].startsWith("assets/")) {
+        const loaded = manifestServes ? await loadReport(new Uint8Array(plain)) : undefined;
+        if (!loaded) return new Response("Not found", { status: 404 });
+        if (match[2] === "manifest.json") return new Response(manifestBody(loaded), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+        const asset = await previewAsset(loaded, match[2]);
+        return asset ? new Response(asset.bytes, { status: 200, headers: { "content-type": asset.type } }) : new Response("Not found", { status: 404 });
+      }
       return new Response(plain, { status: 200, headers: { "content-type": "application/zip" } });
     }
     const artifactNames = { 20: "explore-review-10-1", 21: "explore-review-10-1-ios", 22: "explore-review-10-1-android" };
@@ -171,9 +187,11 @@ test("ci:deploy seals the exact report, deploys it with the preview export, veri
   assert.equal(sealed.byteLength, zip.byteLength + 12 + 16, "iv || ciphertext || tag, nothing else");
   assert.ok(!Buffer.from(sealed).includes(Buffer.from("review.json")), "the static file is ciphertext");
   // Verification hit the gate and its negatives before the comment was published.
-  const previewPaths = eas.requests.filter(request => request.url.origin === "https://acme-explore--1lcbdcpwn3.expo.app").map(request => request.url.pathname);
+  const previewPaths = eas.requests.filter(request => request.url.origin === "https://acme-explore--1lcbdcpwn3.expo.app").map(request => request.url.pathname.replace(/[a-f0-9]{64}/, "<sha256>"));
   const wrong = token.endsWith("a") ? `${token.slice(0, -1)}b` : `${token.slice(0, -1)}a`;
-  assert.deepEqual(previewPaths, [`/p/${token}`, `/p/${token}/api/v1`, `/p/${token}/report.zip`, "/", `/p/${wrong}`, `/p/${wrong}/report.zip`, `/p/${token}/viewer/index.html`]);
+  // The ZIP, then what the Viewer opens from it: the manifest and one asset.
+  assert.deepEqual(previewPaths, [`/p/${token}`, `/p/${token}/api/v1`, `/p/${token}/report.zip`, `/p/${token}/manifest.json`, `/p/${token}/assets/<sha256>.png`,
+    "/", `/p/${wrong}`, `/p/${wrong}/report.zip`, `/p/${token}/viewer/index.html`]);
   assert.ok(eas.requests.every(request => request.url.origin !== "https://acme-explore--1lcbdcpwn3.expo.app" || request.options.cache === "no-store"));
   const posted = eas.requests.find(request => request.options.method === "POST");
   const body = JSON.parse(posted.options.body).body;
@@ -335,9 +353,11 @@ test("ci:deploy fans several platforms' reports into one sealed deployment, veri
   assert.deepEqual(result.reports.map(report => [report.platform, report.reportSha256, report.reportBytes, report.artifactUrl]),
     zips.map((zip, index) => [["ios", "android"][index], createHash("sha256").update(zip).digest("hex"), zip.byteLength, artifactUrl.replace(/20$/, String(21 + index))]));
   assert.equal(result.reportSha256, result.reports[0].reportSha256);
-  const previewPaths = eas.requests.filter(request => request.url.origin === "https://acme-explore--1lcbdcpwn3.expo.app").map(request => request.url.pathname + request.url.search);
+  const previewPaths = eas.requests.filter(request => request.url.origin === "https://acme-explore--1lcbdcpwn3.expo.app").map(request => (request.url.pathname + request.url.search).replace(/[a-f0-9]{64}/, "<sha256>"));
   const wrong = token.endsWith("a") ? `${token.slice(0, -1)}b` : `${token.slice(0, -1)}a`;
-  assert.deepEqual(previewPaths, [`/p/${token}`, `/p/${token}/api/v1`, `/p/${token}/report.zip?platform=ios`, `/p/${token}/report.zip?platform=android`, `/p/${token}/reports.json`,
+  assert.deepEqual(previewPaths, [`/p/${token}`, `/p/${token}/api/v1`,
+    ...["ios", "android"].flatMap(platform => [`/p/${token}/report.zip?platform=${platform}`, `/p/${token}/manifest.json?platform=${platform}`, `/p/${token}/assets/<sha256>.png?platform=${platform}`]),
+    `/p/${token}/reports.json`,
     "/", `/p/${wrong}`, `/p/${wrong}/report.zip`, `/p/${token}/viewer/index.html`]);
   const posted = eas.requests.filter(request => request.options.method === "POST" || request.options.method === "PATCH").map(request => JSON.parse(request.options.body).body);
   assert.equal(posted.length, 2, "the second platform updates the comment the first created");
@@ -408,7 +428,7 @@ test("a never-expiring preview seals no EXPLORE_PREVIEW_EXPIRES_AT and the comme
 
 test("a standalone report deploys to a fixed alias with a fixed token, verifies both hosts, and prints the alias link", async t => {
   const { reportPath, exportPath } = await exportFixture(t);
-  await rename(join(reportPath, "review.json"), join(reportPath, "exploration.json"));
+  await asExploration(reportPath);
   const eas = easFixture();
   const token = "b".repeat(32);
   const result = await deployExplorationReport({ reportPath, project: "acme-explore", owner: "brent-org", expiresAfterDays: null, exportPath, alias: "bluesky", token,
@@ -498,7 +518,7 @@ test("a fixture preview seals each platform's ZIP as is behind one alias and lis
 
 test("a deployment that does not report the requested alias is a retryable deploy failure", async t => {
   const { reportPath, exportPath } = await exportFixture(t);
-  await rename(join(reportPath, "review.json"), join(reportPath, "exploration.json"));
+  await asExploration(reportPath);
   const eas = easFixture();
   const run = (node, [bin, ...args], options) => {
     const result = eas.run(node, [bin, ...args], options);
@@ -617,7 +637,7 @@ test("deployLocalReports hosts one review's platforms behind one link, labelled 
 
 test("an explore:binary report names its platform, so an Android exploration is not served as iOS", async t => {
   const { reportPath, exportPath } = await exportFixture(t);
-  await rename(join(reportPath, "review.json"), join(reportPath, "exploration.json"));
+  await asExploration(reportPath);
   const eas = easFixture();
   await deployExplorationReport({ reportPath, platform: "android", project: "acme-explore", owner: "brent-org", expiresAfterDays: 7, exportPath,
     environment: deployEnvironment, transport: eas.transport, run: eas.run, now: () => now, verifyTimeoutMs: 1 });
@@ -753,4 +773,13 @@ test("ci:deploy pairs target-named artifacts, deploys them in config order, and 
   await cp(fixtures[0].inputPath, join(root, "inputs", "explore-capture-10-1-duo-open", "report-input.json"));
   await assert.rejects(collectPlatformReports({ inputsPath: join(root, "inputs"), reportsPath: join(root, "reports"), environment: deployEnvironment, transport }),
     error => error.code === "PREVIEW_REPORTS_INVALID" && /holds the report of iphone/.test(error.message));
+});
+
+test("ci:deploy fails a deployment whose Worker serves the ZIP but not the manifest and screenshots the Viewer opens", async t => {
+  const { inputPath, reportPath, exportPath } = await exportFixture(t);
+  const eas = easFixture({ manifestServes: false });
+  await assert.rejects(deployPreview({ inputPath, reportPath, exportPath, artifactUrl, environment: deployEnvironment, transport: eas.transport, run: eas.run, now: () => now, verifyTimeoutMs: 1 }),
+    error => error.code === "PREVIEW_VERIFY_FAILED" && /manifest and screenshots/.test(error.message) && error.details.status === 404);
+  const posted = eas.requests.filter(request => request.options.method === "POST" || request.options.method === "PATCH").map(request => JSON.parse(request.options.body).body);
+  assert.ok(posted.every(body => !body.includes(`/p/${eas.captured.env.EXPLORE_PREVIEW_TOKEN}`)), posted.join("\n---\n"));
 });
