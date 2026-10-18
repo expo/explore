@@ -703,8 +703,17 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       } else {
         // agent-device folds only inside a session, and `install` opens none (SESSION_NOT_FOUND on EAS Simulator when the
         // fold came first): the app opens once to start the session. Argent's bridge folds without one.
-        if (controller !== "argent") runner({ command: controllerCommand, args: ["open", options.bundleId, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
-          cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 5 * 60_000 });
+        // A foldable's first open on EAS Simulator has timed out inside the controller once (`xcrun timed out`); one retry.
+        for (let attempt = 0; controller !== "argent"; attempt += 1) {
+          try {
+            runner({ command: controllerCommand, args: ["open", options.bundleId, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
+              cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 5 * 60_000 });
+            break;
+          } catch (error) {
+            if (attempt > 0) throw error;
+            say(`the app did not open before the fold (${(error as Error).message.split("\n")[0]}); opening it again`);
+          }
+        }
         const folded = runner({ command: controllerCommand, args: ["fold", options.devicePose, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
           cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000, allowFailure: true });
         const failure = foldFailure(folded.stdout);
