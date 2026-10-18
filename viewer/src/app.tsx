@@ -1558,7 +1558,7 @@ function ViewerApp() {
       const run = runTargets(map.run);
       const noun = run.targets.every((target) => target.id === target.platform) ? "platform" as const : "device" as const;
       const page = new URL(window.location.href);
-      return run.targets.flatMap((target, place) => target.id !== run.current && siblingReportUrl(page, target.id) ? [{ id: target.id, label: target.label, place, noun }] : []);
+      return run.targets.flatMap((target, place) => target.id !== run.current && siblingReportUrl(page, target.id) ? [{ id: target.id, label: target.label, platform: target.platform, place, noun }] : []);
     })(),
     camera: !phone && route.canvas === "map" && Boolean(getCanvasZoomState().api),
   }, {

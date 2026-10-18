@@ -21,9 +21,9 @@ export type SearchSuggestionContext = {
   screenId?: string;
 };
 
-/** Route-shaped queries ("/settings") are after a screen; words ("dark", "fit") are after a command. */
+/** Route-shaped queries ("/settings", "settings/profile") are after a screen; words ("dark", "fit") are after a command. */
 function preferredKind(query: string): SearchItemKind {
-  return query.startsWith("/") ? "screen" : "command";
+  return query.includes("/") ? "screen" : "command";
 }
 
 export function normalizeSearchText(value: string): string {

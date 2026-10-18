@@ -23,8 +23,8 @@ export type CommandContext = {
   inspector?: { open: boolean } | undefined;
   /** Full screen's state where the browser supports it. */
   fullscreen?: boolean | undefined;
-  /** The run's other targets this page can open, with their place in the targets menu. */
-  targets: readonly { id: string; label: string; place: number; noun: "device" | "platform" }[];
+  /** The run's other targets this page can open, with their platform and their place in the targets menu. */
+  targets: readonly { id: string; label: string; platform: string; place: number; noun: "device" | "platform" }[];
   /** A canvas camera is on screen (Map), so fit, center and zoom apply. */
   camera: boolean;
 };
@@ -73,17 +73,18 @@ export function commandItems(context: CommandContext, actions: CommandActions): 
   if (hasChanges && context.canvas !== "compare") add("go:compare", "Go to", "Compare", () => actions.selectCanvas("compare"), { keywords: ["review", "changes", "diff", "before", "after"], shortcut: key(SHORTCUTS.canvas.compare) });
   if (context.find) add("go:find", "Go to", "Find a screen", actions.openFind, { keywords: ["filter", "screens", "search"], shortcut: "/" });
   if (context.handoff) add("go:handoff", "Go to", "Hand off to AI", actions.openHandoff, { keywords: ["agent", "prompt", "claude", "codex", "copy"], shortcut: key(SHORTCUTS.app.handoff) });
-  add("go:shortcuts", "Go to", "Keyboard shortcuts", actions.openShortcuts, { keywords: ["keys", "help"], shortcut: "?" });
+  if (!context.phone) add("go:shortcuts", "Go to", "Keyboard shortcuts", actions.openShortcuts, { keywords: ["keys", "help"], shortcut: "?" });
   if (hasChanges && !context.phone) add("go:changes-menu", "Go to", "Changed screens menu", actions.toggleChanges, { keywords: ["changes", "list", "filter"], shortcut: key(SHORTCUTS.app.changes) });
 
   if (hasChanges) {
+    // The ends stop, as Compare's arrows do; with no change selected, the steps start from either end.
     const at = context.changed.findIndex((entry) => entry.id === context.selectedScreenId);
-    const count = context.changed.length;
-    const step = (delta: number) => context.changed[((at < 0 ? (delta > 0 ? -1 : 0) : at) + delta + count) % count]!;
+    const next = context.changed[at < 0 ? 0 : at + 1];
+    const previous = context.changed[at < 0 ? context.changed.length - 1 : at - 1];
     const compare = context.canvas === "compare";
-    add("changes:next", "Changes", "Next changed screen", () => actions.openChangedScreen(step(1).id),
+    if (next) add("changes:next", "Changes", "Next changed screen", () => actions.openChangedScreen(next.id),
       { keywords: ["change", "step", "forward"], shortcut: compare ? key(SHORTCUTS.compare.nextScreen) : undefined });
-    add("changes:previous", "Changes", "Previous changed screen", () => actions.openChangedScreen(step(-1).id),
+    if (previous) add("changes:previous", "Changes", "Previous changed screen", () => actions.openChangedScreen(previous.id),
       { keywords: ["change", "step", "back"], shortcut: compare ? key(SHORTCUTS.compare.previousScreen) : undefined });
     if (selectedChange && !compare) add("changes:open-selected", "Changes", `Open ${selectedChange.route} in Compare`, () => actions.selectCanvas("compare"), { keywords: ["selected", "review", "diff"] });
   }
@@ -98,7 +99,7 @@ export function commandItems(context: CommandContext, actions: CommandActions): 
   }
   for (const appearance of context.appearances) {
     add(`view:appearance:${appearance.id}`, appearance.current ? "View · current" : "View", `App appearance: ${appearance.label}`, () => actions.chooseAppearance(appearance.id),
-      { keywords: ["app", "appearance", "scheme", "light", "dark", "captured"], shortcut: !appearance.current && context.appearances.length === 2 ? key(SHORTCUTS.appearance.app) : undefined });
+      { keywords: ["app", "appearance", "scheme", "captured"], shortcut: !appearance.current && context.appearances.length === 2 ? key(SHORTCUTS.appearance.app) : undefined });
   }
   if (context.fullscreen !== undefined) {
     add("view:fullscreen", "View", context.fullscreen ? "Exit full screen" : "Enter full screen", actions.toggleFullscreen, { keywords: ["fullscreen", "window", "focus"] });
@@ -107,7 +108,7 @@ export function commandItems(context: CommandContext, actions: CommandActions): 
   for (const target of context.targets) {
     const numbered = TARGET_NUMBER_KEYS ? SHORTCUTS.targetByNumber[target.place] : undefined;
     add(`target:${target.id}`, target.noun === "device" ? "Devices" : "Platforms", `Switch to ${target.label}`, () => actions.switchTarget(target.id),
-      { keywords: [target.noun, "report", "switch", "ios", "android"], shortcut: numbered ? key(numbered) : undefined });
+      { keywords: [target.noun, "report", "switch", target.platform], shortcut: numbered ? key(numbered) : undefined });
   }
 
   if (context.camera) {
