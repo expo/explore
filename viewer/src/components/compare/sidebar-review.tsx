@@ -122,7 +122,7 @@ export function SidebarReview(props: CompareControllerOptions) {
     <section className="sidebar-review" aria-label={`Changes in ${route}`}>
       <ReviewModes value={compare.chosenMode} disabled={compare.modesDisabled} onChange={compare.chooseMode} />
 
-      <div className={`compare-stage sidebar-review-stage mode-${mode}`}
+      <div className={`compare-stage sidebar-review-stage mode-${mode}${compare.aspect > 1 ? " landscape" : ""}`}
         style={{ "--compare-aspect": compare.aspect } as CSSProperties}>
         {/* Before and After are named above the frames in every mode, as in Compare. */}
         <CompareStage
