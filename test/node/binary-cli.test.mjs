@@ -7,7 +7,7 @@ import test from "node:test";
 
 const root = resolve(import.meta.dirname, "../..");
 const cli = join(root, "dist", "cli.js");
-const { defaultOutputDirectory, expiresInDays } = await import(join(root, "dist", "cli", "binary-commands.js"));
+const { defaultOutputDirectory } = await import(join(root, "dist", "cli", "binary-commands.js"));
 
 function fail(args) {
   // Without an EAS login (as on CI) argument and archive errors must still come first.
@@ -28,7 +28,6 @@ test("explore:binary is in the short help with its archive kinds and --no-upload
 test("explore:binary validates its arguments before touching EAS or a model", () => {
   assert.match(fail([]), /Pass the app archive/);
   assert.match(fail(["./app.apk", "--upload", "--no-upload"]), /either --upload or --no-upload/);
-  assert.match(fail(["./app.apk", "--expires-in", "400d"]), /--expires-in must be 1d to 90d, or never/);
   assert.match(fail(["./app.apk", "--platform", "web"]), /platform/);
   assert.match(fail(["./app.apk", "--simulator", "cloud"]), /simulator/);
   // A local run needs no EAS login, so the archive is the first thing it checks.
@@ -40,9 +39,10 @@ test("explore:binary validates its arguments before touching EAS or a model", ()
   assert.match(human.stderr, /Archive not found: .*does-not-exist\.apk\n→ Check the path/);
 });
 
-test("expiry and output directory defaults", () => {
-  assert.equal(expiresInDays("7d"), 7); assert.equal(expiresInDays("90d"), 90); assert.equal(expiresInDays("never"), null);
-  assert.throws(() => expiresInDays("0d")); assert.throws(() => expiresInDays("7")); assert.throws(() => expiresInDays("91d"));
+test("--expires-in is accepted from older scripts and says it no longer applies; output directory defaults", () => {
+  const ignored = spawnSync(process.execPath, [cli, "explore:binary", "./does-not-exist.apk", "--no-upload", "--expires-in", "400d"], { cwd: root, encoding: "utf8", env: { ...process.env, EXPO_TOKEN: "", EXPO_SESSION_SECRET: "", GITHUB_ACTIONS: "" } });
+  assert.match(ignored.stderr, /^--expires-in no longer applies: a hosted preview lasts as long as its EAS Hosting deployment/m);
+  assert.match(ignored.stderr, /Archive not found/, "and the run goes on");
   const now = new Date("2026-10-11T16:28:48.123Z");
   assert.equal(defaultOutputDirectory("/builds/euxy-ios.tar.gz", now), "explore-euxy-ios-20261011-1628");
   assert.equal(defaultOutputDirectory("My App (1).app", now), "explore-My-App-1-20261011-1628");

@@ -25,6 +25,13 @@ export const APPLE = typeof navigator !== "undefined"
  */
 export const CANVAS_NUMBER_KEYS = APPLE;
 
+/**
+ * Whether Alt+1–8 reach the page. Browsers on Linux and ChromeOS keep them for their tabs; on Apple keyboards ⌥ only
+ * types a symbol (matching is on `event.code`, so that does not matter) and Windows browsers leave Alt+digits alone.
+ */
+export const TARGET_NUMBER_KEYS = APPLE
+  || !(typeof navigator !== "undefined" && /Linux|X11|CrOS/.test(navigator.platform || navigator.userAgent));
+
 function mod(code: string, key: string): Shortcut {
   return { code, key, mod: true };
 }
@@ -43,6 +50,10 @@ function shift(code: string, key: string): Shortcut {
 
 function plain(code: string, key: string): Shortcut {
   return { code, key };
+}
+
+function alt(code: string, key: string): Shortcut {
+  return { code, key, alt: true };
 }
 
 // Keys follow what the reader already knows from other apps: ⌘B is VS Code's sidebar key (here the
@@ -79,6 +90,16 @@ export const SHORTCUTS = {
     fit: shift("Digit1", "1"),
     center: shift("Digit2", "2"),
   },
+  /**
+   * The run's other targets (devices, or platforms in reports from before targets). D opens their menu as ⌘B opens
+   * Changes, and ` returns to the last one shown, as ⌘` and Alt-Tab return to the last window.
+   */
+  target: {
+    menu: plain("KeyD", "D"),
+    last: plain("Backquote", "`"),
+  },
+  /** A target by its place in the menu, as the canvases are numbered; the only digits left are ⌥'s. TARGET_NUMBER_KEYS only. */
+  targetByNumber: ["1", "2", "3", "4", "5", "6", "7", "8"].map(digit => alt(`Digit${digit}`, digit)),
   /** Initials for the canvases; the shifted digits already belong to persistent canvas actions. */
   canvas: {
     map: plain("KeyM", "M"),

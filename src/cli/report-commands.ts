@@ -3,7 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { DEFAULT_BINARY_PROJECT } from "../binary/run.js";
 import { pruneCaptureCache, repositoryName } from "../ci/local-review.js";
-import { readExploreConfig, previewDays, DEFAULT_EXPLORE_CONFIG_PATH, PREVIEW_DEFAULT_DAYS, type ExploreConfig } from "../config/explore-config.js";
+import { readExploreConfig, warnIgnoredExpiry, DEFAULT_EXPLORE_CONFIG_PATH, type ExploreConfig } from "../config/explore-config.js";
 import { assertHostingExport, deployLocalReports, previewProjectSlug, readReportZip, zipReportDirectory, MAX_REPORT_BYTES, type ReportZipSummary } from "../report/preview-deploy.js";
 import { startLocalReportServer } from "../report/local-report-server.js";
 import { findSavedRun, listSavedRuns, pruneSavedRuns, readSavedReports, removeSavedRun, reportTarget, saveRun, savedRunsDirectory, SAVED_RUN_LIMITS, type SavedReport, type SavedRun } from "../report/saved-runs.js";
@@ -11,10 +11,9 @@ import { openViewerInBrowser } from "../map/viewer-server.js";
 import { formatBytes, friendlyTime, kindLabel, runPicker, runTitle } from "./reports-picker.js";
 import { pickIntro } from "./title-intros.js";
 import { CiError, toCiError } from "../shared/ci-errors.js";
-import { argumentError, flag, has, nonNegativeInteger, output, positionals, required } from "./args.js";
+import { argumentError, flag, has, nonNegativeInteger, output, positionals } from "./args.js";
 
 /** explore:binary's default: an exploration link is for a quick look. */
-const EXPLORATION_DEFAULT_DAYS = 7;
 
 /** A report directory (review.json or exploration.json and assets/), its parent holding report.zip, or a report ZIP. */
 async function readReport(path: string): Promise<{ path: string; zip: Uint8Array; summary: ReportZipSummary }> {
@@ -94,12 +93,12 @@ async function hostReports(reports: ReadReport[]): Promise<void> {
   const found = review ? await repositoryPreview(review.repository) : undefined;
   const preview = found?.preview;
   if (review) process.stderr.write(found ? `report.preview from ${found.source}\n`
-    : `no config of ${review.repository} here: hosting with the defaults (pass --config, or --owner, --project and --expires-in)\n`);
+    : `no config of ${review.repository} here: hosting with the defaults (pass --config, or --owner and --project)\n`);
   const project = flag("project") ?? (review ? previewProjectSlug(review.repository, preview?.project) : DEFAULT_BINARY_PROJECT);
   const owner = flag("owner") ?? preview?.owner;
-  const expiresAfterDays = has("expires-in") ? previewDays(required("expires-in"), "--expires-in")
-    : preview ? preview.expiresAfterDays : review ? PREVIEW_DEFAULT_DAYS : EXPLORATION_DEFAULT_DAYS;
-  const hosted = await deployLocalReports({ project, ...(owner ? { owner } : {}), expiresAfterDays,
+  if (has("expires-in")) warnIgnoredExpiry("--expires-in");
+  else if (preview?.expiresAfterIgnored) warnIgnoredExpiry("report.preview.expiresAfter");
+  const hosted = await deployLocalReports({ project, ...(owner ? { owner } : {}),
     reports: reports.map(report => ({ platform: report.summary.platform, target: report.summary.target, zip: report.zip,
       ...(report.summary.changes === undefined ? {} : { changes: report.summary.changes }), ...(report.summary.device ? { device: report.summary.device } : {}) })),
     ownerHint: "Pass --owner with the Expo account that should host the report.",

@@ -145,7 +145,7 @@ npx @expo/explore capture --committed   # HEAD alone
 npx @expo/explore capture --base v1.3.0 --head v1.4.0 --scope all --upload
 ```
 
-- It checks out both commits as temporary worktrees, installs their dependencies, captures every configured platform or [target](#targets) on EAS Simulator or a [local simulator](#simulator), and opens the report in a local Viewer. `--target` or `--platform` picks some; they run at once, at most `--parallel N` at a time. `--upload` hosts it for 30 days (`--expires-in` changes that) and prints the link; `report:upload <report.zip>` hosts one you already have.
+- It checks out both commits as temporary worktrees, installs their dependencies, captures every configured platform or [target](#targets) on EAS Simulator or a [local simulator](#simulator), and opens the report in a local Viewer. `--target` or `--platform` picks some; they run at once, at most `--parallel N` at a time. `--upload` hosts it and prints the link; `report:upload <report.zip>` hosts one you already have.
 - Your checkout, index and branches are never touched. Your uncommitted changes, untracked files included, are reviewed as `eas build` would upload them; `--committed`, or `cli.requireCommit: true` in `eas.json`, leaves them out.
 - Installs run without credential environment variables, which keeps tokens out of reach of a registry a commit's `.npmrc` names; that is not a sandbox. A registry that needs `${NPM_TOKEN}` in the project's `.npmrc` must be authenticated in your own `~/.npmrc`.
 - Captures are cached in `~/.cache/expo-explore`, so the same base is not captured twice (`--no-cache` skips it); a capture unused for 30 days goes, and the cache stays under 2 GB. Ctrl+C stops the run's simulator sessions and local devices; when a run is stopped harder than that, the next local run stops what it left running.
@@ -170,7 +170,7 @@ Pointed to a build, the [quick start](#quick-start) maps every screen of it, wit
 - A run stops after 15 minutes, 40 screens, or 150 actions (`--max-duration-minutes`, `--max-screens`, `--max-actions`).
 - Buttons that delete, pay, sign out, send, or leave the app are never tapped. `--allow-destructive "Reset filters"` allows one by its exact label.
 - `--hints "…"` tells the model what to focus on or how to sign in ([details](#sign-in-and-other-app-state)).
-- On EAS Simulator the report is hosted, and the link lasts 7 days (`--expires-in` takes 1d to 90d, or never); `--no-upload` keeps it local. On a local simulator it opens in the local Viewer (`--no-open` or `--json` skips that; `view --dir <folder>` opens it later), and `--upload` hosts it, which needs an EAS login. `--json` prints the result for scripts.
+- On EAS Simulator the report is hosted, and the link lasts as long as its EAS Hosting deployment (see [report access](docs/private-review.md#hosted-previews)); `--no-upload` keeps it local. On a local simulator it opens in the local Viewer (`--no-open` or `--json` skips that; `view --dir <folder>` opens it later), and `--upload` hosts it, which needs an EAS login. `--json` prints the result for scripts.
 - For a link that stays the same from run to run, pass `--alias NAME` and set `EXPLORE_PREVIEW_TOKEN` to a fixed token of 32 characters from a–z and 2–7 (`LC_ALL=C tr -dc a-z2-7 </dev/urandom | head -c 32`).
 - EAS Simulator sessions and hosted reports run under an EAS project named `expo-explore` in your account, created on first use (`--owner` and `--project` pick another).
 - Read a local result with `npx @expo/explore view --dir <folder>`, `screen:list`, or `gap:list`.
@@ -227,7 +227,6 @@ By default reviewers download the report from GitHub. With hosted previews, the 
 report:
   preview:
     hosting: eas        # default: off
-    expiresAfter: 30d   # default 30d, max 365d, or never
     # project: acme-explore   # default <repository name>-explore, created on first run
 ```
 
@@ -235,7 +234,7 @@ report:
 - A [comparison of two commits](#compare-any-two-commits) links its hosted report from the run's summary instead of a PR comment. `capture --upload` on your machine deploys to the same project with your `eas login`.
 - `expo-explore report:upload <report.zip>...` hosts reports already on your machine the same way: a review's reports (one per platform or target, from `capture --output` or a downloaded `explore-review` artifact) or an `explore:binary` report.
 - `EXPO_TOKEN` must be able to create the EAS project, so use a [robot user's](https://docs.expo.dev/accounts/programmatic-access/) token.
-- The report is encrypted, and only a request carrying the link's token can open it. Treat the link like a shared file link; see [report access](docs/private-review.md#hosted-previews).
+- Every file of the report sits under the link's 160-bit token, so only someone with the link can open it. Treat the link like a shared file link. It works as long as its EAS Hosting deployment does: EAS deletes one without an alias after 30 days on the Free plan and 90 on paid plans, and you can delete it sooner (`eas deploy:delete`) or on your own schedule. Explore sets no expiry of its own; see [report access](docs/private-review.md#hosted-previews).
 
 </details>
 
@@ -406,11 +405,11 @@ give me the report link.
 
 There are a few ways to snapshot a release:
 
-- **On demand:** in your repository's Actions tab, open **Expo Explore compare**, choose **Run workflow**, and set `base` to the last release's tag (`v1.3.0`), `head` to the new tag or release candidate (`v1.4.0-rc.1`), `scope` to `all` and `expires-in` to `never`. The run's summary links the report.
+- **On demand:** in your repository's Actions tab, open **Expo Explore compare**, choose **Run workflow**, and set `base` to the last release's tag (`v1.3.0`), `head` to the new tag or release candidate (`v1.4.0-rc.1`), and `scope` to `all`. The run's summary links the report.
 - **Automatically, on every tag:** add the `release-review.yml` in [The comparison workflow](#compare) below. It compares each tag, release candidates included, with the last stable tag, so a release candidate is reviewed against what people have now.
 - **On your machine, without CI:** `npx @expo/explore capture --base v1.3.0 --head v1.4.0 --scope all --upload`, with your `eas login`. `npx @expo/explore reports` lists the runs you have kept.
 
-`scope: all` captures every screen, not only those whose source changed, so the report shows the whole release with what changed since the last one marked; `expires-in: never` keeps its link.
+`scope: all` captures every screen, not only those whose source changed, so the report shows the whole release with what changed since the last one marked.
 
 <details>
 <summary id="compare"><strong>The comparison workflow</strong></summary>
@@ -443,16 +442,15 @@ jobs:
       base: '${{ needs.previous.outputs.tag }}'
       head: '${{ github.ref_name }}'
       scope: all          # every screen, not only those whose source changed
-      expires-in: never   # keep the hosted link (with report.preview.hosting: eas)
     secrets: inherit
 ```
 
 - Pick whatever `base` the event calls for: `main` for a release branch, yesterday's tag for a nightly, the last stable tag for a release candidate.
-- `scope` and `expires-in` are optional and override `exploration.scope` and `report.preview.expiresAfter` for that run. Without them a comparison captures what a PR review would (`scope: changes` captures only screens whose source changed), and the hosted link expires like a PR's.
+- `scope` is optional and overrides `exploration.scope` for that run. Without it a comparison captures what a PR review would (`scope: changes` captures only screens whose source changed). The hosted link lasts as long as its deployment, like a PR's; `expires-in` from earlier versions of this workflow is accepted and ignored.
 - The run summary links each target's report (**Open** and **zip**, like a PR comment) and, with hosting, the hosted report.
 - `setup --workflows` installs it from 0.19.0; `npx @expo/explore@latest setup --workflows` adds it to an existing setup. The caller grants `contents: read` and `actions: read`; `secrets: inherit` passes `EXPO_TOKEN` and any app-test secrets.
 - Call it once per workflow run. A called workflow runs inside its caller's run, so a second call in the same run would reuse the first one's artifact names; use separate workflows instead.
-- When the baseline workflow captured `base` in the last 30 days, with the same config and Explore version, that capture is reused and only `head` is captured. The report artifact is kept 30 days; only a hosted link with `expires-in: never` lasts longer.
+- When the baseline workflow captured `base` in the last 30 days, with the same config and Explore version, that capture is reused and only `head` is captured. The report artifact is kept 30 days; a hosted link lasts as long as its EAS Hosting deployment (an aliased one until the alias moves).
 
 </details>
 
@@ -506,7 +504,7 @@ The same link answers differently depending on who asks. It already carries the 
 - Anything that does not ask for HTML (`curl`, `fetch`, agents' URL tools) gets a Markdown index of the report, also at `/llms.txt`.
 - The index links to a read-only JSON API under `/api/v1`: `/screens?status=modified,accessibility-only,added,removed`, `/screens/<id>`, `/transitions`, and `/raw` for the report file.
 - Reports without source also expose `/journeys`, `/gaps`, and `/frontier`.
-- A link to several targets takes `?target=<id>` and serves the first without it; `/reports.json` lists them (`?platform=ios|android` from older links still works). Expired links' report and API routes answer `410`.
+- A link to several targets takes `?target=<id>` and serves the first without it; `/reports.json` lists them (`?platform=ios|android` from older links still works).
 
 ```sh
 curl -s "$LINK/api/v1/screens?status=modified" | jq '.items[] | {route, status, review}'

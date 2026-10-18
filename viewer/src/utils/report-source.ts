@@ -204,7 +204,7 @@ export class ReportSource {
     let manifest: unknown;
     try { manifest = JSON.parse(await new Blob(chunks).text()); }
     catch { throw new ReportFileError("invalid", "The hosted report manifest is not valid JSON."); }
-    return ArtifactReportArchive.openManifest(manifest, path => previewAssetUrl(token, path, target));
+    return ArtifactReportArchive.openManifest(manifest, path => previewAssetUrl(token, path));
   }
 
   /** The Worker's answer for this link: the bytes, or why there are none. */
@@ -212,8 +212,6 @@ export class ReportSource {
     let response = await fetch(url, { credentials: "same-origin" });
     // A 503 is the Worker not reading the report this time; the next request usually does.
     if (response.status >= 500) response = await fetch(url, { credentials: "same-origin" });
-    if (response.status === 410) throw new ReportFileError("invalid", `This preview link expired${await expiredOn(response)}. Download the report from the pull request or workflow run instead, or rerun Explore for a fresh link.`);
-    if (response.status === 413) throw new ReportFileError("too-large", "This report is too large to open from a hosted link. Download it from the pull request or workflow run instead, and drop it on the Viewer.");
     if (response.status === 404) throw new ReportFileError("invalid", "This preview link is not valid, or its deployment was deleted. Ask for a new review, or download the report from the pull request or workflow run.");
     if (!response.ok || !response.body) throw new ReportFileError("invalid", `The report could not be downloaded (HTTP ${response.status}).`);
     const total = Number(response.headers.get("content-length")) || undefined;
@@ -302,11 +300,3 @@ function archiveTarget(archive: ArtifactReportArchive): string | undefined {
 
 export const REPORT_SOURCE = new ReportSource(typeof window === "undefined" ? undefined : new URL(window.location.href));
 
-/** " on Oct 10, 2026" from the 410 body's `expiredAt`, or "" when it is missing or malformed. */
-async function expiredOn(response: Response): Promise<string> {
-  try {
-    const body = await response.json() as { expiredAt?: unknown };
-    const at = typeof body.expiredAt === "string" ? Date.parse(body.expiredAt) : Number.NaN;
-    return Number.isFinite(at) ? ` on ${new Date(at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}` : "";
-  } catch { return ""; }
-}

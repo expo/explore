@@ -54,17 +54,14 @@ test("rejects comparisons that name another URL, a PR number, or one commit twic
   assert.throws(() => projectReviewPresentation({ ...comparison, repositoryId: "x" }), /decimal GitHub id/);
 });
 
-test("a run's scope and link lifetime override the reviewed config only where the workflow set them", async () => {
+test("a run's scope overrides the reviewed config only where the workflow set it; a link lifetime from older workflows changes nothing", async () => {
   const { withRunOverrides } = await import("../../dist/config/explore-config.js");
-  const config = { exploration: { scope: "changes" }, report: { preview: { hosting: "eas", expiresAfterDays: 30 } } };
+  const config = { exploration: { scope: "changes" }, report: { preview: { hosting: "eas" } } };
   assert.deepEqual(withRunOverrides(config, {}), config);
-  assert.deepEqual(withRunOverrides(config, { scope: "all", expiresIn: "never" }),
-    { exploration: { scope: "all" }, report: { preview: { hosting: "eas", expiresAfterDays: null } } });
-  assert.equal(withRunOverrides(config, { expiresIn: "90d" }).report.preview.expiresAfterDays, 90);
-  assert.deepEqual(withRunOverrides({ exploration: { scope: "changes" } }, { expiresIn: "never" }), { exploration: { scope: "changes" } }, "no hosting, nothing to expire");
+  assert.deepEqual(withRunOverrides(config, { scope: "all", expiresIn: "never" }), { exploration: { scope: "all" }, report: { preview: { hosting: "eas" } } });
+  // A hosted preview lasts as long as its EAS Hosting deployment, so --expires-in is accepted from older workflows and ignored, whatever it says.
+  assert.deepEqual(withRunOverrides(config, { expiresIn: "forever" }), config);
   assert.throws(() => withRunOverrides(config, { scope: "everything" }), /--scope must be changes or all/);
-  assert.throws(() => withRunOverrides(config, { expiresIn: "forever" }), /--expires-in/);
-  assert.throws(() => withRunOverrides({ exploration: { scope: "changes" } }, { expiresIn: "forevr" }), /--expires-in/, "a typo fails even before hosting is on");
 });
 
 test("a comparison links GitHub's direct two-dot diff, which matches what capture compares, also for a rollback", () => {

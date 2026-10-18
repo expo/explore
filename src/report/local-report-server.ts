@@ -69,15 +69,24 @@ export async function startLocalReportServer(options: { reports: LocalReport[]; 
         return send(reply.status, body, reply.contentType, { vary: "Accept", ...reply.headers });
       }
       if (isPage) return send(200, await readFile(resolve(viewerRoot, "index.html")), TYPES[".html"]);
-      // What the Viewer opens (preview-manifest.ts, shared with the hosted Worker): the manifest, then each asset as it is shown.
-      if (url.pathname === `${page}/manifest.json` || url.pathname.startsWith(`${page}/assets/`)) {
-        if (!report) return send(404, "Not found");
-        if (!loaded.has(report)) loaded.set(report, loadReport(report.zip));
-        const content = await loaded.get(report);
-        if (!content) return send(404, "Not found");
-        if (url.pathname === `${page}/manifest.json`) return send(200, manifestBody(content), TYPES[".json"]);
-        const asset = await previewAsset(content, url.pathname.slice(page.length + 1));
-        return asset ? send(200, asset.bytes, asset.type) : send(404, "Not found");
+      // What the Viewer opens (preview-manifest.ts, as a hosted preview serves it): the manifest, then each asset as it is
+      // shown. An asset is named by its SHA-256 and carries no target, so it comes from whichever report holds it.
+      const read = (entry: LocalReport) => {
+        if (!loaded.has(entry)) loaded.set(entry, loadReport(entry.zip));
+        return loaded.get(entry)!;
+      };
+      if (url.pathname === `${page}/manifest.json`) {
+        const content = report ? await read(report) : undefined;
+        return content ? send(200, manifestBody(content), TYPES[".json"]) : send(404, "Not found");
+      }
+      if (url.pathname.startsWith(`${page}/assets/`)) {
+        const path = url.pathname.slice(page.length + 1);
+        for (const entry of options.reports) {
+          const content = await read(entry);
+          const asset = content ? await previewAsset(content, path) : undefined;
+          if (asset) return send(200, asset.bytes, asset.type);
+        }
+        return send(404, "Not found");
       }
       if (url.pathname === `${page}/report.zip`) return report ? send(200, report.zip, "application/zip") : send(404, "Not found");
       if (url.pathname === `${page}/reports.json` && options.reports.length > 1) return send(200, listing, TYPES[".json"]);

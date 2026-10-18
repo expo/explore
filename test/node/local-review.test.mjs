@@ -245,11 +245,13 @@ test('the local Viewer serves the manifest and assets the Viewer opens, the same
   assert.match(manifest.headers.get('content-type') ?? '', /^application\/json/);
   assert.equal(await manifest.text(), manifestBody(loaded));
   const [asset] = Object.keys(JSON.parse(manifestBody(loaded)).entries);
-  const served = await fetch(`${server.url}/${asset}?platform=ios`);
+  // An asset is named by its SHA-256, as a hosted preview's static files are, so it carries no target and comes from whichever report holds it.
+  const served = await fetch(`${server.url}/${asset}`);
   assert.equal(served.status, 200);
   assert.equal(served.headers.get('content-type'), 'image/png');
   assert.equal(createHash('sha256').update(new Uint8Array(await served.arrayBuffer())).digest('hex'), asset.slice('assets/'.length, 'assets/'.length + 64));
-  for (const path of [`/${asset}?platform=android`, `/assets/${'0'.repeat(64)}.png`, '/assets/review.json', '/manifest.json?platform=android', '/manifest.json?target=tablet']) {
+  assert.equal((await fetch(`${server.url}/${asset}?platform=android`)).status, 200, 'a target query changes nothing');
+  for (const path of [`/assets/${'0'.repeat(64)}.png`, '/assets/review.json', '/manifest.json?platform=android', '/manifest.json?target=tablet']) {
     assert.equal((await fetch(`${server.url}${path}`)).status, 404, path);
   }
 });

@@ -56,17 +56,9 @@ export function isPreviewPath(pathname: string): boolean {
 }
 
 /**
- * A hosted preview: one EAS Hosting deployment per review whose Worker serves this Viewer at
- * `/p/<token>` and the decrypted report at `/p/<token>/report.zip`, for as long as the link is valid.
+ * The token of a hosted preview page, `/p/<token>`: one EAS Hosting deployment per review, whose Worker serves this
+ * Viewer there, each target's manifest at `/p/<token>/manifest.json`, and every screenshot as a static file.
  */
-export function previewReportUrl(page: URL): string | undefined {
-  const match = PREVIEW_PATH.exec(page.pathname);
-  if (!match) return undefined;
-  const target = reportTarget(page);
-  return `/p/${match[1]}/report.zip${target ? `?${targetQuery(target)}` : ""}`;
-}
-
-/** The token of a hosted preview page, `/p/<token>`. */
 export function previewToken(page: URL): string | undefined {
   return PREVIEW_PATH.exec(page.pathname)?.[1];
 }
@@ -76,9 +68,12 @@ export function previewManifestUrl(token: string, target?: string): string {
   return `/p/${token}/manifest.json${target ? `?${targetQuery(target)}` : ""}`;
 }
 
-/** One asset of a hosted preview's report, `assets/<sha256>.<ext>` under `/p/<token>/`. */
-export function previewAssetUrl(token: string, path: string, target?: string): string {
-  return `/p/${token}/${path}${target ? `?${targetQuery(target)}` : ""}`;
+/**
+ * One asset of a hosted preview's report, a static file at `/p/<token>/assets/<sha256>.<ext>`. Named by its content, it
+ * is the same file for every target that shows it, so it carries no target.
+ */
+export function previewAssetUrl(token: string, path: string): string {
+  return `/p/${token}/${path}`;
 }
 
 /** The hosted preview's list of the targets it serves (`/p/<token>/reports.json`). */

@@ -28,7 +28,7 @@ Platform, bundle id, app name and version are read from the archive; do not pass
 3. `agent-device install` of the archive straight into the session (Argent: `reinstall-app`; locally `simctl install` or `adb install`), then `open <bundle id>`.
 4. The model explores through a small tool set (observe, act, capture, finish); app text is treated as untrusted and destructive controls (delete, reset, sign out, purchase, send, share) are blocked outside the model.
 5. The map and screenshots are written under `--output` (default `./explore-<archive>-<timestamp>`), plus `report/` for the Viewer.
-6. The report is sealed and deployed to EAS Hosting (`--no-upload` skips this; `--expires-in 7d|30d|never`). With `--simulator local` it opens in the local Viewer instead, which keeps running until stopped; `--json` and `--no-open` skip it, so with `--json` open it afterwards with `view --dir <output>` (in the background, since it serves until stopped). `--upload` hosts it, and that needs an EAS login.
+6. The report is deployed to EAS Hosting as files under the link's token (`--no-upload` skips this); the link lasts as long as the deployment. With `--simulator local` it opens in the local Viewer instead, which keeps running until stopped; `--json` and `--no-open` skip it, so with `--json` open it afterwards with `view --dir <output>` (in the background, since it serves until stopped). `--upload` hosts it, and that needs an EAS login.
 7. The exact session is stopped, or the local device deleted; a failure to stop reports `SESSION_CLEANUP_FAILED` with the command to stop it by hand. A local device a hard-stopped run left behind is removed by the next local run.
 
 Budgets default to 15 minutes, 40 screens, 150 actions (`--max-duration-minutes`, `--max-screens`, `--max-actions`). Steer the model with `--hints "focus on the onboarding and settings"`, skip onboarding with `--launch-url myapp://home`, and allow a specific risky control with `--allow-destructive "Clear cache"`.
@@ -111,7 +111,7 @@ With `--json` the last stdout line is the result:
 ```json
 { "ok": true, "app": { "name": "euxy", "bundleId": "dev.brent.euxy", "platform": "ios", "version": "1.2.0" },
   "exploration": { "stopReason": "finished", "screens": 9, "observations": 11, "actions": 23, "summary": "..." },
-  "map": ".../explore-euxy-.../map.json", "report": ".../explore-euxy-.../report", "url": "https://....expo.app/p/<token>", "expiresAt": "..." }
+  "map": ".../explore-euxy-.../map.json", "report": ".../explore-euxy-.../report", "url": "https://....expo.app/p/<token>", "expiresAt": null }
 ```
 
 Share `url` (it is the only copy of the access token; it is not written to disk). Then query the map locally without a model or device:

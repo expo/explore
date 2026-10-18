@@ -104,7 +104,7 @@ export type ExploreConfig = {
   setup?: ExploreSetupAction[];
   agent?: { provider: "openai" | "anthropic"; model: string; instructions?: string };
   /** Hosted previews: one token-gated EAS Hosting deployment per review, see docs/private-review.md. */
-  report?: { preview?: { hosting: "eas"; /** null: the link never expires; the deployment lives until someone deletes it. */ expiresAfterDays: number | null; owner?: string; project?: string };
+  report?: { preview?: { hosting: "eas"; /** `expiresAfter` was set; it no longer applies (see IGNORED_EXPIRY). */ expiresAfterIgnored?: true; owner?: string; project?: string };
     /** `map`: the PR comment draws a Mermaid map of the changed screens and the screens that lead to them. Off by default. */
     comment?: { map: boolean } };
   /**
@@ -115,8 +115,16 @@ export type ExploreConfig = {
   ci?: { trustedAuthors?: string[] };
 };
 
-export const PREVIEW_MAX_DAYS = 365;
-export const PREVIEW_DEFAULT_DAYS = 30;
+/**
+ * What `report.preview.expiresAfter` and `--expires-in` say now that Explore sets no expiry: a hosted preview lasts as long
+ * as its EAS Hosting deployment. Both are still accepted, so configs and copied workflows keep working.
+ */
+export const IGNORED_EXPIRY = "no longer applies: a hosted preview lasts as long as its EAS Hosting deployment, which EAS deletes after 30 days on Free and 90 on paid plans unless an alias points at it. Delete the deployment (eas deploy:delete) to remove it sooner.";
+
+/** Says once, on stderr (a warning annotation in GitHub Actions), that an expiry setting is ignored. */
+export function warnIgnoredExpiry(setting: string, environment: NodeJS.ProcessEnv = process.env): void {
+  process.stderr.write(`${environment.GITHUB_ACTIONS === "true" ? "::warning::" : ""}${setting} ${IGNORED_EXPIRY}\n`);
+}
 
 const MAX_CONFIG_BYTES = 64 * 1024;
 const UNSAFE_CHARACTERS = /[\u0000-\u001f\u007f]/;
@@ -507,8 +515,8 @@ export function resolvePlatformConfig(config: ExploreConfig, platform: ExplorePl
 
 /**
  * One run's choices over the reviewed config, from the workflow that started it: a release comparison can capture
- * every screen (`scope: all`) and keep its hosted link (`expiresIn: never`). `expiresIn` changes nothing when the
- * config hosts no report.
+ * every screen (`scope: all`). `expiresIn` (`--expires-in`) is accepted from workflows written before Explore stopped
+ * setting an expiry, and changes nothing.
  */
 export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined; controller?: string | undefined; simulator?: string | undefined; repack?: string | undefined }): ExploreConfig {
   let result = config;
@@ -530,11 +538,6 @@ export function withRunOverrides(config: ExploreConfig, overrides: { scope?: str
     if (overrides.scope !== "changes" && overrides.scope !== "all") fail("--scope must be changes or all", "--scope");
     result = { ...result, exploration: { ...result.exploration, scope: overrides.scope } };
   }
-  if (overrides.expiresIn !== undefined) {
-    // Validated even without hosting, so a typo in a release workflow surfaces before hosting is turned on.
-    const expiresAfterDays = previewDays(overrides.expiresIn, "--expires-in");
-    if (result.report?.preview) result = { ...result, report: { ...result.report, preview: { ...result.report.preview, expiresAfterDays } } };
-  }
   return result;
 }
 
@@ -544,18 +547,6 @@ export function withRunOverrides(config: ExploreConfig, overrides: { scope?: str
  */
 export function captureRepack(config: ExploreConfig): "eas" | "local" {
   return config.capture.repack ?? (config.capture.simulator === "local" ? "local" : "eas");
-}
-
-/** `expiresAfter` is a whole number of days (`30d`, `30 days`, or `30`), at most PREVIEW_MAX_DAYS, or `never` (null). */
-export function previewDays(value: unknown, field: string): number | null {
-  if (value === undefined) return PREVIEW_DEFAULT_DAYS;
-  if (typeof value === "string" && /^\s*never\s*$/i.test(value)) return null;
-  const match = typeof value === "number" ? [null, String(value)] : typeof value === "string" ? /^\s*(\d{1,3})\s*(?:d|days?)?\s*$/i.exec(value) : null;
-  const days = match ? Number(match[1]) : Number.NaN;
-  if (!Number.isInteger(days) || days < 1 || days > PREVIEW_MAX_DAYS) {
-    fail(`${field} must be between 1 and ${PREVIEW_MAX_DAYS} days, such as 30d, or never`, field);
-  }
-  return days;
 }
 
 const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}(?:\[bot\])?$/;
@@ -618,7 +609,8 @@ function previewConfig(value: unknown): NonNullable<ExploreConfig["report"]>["pr
   }
   return {
     hosting: literal(preview.hosting, ["eas"] as const, "report.preview.hosting"),
-    expiresAfterDays: previewDays(preview.expiresAfter, "report.preview.expiresAfter"),
+    // Accepted from configs written before Explore stopped setting an expiry; the commands that host say it is ignored.
+    ...(preview.expiresAfter === undefined ? {} : { expiresAfterIgnored: true as const }),
     ...(owner === undefined ? {} : { owner }),
     ...(project === undefined ? {} : { project }),
   };

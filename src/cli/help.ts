@@ -18,7 +18,7 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
   doctor --capture [--project DIRECTORY] [--output DIRECTORY] [--target ID | --platform ios|android] [--controller agent-device|argent] [--simulator eas|local] [--repack eas|local] [--yes]
        (captures the committed HEAD like the baseline workflow, with your eas login, and reports each route)
   capture [--base REF] [--head REF | --committed] [--target ID | --platform ios|android] [--parallel N] [--scope all|changes]
-       [--controller agent-device|argent] [--simulator eas|local] [--repack eas|local] [--upload [--expires-in 7d|30d|never]] [--no-open] [--no-cache] [--output DIRECTORY] [--project DIRECTORY]
+       [--controller agent-device|argent] [--simulator eas|local] [--repack eas|local] [--upload] [--no-open] [--no-cache] [--output DIRECTORY] [--project DIRECTORY]
        (on this machine: checks out both commits in temporary worktrees, captures them with your eas login (in agent
         mode, also your local claude or codex login), and opens the report; the head is HEAD with your uncommitted changes, as eas build
         uploads them (--committed, or cli.requireCommit in eas.json, leaves them out); the base defaults to where HEAD
@@ -39,7 +39,7 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
        (the runs kept on this machine: local reviews, explorations and uploaded reports, for 30 days or up to 2 GB;
         in a terminal, an arrow-key picker: Enter opens a run in the local Viewer, u hosts it, d deletes it;
         ID is a run's id from reports list, or latest; EXPLORE_INTRO=off skips the title animation)
-  report:upload <report.zip | report directory>... [--owner ACCOUNT] [--project SLUG] [--expires-in 7d|30d|never] [--config FILE] [--json]
+  report:upload <report.zip | report directory>... [--owner ACCOUNT] [--project SLUG] [--config FILE] [--json]
        (hosts reports already on this machine on EAS Hosting behind one link, with your eas login: one per platform
         of the same review, from capture:review --output or a downloaded explore-review artifact, or one explore:binary report)`;
 
@@ -55,7 +55,7 @@ const BINARY = `Prebuilt apps (no source needed; runs with your local claude or 
         (a sign-in in --hints is written as {{secret:NAME}}: Explore types the value of the environment variable NAME,
         and the model and the report only see the reference)
         --max-duration-minutes N --max-screens N --max-actions N --provider anthropic|openai --model ID
-        --owner ACCOUNT --project SLUG --expires-in 7d|30d|never --allow-destructive "Label,Other label"
+        --owner ACCOUNT --project SLUG --allow-destructive "Label,Other label"
         --alias NAME (one EAS Hosting host per app that always serves the newest run; with EXPLORE_PREVIEW_TOKEN
         set to a fixed 32-character token, the hosted link is the same every run)
        (iOS needs a simulator build; a device .ipa and Android .aab are rejected before any device starts)

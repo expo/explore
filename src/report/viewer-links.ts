@@ -15,7 +15,7 @@ export type ViewerDeepLinks = {
   surface: (surfaceId: string) => string;
 };
 
-/** A hosted preview: the Viewer and its decrypted report served from one token-gated EAS Hosting deployment. */
+/** A hosted preview: the Viewer and its report served from one token-gated EAS Hosting deployment. */
 export type PreviewLinks = ViewerDeepLinks & {
   /** Epoch milliseconds after which the deployment's Worker stops serving the report; null when the link does not expire. */
   expiresAt: number | null;
