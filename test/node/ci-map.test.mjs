@@ -287,6 +287,8 @@ async function fixture(t, settings = {}) {
       if (command === 'install') { assert.ok(existsSync(request.args[1]), 'the repacked app is on this machine'); return ok({ installed: true, appBundleId: 'com.example.app' }); }
       // agent-device 0.21.15 cannot read Xcode 27.1's hinge angle back, so a local fold reports a failure after folding.
       if (command === 'fold') return settings.local ? json({ success: false, error: { code: 'COMMAND_FAILED', message: "CoreDevice reported no hinge angle sample: Unknown option '--device'" } })
+        // EAS Simulator: the pose is dispatched, but agent-device cannot read the hinge back to confirm it.
+        : settings.foldUnverified ? json({ success: false, error: { code: 'COMMAND_FAILED', message: `fold: iPhone Duo received the ${request.args[1]} pose request, but the first hinge-angle read returned no sample to verify it` } })
         : ok({ action: 'fold', pose: request.args[1] });
       if (command === 'record' && settings.recording) {
         if (request.args[1] === 'start') { recordingPath = request.args[2]; return ok({ path: recordingPath }); }
@@ -516,6 +518,14 @@ test('device.pose folds the device first, before the app is opened, read or capt
     // Argent's bridge is told the pose, so it captures the opened panel's landscape UI upright.
     if (argent) for (const request of controller) assert.equal(request.environment.EXPLORE_ARGENT_POSE, 'open');
   }
+});
+
+test('on EAS Simulator a fold the controller cannot read back is confirmed by the lit display: portrait is closed, landscape is open', async t => {
+  const closed = await fixture(t, { devicePose: 'closed', foldUnverified: true });
+  assert.equal((await runCiMap(closed.options)).runStatus, 'complete');
+  assert.ok(closed.requests.some(request => request.args[0] === 'screenshot' && request.args[1].endsWith('pose.png')), 'the display is read after the unconfirmed fold');
+  const open = await fixture(t, { devicePose: 'open', foldUnverified: true });
+  await assert.rejects(runCiMap(open.options), error => error.code === 'CONTROLLER_FOLD_UNVERIFIED');
 });
 
 test('a local simulator capture creates its own iOS simulator, installs the repacked app there, and deletes the simulator', async t => {

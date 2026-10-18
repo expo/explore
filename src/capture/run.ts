@@ -20,7 +20,7 @@ import { type CiAgentRuntimeOptions } from "./agent/runtime.js";
 import { EAS_CLI_VERSION, CONTROLLER_SESSION, isRecord, parseJson, baseEnvironment, nonEmpty } from "./common.js";
 import { lstatIfExists, isWithin, temporaryCaptureDirectory, absoluteContractFile, readContractJson, assertNoSymlinkAncestors } from "./fs-safety.js";
 import { loadAppIcon, loadCachedAppIcon, storeAppIcon } from "./app-icon.js";
-import { defaultRunner, runAgentControllerCommand } from "./controller.js";
+import { controllerCommandFailure, defaultRunner, runAgentControllerCommand } from "./controller.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
 import { assertCaptureEasProfile, assertSimulatorAvailable, fingerprintFrom, hasEasEnvironmentFetchFailure, nativeBuildFrom, existingBuild, repackProfileFrom, prepareExactSourceBuild, type RepackMode } from "./eas-build.js";
 import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, controllerVersion, simulatorOsVersion, type ActiveSimulatorRuntime, type SimulatorConnection } from "./simulator.js";
@@ -28,7 +28,7 @@ import { argentControllerInvocation } from "./controller-invocation.js";
 import { sharedBuild } from "./shared-build.js";
 import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, agentDeviceClaims, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
   deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, approveLinkScheme, localPoseShown,
-  setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
+  pngSize, setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
 import { ensureArgentToolServer } from "../shared/controller-cache.js";
 import { openLocalCaptureRecord } from "./local-registry.js";
 import { type UnattributedSetting } from "./unattributed.js";
@@ -705,7 +705,25 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         // fold came first): the app opens once to start the session. Argent's bridge folds without one.
         if (controller !== "argent") runner({ command: controllerCommand, args: ["open", options.bundleId, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
           cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 5 * 60_000 });
-        fold();
+        const folded = runner({ command: controllerCommand, args: ["fold", options.devicePose, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
+          cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000, allowFailure: true });
+        const failure = foldFailure(folded.stdout);
+        if (failure) {
+          // On EAS Simulator agent-device dispatches the pose but cannot read the hinge back, so the lit display's shape
+          // confirms the pose instead: the inner one is landscape when open, the outer one portrait when closed.
+          if (!/hinge/i.test(failure)) throw controllerCommandFailure(folded.stdout, "fold");
+          const file = join(simulatorProject, "pose.png");
+          runner({ command: controllerCommand, args: ["screenshot", file, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
+            cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
+          const size = pngSize(await readFile(file).catch(() => Buffer.alloc(0)));
+          await rm(file, { force: true });
+          const shown = options.devicePose === "open" ? size !== undefined && size.width > size.height
+            : options.devicePose === "closed" ? size !== undefined && size.height > size.width : true;
+          if (!shown) throw new CiError({ code: "CONTROLLER_FOLD_UNVERIFIED", stage: "session",
+            message: `${options.device} did not show the ${options.devicePose} display after folding: ${failure}`,
+            nextAction: "Rerun; if it persists, check that this EAS Simulator image supports folding the device." });
+          say(`${options.device} shows the ${options.devicePose} display (the controller could not read the hinge back)`);
+        }
       }
     }
     runtimeStage = "runtime";
@@ -912,4 +930,12 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const captured = selectedIds.filter(id => outcomes[id]?.status === "captured").length;
   say(`${captured} of ${selectedIds.length} ${selectedIds.length === 1 ? "route" : "routes"} captured`);
   return finish();
+}
+
+/** The message of a `fold --json` the controller reported as failed, or undefined when it succeeded. */
+function foldFailure(stdout: string): string | undefined {
+  try {
+    const parsed = JSON.parse(stdout) as { success?: boolean; error?: { message?: string } };
+    return parsed.success === false ? String(parsed.error?.message ?? "fold failed") : undefined;
+  } catch { return undefined; }
 }

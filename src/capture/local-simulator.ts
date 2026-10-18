@@ -92,7 +92,7 @@ export function approveLinkScheme(options: { runner: CommandRunner; udid: string
 }
 
 /** The pixel size of a PNG, from its header. */
-function pngSize(bytes: Buffer): { width: number; height: number } | undefined {
+export function pngSize(bytes: Buffer): { width: number; height: number } | undefined {
   if (bytes.length < 24 || bytes.toString("latin1", 12, 16) !== "IHDR") return undefined;
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
 }
