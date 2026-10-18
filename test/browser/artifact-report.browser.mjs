@@ -87,7 +87,9 @@ async function harness(t, bytes, { app = false, open = true, name = fileName, re
           if (preview.status && preview.status !== 200) { response.statusCode = preview.status; return response.end(preview.body ?? "Not found"); }
           response.setHeader("content-type", "application/json");
           // A slow target (`delays` by query) keeps its manifest in flight while the reviewer moves on.
-          return void setTimeout(() => response.end(served.manifest), preview.delays?.[url.search] ?? 0);
+          // `padding` makes the manifest larger than the Viewer reads.
+          const body = preview.padding ? " ".repeat(preview.padding) + served.manifest : served.manifest;
+          return void setTimeout(() => response.end(body), preview.delays?.[url.search] ?? 0);
         }
         if (preview && url.pathname.startsWith(`${pagePath}/assets/`)) {
           const asset = served.files.get(url.pathname.slice(pagePath.length + 1));
@@ -521,7 +523,7 @@ test("a switch the prefetch joins keeps the report it shows open", { timeout: 60
   assert.deepEqual(errors, []);
 });
 
-test("a switch to a prefetched target lets go of the screenshots the other report showed", { timeout: 60_000 }, async t => {
+test("switching back to a prefetched target shows the screenshots it showed before, without decoding them again", { timeout: 60_000 }, async t => {
   const { page, errors, preview, switchToIos } = await slowSwitchHarness(t, "hijklmnopqrstuvwxyz2345672345672", 0);
   const screenshot = page.locator(".map-canvas img[data-screenshot-src]").first();
   await expect(screenshot).toHaveAttribute("data-screenshot-state", "ready");
@@ -530,9 +532,46 @@ test("a switch to a prefetched target lets go of the screenshots the other repor
   await page.waitForTimeout(250);
   await switchToIos();
   await expect(page.locator(".app-shell")).toBeVisible();
-  await expect.poll(() => page.evaluate(url => window.revokedUrls.includes(url), shown)).toBe(true);
   await expect(screenshot).toHaveAttribute("data-screenshot-state", "ready");
   assert.equal(preview.queries.filter(query => query === "?platform=ios").length, 1, "the switch opens the prefetched report without a download");
+  const created = await page.evaluate(() => window.createdUrls.length);
+  await page.goBack();
+  await page.waitForURL(url => new URL(url).searchParams.get("platform") === "android");
+  await expect(screenshot).toHaveAttribute("data-screenshot-state", "ready");
+  assert.equal(await screenshot.getAttribute("src"), shown, "the Android report kept the Blob URL it was showing");
+  assert.equal(await page.evaluate(url => window.revokedUrls.includes(url), shown), false);
+  assert.equal(await page.evaluate(() => window.createdUrls.length), created, "nothing was decoded again");
+  assert.deepEqual(errors, []);
+});
+
+test("Forward onto a target still downloading keeps the preview link and its place in history", { timeout: 60_000 }, async t => {
+  const { page, errors, switchToIos } = await slowSwitchHarness(t, "jklmnopqrstuvwxyz234567234567234", 3000);
+  await page.evaluate(() => { window.location.hash = "#/map?inspect=diff"; });
+  const androidUrl = page.url();
+  await switchToIos();
+  const iosUrl = page.url();
+  await page.goBack();
+  await page.waitForURL(androidUrl);
+  await expect(page.locator(".app-shell")).toBeVisible();
+  // iOS is not kept yet: its download is still in flight.
+  await page.goForward();
+  await page.waitForTimeout(200);
+  assert.equal(page.url(), iosUrl, "Forward lands on the iOS link, not a rewritten /map");
+  await expect(page.locator(".app-shell")).toBeVisible({ timeout: 10_000 });
+  assert.equal(new URL(page.url()).pathname, new URL(iosUrl).pathname);
+  assert.equal(new URL(page.url()).searchParams.get("platform"), "ios");
+  await page.goBack();
+  await page.waitForTimeout(200);
+  assert.equal(page.url(), androidUrl, "Back restores the Android entry as it was");
+  assert.deepEqual(errors, []);
+});
+
+test("a hosted manifest larger than the Viewer reads is refused before it is parsed", { timeout: 60_000 }, async t => {
+  const preview = { token: "klmnopqrstuvwxyz2345672345672345", padding: 11 * 1024 * 1024 };
+  const { page, errors } = await harness(t, await archive(), { app: true, reportIdentity: null, preview, query: "" });
+  const shell = page.locator(".report-loading-shell");
+  await expect(shell).toHaveAttribute("data-loading-status", "failed");
+  await expect(shell).toContainText("This report's index is larger than the Viewer opens.");
   assert.deepEqual(errors, []);
 });
 

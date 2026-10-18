@@ -290,6 +290,8 @@ const DECODE_SLOTS = 4;
  */
 export const RETAINED_SCREENSHOTS = 32;
 export const RETAINED_SCREENSHOT_BYTES = 128 * 1024 * 1024;
+/** A hosted preview's report in the background (another target is shown) keeps fewer, for a quick switch back. */
+export const BACKGROUND_RETAINED_SCREENSHOTS = 16;
 
 /**
  * Compressed Blob + entry index. Screenshots are extracted when a caller asks for them; the last
@@ -305,6 +307,7 @@ export class ArtifactReportArchive {
   private readonly queues: Record<ScreenshotPriority, ImageLoad[]> = { eager: [], lazy: [] };
   private disposed = false;
   private running = 0;
+  private retainedLimit = RETAINED_SCREENSHOTS;
 
   private constructor(private readonly close: () => void, report: ArtifactReport | ExplorationReport,
     private readonly images: Map<string, ImageEntry>, readonly identity: ArtifactIdentity) {
@@ -425,6 +428,8 @@ export class ArtifactReportArchive {
   async resolve(reference: string, priority: ScreenshotPriority = "lazy"): Promise<string> {
     const sha256 = IMAGE_REFERENCE.exec(reference)?.[1];
     if (!sha256) return reference;
+    // Shown again: back to the full allowance.
+    this.retainedLimit = RETAINED_SCREENSHOTS;
     if (this.disposed || !this.images.has(sha256)) throw new Error("This report screenshot is unavailable.");
     const existing = this.loads.get(sha256);
     if (existing) {
@@ -479,11 +484,11 @@ export class ArtifactReportArchive {
     for (const load of this.queues.eager.splice(0).concat(this.queues.lazy.splice(0))) {
       load.waiting?.drop(new Error("This screenshot is no longer in use."));
     }
-    for (const load of this.loads.values()) if (load.url) URL.revokeObjectURL(load.url);
+    // What the Viewer was showing is kept as released, most recent last, so switching back shows it at once.
+    this.retainedLimit = BACKGROUND_RETAINED_SCREENSHOTS;
+    for (const load of this.loads.values()) if (load.url) this.retain(load.sha256, load.url);
     this.loads.clear();
-    for (const { url } of this.retained.values()) URL.revokeObjectURL(url);
-    this.retained.clear();
-    this.retainedBytes = 0;
+    this.evictRetained();
   }
 
   private async decode(load: ImageLoad): Promise<string> {
@@ -573,8 +578,13 @@ export class ArtifactReportArchive {
     }
     this.retained.set(sha256, { url, bytes });
     this.retainedBytes += bytes;
+    this.evictRetained();
+  }
+
+  /** Beyond either limit, the least recently released kept URLs are revoked. */
+  private evictRetained(): void {
     for (const [oldest, old] of this.retained) {
-      if (this.retained.size <= RETAINED_SCREENSHOTS && this.retainedBytes <= RETAINED_SCREENSHOT_BYTES) break;
+      if (this.retained.size <= this.retainedLimit && this.retainedBytes <= RETAINED_SCREENSHOT_BYTES) break;
       this.retained.delete(oldest);
       this.retainedBytes -= old.bytes;
       URL.revokeObjectURL(old.url);

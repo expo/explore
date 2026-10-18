@@ -1,6 +1,6 @@
 import type { EmbeddedReport } from "../../../src/contracts/standalone-report";
 import {
-  ArtifactReportArchive, artifactIdentity, isReportPage, isReportTargetId, openCachedReport, openReportFile, previewAssetUrl,
+  ARTIFACT_LIMITS, ArtifactReportArchive, artifactIdentity, isReportPage, isReportTargetId, openCachedReport, openReportFile, previewAssetUrl,
   previewManifestUrl, previewReportsUrl, previewToken, reportDownloadUrl, reportFileName, reportTarget, ReportFileError,
   showArchive, workflowRunUrl, type ArtifactIdentity, type ArtifactLoadProgress, type ReportFileErrorCode,
 } from "./artifact-report";
@@ -18,6 +18,8 @@ export type ReportSourceSnapshot = {
   reportKey: number;
 };
 
+/** The metadata the ZIP path accepts, plus room for the manifest's list of assets and their sizes. */
+const MAX_MANIFEST_BYTES = ARTIFACT_LIMITS.metadata + 2 * 1024 * 1024;
 /** After the shown report is ready, the deployment's other targets are fetched so a switch needs no download. */
 const PREFETCH_DELAY = 1500;
 
@@ -42,6 +44,8 @@ export class ReportSource {
   /** Opened preview reports by the target key that selected them ("" for the link's default). */
   private readonly archives = new Map<string, ArtifactReportArchive>();
   private readonly loading = new Map<string, Promise<ArtifactReportArchive>>();
+  /** Everyone waiting on a download hears its progress: a switch can join one the prefetch started. */
+  private readonly loadingProgress = new Map<string, Set<(progress: ArtifactLoadProgress) => void>>();
   private current: string | undefined;
   private generation = 0;
   private prefetched = false;
@@ -151,7 +155,8 @@ export class ReportSource {
     const key = target ?? "";
     try {
       const archive = this.archives.get(key) ?? await this.loadTarget(target, progress => { if (generation === this.generation) this.progressed(progress); });
-      if (generation !== this.generation) return;
+      // A switch Back or Forward left behind still keeps what it downloaded, so returning to it needs no download.
+      if (generation !== this.generation) return void this.remember(key, archive);
       this.adopt(key, archive);
     } catch (error) {
       if (generation !== this.generation) return;
@@ -180,9 +185,13 @@ export class ReportSource {
   /** One download per target, shared between a switch and the prefetch. */
   private loadTarget(target: string | undefined, onProgress?: (progress: ArtifactLoadProgress) => void): Promise<ArtifactReportArchive> {
     const key = target ?? "";
+    const listeners = this.loadingProgress.get(key) ?? new Set();
+    this.loadingProgress.set(key, listeners);
+    if (onProgress) listeners.add(onProgress);
     let pending = this.loading.get(key);
     if (!pending) {
-      pending = this.fetchTarget(target, onProgress).finally(() => { this.loading.delete(key); });
+      pending = this.fetchTarget(target, progress => { for (const listener of listeners) listener(progress); })
+        .finally(() => { this.loading.delete(key); this.loadingProgress.delete(key); });
       this.loading.set(key, pending);
     }
     return pending;
@@ -204,9 +213,12 @@ export class ReportSource {
     // A 503 is the Worker not reading the report this time; the next request usually does.
     if (response.status >= 500) response = await fetch(url, { credentials: "same-origin" });
     if (response.status === 410) throw new ReportFileError("invalid", `This preview link expired${await expiredOn(response)}. Download the report from the pull request or workflow run instead, or rerun Explore for a fresh link.`);
+    if (response.status === 413) throw new ReportFileError("too-large", "This report is too large to open from a hosted link. Download it from the pull request or workflow run instead, and drop it on the Viewer.");
     if (response.status === 404) throw new ReportFileError("invalid", "This preview link is not valid, or its deployment was deleted. Ask for a new review, or download the report from the pull request or workflow run.");
     if (!response.ok || !response.body) throw new ReportFileError("invalid", `The report could not be downloaded (HTTP ${response.status}).`);
     const total = Number(response.headers.get("content-length")) || undefined;
+    const tooLarge = () => new ReportFileError("too-large", "This report's index is larger than the Viewer opens. Download the report from the pull request or workflow run instead.");
+    if (total && total > MAX_MANIFEST_BYTES) throw tooLarge();
     const reader = response.body.getReader();
     const chunks: BlobPart[] = [];
     let loaded = 0;
@@ -215,6 +227,8 @@ export class ReportSource {
       if (done) break;
       chunks.push(value);
       loaded += value.byteLength;
+      // Stop reading before parsing what the ZIP path would have rejected unread.
+      if (loaded > MAX_MANIFEST_BYTES) { void reader.cancel(); throw tooLarge(); }
       onProgress?.({ phase: "downloading", loaded, ...(total ? { total } : {}) });
     }
     return chunks;
@@ -257,13 +271,15 @@ export class ReportSource {
     if (!this.canRetry || this.snapshot.status === "opening" || this.snapshot.status === "ready" || this.pending) return;
     const identity = this.linkIdentity;
     const linked = identity ? { identity } : {};
-    this.set({ ...this.snapshot, status: "opening", progress: { phase: "verifying" }, ...linked, fileName: file.name });
+    // A fresh snapshot: a failed drop's error must not show while the next file opens.
+    const { reportKey } = this.snapshot;
+    this.set({ status: "opening", progress: { phase: "verifying" }, ...linked, fileName: file.name, reportKey });
     try {
       const archive = await openReportFile(file, identity, this.progressed);
       this.data = archive.data;
-      this.set({ ...this.snapshot, status: "ready", identity: archive.identity, fileName: file.name });
+      this.set({ status: "ready", progress: this.snapshot.progress, identity: archive.identity, fileName: file.name, reportKey });
     } catch (error) {
-      this.set({ ...this.snapshot, status: "failed", ...linked, fileName: file.name,
+      this.set({ status: "failed", progress: this.snapshot.progress, ...linked, fileName: file.name, reportKey,
         error: error instanceof Error && error.message ? error.message : "The report could not be opened.",
         errorCode: error instanceof ReportFileError ? error.code : "invalid" });
     }

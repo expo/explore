@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { createPortal, flushSync } from "react-dom";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { Toaster } from "sonner";
-import { isEmbeddedArtifactUrl, optionalStorage, releaseEmbeddedArtifactUrl, resolveEmbeddedArtifactUrl, viewerLocation } from "./utils/embedded-report";
+import { isEmbeddedArtifactUrl, leaseEmbeddedArtifactUrl, optionalStorage, viewerLocation } from "./utils/embedded-report";
 import { REPORT_SOURCE } from "./utils/report-source";
 import { CanvasToolbar } from "./components/canvas/toolbar";
 import { CanvasCameraControls } from "./components/canvas/camera-controls";
@@ -1385,18 +1385,20 @@ function ViewerApp() {
       icon?.setAttribute("href", appIcon ?? fallback);
       return;
     }
-    // A report ZIP's icon is a reference the browser cannot load: the tab holds its Blob URL while it shows.
+    // A report ZIP's icon is a reference the browser cannot load: the tab holds its Blob URL while it shows. The lease
+    // releases it against the report that resolved it, even after a switch to another target's report.
     let state: "pending" | "shown" | "gone" = "pending";
-    resolveEmbeddedArtifactUrl(appIcon, "eager").then(
+    const lease = leaseEmbeddedArtifactUrl(appIcon, "eager");
+    lease.url.then(
       (url) => {
-        if (state === "gone") return void releaseEmbeddedArtifactUrl(appIcon);
+        if (state === "gone") return void lease.release();
         state = "shown";
         icon?.setAttribute("href", url);
       },
-      () => icon?.setAttribute("href", fallback),
+      () => { if (state !== "gone") icon?.setAttribute("href", fallback); },
     );
     return () => {
-      if (state === "shown") releaseEmbeddedArtifactUrl(appIcon);
+      if (state === "shown") lease.release();
       state = "gone";
     };
   }, [index, map, selectedScreenId]);

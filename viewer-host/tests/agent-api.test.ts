@@ -74,7 +74,7 @@ const explorationReport = {
 };
 const explorationZip = zip({ "exploration.json": new TextEncoder().encode(JSON.stringify(explorationReport)), [`assets/${pngSha}.png`]: png });
 
-function deployment(files: Record<string, Uint8Array<ArrayBuffer>>, env: PreviewEnvironment, now?: () => number) {
+function deployment(files: Record<string, Uint8Array<ArrayBuffer>>, env: PreviewEnvironment, now?: () => number, budget?: { held: number; peak: number }) {
   const calls: string[] = [];
   const fetchImpl = (async (input: RequestInfo | URL) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
@@ -82,7 +82,7 @@ function deployment(files: Record<string, Uint8Array<ArrayBuffer>>, env: Preview
     const body = files[url.pathname];
     return body ? new Response(body, { headers: { "content-length": String(body.byteLength) } }) : new Response("missing", { status: 404 });
   }) as typeof fetch;
-  const options = { env, indexHtml: html, fetchImpl, subtle, cache: new Map(), manifests: new Map(), ...(now ? { now } : {}) };
+  const options = { env, indexHtml: html, fetchImpl, subtle, cache: new Map(), loading: new Map(), manifests: new Map(), oversized: new Set<string>(), ...(now ? { now } : {}), ...(budget ? { budget } : {}) };
   return { calls, get: (path: string, accept?: string) => previewResponse(new Request(`${origin}/p/${token}${path}`, accept === undefined ? {} : { headers: { accept } }), options) };
 }
 
@@ -416,22 +416,29 @@ test("a ZIP's directory records are not assets: the manifest the Viewer validate
   assert.deepEqual(body.entries, { [`assets/${pngSha}.png`]: png.byteLength });
 });
 
-test("a report the Worker cannot read right now answers 503 on the Viewer's routes, which the Viewer retries", async () => {
-  const site = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: new Uint8Array(64) as Uint8Array<ArrayBuffer> }, reviewEnv);
-  for (const path of ["/manifest.json", `/assets/${pngSha}.png`]) {
-    const response = await site.get(path);
+test("a report the Worker cannot fetch this time answers 503, which the Viewer retries; one that never decrypts is a 404", async () => {
+  const flaky = { get: (path: string) => previewResponse(new Request(`${origin}/p/${token}${path}`), {
+    env: reviewEnv, indexHtml: html, subtle, cache: new Map(), loading: new Map(), manifests: new Map(),
+    fetchImpl: (async () => new Response("upstream", { status: 502 })) as typeof fetch }) };
+  for (const path of ["/manifest.json", `/assets/${pngSha}.png`, "/report.zip"]) {
+    const response = await flaky.get(path);
     assert.equal(response.status, 503, path);
     assert.equal(response.headers.get("retry-after"), "1");
     assert.equal(response.headers.get("cache-control"), "private, no-store");
   }
+  const garbage = deployment({ [reviewEnv.EXPLORE_PREVIEW_REPORT!]: new Uint8Array(64) as Uint8Array<ArrayBuffer> }, reviewEnv);
+  for (const path of ["/manifest.json", `/assets/${pngSha}.png`, "/report.zip"]) assert.equal((await garbage.get(path)).status, 404, path);
   // A wrong token or an unknown target is still the same 404 as any other path.
-  assert.equal((await site.get("/manifest.json?target=pixel")).status, 404);
+  assert.equal((await garbage.get("/manifest.json?target=pixel")).status, 404);
 });
 
-test("an isolate keeps every target's manifest but the decrypted ZIPs of only the two it last served screenshots from", async () => {
+test("an isolate keeps decrypted reports within its byte budget, decrypts one at a time, and shares a decrypt between requests", async () => {
   const listing = ["iphone", "duo-open", "duo-closed"].map(target => ({ target, platform: "ios", label: target, path: `/_report/abcdefghijklmnop/${target}.zip.enc` }));
   const env: PreviewEnvironment = { ...reviewEnv, EXPLORE_PREVIEW_REPORT: undefined, EXPLORE_PREVIEW_REPORTS: JSON.stringify(listing) };
-  const site = deployment(Object.fromEntries(await Promise.all(listing.map(async entry => [entry.path, await sealed(explorationZip)] as const))), env);
+  const size = explorationZip.byteLength;
+  // Room to keep two reports, and to decrypt one beside them.
+  const site = deployment(Object.fromEntries(await Promise.all(listing.map(async entry => [entry.path, await sealed(explorationZip)] as const))), env,
+    undefined, { held: 2 * size, peak: 4 * size + 64 });
   const decrypts = () => site.calls.length;
   // The prefetch: every target's manifest, each report decrypted once and let go.
   for (const { target } of listing) assert.equal((await site.get(`/manifest.json?target=${target}`)).status, 200);
@@ -439,8 +446,8 @@ test("an isolate keeps every target's manifest but the decrypted ZIPs of only th
   for (const { target } of listing) await site.get(`/manifest.json?target=${target}`);
   assert.equal(decrypts(), 3, "manifests are kept");
   const asset = (target: string) => site.get(`/assets/${pngSha}.png?target=${target}`).then(response => response.status);
-  assert.equal(await asset("iphone"), 200);
-  assert.equal(await asset("iphone"), 200);
+  // Requests that arrive together wait for one decrypt.
+  assert.deepEqual(await Promise.all([asset("iphone"), asset("iphone"), asset("iphone")]), [200, 200, 200]);
   assert.equal(decrypts(), 4, "the report a reviewer looks at is kept");
   assert.equal(await asset("duo-open"), 200);
   assert.equal(await asset("iphone"), 200);
@@ -451,4 +458,16 @@ test("an isolate keeps every target's manifest but the decrypted ZIPs of only th
   assert.equal(decrypts(), 6);
   assert.equal(await asset("duo-open"), 200);
   assert.equal(decrypts(), 7);
+
+  // A report larger than the budget keeps is decrypted for each request; one too large to decrypt is unavailable.
+  const perRequest = deployment({ [listing[0]!.path]: await sealed(explorationZip) }, env, undefined, { held: size - 1, peak: 4 * size });
+  for (let request = 1; request <= 3; request++) {
+    assert.equal(await perRequest.get(`/assets/${pngSha}.png?target=iphone`).then(response => response.status), 200);
+    assert.equal(perRequest.calls.length, request);
+  }
+  const tooLarge = deployment({ [listing[0]!.path]: await sealed(explorationZip) }, env, undefined, { held: size, peak: size });
+  for (const path of [`/assets/${pngSha}.png?target=iphone`, "/manifest.json?target=iphone", "/report.zip?target=iphone"]) {
+    assert.equal((await tooLarge.get(path)).status, 413, path);
+  }
+  assert.equal(tooLarge.calls.length, 2, "the isolate remembers a report it cannot decrypt (report.zip is not cached)");
 });
