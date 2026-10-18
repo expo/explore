@@ -9,7 +9,7 @@ import { screenTree, treeIndex, treeNodeKey, treeScreenOrder, type ScreenTree, t
 import type { Appearance } from "../../utils/appearance";
 import type { FocusRequest, FocusStatus } from "../../utils/navigation";
 import { shortcutsLive } from "../../utils/shortcuts";
-import { HOLD_INITIAL_DELAY_MS, holdIntervalMs } from "../../utils/key-hold";
+import { createKeyHold } from "../../utils/key-hold";
 import { placeholderScreen } from "../../utils/map-frame";
 import { ScreenScreenshotCard } from "../canvas/screen-screenshot-card";
 import { useCanvasVisibleFrame } from "../canvas/visible-frame-provider";
@@ -393,28 +393,23 @@ export function ScreensView(props: ScreensViewProps) {
       pickRef.current(id);
       requestAnimationFrame(() => document.getElementById(cardId(id))?.querySelector<HTMLElement>(".screen-screenshot-target")?.focus({ preventScroll: true }));
     };
-    let hold: { code: string; at: string; timer: ReturnType<typeof setTimeout> } | undefined;
-    const endHold = () => {
-      if (hold) clearTimeout(hold.timer);
-      hold = undefined;
-    };
+    // A held arrow keeps stepping from the card the last step landed on, not the lagging pick.
+    const hold = createKeyHold();
     const beginHold = (code: string, at: string) => {
-      endHold();
-      let step = 1;
-      const tick = () => {
-        const id = hold && next(code, hold.at);
-        if (!hold || !id) { endHold(); return; }
+      hold.begin(code, () => {
+        const id = next(code, at);
+        if (!id) return false;
+        at = id;
         go(id);
-        hold = { code, at: id, timer: setTimeout(tick, holdIntervalMs(step)) };
-        step += 1;
-      };
-      hold = { code, at, timer: setTimeout(tick, HOLD_INITIAL_DELAY_MS) };
+        return true;
+      });
     };
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      hold.interrupt(event);
       const arrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.code);
       if (!arrow && event.key !== "Enter") return;
       // The browser's own repeat of a held arrow would scroll the page under the hold.
-      if (event.repeat && hold?.code === event.code) { event.preventDefault(); return; }
+      if (event.repeat && hold.holding(event.code)) { event.preventDefault(); return; }
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.defaultPrevented || !shortcutsLive(event)) return;
       const target = event.target instanceof Element ? event.target : null;
       if (!arrow) {
@@ -436,8 +431,9 @@ export function ScreensView(props: ScreensViewProps) {
       beginHold(event.code, id);
     };
     const onKeyUp = (event: globalThis.KeyboardEvent) => {
-      if (hold && event.code === hold.code) endHold();
+      if (hold.holding(event.code)) hold.end();
     };
+    const endHold = hold.end;
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", endHold);

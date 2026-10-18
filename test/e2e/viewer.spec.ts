@@ -1491,8 +1491,19 @@ test("Esc closes the Inspector first, then deselects; arrows and hjkl walk the m
   await expect(selected).toHaveCount(0);
   await expect(page).toHaveURL(/\/map$/);
 
-  // Nothing selected: the arrows are not map moves.
-  await page.keyboard.press("ArrowDown");
+  // Nothing selected: ↓ enters the map at its top, as → enters Screens at its first card; held, it
+  // keeps walking down from there and stops where it is on release.
+  await page.keyboard.down("ArrowDown");
+  await expect(selected).toHaveCount(1);
+  const entered = await selected.getAttribute("data-id");
+  await expect.poll(() => selected.getAttribute("data-id"), { timeout: 4000 }).not.toBe(entered);
+  await page.keyboard.up("ArrowDown");
+  const walkedTo = await selected.getAttribute("data-id");
+  await page.waitForTimeout(500);
+  await expect(selected).toHaveAttribute("data-id", walkedTo!);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".right-panel")).toHaveCount(0);
+  await page.keyboard.press("Escape");
   await expect(selected).toHaveCount(0);
 
   await page.locator(".map-canvas .react-flow__node-screen .screen-screenshot-target").first().click();
@@ -1506,6 +1517,67 @@ test("Esc closes the Inspector first, then deselects; arrows and hjkl walk the m
   await expect(selected).toHaveAttribute("data-id", first!);
   await page.keyboard.press("j");
   await expect(selected).toHaveAttribute("data-id", child!);
+});
+
+test("a held key stops when Esc, another key or a dialog takes the keyboard; a menu keeps its own arrows", async ({ page }) => {
+  await page.goto("/map");
+  const selected = page.locator(".map-canvas .react-flow__node-screen.selected");
+  const inspector = page.locator(".right-panel");
+  const search = page.getByRole("dialog", { name: "Search Explore" });
+  const viewport = page.locator(".map-canvas .react-flow__viewport");
+  const mod = process.platform === "darwin" ? "Meta" : "Control";
+
+  // Nothing selected and a menu open: ← and → on its item are the menu's, not the map's.
+  await expect(selected).toHaveCount(0);
+  await page.locator(".zoom-button").click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowRight");
+  await expect(selected).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+
+  // Esc mid-walk closes the Inspector, and the walk does not reopen it on its next step.
+  await page.locator(".map-canvas .react-flow__node-screen .screen-screenshot-target").first().click();
+  await expect(inspector).toBeVisible();
+  await page.keyboard.down("ArrowDown");
+  await page.keyboard.press("Escape");
+  await expect(inspector).toHaveCount(0);
+  await page.waitForTimeout(800);
+  await expect(inspector).toHaveCount(0);
+  await page.keyboard.up("ArrowDown");
+
+  // ⌘K mid-walk opens Search, and the selection behind it stays where it was.
+  await page.keyboard.down("ArrowDown");
+  await page.keyboard.press(`${mod}+k`);
+  await expect(search).toBeVisible();
+  const behind = await selected.getAttribute("data-id");
+  await page.waitForTimeout(800);
+  await expect(selected).toHaveAttribute("data-id", behind!);
+  await page.keyboard.up("ArrowDown");
+  await page.keyboard.press("Escape");
+  await expect(search).toHaveCount(0);
+
+  // A held + glides past the tap's one step and stops where it is on release.
+  const zoomNow = async () => (await readCanvasCamera(viewport)).zoom;
+  const before = await zoomNow();
+  await page.keyboard.down("Equal");
+  await expect.poll(zoomNow, { timeout: 4000 }).toBeGreaterThan(before * 1.2 * 1.2);
+  await page.keyboard.up("Equal");
+  const released = await zoomNow();
+  await page.waitForTimeout(300);
+  expect(await zoomNow()).toBeCloseTo(released, 3);
+
+  // Held −, then a click opens Search: the glide stops rather than zoom behind the dialog.
+  await page.keyboard.down("Minus");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(search).toBeVisible();
+  await page.waitForTimeout(400);
+  const atOpen = await zoomNow();
+  await page.waitForTimeout(800);
+  expect(await zoomNow()).toBeCloseTo(atOpen, 3);
+  await page.keyboard.up("Minus");
 });
 
 test("a drag that starts on a transition edge pans the map", async ({ page }) => {
@@ -2040,16 +2112,12 @@ test("canonicalizes the legacy Workspace route to Changes and reports the exact 
     if (entry.status === "unchanged") return total;
     return total + (entry.currentScreenIds.length || entry.baselineScreenIds.length);
   }, 0);
-  // The bottom bar's Compare button carries the count.
-  const badge = page.locator(".canvas-toolbar .toolbar-badge");
-  await expect(badge).toHaveText(String(expectedChanges));
   const menu = await openChangesMenu(page);
   await expect(menu.locator(".changes-panel-title .changes-panel-count")).toHaveText(String(expectedChanges));
 
   // Without a baseline there is nothing to count. Compare still opens, and the view says why it is empty.
   await page.goto("/map?baseline=none");
   await expect(page).toHaveURL(/baseline=none/);
-  await expect(badge).toHaveCount(0);
   const compare = page.getByRole("toolbar", { name: "Canvas tools" }).getByRole("button", { name: "Compare", exact: true });
   await expect(compare).not.toHaveAttribute("aria-disabled", "true");
   await compare.click();
@@ -2700,6 +2768,31 @@ test("drives the shell from the keyboard, and says so on hover", async ({ page }
   }
   await expect(page.getByRole("button", { name: "Comments", exact: true })).toHaveCount(0);
 
+  // A held modifier shows, on each button it makes a chord with, the key that completes it: ⇧ puts
+  // 1 on Fit canvas, ⌘ (Ctrl elsewhere) puts K on Search. Released, the hints go.
+  const hints = page.locator(".key-hint");
+  await expect(hints).toHaveCount(0);
+  await page.keyboard.down("Shift");
+  await expect(page.getByRole("button", { name: "Fit canvas" }).locator(".key-hint")).toHaveText("1");
+  await expect(page.getByRole("button", { name: "Center canvas" }).locator(".key-hint")).toHaveText("2");
+  await expect(page.getByRole("button", { name: "Search", exact: true }).locator(".key-hint")).toHaveCount(0);
+  await page.keyboard.up("Shift");
+  await expect(hints).toHaveCount(0);
+  await page.keyboard.down(mod);
+  await expect(page.getByRole("button", { name: "Search", exact: true }).locator(".key-hint")).toHaveText("K");
+  await expect(page.getByRole("button", { name: "Fit canvas" }).locator(".key-hint")).toHaveCount(0);
+  await page.keyboard.up(mod);
+  await expect(hints).toHaveCount(0);
+  // Focus that moves into a field by mouse, with ⇧ still down, takes the hints with it.
+  await page.keyboard.down("Shift");
+  await expect(page.getByRole("button", { name: "Fit canvas" }).locator(".key-hint")).toHaveText("1");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Search Explore" })).toBeVisible();
+  await expect(hints).toHaveCount(0);
+  await page.keyboard.up("Shift");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Search Explore" })).toHaveCount(0);
+
   // ⌘B opens and closes the Changes menu.
   await page.keyboard.press(`${mod}+b`);
   await expect(page.locator(".changes-menu")).toBeVisible();
@@ -2732,14 +2825,23 @@ test("drives the shell from the keyboard, and says so on hover", async ({ page }
   await expect(page.locator(".tooltip-key")).toHaveText("C");
   await page.getByRole("button", { name: "Expand inspector" }).hover();
   await expect(page.locator(".tooltip-key")).toHaveText("I");
-  // The theme button has no key: it names the mode in force and nothing else.
+  // The theme button names the mode in force, and T is its key.
   const themeButton = page.getByRole("button", { name: "Toggle theme" });
   await themeButton.hover();
-  await expect(page.locator(".tooltip-content")).toContainText("Theme:");
-  await expect(page.locator(".tooltip-key")).toHaveCount(0);
+  await expect(page.locator(".tooltip-content")).toContainText("Theme: Auto");
+  await expect(page.locator(".tooltip-key")).toHaveText("T");
   await page.mouse.move(0, 0);
   const initialTheme = await page.locator("html").getAttribute("data-theme");
   expect(initialTheme === "light" || initialTheme === "dark").toBe(true);
+  const otherTheme = initialTheme === "dark" ? "light" : "dark";
+  // T flips between dark and light from whatever Auto showed, and never steps back to Auto.
+  await page.keyboard.press("t");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", otherTheme);
+  await page.keyboard.press("t");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", initialTheme!);
+  await themeButton.hover();
+  await expect(page.locator(".tooltip-content")).toContainText(initialTheme === "dark" ? "Theme: Dark" : "Theme: Light");
+  await page.mouse.move(0, 0);
   // The retired theme and inspector chords no longer answer.
   await page.keyboard.press(`${mod}+Alt+t`);
   await expect(page.locator("html")).toHaveAttribute("data-theme", initialTheme!);
@@ -4201,6 +4303,25 @@ test("desktop Compare: one command bar with the modes in it, even gaps to both b
   await page.keyboard.up("ArrowLeft");
   for (let step = 1; step < before; step += 1) await page.keyboard.press("ArrowRight");
   await expect(position).toHaveText(new RegExp(`^${before} of `));
+
+  // In Swipe, [ and ] nudge the divider; held, ] keeps going until it is released or at the edge.
+  await page.keyboard.press("2");
+  const divider = compare.getByRole("slider");
+  await expect(divider).toHaveAttribute("aria-valuenow", "50");
+  await page.keyboard.press("BracketLeft");
+  await expect(divider).toHaveAttribute("aria-valuenow", "45");
+  const dividerAt = async () => Number(await divider.getAttribute("aria-valuenow"));
+  await page.keyboard.down("BracketRight");
+  await expect(divider).toHaveAttribute("aria-valuenow", "50");
+  await expect.poll(dividerAt, { timeout: 4000 }).toBeGreaterThanOrEqual(65);
+  await page.keyboard.up("BracketRight");
+  const dividerHeld = await dividerAt();
+  await page.waitForTimeout(600);
+  expect(await dividerAt()).toBe(dividerHeld);
+  await page.keyboard.down("BracketRight");
+  await expect.poll(dividerAt, { timeout: 8000 }).toBe(100);
+  await page.keyboard.up("BracketRight");
+  await page.keyboard.press("1");
 
   // The bar keeps one size whatever the route, so Next stays under the pointer: it can be clicked
   // again and again through screens whose routes differ in length.

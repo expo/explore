@@ -3,6 +3,7 @@ import { Fullscreen, LocateFixed } from "lucide-react";
 import { runCanvasZoomCommand } from "../../utils/canvas-zoom";
 import { useCanvasZoom } from "../../hooks/use-canvas-zoom";
 import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
+import { KeyHint } from "../shared/key-hint";
 import { Menu, type MenuItem } from "../shared/menu";
 import { Tooltip } from "../shared/tooltip";
 import { FullscreenToggleButton, ThemeToggleButton, type ShellActionsProps, type ShellTheme } from "../panels/shell-actions";
@@ -86,6 +87,7 @@ function FitControl() {
         disabled={!camera}
         onClick={() => runCanvasZoomCommand(camera?.hasSelection() ? "selection" : "fit")}>
         <Fullscreen aria-hidden="true" />
+        <KeyHint shortcut={SHORTCUTS.camera.fit} />
       </button>
     </Tooltip>
   );
@@ -105,6 +107,7 @@ function RecenterControl() {
         disabled={!camera}
         onClick={() => runCanvasZoomCommand("recenter")}>
         <LocateFixed aria-hidden="true" />
+        <KeyHint shortcut={SHORTCUTS.camera.center} />
       </button>
     </Tooltip>
   );

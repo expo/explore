@@ -3,6 +3,13 @@ import type { ConnectionGroup } from "./graph-model";
 export type MapKeyDirection = "up" | "down" | "left" | "right";
 type Point = { x: number; y: number };
 
+const ARROW_WIDGETS = '[role="menu"], [role="menubar"], [role="listbox"], [role="tree"], [role="tablist"], [role="radiogroup"], [role="slider"]';
+
+/** Whether the key's target is a widget whose arrows are its own (a menu item, a list, tabs); the map leaves those keys to it. */
+export function arrowsOwnedBy(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(ARROW_WIDGETS) !== null;
+}
+
 /** Arrow keys and their Vim twins; anything else is not a map move. */
 export function mapKeyDirection(event: Pick<KeyboardEvent, "key" | "altKey" | "ctrlKey" | "metaKey" | "shiftKey">): MapKeyDirection | undefined {
   if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return undefined;
@@ -49,6 +56,26 @@ export function mapKeyTarget(
     if (forward <= 0 || drift(point) > forward * spread) continue;
     const score = (forward + drift(point) * 2) * (linked.has(id) ? 1 : 1.5);
     if (!best || score < best.score) best = { id, score };
+  }
+  return best?.id;
+}
+
+/**
+ * The screen an arrow selects when nothing is: the one at the edge the key moves away from, as
+ * the Screens page's arrows enter at the first or last card. ↓ takes the topmost screen, ↑ the
+ * bottom one, → the leftmost, ← the rightmost; ties go to the screen nearest the other axis's start.
+ */
+export function mapKeyEntry(
+  structure: { positions: Map<string, Point> },
+  direction: MapKeyDirection,
+): string | undefined {
+  const vertical = direction === "up" || direction === "down";
+  const sign = direction === "down" || direction === "right" ? 1 : -1;
+  let best: { id: string; along: number; across: number } | undefined;
+  for (const [id, point] of structure.positions) {
+    const along = sign * (vertical ? point.y : point.x);
+    const across = vertical ? point.x : point.y;
+    if (!best || along < best.along || (along === best.along && across < best.across)) best = { id, along, across };
   }
   return best?.id;
 }

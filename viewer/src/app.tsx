@@ -306,6 +306,8 @@ function ViewerApp() {
   const [mapProjectionFitKey, setMapProjectionFitKey] = useState(0);
   // A report captured in several appearances shows one at a time; the primary (first captured) is the default.
   const [appearanceChoice, setAppearanceChoice] = useState<Appearance | undefined>();
+  // For the ⇧T shortcut, which steps to the next captured appearance; set once they are known.
+  const appearanceRef = useRef<{ options: readonly Appearance[]; current: Appearance | undefined }>({ options: [], current: undefined });
   const [handoffOpen, setHandoffOpen] = useState(false);
   /** Whether this page can hand the report off (a hosted preview); the A key reads it. */
   const handoffAvailableRef = useRef(false);
@@ -371,6 +373,10 @@ function ViewerApp() {
   const toggleTheme = useCallback(() => {
     setThemePreference(current => current === "system" ? "dark" : current === "dark" ? "light" : "system");
   }, []);
+  // The T key flips what is on screen, dark to light and back; only the button returns to Auto.
+  const flipTheme = useCallback(() => {
+    setThemePreference(current => (current === "system" ? preferredSystemTheme : current) === "dark" ? "light" : "dark");
+  }, [preferredSystemTheme]);
 
   const load = useCallback(async (silent = false) => {
     void silent;
@@ -994,6 +1000,14 @@ function ViewerApp() {
       if (matchesShortcut(event, SHORTCUTS.app.handoff)) {
         if (!handoffAvailableRef.current) return;
         setHandoffOpen(true);
+      } else if (matchesShortcut(event, SHORTCUTS.appearance.theme)) {
+        flipTheme();
+      } else if (matchesShortcut(event, SHORTCUTS.appearance.app)) {
+        // Only a report captured in both schemes has another appearance to show.
+        const { options, current } = appearanceRef.current;
+        if (options.length < 2) return;
+        const index = current ? options.indexOf(current) : -1;
+        setAppearanceChoice(options[(index + 1) % options.length]);
       } else if (matchesShortcut(event, SHORTCUTS.app.changes)) {
         setChangesOpen((open) => !open);
       } else if (matchesShortcut(event, SHORTCUTS.panel.right)) {
@@ -1009,7 +1023,7 @@ function ViewerApp() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [clearSelectedScreen, navigate, searchOpen, selectCanvas, toggleRightPanel]);
+  }, [clearSelectedScreen, flipTheme, navigate, searchOpen, selectCanvas, toggleRightPanel]);
 
   // A side-panel row or a deep link is a "go to": the camera fits that screen and the step is
   // kept. Screens inventory clicks only select in place; Map clicks also focus the chosen screen. Repeating a selected target refits it without adding history.
@@ -1102,6 +1116,7 @@ function ViewerApp() {
   const baseline = builds.find((build) => build.id === route.baseline);
   const appearances = useMemo(() => appearanceOptions(payload?.map), [payload]);
   const appearance = appearanceChoice && appearances.includes(appearanceChoice) ? appearanceChoice : appearances[0];
+  appearanceRef.current = { options: appearances, current: appearance };
   const appearanceMap = useMemo(() => payload ? filterMapAppearance(payload.map, appearance) : undefined, [appearance, payload]);
   const currentMap = useMemo(() => (
     appearanceMap && workspace && currentBuild
@@ -1605,7 +1620,6 @@ function ViewerApp() {
         ) : <CanvasToolbar
           canvas={route.canvas}
           searchOpen={searchOpen}
-          compareCount={compareOrder.length}
           {...(handoffAction ? { actions: handoffAction } : {})}
           onOpenShortcuts={() => setShortcutsOpen(true)}
           onSelectCanvas={selectCanvas}
@@ -1614,7 +1628,7 @@ function ViewerApp() {
       </CanvasVisibleFrameProvider>
       {shortcutsOpen ? (
         <ShortcutsDialog
-          context={{ canvas: route.canvas, review: reviewingInSidebar, hasChanges: compareOrder.length > 0, handoff: Boolean(handoffInput) }}
+          context={{ canvas: route.canvas, review: reviewingInSidebar, hasChanges: compareOrder.length > 0, handoff: Boolean(handoffInput), appearances: appearances.length > 1 }}
           onClose={() => setShortcutsOpen(false)}
         />
       ) : null}

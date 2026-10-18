@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { tsImport } = await import("tsx/esm/api");
-const { mapKeyDirection, mapKeyTarget } = await tsImport("../../viewer/src/utils/map-keyboard.ts", import.meta.url);
+const { mapKeyDirection, mapKeyEntry, mapKeyTarget } = await tsImport("../../viewer/src/utils/map-keyboard.ts", import.meta.url);
 
 // A top-to-bottom map: root fans out to a, b, c on one rank; b leads on to d; e is a stray rank with no edges.
 //        root
@@ -99,4 +99,12 @@ test("a left-to-right map needs no special case: the keys read positions", () =>
   assert.equal(mapKeyTarget(rotated, "b", "left"), "root");
   assert.equal(mapKeyTarget(rotated, "a", "down"), "b");
   assert.equal(mapKeyTarget(rotated, "c", "up"), "b");
+});
+
+test("with nothing selected, an arrow enters the map at the edge it moves away from, as Screens' arrows do", () => {
+  assert.equal(mapKeyEntry(structure, "down"), "root", "down starts at the top");
+  assert.equal(mapKeyEntry(structure, "up"), "d", "up starts at the bottom; the leftmost of that rank");
+  assert.equal(mapKeyEntry(structure, "right"), "a", "right starts at the left edge");
+  assert.equal(mapKeyEntry(structure, "left"), "e", "left starts at the right edge");
+  assert.equal(mapKeyEntry({ positions: new Map() }, "down"), undefined, "an empty map has no entry");
 });

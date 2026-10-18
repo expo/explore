@@ -2,7 +2,8 @@ import { GitCompareArrows, Keyboard, LayoutGrid, Map, Search } from "lucide-reac
 import { type CSSProperties } from "react";
 import { Tooltip } from "../shared/tooltip";
 import { useCanvasVisibleFrame } from "./visible-frame-provider";
-import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
+import { CANVAS_NUMBER_KEYS, formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
+import { KeyHint } from "../shared/key-hint";
 import {
   CANVAS_DESCRIPTIONS,
   CANVAS_LABELS,
@@ -21,9 +22,6 @@ const TOOLBAR_MINIMUM_FRAME_WIDTH = 220;
 type CanvasToolbarProps = {
   canvas: CanvasView;
   searchOpen: boolean;
-  /** How many changed screens Compare holds, shown as a badge on its button. Compare's own header
-      steps through them. */
-  compareCount?: number;
   /** Page-wide actions beside Search (Hand off to AI). */
   actions?: React.ReactNode;
   onSelectCanvas: (canvas: CanvasView) => void;
@@ -60,6 +58,7 @@ export function CanvasToolbar(props: CanvasToolbarProps) {
             aria-expanded={props.searchOpen}
             onClick={props.onOpenSearch}>
             <Search />
+            <KeyHint shortcut={SHORTCUTS.app.search} />
           </button>
         </Tooltip>
         {props.actions}
@@ -88,9 +87,7 @@ export function CanvasToolbar(props: CanvasToolbarProps) {
                 onClick={() => props.onSelectCanvas(id)}>
                 {VIEW_ICONS[id]}
                 <span className="toolbar-view-label" aria-hidden="true"><span>{CANVAS_LABELS[id]}</span></span>
-                {id === "compare" && props.compareCount ? (
-                  <span className="toolbar-badge" aria-hidden="true">{props.compareCount}</span>
-                ) : null}
+                {CANVAS_NUMBER_KEYS ? <KeyHint shortcut={SHORTCUTS.canvasByNumber[id]} /> : null}
               </button>
             </Tooltip>
           );

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Maximize, Minimize, Moon, Sun, SunMoon } from "lucide-react";
 import { Tooltip } from "../shared/tooltip";
+import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
 import type { ThemePreference } from "../../utils/navigation";
 
 export type ShellTheme = "light" | "dark";
@@ -51,7 +52,7 @@ const THEME_LABELS: Record<ThemePreference, string> = {
 export function ThemeToggleButton(props: ShellActionsProps) {
   const Icon = props.themePreference === "system" ? SunMoon : props.themePreference === "dark" ? Moon : Sun;
   return (
-    <Tooltip label={THEME_LABELS[props.themePreference]} placement="bottom">
+    <Tooltip label={THEME_LABELS[props.themePreference]} shortcut={formatShortcut(SHORTCUTS.appearance.theme)} placement="bottom">
       <button
         type="button"
         className={props.className ?? "icon-button"}

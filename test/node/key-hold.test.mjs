@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { tsImport } = await import("tsx/esm/api");
-const { HOLD_INITIAL_DELAY_MS, HOLD_FIRST_INTERVAL_MS, HOLD_FLOOR_INTERVAL_MS, holdIntervalMs, holdSchedule } =
+const { HOLD_INITIAL_DELAY_MS, HOLD_FIRST_INTERVAL_MS, HOLD_FLOOR_INTERVAL_MS, createKeyHold, glideRate, holdIntervalMs, holdSchedule } =
   await tsImport("../../viewer/src/utils/key-hold.ts", import.meta.url);
 
 test("a held paging key waits, then steps sooner and sooner down to a floor", () => {
@@ -15,4 +15,71 @@ test("a held paging key waits, then steps sooner and sooner down to a floor", ()
   assert.equal(schedule[0], HOLD_INITIAL_DELAY_MS, "the first held step waits for the initial delay");
   assert.ok(schedule.at(-1) < 2000, "six held steps fit in two seconds");
   assert.ok(HOLD_INITIAL_DELAY_MS > HOLD_FIRST_INTERVAL_MS, "the hold begins slower than it repeats");
+});
+
+test("a held key steps on the schedule from its first step, and ends when a step finds nothing", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const hold = createKeyHold();
+  let steps = 0;
+  hold.begin("ArrowRight", () => (steps += 1) < 3);
+  assert.ok(hold.holding("ArrowRight"));
+  assert.ok(!hold.holding("ArrowLeft"));
+  t.mock.timers.tick(HOLD_INITIAL_DELAY_MS - 1);
+  assert.equal(steps, 0, "nothing before the initial delay");
+  t.mock.timers.tick(1);
+  assert.equal(steps, 1, "the second step lands after the initial delay");
+  t.mock.timers.tick(holdIntervalMs(1));
+  assert.equal(steps, 2);
+  t.mock.timers.tick(holdIntervalMs(2));
+  assert.equal(steps, 3, "the third attempt finds nothing");
+  assert.ok(!hold.holding("ArrowRight"), "and the hold ends by itself");
+  t.mock.timers.tick(10_000);
+  assert.equal(steps, 3, "no further steps");
+});
+
+test("ending a hold, or beginning another key, stops the first", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const hold = createKeyHold();
+  let right = 0;
+  let left = 0;
+  hold.begin("ArrowRight", () => { right += 1; return true; });
+  t.mock.timers.tick(HOLD_INITIAL_DELAY_MS);
+  assert.equal(right, 1);
+  hold.begin("ArrowLeft", () => { left += 1; return true; });
+  assert.ok(!hold.holding("ArrowRight"));
+  assert.ok(hold.holding("ArrowLeft"));
+  // Mock timers run one scheduled round per tick; a hold schedules the next step from each step.
+  t.mock.timers.tick(HOLD_INITIAL_DELAY_MS);
+  t.mock.timers.tick(holdIntervalMs(1));
+  assert.equal(right, 1, "the first key stopped stepping");
+  assert.equal(left, 2);
+  hold.end();
+  assert.ok(!hold.holding("ArrowLeft"));
+  t.mock.timers.tick(holdIntervalMs(2));
+  t.mock.timers.tick(1000);
+  assert.equal(left, 2);
+});
+
+test("another key ends a hold, as the OS's own repeat stops; its own repeats and a modifier do not", () => {
+  const key = (code, key = code, repeat = false) => ({ code, key, repeat });
+  const hold = createKeyHold();
+  hold.begin("ArrowDown", () => true);
+  hold.interrupt(key("ArrowDown", "ArrowDown", true));
+  hold.interrupt(key("ShiftLeft", "Shift"));
+  hold.interrupt(key("MetaLeft", "Meta"));
+  assert.ok(hold.holding("ArrowDown"), "its own repeat and a modifier leave it held");
+  hold.interrupt(key("Escape"));
+  assert.ok(!hold.holding("ArrowDown"), "Esc ends it");
+  hold.begin("ArrowDown", () => true);
+  hold.interrupt(key("KeyK", "k"));
+  assert.ok(!hold.holding("ArrowDown"), "so does the K of ⌘K");
+  hold.end();
+});
+
+test("a glide picks up from rest, then eases from the stepped hold's first speed up to its top speed", () => {
+  assert.equal(glideRate(0), 0, "it starts at rest, where the tap's step ended");
+  assert.ok(Math.abs(glideRate(80) - 1000 / HOLD_FIRST_INTERVAL_MS) < 0.2, "within a few frames it moves a step per first interval");
+  for (let at = 10; at <= 1200; at += 10) assert.ok(glideRate(at) >= glideRate(at - 10), `never slows, at ${at}ms`);
+  assert.equal(glideRate(1000), 1000 / HOLD_FLOOR_INTERVAL_MS, "after a second, a step per floor interval");
+  assert.equal(glideRate(5000), glideRate(1000), "and no faster");
 });
