@@ -5115,3 +5115,83 @@ test("/ finds screens on the Screens page: the tree and the grid narrow to the q
   await page.keyboard.press("/");
   await expect(page.getByRole("main", { name: "Screens" }).getByRole("searchbox", { name: "Find screens" })).toBeFocused();
 });
+
+test("a / from the Map opens the find once: Screens opened again from the toolbar comes up without it", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/map");
+  await page.keyboard.press("/");
+  const grid = page.getByRole("main", { name: "Screens" });
+  const field = grid.getByRole("searchbox", { name: "Find screens" });
+  await expect(field).toBeFocused();
+  await field.press("Escape");
+  await expect(field).toHaveCount(0);
+
+  await chooseCanvasView(page, "Map");
+  await chooseCanvasView(page, "Screens");
+  await expect(grid.locator(".screens-grid .screens-cell").first()).toBeVisible();
+  await expect(grid.getByRole("button", { name: "Find a screen" })).toBeVisible();
+  await expect(field).toHaveCount(0);
+});
+
+test("the find's keys stay in its field: Return on the clear button clears, and Return while composing text opens nothing", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/screens");
+  const grid = page.getByRole("main", { name: "Screens" });
+  const inspector = page.getByRole("complementary", { name: "Inspector panel" });
+  await expect(grid.locator(".screens-grid .screens-cell").first()).toBeVisible();
+  await page.keyboard.press("/");
+  const field = grid.getByRole("searchbox", { name: "Find screens" });
+  await field.fill("/");
+  await field.press("Tab");
+  await expect(grid.getByRole("button", { name: "Clear find query" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(field).toHaveValue("");
+  await expect(inspector).toBeHidden();
+
+  await field.fill("/");
+  // An input method's Return confirms the composed text; it is not the find's Return.
+  await field.evaluate((input) => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", isComposing: true, bubbles: true, cancelable: true })));
+  await page.waitForTimeout(200);
+  await expect(inspector).toBeHidden();
+});
+
+test("a find inside Changed that only matches other screens says so and offers All", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/screens");
+  const grid = page.getByRole("main", { name: "Screens" });
+  const cells = grid.locator(".screens-grid .screens-cell");
+  const titles = () => cells.locator(".screen-node-title").allTextContents();
+  await expect(cells.first()).toBeVisible();
+  const all = await titles();
+  await grid.getByRole("button", { name: /^Changed/ }).click();
+  await expect.poll(async () => (await titles()).length).toBeLessThan(all.length);
+  const changed = (await titles()).map(title => title.toLowerCase());
+  const query = all.find(title => !changed.some(other => other.includes(title.toLowerCase())));
+  test.skip(!query, "every unchanged screen's title is part of a changed one's");
+
+  await page.keyboard.press("/");
+  const field = grid.getByRole("searchbox", { name: "Find screens" });
+  await field.fill(query!);
+  await expect(grid.getByRole("status").filter({ hasText: `No changed screens match “${query}”` }).first()).toBeVisible();
+  await grid.getByRole("button", { name: /^Show all/ }).click();
+  await expect(cells.filter({ hasText: query! }).first()).toBeVisible();
+  await expect(field).toBeFocused();
+  await field.press("Escape");
+  await field.press("Escape");
+  await expect(grid.getByRole("button", { name: /^All/ })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("a find left on when the window narrows to the phone layout does not filter the phone's screens", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/screens");
+  const grid = page.getByRole("main", { name: "Screens" });
+  const cells = grid.locator(".screens-grid .screens-cell");
+  await expect(cells.first()).toBeVisible();
+  await grid.getByRole("button", { name: /^All/ }).click();
+  const all = await cells.count();
+  await page.keyboard.press("/");
+  await grid.getByRole("searchbox", { name: "Find screens" }).fill("no-such-route-anywhere");
+  await expect(cells).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(cells).toHaveCount(all);
+});

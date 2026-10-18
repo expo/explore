@@ -324,6 +324,7 @@ function ViewerApp() {
   const [searchOpen, setSearchOpen] = useState(false);
   /** `/` on another canvas: Screens opens with its find field focused; each press is a new request. */
   const [findRequest, setFindRequest] = useState<number>();
+  const clearFindRequest = useCallback(() => setFindRequest(undefined), []);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Compare steps through the changed screens in review order. Callbacks read it from a ref,
   // because they are created before the diff that produces it.
@@ -1575,6 +1576,7 @@ function ViewerApp() {
               focus={focusFilter}
               phone={phone}
               findRequest={findRequest}
+              onFindRequestDone={clearFindRequest}
               onSelectScreen={selectScreenOnCanvas}
               onPickScreen={pickScreenInPlace}
               onClearSelection={clearSelectedScreen}

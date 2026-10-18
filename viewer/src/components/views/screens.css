@@ -359,3 +359,5 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-find .panel-search { height: 34px; border-radius: 9px; }
 .screens-find-empty { margin: 0; padding: 4px 8px; color: var(--tertiary); font-size: 12px; }
 .screens-empty { min-height: 240px; flex: 1; }
+.screens-empty-all { padding: 0; color: var(--accent); font: inherit; background: transparent; }
+.screens-empty-all:hover { text-decoration-line: underline; text-underline-offset: 3px; }
