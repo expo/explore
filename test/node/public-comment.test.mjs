@@ -600,7 +600,7 @@ test('with report.comment.map, the map draws the added, removed and visually cha
     head: graph([edge('cats', 'care-guide', 'push'), edge('cats', 'settings', 'tab'), edge('settings', 'cats', 'tab'), edge('home', 'cats', 'replace')]),
     base: graph([edge('cats', 'sweet-bee', 'push'), edge('cats', 'settings', 'tab')]),
   } };
-  // Off by default: a review with hundreds of changed screens would draw a wall.
+  // Off by default: most reviews do not need it, so a config opts in with report.comment.map.
   assert.ok(!/<summary>Map/.test(renderPublicComment(state({ artifactOnly: true, review: withNavigation }))));
   assert.equal(platformRecordOf(state({ review: withNavigation })).navigation, undefined);
   const body = renderPublicComment(state({ artifactOnly: true, map: true, review: withNavigation }));
