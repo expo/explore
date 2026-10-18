@@ -85,7 +85,7 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
   validate: {},
   export: { output: "value" },
   "export:web": {catalog:"value",output:"value"},
-  "capture:review": { "base-project":"value", "head-project":"value", "pull-request":"value", compare:"value", output:"value", config:"value", parallel:"value", target:"value", platform:"value", controller:"value", simulator:"value", repack:"value", scope:"value", "expires-in":"value",
+  "capture:review": { "base-project":"value", "head-project":"value", "pull-request":"value", compare:"value", output:"value", config:"value", parallel:"value", target:"value", platform:"value", controller:"value", simulator:"value", repack:"value", flows:"value", scope:"value", "expires-in":"value",
     base:"value", head:"value", project:"value", committed:"boolean", uncommitted:"boolean", "include-untracked":"boolean", upload:"boolean", "no-open":"boolean", "no-cache":"boolean", port:"value" },
 
 
