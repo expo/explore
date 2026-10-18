@@ -2,7 +2,7 @@ import type { EmbeddedReport } from "../../../src/contracts/standalone-report";
 import {
   ARTIFACT_LIMITS, ArtifactReportArchive, artifactIdentity, isReportPage, isReportTargetId, openCachedReport, openReportFile, previewAssetUrl,
   previewManifestUrl, previewReportsUrl, previewToken, reportDownloadUrl, reportFileName, reportTarget, ReportFileError,
-  showArchive, workflowRunUrl, type ArtifactIdentity, type ArtifactLoadProgress, type ReportFileErrorCode,
+  showArchive, targetQuery, workflowRunUrl, type ArtifactIdentity, type ArtifactLoadProgress, type ReportFileErrorCode,
 } from "./artifact-report";
 
 export type ReportSourceStatus = "checking-cache" | "downloading" | "awaiting-file" | "opening" | "ready" | "failed";
@@ -18,6 +18,8 @@ export type ReportSourceSnapshot = {
   reportKey: number;
   /** A hosted preview downloading another target while the report on screen stays: the pill shows the download. */
   switching?: { target: string; progress: ArtifactLoadProgress };
+  /** The last switch whose download failed, while the report on screen stayed: the pill toasts why. */
+  switchError?: { target: string; error: string };
 };
 
 /** The metadata the ZIP path accepts, plus room for the manifest's list of assets and their sizes. */
@@ -49,6 +51,8 @@ export class ReportSource {
   /** Everyone waiting on a download hears its progress: a switch can join one the prefetch started. */
   private readonly loadingProgress = new Map<string, Set<(progress: ArtifactLoadProgress) => void>>();
   private current: string | undefined;
+  /** The link to the report on screen while another target downloads, for a switch that fails to go back to. */
+  private returnUrl: string | undefined;
   private generation = 0;
   private prefetched = false;
 
@@ -103,10 +107,11 @@ export class ReportSource {
     this.set(switching ? { ...this.snapshot, switching: { ...switching, progress } } : { ...this.snapshot, progress });
   };
 
-  /** The snapshot without a switch in progress. */
+  /** The snapshot without a switch in progress, or one that failed. */
   private settled(): ReportSourceSnapshot {
-    const { switching, ...snapshot } = this.snapshot;
+    const { switching, switchError, ...snapshot } = this.snapshot;
     void switching;
+    void switchError;
     return snapshot;
   }
 
@@ -131,8 +136,9 @@ export class ReportSource {
    */
   switchTarget(target: string, url: string): boolean {
     if (!this.preview || typeof window === "undefined") return false;
+    const from = window.location.href;
     window.history.pushState(null, "", url);
-    this.activateTarget(target);
+    this.activateTarget(target, from);
     return true;
   }
 
@@ -142,7 +148,7 @@ export class ReportSource {
     this.activateTarget(target);
   };
 
-  private activateTarget(target: string | undefined): void {
+  private activateTarget(target: string | undefined, from?: string): void {
     const key = target ?? "";
     const archive = this.archives.get(key);
     // Already shown (a hash-only navigation); going back to it from a switch still loading or failed shows it again.
@@ -164,7 +170,8 @@ export class ReportSource {
     }
     // The report on screen stays up while the other target downloads; only a page with none yet shows the loading screen.
     if (this.snapshot.status === "ready" && this.data) {
-      this.set({ ...this.snapshot, switching: { target: key, progress: { phase: "downloading" } } });
+      this.returnUrl = from;
+      this.set({ ...this.settled(), switching: { target: key, progress: { phase: "downloading" } } });
     } else {
       this.data = undefined;
       this.set({ status: "downloading", progress: { phase: "downloading" }, reportKey: this.snapshot.reportKey });
@@ -182,10 +189,29 @@ export class ReportSource {
       this.adopt(key, archive);
     } catch (error) {
       if (generation !== this.generation) return;
-      this.set({ ...this.settled(), status: "failed",
-        error: error instanceof Error && error.message ? error.message : "The report could not be downloaded.",
+      const message = error instanceof Error && error.message ? error.message : "The report could not be downloaded.";
+      // A switch away from a report on screen keeps it there: the link goes back to it, and the pill toasts why.
+      if (this.snapshot.switching && this.data) {
+        window.history.replaceState(null, "", this.returnUrl ?? this.shownLink());
+        this.returnUrl = undefined;
+        this.set({ ...this.settled(), switchError: { target: key, error: message } });
+        return;
+      }
+      this.set({ ...this.settled(), status: "failed", error: message,
         errorCode: error instanceof ReportFileError ? error.code : "invalid" });
     }
+  }
+
+  /** This page's link with the target of the report on screen: for a Back or Forward onto a target that failed. */
+  private shownLink(): string {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("platform");
+    url.searchParams.delete("target");
+    if (this.current) {
+      const [name, value] = targetQuery(this.current).split("=") as [string, string];
+      url.searchParams.set(name, value);
+    }
+    return url.href;
   }
 
   private adopt(key: string, archive: ArtifactReportArchive): void {

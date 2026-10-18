@@ -1,6 +1,7 @@
 import { appearanceLabel, type Appearance } from "../../utils/appearance";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { LoaderCircle, Search } from "lucide-react";
+import { toast } from "sonner";
 import { ExpoLogo } from "../shared/expo-logo";
 import { Menu } from "../shared/menu";
 import { isPreviewPath, isReportTargetId, previewReportsUrl, targetQuery } from "../../utils/artifact-report";
@@ -136,8 +137,8 @@ export function AppPill(props: AppPillProps) {
   const pillRef = useRef<HTMLDivElement>(null);
   const platformRef = useRef<HTMLButtonElement>(null);
   const [platformOpen, setPlatformOpen] = useState(false);
-  // A target still downloading: this report stays up, the trigger and the menu row say so.
-  const switching = useSyncExternalStore(REPORT_SOURCE.subscribe, REPORT_SOURCE.getSnapshot, REPORT_SOURCE.getSnapshot).switching;
+  // A target still downloading: this report stays up, the trigger and the menu row say so. One that failed says why.
+  const { switching, switchError } = useSyncExternalStore(REPORT_SOURCE.subscribe, REPORT_SOURCE.getSnapshot, REPORT_SOURCE.getSnapshot);
   const appearanceRef = useRef<HTMLButtonElement>(null);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const appearanceItems = (props.appearance?.options ?? []).map(option => ({
@@ -204,6 +205,10 @@ export function AppPill(props: AppPillProps) {
   // the menu's order before there is one). The handler reads the current targets from a ref.
   const last = useLastTarget(run.current);
   const targetKeys = { siblings: siblings.map(entry => entry.target.id), order: run.targets.map(target => target.id), current: run.current, last, openTarget };
+  const failedLabel = switchError ? run.targets.find(target => target.id === switchError.target)?.label : undefined;
+  useEffect(() => {
+    if (switchError) toast.error(failedLabel ? `Couldn’t open ${failedLabel}` : "Couldn’t open the other report", { description: switchError.error });
+  }, [switchError, failedLabel]);
   const targetKeysRef = useRef(targetKeys);
   targetKeysRef.current = targetKeys;
   useEffect(() => {

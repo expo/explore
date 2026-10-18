@@ -88,6 +88,8 @@ async function harness(t, bytes, { app = false, open = true, name = fileName, re
           preview.requests = (preview.requests ?? 0) + 1;
           preview.queries = [...(preview.queries ?? []), url.search];
           if (preview.status && preview.status !== 200) { response.statusCode = preview.status; return response.end(preview.body ?? "Not found"); }
+          // A target the Worker cannot read (`failures` by query) answers with that status.
+          if (preview.failures?.[url.search]) { response.statusCode = preview.failures[url.search]; return response.end("Unavailable"); }
           response.setHeader("content-type", "application/json");
           // A slow target (`delays` by query) keeps its manifest in flight while the reviewer moves on.
           // `padding` makes the manifest larger than the Viewer reads.
@@ -542,6 +544,30 @@ test("switching back to a prefetched target shows the screenshots it showed befo
   assert.equal(await screenshot.getAttribute("src"), shown, "the Android report kept the Blob URL it was showing");
   assert.equal(await page.evaluate(url => window.revokedUrls.includes(url), shown), false);
   assert.equal(await page.evaluate(() => window.createdUrls.length), created, "nothing was decoded again");
+  assert.deepEqual(errors, []);
+});
+
+test("a target whose download fails leaves the report on screen and its link, and a toast says why", { timeout: 60_000 }, async t => {
+  const report = reportFixture();
+  report.review.runtime = { ...report.review.runtime, platform: "android", platforms: ["ios", "android"] };
+  const preview = { token: "mnopqrstuvwxyz234567234567234567", listing: [{ platform: "ios" }, { platform: "android" }],
+    failures: { "?platform=ios": 500 } };
+  const { page, errors } = await harness(t, await archive(report), { app: true, reportIdentity: null, preview, query: "&platform=android" });
+  const trigger = page.getByRole("button", { name: "Platform: Android. Open another platform's report" });
+  await expect(trigger).toBeVisible();
+  await page.evaluate(() => { window.__samePage = true; });
+  const place = new URL(page.url()).hash;
+  await trigger.click();
+  await page.getByRole("menu", { name: "Platform" }).getByRole("menuitemradio").nth(0).click();
+  await expect(page.locator(".app-toast")).toContainText("Couldn’t open iOS");
+  await expect(page.locator(".app-toast")).toContainText("The report could not be downloaded (HTTP 500).");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(page.locator(".report-loading-shell")).toHaveCount(0);
+  await expect(trigger).not.toHaveAttribute("aria-busy", /.*/);
+  // The link is the Android report's again, at the place it was.
+  await expect.poll(() => new URL(page.url()).searchParams.get("platform")).toBe("android");
+  assert.equal(new URL(page.url()).hash, place);
+  assert.equal(await page.evaluate(() => window.__samePage), true, "the failed switch stays on the page");
   assert.deepEqual(errors, []);
 });
 
