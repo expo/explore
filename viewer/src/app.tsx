@@ -1188,7 +1188,7 @@ function ViewerApp() {
   // A flows-only review has no routes: the Map and Screens would be empty, so the Flows view is the home.
   // A flows review: every screen is a flow frame, or the capture took no route frame on either side (flows mode lists the routes without capturing them).
   const flowsOnly = hasFlows && ((map !== undefined && map.screens.length > 0 && map.screens.every((screen) => isFlowScreen(screen)))
-    || (loadedPublicReview?.surfaces ?? []).every((surface) => !surface.baseImage && !surface.headImage));
+    || (loadedPublicReview?.surfaces ?? []).every((surface) => isFlowScreen(surface) || (!surface.baseImage && !surface.headImage)));
   useEffect(() => {
     if (flowsOnly && (route.canvas === "map" || route.canvas === "screens")) navigate({ canvas: "flows" }, { replace: true });
     // A Flows link into a review that ran none (or an old link to the retired canvas) lands on the map.
