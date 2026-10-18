@@ -1,6 +1,0 @@
-{
-  "app": "wallet",
-  "scenario": "identical",
-  "mode": "flows",
-  "planOnly": true
-}

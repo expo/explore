@@ -1,6 +1,0 @@
-{
-  "app": "test/ci/apps/wallet",
-  "scenario": "test/ci/scenarios/wallet/identical",
-  "mode": "flows",
-  "planOnly": true
-}
