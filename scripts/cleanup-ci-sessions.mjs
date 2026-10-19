@@ -10,7 +10,8 @@ const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 
 /** Stop only exact sessions whose ownership the capture coordinator already verified. */
 export async function cleanupCiSessions({ sessionFiles, easCommand, environment = process.env, runCommand = spawnSync }) {
-  if (!Array.isArray(sessionFiles) || sessionFiles.length > 3) throw new Error('Provide at most three explicit session handoff files.');
+  // head, base and baseline, each with a session per appearance pass (light, dark) beside its own.
+  if (!Array.isArray(sessionFiles) || sessionFiles.length > 9) throw new Error('Provide at most nine explicit session handoff files.');
   const temporary = await realpath(environment.RUNNER_TEMP || tmpdir());
   const result = { stopped: [], failures: [] };
   let project;

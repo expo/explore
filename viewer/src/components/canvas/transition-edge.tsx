@@ -12,7 +12,8 @@ export type TransitionEdgeData = {
   transitionCount: number;
   active: boolean;
   primary: boolean;
-  dimmed: boolean;
+  /** Another screen is selected: the edge steps back to a hairline, so the selection's own stand out. */
+  quiet: boolean;
   sourceOnly?: boolean;
   previousSource?: boolean;
   tooltip?: string;
@@ -39,9 +40,10 @@ export function TransitionEdge(props: EdgeProps<TransitionGraphEdge>) {
     curvature: 0.24,
   });
   const emphasized = Boolean(props.data?.active || props.selected || hovered);
-  const dimmed = Boolean(props.data?.dimmed && !emphasized);
+  const quiet = Boolean(props.data?.quiet && !emphasized);
   const stroke = emphasized
     ? "var(--accent)"
+    : quiet ? "var(--border-subtle)"
     : props.data?.previousSource ? "var(--danger)" : props.data?.primary ? "var(--graph-line)" : "var(--graph-line-soft)";
 
   return (
@@ -66,9 +68,8 @@ export function TransitionEdge(props: EdgeProps<TransitionGraphEdge>) {
         style={{
           ...props.style,
           stroke,
-          strokeWidth: emphasized ? 2.2 : props.data?.primary ? 1.15 : 0.9,
+          strokeWidth: emphasized ? 2.5 : quiet ? 1 : props.data?.primary ? 1.15 : 0.9,
           strokeDasharray: props.data?.sourceOnly ? "6 5" : emphasized || props.data?.primary ? undefined : "4 7",
-          opacity: dimmed ? 0.12 : 1,
         }}
       />
     </>

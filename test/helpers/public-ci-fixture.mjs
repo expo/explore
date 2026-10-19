@@ -54,7 +54,7 @@ export async function readUsage(output) {
 
 export async function fixture(t, provider, { docsOnly = false, unresolvedParameters = false, observerFailurePath, agentMode = false,
   instructions = 'Explore selected routes in a stable, comparable state.', recoverableOpenFailure = false,
-  userInterfaceStyle, headUserInterfaceStyle, platform: initialPlatform = 'ios', targets } = {}) {
+  userInterfaceStyle, headUserInterfaceStyle, platform: initialPlatform = 'ios', targets, maxSessions } = {}) {
   let platform = initialPlatform;
   const root = await realpath(await mkdtemp(join(tmpdir(), 'explore-ci-integration-')));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -67,7 +67,7 @@ export async function fixture(t, provider, { docsOnly = false, unresolvedParamet
   const commit = message => { git(headProject, 'add', '.'); git(headProject, 'commit', '-m', message); return git(headProject, 'rev-parse', 'HEAD'); };
   const config = { mode: 'deterministic', app: { name: 'Example', platform, bundleId: 'com.example.app', easProfile: 'capture', scheme: 'sample' },
     device: { name: 'iPhone 17 Pro' }, navigation: { provider, ...(provider === 'react-navigation' ? { entry: 'src/App.tsx' } : {}) },
-    exploration: { scope: 'changes' }, capture: { maxMinutes: 30, maxActions: 500, repack: 'eas' },
+    exploration: { scope: 'changes' }, capture: { maxMinutes: 30, maxActions: 500, repack: 'eas', ...(maxSessions ? { maxSessions } : {}) },
     parameters: provider === 'expo-router' && !unresolvedParameters ? { '/item/[id]': { id: 'example-item' } } : {} };
   if (targets) config.targets = targets;
   if (agentMode) { config.mode = 'agent'; config.agent = { provider: 'anthropic', model: 'fixture-model', instructions: '.expo-explore/instructions.md' }; }

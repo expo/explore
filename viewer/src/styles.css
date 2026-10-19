@@ -110,7 +110,6 @@
   /* How far an item the Changes filter does not cover falls back. Low enough to read as
      background at a glance, high enough that the canvas keeps its shape. */
   --dim-out: 0.35;
-  --hover-neighbour-frame: color-mix(in srgb, var(--accent) 55%, var(--border-subtle));
   --shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.025), 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 10px 20px rgba(0, 0, 0, 0.1), 0 3px 6px rgba(0, 0, 0, 0.05);
 
@@ -461,6 +460,8 @@ code {
   --graph-line-soft: #c5c7ce;
   /* One flat fill for a group — no border, no second tone inside it. */
   --canvas-group: #f5f5f6;
+  /* The ring a hovered Map card takes: a step past the border scale, short of the connectors. */
+  --hover-ring: #b9bbc6;
   color: var(--text);
   background: var(--screen);
 }
@@ -480,6 +481,7 @@ code {
   --graph-line: #696e77;
   --graph-line-soft: #3f4349;
   --canvas-group: #18191b;
+  --hover-ring: #5a6169;
 }
 /* The canvas is a fixed map: dragging anywhere pans, while clicking an object selects it. */
 .graph-canvas .canvas-tool-pan,
@@ -499,27 +501,14 @@ code {
 .graph-canvas .transition-edge-hitarea { cursor: pointer; pointer-events: stroke; }
 .graph-canvas .transition-edge-path { transition: stroke 100ms ease, stroke-width 100ms ease, opacity 140ms ease; }
 .graph-canvas .graph-edge-secondary { opacity: 0.72; }
-.graph-canvas .graph-edge-dimmed { opacity: 0.14; }
 .graph-canvas .graph-edge-active { opacity: 1; }
 .graph-canvas .react-flow__node { transition: opacity 180ms ease, filter 180ms ease; }
 .graph-canvas .canvas-focus-animating .react-flow__node { transition: none; }
 /* Focus: what the chosen state does not cover only steps back, so the map is still readable. */
 .graph-canvas .react-flow__node.graph-node-muted { opacity: var(--dim-out); --map-card-opacity: var(--dim-out); }
-/* A route-selected screenshot stays visually anchored while the surrounding screenshots recede.
-   They fade as focus dims them, by opacity alone: a filter would grey the card's opaque backing.
-   Summary cards retain their normal contrast so the selected screen's semantic context is legible. */
-.map-canvas.screen-selection-active .react-flow__node-screen:not(.selected) {
-  opacity: var(--dim-out);
-  --map-card-opacity: var(--dim-out);
-}
-.map-canvas.screen-selection-active .react-flow__node-screen:not(.selected):hover,
-.map-canvas.screen-selection-active .react-flow__node-screen:not(.selected):focus-within {
-  opacity: 1;
-  --map-card-opacity: 1;
-}
-/* Hover never recedes anything, but where focus or a selection has already dimmed the map, the
-   hovered screen and the screens it connects to come back up, with the transitions between them,
-   so the neighbourhood reads. These come after both dimming rules so the pointer's context wins. */
+/* Hover never recedes anything, but where the Changes filter has dimmed the map, the hovered
+   screen and the screens it connects to come back up, with the transitions between them, so the
+   neighbourhood reads. These come after the dimming rule so the pointer's context wins. */
 .connection-canvas-surface.canvas-hovering .react-flow__node-screen.graph-node-hover-related {
   opacity: 1;
   --map-card-opacity: 1;
@@ -687,7 +676,7 @@ code {
 /* Hover and selection draw a 3px ring in the accent colour: the 1px border recoloured plus a 2px
    shadow outside it, so the image keeps its size (a thicker border would shrink the picture inside
    its box). Changed screens keep their own colour at the same weight: the diff rules below win on
-   specificity. */
+   specificity. The Map leaves the border to the status and rings the card from outside instead. */
 .screen-node-image:hover img,
 .screen-screenshot-card.selected .screen-node-image img { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 .screen-node-image:hover > .image-placeholder,
@@ -707,8 +696,8 @@ code {
   border-radius: 17px;
   pointer-events: none;
 }
-/* Selection needs no ring: the canvas dims every other screen. The highlight ring stays for the
-   transient pointer-over state that panels project onto the canvas. */
+/* Selection needs no overlay: the Map rings the screenshot and Screens frames the card. The
+   highlight ring stays for the transient pointer-over state that panels project onto the canvas. */
 .canvas-active-frame.is-highlighted::after {
   border-color: var(--accent);
   box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 24%, transparent);
@@ -723,10 +712,9 @@ code {
   pointer-events: none;
 }
 /* A screen's handles are ports on its frame: they take the frame colour, whether that is the
-   status colour of a changed screen or the accent of a hovered or selected one, and a ring in
-   the canvas colour keeps them legible as connection points on the border. */
+   status colour of a changed screen or the accent of a selected one, and a ring in the canvas
+   colour keeps them legible as connection points on the border. */
 .screen-screenshot-card { --screen-frame: var(--graph-line); }
-.screen-screenshot-card:has(.screen-node-image:hover),
 .screen-screenshot-card.selected,
 .screen-screenshot-card.highlighted { --screen-frame: var(--accent); }
 .screen-screenshot-card:is(.diff-added, .diff-modified, .diff-removed) { --screen-frame: var(--diff); }
@@ -738,22 +726,47 @@ code {
   opacity: 1;
 }
 
-/* Hover is transient canvas state. Nothing recedes: the pointer's screen gets its ring, the
-   transitions into and out of it turn accent, and the screens at their other ends take a tinted
-   frame, so the neighbourhood reads without the rest of the map changing. Only the symmetric
-   difference of related nodes/edges receives a class, avoiding a React commit across the graph. */
-.connection-canvas-surface.canvas-hovering .graph-edge-hover-related .transition-edge-path {
-  stroke: var(--accent) !important;
-  stroke-width: 2.2 !important;
+/* A Map card's border is its status alone. Selection rings it from outside instead: an accent
+   ring past a gap in the canvas colour, outside the status border, with a soft lift; hover draws
+   the same ring in grey. The ring scales with the canvas, so below a readable zoom its unit grows
+   to keep it about a screen pixel and a half wide (--canvas-zoom, set by the zoom bridge). */
+.map-surface .screen-screenshot-card {
+  --ring-unit: clamp(1px, 0.6px / var(--canvas-zoom, 1), 6px);
+  --ring-status: 0px;
+}
+.map-surface .screen-screenshot-card:is(.diff-added, .diff-modified, .diff-removed) { --ring-status: 2px; }
+.map-surface .screen-screenshot-card .screen-node-image :is(img, .image-placeholder) {
+  border-color: var(--border-subtle);
+  box-shadow: none;
+}
+.map-surface .react-flow__node-screen:is(.selected, .graph-node-hover-subject) .screen-screenshot-card .screen-node-image :is(img, .image-placeholder) {
+  box-shadow:
+    0 0 0 var(--ring-status) var(--diff, transparent),
+    0 0 0 calc(var(--ring-status) + 4 * var(--ring-unit)) var(--screen),
+    0 0 0 calc(var(--ring-status) + 6.5 * var(--ring-unit)) var(--ring-color),
+    var(--ring-lift, 0 0 transparent);
+}
+.map-surface .react-flow__node-screen.graph-node-hover-subject { --ring-color: var(--hover-ring); }
+.map-surface .react-flow__node-screen.selected {
+  --ring-color: var(--accent);
+  --ring-lift: 0 calc(10 * var(--ring-unit)) calc(28 * var(--ring-unit)) color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.map-surface .react-flow__node-screen.selected .screen-node-title { color: var(--accent-strong); }
+/* Keyboard focus is dashed, past where a ring would sit, so it never reads as either. */
+.map-surface .screen-screenshot-target:focus-visible {
+  outline: 2px dashed var(--accent-strong) !important;
+  outline-offset: calc(var(--ring-status) + 9 * var(--ring-unit)) !important;
+  filter: none !important;
+}
+
+/* Hover is transient canvas state. Nothing recedes: the pointer's screen takes its grey ring and
+   the transitions into and out of it darken. Only the symmetric difference of related
+   nodes/edges receives a class, avoiding a React commit across the graph. A selected screen's
+   transitions stay accent. */
+.connection-canvas-surface.canvas-hovering .graph-edge-hover-related:not(.graph-edge-active) .transition-edge-path {
+  stroke: var(--tertiary) !important;
+  stroke-width: 2 !important;
   stroke-dasharray: none !important;
-}
-.connection-canvas-surface.canvas-hovering .react-flow__node-screen.graph-node-hover-related:not(.graph-node-hover-subject)
-  .screen-screenshot-card:not(.selected, .diff-added, .diff-modified, .diff-removed) {
-  --screen-frame: var(--hover-neighbour-frame);
-}
-.connection-canvas-surface.canvas-hovering .react-flow__node-screen.graph-node-hover-related:not(.graph-node-hover-subject)
-  .screen-screenshot-card:not(.selected, .diff-added, .diff-modified, .diff-removed) .screen-node-image :is(img, .image-placeholder) {
-  border-color: var(--hover-neighbour-frame);
 }
 
 /* Semantic Map: an area is a meaningful destination, never an anonymous "X states" step. */
@@ -928,7 +941,7 @@ code {
 
 /* The phone map's open hint. The first tap there only selects, so the pill sits in the middle of
    the selected screenshot (always on the image whatever the slot's shape) and says what the next
-   tap does. In a wider window the card's tooltip carries the message and nothing covers the image. */
+   tap does. In a wider window a click opens the Inspector at once and nothing covers the image. */
 .screen-screenshot-target { cursor: pointer; }
 .screen-open-hint {
   position: absolute;
@@ -954,7 +967,7 @@ code {
 .screen-open-hint > svg { width: 14px; height: 14px; flex: none; }
 /* Only the phone layout's map shows the pill, on the selected screen, where a second tap or click
    opens the Inspector. That layout is a width, not a device, and has no tooltips, so a narrow
-   desktop window shows it too. Elsewhere the screenshot button's tooltip says it instead. */
+   desktop window shows it too. */
 .phone-layout .map-canvas .screen-screenshot-card.selected .screen-open-hint {
   display: inline-flex;
   animation: screen-open-hint-in 140ms ease-out;

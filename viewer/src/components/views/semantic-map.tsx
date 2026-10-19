@@ -31,6 +31,7 @@ import { arrowsOwnedBy, mapKeyDirection, mapKeyEntry, mapKeyTarget, type MapKeyD
 import { createKeyHold } from "../../utils/key-hold";
 
 const HOVER_CLEAR_DELAY = 180;
+const PRESSABLE = 'button, a, summary, [role="button"]';
 const MAP_LAYOUT_REVISION = "flat-v1";
 const MAP_FIT_VIEW_OPTIONS = {
   padding: 0.04,
@@ -115,8 +116,8 @@ function ScreenNodeCard({ data, selected }: NodeProps<ScreenGraphNode>) {
       imageHeight={data.screenshotSize?.imageHeight ?? data.frame.screen.height}
       placeholderSize={data.frame.screen}
       loading="lazy"
-      // The route heads the card, so the tooltip goes below it.
-      tooltipPlacement="bottom"
+      // The ring says which screen is which; a click opening it in the Inspector needs no tooltip.
+      inspectorTooltip={false}
       leading={<Handle type="target" position={horizontal ? Position.Left : Position.Top} className="graph-handle" />}
       trailing={<Handle type="source" position={horizontal ? Position.Right : Position.Bottom} className="graph-handle" />}
       onMouseEnter={() => data.onHover(data.screen.id)}
@@ -342,8 +343,9 @@ function projectionElements(
   const edges: TransitionGraphEdge[] = structure.groups.map((group) => {
     const hierarchyEdge = structure.primaryEdgeKeys.has(group.key);
     const connected = group.from === selectedScreenId || group.to === selectedScreenId;
-    const dimmed = false;
     const active = connected;
+    // While a screen is selected, every other transition quiets to a hairline; cards never fade.
+    const quiet = Boolean(selectedScreenId) && !connected;
     const sourceOnly = group.transitionIds.length === 0 && Boolean(group.sourceEdges?.length);
     const previousSource = group.sourceRevision === "baseline";
     const removed = previousSource || (!group.synthetic && diff?.screens.get(group.to)?.status === "removed");
@@ -356,25 +358,26 @@ function projectionElements(
     const primary = hierarchyEdge;
     const stroke = active
       ? "var(--accent)"
+      : quiet ? "var(--border-subtle)"
       : removed ? "var(--danger)" : primary ? "var(--graph-line)" : "var(--graph-line-soft)";
     return {
       id: edgeElementId(group.key),
       source: group.from,
       target: group.to,
       type: "transition",
-      className: `${hierarchyEdge ? "graph-edge-primary" : "graph-edge-secondary"}${sourceOnly ? " graph-edge-source" : ""}${previousSource ? " graph-edge-source-baseline" : ""}${active ? " graph-edge-active" : ""}${dimmed ? " graph-edge-dimmed" : ""}`,
+      className: `${hierarchyEdge ? "graph-edge-primary" : "graph-edge-secondary"}${sourceOnly ? " graph-edge-source" : ""}${previousSource ? " graph-edge-source-baseline" : ""}${active ? " graph-edge-active" : ""}${quiet ? " graph-edge-quiet" : ""}`,
       markerEnd: {
         type: MarkerType.ArrowClosed,
-        width: active || hierarchyEdge ? 14 : 11,
-        height: active || hierarchyEdge ? 14 : 11,
+        width: active || (hierarchyEdge && !quiet) ? 14 : 11,
+        height: active || (hierarchyEdge && !quiet) ? 14 : 11,
         color: stroke,
       },
       style: {
         stroke,
-        strokeWidth: active ? 2.2 : hierarchyEdge ? 1.15 : 0.9,
+        strokeWidth: active ? 2.5 : quiet ? 1 : hierarchyEdge ? 1.15 : 0.9,
         strokeDasharray: !hierarchyEdge && !active && !removed ? "4 7" : undefined,
       },
-      data: { label, transitionCount: group.transitionIds.length, active, primary, dimmed, sourceOnly, previousSource, ...(tooltip ? { tooltip } : {}) },
+      data: { label, transitionCount: group.transitionIds.length, active, primary, quiet, sourceOnly, previousSource, ...(tooltip ? { tooltip } : {}) },
       // React Flow renders a positive edge z-index above root nodes. Keep every connection in
       // the base edge layer so selected/highlighted paths still pass behind screen imagery.
       zIndex: 0,
@@ -433,7 +436,7 @@ function sameTransitionEdge(a: TransitionGraphEdge, b: TransitionGraphEdge) {
     && a.data?.transitionCount === b.data?.transitionCount
     && a.data?.active === b.data?.active
     && a.data?.primary === b.data?.primary
-    && a.data?.dimmed === b.data?.dimmed;
+    && a.data?.quiet === b.data?.quiet;
 }
 
 function reuseUnchangedElements(
@@ -557,7 +560,8 @@ function ConnectionCanvas(props: MapViewProps) {
   }, [applyHover]);
   // The arrow keys (or h j k l) walk the map from the selected screen: along an edge in the
   // layout's flow, across to the neighbour on the same rank otherwise. With nothing selected they
-  // enter the map at its edge, as on the Screens page. A held key keeps walking.
+  // enter the map at its edge, as on the Screens page. A held key keeps walking. Return opens the
+  // selection in the Inspector.
   const { selectedScreenId } = props;
   const selectedRef = useRef(selectedScreenId);
   selectedRef.current = selectedScreenId;
@@ -568,22 +572,39 @@ function ConnectionCanvas(props: MapViewProps) {
       if (!structure) return undefined;
       return from ? mapKeyTarget(structure, from, direction) : mapKeyEntry(structure, direction);
     };
+    // A click leaves the keyboard focus on the clicked screen's button, where Return would press it
+    // and open that screen again. A walk lets go of it, so Return reaches the screen walked to.
+    const walkTo = (id: string) => {
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && surfaceRef.current?.contains(focused)) focused.blur();
+      selectScreen(id);
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       hold.interrupt(event);
       if (event.repeat && hold.holding(event.code)) { event.preventDefault(); return; }
       if (event.defaultPrevented || !shortcutsLive(event) || arrowsOwnedBy(event.target)) return;
+      if (event.key === "Enter") {
+        // A focused button or link keeps its own Return; elsewhere on the page it opens the selection.
+        const target = event.target instanceof Element ? event.target : null;
+        const selected = selectedRef.current;
+        if (!selected || event.isComposing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+        if (target && target !== document.body && (target.closest(PRESSABLE) || !surfaceRef.current?.contains(target))) return;
+        event.preventDefault();
+        selectScreen(selected);
+        return;
+      }
       const direction = mapKeyDirection(event);
       if (!direction) return;
       if (!structureRef.current) return;
       event.preventDefault();
       let at = move(direction, selectedRef.current);
       if (!at) return;
-      selectScreen(at);
+      walkTo(at);
       hold.begin(event.code, () => {
         const target = move(direction, at);
         if (!target) return false;
         at = target;
-        selectScreen(target);
+        walkTo(target);
         return true;
       });
     };
@@ -636,9 +657,6 @@ function ConnectionCanvas(props: MapViewProps) {
     .sort((left, right) => left.depth - right.depth || left.y - right.y || left.x - right.x || left.index - right.index)
     .map(({ id }) => id), [layout.nodes]);
   const phone = usePhoneLayout();
-  const selectedScreenVisible = Boolean(
-    props.selectedScreenId && layout.nodes.some((node) => node.id === props.selectedScreenId),
-  );
   if (props.map.screens.length === 0) {
     const blockers = props.map.gaps.filter((gap) => gap.status === "open" && !gap.screenId).map((gap) => gap.message);
     return (
@@ -656,10 +674,7 @@ function ConnectionCanvas(props: MapViewProps) {
     <div ref={surfaceRef} className="connection-canvas-surface map-surface">
       <CanvasStage
         ariaLabel="Screen map"
-        className={[
-          "map-canvas",
-          selectedScreenVisible ? "screen-selection-active" : "",
-        ].filter(Boolean).join(" ")}
+        className="map-canvas"
         nodes={layout.nodes}
         edges={layout.edges}
         nodeTypes={NODE_TYPES}
