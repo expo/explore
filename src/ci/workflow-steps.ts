@@ -196,7 +196,8 @@ export async function cleanupAfterCapture(options: { output: string; checkouts: 
   const environment = options.environment ?? process.env;
   const result: { stopped: string[]; failures: Array<{ code: string; message: string; nextAction: string }> } = { stopped: [], failures: [] };
   const sessionFiles: string[] = [];
-  for (const name of ["head-session", "base-session", "baseline-session"]) {
+  // A side that captures an appearance in a session of its own (capture.maxSessions) records it as `<side>-session-<scheme>`.
+  for (const name of ["head", "base", "baseline"].flatMap(side => ["", "-light", "-dark"].map(scheme => `${side}-session${scheme}`))) {
     const path = resolve(options.output, name);
     try { await lstat(path); sessionFiles.push(path); } catch { /* That side never started a session. */ }
   }

@@ -1,13 +1,18 @@
 import { systemRegions } from "../contracts/capture.js";
 import type { RunTarget } from "../types.js";
-import { spawnSync } from "node:child_process";
-import { mkdir, open, readFile, realpath, writeFile } from "node:fs/promises";
+import { execFile, spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join, relative, resolve, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import { buildVerifiedPlan } from "./verified-plan.js";
-import { runCiMap, type CommandRunner } from "../capture/run.js";
-import { routeIdOfScreen } from "../capture/appearance.js";
+import { runCiMap, type CiMapOptions, type CommandRunner } from "../capture/run.js";
+import { resolveColorSchemes, routeIdOfScreen, type ColorScheme } from "../capture/appearance.js";
+import { baseEnvironment } from "../capture/common.js";
+import { DEFAULT_MAX_SESSIONS, planSideSessions, sessionShare } from "./session-plan.js";
+import { mergeCaptureExports } from "./export-merge.js";
+import { abandonSharedBuilds } from "../capture/shared-build.js";
 import { prepareCaptureReview, readCaptureBundle } from "../review/capture-review.js";
 import { quarantineReviewContract } from "../contracts/review-validation.js";
 import { agentCaptureConstraints } from "../capture/agent/source-context.js";
@@ -64,6 +69,8 @@ async function recipe(config: ExploreConfig, plan: SourceCapturePlan, side: "bas
 /** The capture's clock and host-side pause; tests pair them with an injected runner so readiness budgets are not real time. */
 type CaptureClock = { now?: (() => number) | undefined; sleep?: ((milliseconds: number) => void) | undefined };
 
+const execFileAsync = promisify(execFile);
+
 function captureOptions(config: ExploreConfig, environment: NodeJS.ProcessEnv, runner?: CommandRunner, clock: CaptureClock = {}) {
   return { ...(runner && clock.now ? { now: clock.now } : {}), ...(runner && clock.sleep ? { sleep: clock.sleep } : {}), platform: config.app.platform, bundleId: config.app.bundleId,
     ...(config.app.scheme ? { scheme: config.app.scheme } : {}), device: config.device.name, ...(config.device.pose ? { devicePose: config.device.pose } : {}),
@@ -83,6 +90,87 @@ async function prefetchControllers(config: ExploreConfig, environment: NodeJS.Pr
   if (config.capture.controller === "argent") await ensureController("argent", { environment, progress });
   // Argent on a local device also needs its tool-server, installed once before the targets capture side by side.
   if (config.capture.controller === "argent" && config.capture.simulator === "local") await ensureArgentToolServer({ environment, progress });
+}
+
+/**
+ * The appearances a capture of this side renders, read before any session starts so the sessions can divide them. The
+ * app config comes from `eas config` in a child process, as the capture reads it, with the capture's restricted
+ * environment: never evaluated in this process, which holds the review's secrets. Unknown: undefined.
+ */
+async function expectedColorSchemes(config: ExploreConfig, project: string, environment: NodeJS.ProcessEnv, easCommand: string): Promise<ColorScheme[] | undefined> {
+  // Argent switches the appearance only through serve-sim on an EAS iOS session; elsewhere it captures one.
+  if (config.capture.controller === "argent" && config.capture.simulator !== "local" && config.app.platform !== "ios") return undefined;
+  if (config.capture.appearance !== "auto") return resolveColorSchemes(config.capture.appearance, undefined, config.app.platform);
+  const easEnvironment = { ...baseEnvironment(environment), ...(environment.EXPO_TOKEN ? { EXPO_TOKEN: environment.EXPO_TOKEN } : {}) };
+  try {
+    const { stdout } = await execFileAsync(easCommand, ["config", "--platform", config.app.platform, "--profile", config.app.easProfile, "--json", "--non-interactive"],
+      { cwd: project, env: easEnvironment, timeout: 5 * 60_000, maxBuffer: 16 * 1024 * 1024 });
+    const app = (JSON.parse(stdout) as { appConfig?: Record<string, unknown> }).appConfig;
+    return app && typeof app === "object" ? resolveColorSchemes("auto", app, config.app.platform) : undefined;
+  } catch {
+    // The capture reads the same config and reports why it cannot; until then the side keeps one session.
+    return undefined;
+  }
+}
+
+/**
+ * Run one side's capture: in one session, or when `passes` splits its appearances, one worker session per pass. The
+ * primary pass exports to `mapOptions.outputDirectory`; the others beside it, named by their appearances, then merge.
+ */
+async function captureSideInSessions(mapOptions: CiMapOptions, passes: readonly (readonly ColorScheme[])[] | undefined,
+  progress: Progress, signal: AbortSignal | undefined, worker: boolean): Promise<Awaited<ReturnType<typeof runCiMap>>> {
+  const runOnWorker = (passOptions: CiMapOptions) =>
+    runCiMapOnWorker((({ progress: _progress, runner: _runner, agent: _agent, signal: _signal, ...rest }) => rest)(passOptions), progress, signal);
+  if (!passes || passes.length <= 1) return worker ? runOnWorker(mapOptions) : runCiMap(mapOptions);
+  const schemes = passes.flat();
+  progress(`${mapOptions.side}: capturing ${passes.map(pass => pass.join("+")).join(" and ")} in separate sessions`);
+  // The passes install the same app: they share one build and repack, as the targets of a local review do.
+  const ownBuildShare = mapOptions.buildShare ? undefined : await mkdtemp(join(tmpdir(), "expo-explore-builds-"));
+  const buildShare = mapOptions.buildShare ?? ownBuildShare!;
+  const settled = await Promise.allSettled(passes.map(async (pass, index) => {
+    const suffix = index === 0 ? "" : `-${pass.join("-")}`;
+    const outputDirectory = `${mapOptions.outputDirectory}${suffix}`;
+    try {
+      return await runOnWorker({ ...mapOptions, mapDirectory: `${mapOptions.mapDirectory}${suffix}`, outputDirectory, buildShare,
+        ...(mapOptions.sessionStatePath ? { sessionStatePath: `${mapOptions.sessionStatePath}${suffix}` } : {}), appearancePass: { all: schemes, capture: pass } });
+    } catch (error) {
+      // A pass that dies mid-build must not leave the others polling for its result.
+      await abandonSharedBuilds(buildShare, owner => owner === outputDirectory, toCiError(error).code).catch(() => undefined);
+      throw error;
+    }
+  }));
+  // The build folder holds the repacked app, which the sessions have installed.
+  if (ownBuildShare) await rm(ownBuildShare, { recursive: true, force: true });
+  for (const outcome of settled) if (outcome.status === "rejected") throw outcome.reason;
+  await mergeCaptureExports(mapOptions.outputDirectory, passes.slice(1).map(pass => ({ directory: `${mapOptions.outputDirectory}-${pass.join("-")}`, scheme: pass[0]! })));
+  return (settled[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof runCiMap>>>).value;
+}
+
+/**
+ * This target's share of `capture.maxSessions`: the targets are this review's (`targets`), or the config's one, and
+ * `posedTargets` (foldables) take the sessions that do not divide evenly.
+ */
+function targetSessionShare(config: ExploreConfig, targets: readonly RunTarget[] | undefined, posedTargets: readonly string[] | undefined): number {
+  const targetIds: string[] = (targets ?? []).map(target => target.id);
+  if (targetIds.length === 0) targetIds.push(...(config.targets ? Object.keys(config.targets) : [config.target?.id ?? "default"]));
+  return sessionShare({ maxSessions: config.capture.maxSessions, targets: targetIds, target: config.target?.id ?? targetIds[0]!,
+    prefer: id => posedTargets?.includes(id) ? 1 : 0 });
+}
+
+/**
+ * The appearance passes one side spreads over sessions of its own, out of its target's share of `capture.maxSessions`;
+ * undefined keeps the side in one session. The side's app config is read only when its share and routes could pay for
+ * a split.
+ */
+export async function sideAppearancePasses(config: ExploreConfig, environment: NodeJS.ProcessEnv,
+  input: { share: number; sides: 1 | 2; routes: number; project: string; easCommand?: string }): Promise<ColorScheme[][] | undefined> {
+  // A pass observes its launch only when capture.launch asks for it.
+  const plan = (schemes: readonly ColorScheme[]) => planSideSessions({ share: input.share, sides: input.sides, routes: input.routes, schemes,
+    ...(config.capture.launch === "off" ? { launchSeconds: 0 } : {}) }).passes;
+  if (plan(["light", "dark"]).length < 2) return undefined;
+  const schemes = await expectedColorSchemes(config, input.project, environment, input.easCommand ?? packageBin("eas-cli", "eas"));
+  const passes = schemes ? plan(schemes) : [];
+  return passes.length > 1 ? passes.map(pass => [...pass]) : undefined;
 }
 
 export function captureSidesConcurrently(input: { plan: SourceCapturePlan; agent: boolean; injectedRunner: boolean; baselineMayExist: boolean }): boolean {
@@ -112,6 +200,8 @@ export type PublicCiOptions = {
   platforms?: ExplorePlatform[];
   /** Every target config.yaml captures, in config order; recorded in the report so the Viewer links the sibling targets' reports. */
   targets?: RunTarget[];
+  /** The targets with a device pose (foldables), which take the sessions `capture.maxSessions` does not divide evenly. */
+  posedTargets?: readonly string[];
   baseProject: string; headProject: string; pullRequestPath: string; output: string;
   config: ExploreConfig; configPath?: string; environment?: NodeJS.ProcessEnv; transport?: typeof fetch;
   now?: () => number; sleep?: (milliseconds: number) => void; onComment?: (state: PublicCommentState, body: string) => void;
@@ -254,6 +344,8 @@ export async function runCiReview(options: {
   platforms?: ExplorePlatform[];
   /** Every target config.yaml captures; `config.target` is the one this review captures. */
   targets?: RunTarget[];
+  /** The targets with a device pose (foldables), which take the sessions `capture.maxSessions` does not divide evenly. */
+  posedTargets?: readonly string[];
   /** A folder shared with the other targets' reviews, so the targets of one platform build each commit once. */
   buildShare?: string;
   measure?: Parameters<typeof assessPublicEvidence>[0]["measure"];
@@ -309,7 +401,20 @@ export async function runCiReview(options: {
     // A baseline that may be restored needs the head runtime profile first; otherwise both sides capture at once.
     const baselineMayExist = plan.baseCaptureSurfaceIds.length > 0 && await captureArtifactCacheMayMatch({ ...cacheRecipes.base,
       ...(environment.EXPLORE_CAPTURE_CACHE ? { sourceDirectory: environment.EXPLORE_CAPTURE_CACHE } : {}), commit: pr.base.sha });
-    const concurrent = captureSidesConcurrently({ plan, agent: !!exploration.agent, injectedRunner: !!options.runner, baselineMayExist });
+    const share = targetSessionShare(config, options.targets, options.posedTargets);
+    // A share of one session captures the sides in turn.
+    const concurrent = captureSidesConcurrently({ plan, agent: !!exploration.agent, injectedRunner: !!options.runner, baselineMayExist }) && share >= 2;
+    // Each side's appearances split by its own app config: a pull request can change userInterfaceStyle. Sides taken in
+    // turn (a baseline may be restored) each have the whole share. Passes run on worker threads, which cannot take an
+    // injected runner or an agent session.
+    const sidePasses = { head: undefined as ColorScheme[][] | undefined, base: undefined as ColorScheme[][] | undefined };
+    if (!exploration.agent && !options.runner) await Promise.all((["head", "base"] as const).map(async side => {
+      sidePasses[side] = await sideAppearancePasses(config, environment, { share, sides: concurrent ? 2 : 1, routes: plan[`${side}CaptureSurfaceIds`].length, project: projects[side] });
+    }));
+    const split = (["head", "base"] as const).filter(side => sidePasses[side]);
+    progress(`sessions: ${share} of ${config.capture.maxSessions ?? DEFAULT_MAX_SESSIONS} for this target; `
+      + (split.length ? `${split.join(" and ")} ${split.length === 1 ? "captures its" : "capture their"} appearances in separate sessions`
+        : concurrent ? "one session per side" : "the sides in turn"));
     const captureSide = async (side: "head" | "base") => {
       const directory = join(output, `${side}-export`);
       const selectedIds = plan[`${side}CaptureSurfaceIds`];
@@ -329,9 +434,8 @@ export async function runCiReview(options: {
         name: config.app.name ?? pr.repository, buildId: pr.origin === "local" ? `local-${pr.runId}-${side}` : pr.origin === "compare" ? `compare-${options.runId}-${side}` : `pr-${pr.number}-${side}`, buildVersion: pr[side].sha.slice(0, 8), gitCommit: pr[side].sha,
         planPath: join(output, "execution-plan.json"), side, sessionStatePath: join(output, `${side}-session`), ...(options.buildShare ? { buildShare: options.buildShare } : {}),
         ...(reuseDirectory ? { reuseDirectory } : {}), ...(options.signal ? { signal: options.signal } : {}) };
-      const captured = concurrent
-        ? await runCiMapOnWorker((({ progress: _progress, runner: _runner, agent: _agent, signal: _signal, ...rest }) => rest)(mapOptions), progress, options.signal)
-        : await runCiMap(mapOptions);
+      // A restored baseline already holds every appearance pass, so it never splits.
+      const captured = await captureSideInSessions(mapOptions, reuseDirectory ? undefined : sidePasses[side], progress, options.signal, concurrent);
       const bundle = await readCaptureBundle(directory);
       bundle.profile = cacheRecipe.profile;
       await writeFile(join(directory, "bundle.json"), JSON.stringify(bundle));
@@ -464,6 +568,10 @@ export async function runCiReview(options: {
 }
 
 export async function runBaselineCi(options: { platform?: ExplorePlatform; project: string; sha: string; output: string; config: ExploreConfig; environment?: NodeJS.ProcessEnv; runner?: CommandRunner;
+  /** Every target config.yaml captures, so this baseline takes its target's share of `capture.maxSessions`. */
+  targets?: RunTarget[];
+  /** The targets with a device pose (foldables), which take the sessions `capture.maxSessions` does not divide evenly. */
+  posedTargets?: readonly string[];
   now?: () => number; sleep?: (milliseconds: number) => void;
   agentSessionFactory?: PrepareCiExplorationOptions["createSession"]; progress?: Progress;
   /** Use the local `eas login` session instead of EXPO_TOKEN (expo-explore doctor --capture). */
@@ -489,12 +597,19 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
       onUsage: recordAgentUsage(output, () => usagePhase), ...(options.subscription ? { subscription: true } : {}) });
   const directory = join(output, "baseline-export");
   usagePhase = "capture-baseline";
-  const result = await runCiMap({ ...captureOptions(options.config, environment, options.runner, { now: options.now, sleep: options.sleep }), progress,
+  const baselineOptions: CiMapOptions = { ...captureOptions(options.config, environment, options.runner, { now: options.now, sleep: options.sleep }), progress,
     ...(options.useLocalEasSession ? { useLocalEasSession: true } : {}),
     ...(exploration.agent ? { agent: exploration.agent } : {}), project: options.project,
     mapDirectory: join(output, "baseline-map"), outputDirectory: directory, name: options.config.app.name ?? options.config.app.bundleId,
     buildId: `baseline-${options.sha.slice(0, 12)}`, buildVersion: options.sha.slice(0, 8), gitCommit: options.sha,
-    side: "head", planPath: join(output, "execution-plan.json"), sessionStatePath: join(output, "baseline-session") });
+    side: "head", planPath: join(output, "execution-plan.json"), sessionStatePath: join(output, "baseline-session") };
+  const share = targetSessionShare(options.config, options.targets, options.posedTargets);
+  // Passes on worker threads cannot take an injected runner or an agent session.
+  const passes = !options.runner && !exploration.agent
+    ? await sideAppearancePasses(options.config, environment, { share, sides: 1, routes: plan.headCaptureSurfaceIds.length, project: options.project }) : undefined;
+  progress(`sessions: ${share} of ${options.config.capture.maxSessions ?? DEFAULT_MAX_SESSIONS} for this target; `
+    + (passes ? `capturing ${passes.map(pass => pass.join("+")).join(" and ")} in separate sessions` : "one session"));
+  const result = await captureSideInSessions(baselineOptions, passes, progress, undefined, passes !== undefined);
   const cacheRecipe = await recipe(options.config, plan, "head", environment, exploration.instructionsSha256);
   if (options.subscription) cacheRecipe.toolsCommit += ":local-subscription";
   const bundle = await readCaptureBundle(directory); bundle.profile = cacheRecipe.profile;

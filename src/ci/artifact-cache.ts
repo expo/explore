@@ -28,6 +28,9 @@ const recipeKey = ({ inventory, profile, config, toolsCommit }: Recipe) => {
 
 /** Only settings that can change captured runtime evidence belong in the recipe. */
 export function captureRecipeConfig(config: ExploreConfig, instructionsSha256?: string): string {
+  // How many sessions capture the evidence (capture.maxSessions) does not change it.
+  const { maxSessions: _maxSessions, ...capture } = config.capture;
+  void _maxSessions;
   return canonicalJson({
     observer: CAPTURE_OBSERVER_HASH,
     mode: config.mode,
@@ -36,7 +39,7 @@ export function captureRecipeConfig(config: ExploreConfig, instructionsSha256?: 
       ...(config.app.scheme === undefined ? {} : { scheme: config.app.scheme }) },
     device: config.device, parameters: config.parameters, setup: config.setup ?? [],
     // The repack as it resolves, so a config that leaves it to the default keeps the recipe it had when the default was written out.
-    capture: { ...config.capture, repack: captureRepack(config) },
+    capture: { ...capture, repack: captureRepack(config) },
     // agent-device recipes stay as they were; an Argent capture is keyed to the Argent release that drove it.
     ...(config.capture.controller === "argent" ? { controllerVersion: ARGENT_VERSION } : {}),
   });

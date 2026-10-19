@@ -25,6 +25,7 @@ jobs:
       contents: read
     outputs:
       targets: ${{ steps.targets.outputs.targets }}
+      max_parallel: ${{ steps.targets.outputs.max_parallel }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: '${{ github.sha }}', path: app, persist-credentials: false }
@@ -51,12 +52,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          targets="$(node "$TOOLS/dist/cli.js" config:targets --project "$GITHUB_WORKSPACE/app/$APP_PROJECT_DIR" --config .expo-explore/config.yaml | jq -c '[.targets[].id]')"
-          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          listed="$(node "$TOOLS/dist/cli.js" config:targets --project "$GITHUB_WORKSPACE/app/$APP_PROJECT_DIR" --config .expo-explore/config.yaml)"
+          echo "targets=$(jq -c '[.targets[].id]' <<< "$listed")" >> "$GITHUB_OUTPUT"
+          # Each target job needs a simulator session: at most capture.maxSessions of them run at once.
+          echo "max_parallel=$(jq '.maxParallel // (.targets | length)' <<< "$listed")" >> "$GITHUB_OUTPUT"
   baseline:
     needs: targets
     strategy:
       fail-fast: false
+      max-parallel: ${{ fromJSON(needs.targets.outputs.max_parallel) }}
       matrix:
         target: ${{ fromJSON(needs.targets.outputs.targets) }}
     runs-on: ubuntu-22.04

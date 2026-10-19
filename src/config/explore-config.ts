@@ -94,6 +94,11 @@ export type ExploreConfig = {
   /** `exclude` names routes, as `requiresRoute` does, that stay in the map but are never captured. */
   exploration: { scope: "changes" | "all"; exclude?: string[] };
   capture: { maxMinutes: number; maxActions: number;
+    /**
+     * The most EAS Simulator sessions one review may run at once, across its targets and sides; absent:
+     * DEFAULT_MAX_SESSIONS (5). Below the number of targets, that many target jobs run at once, one session each.
+     */
+    maxSessions?: number;
     /** Where the route observer is bundled into the app, when the config chooses; captureRepack gives the default. */
     repack?: "eas" | "local"; appearance: AppearanceSetting; launch: LaunchSetting; reset: RouteResetSetting; unattributed: UnattributedSetting; readinessSeconds?: number;
     /** The device controller; absent means agent-device, so configs that never chose one keep their cache recipes. */
@@ -295,7 +300,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
   const exploration = optionalRecord(root.exploration, "exploration");
   exactKeys(exploration, ["scope", "exclude"], "exploration");
   const capture = optionalRecord(root.capture, "capture");
-  exactKeys(capture, ["maxMinutes", "maxActions", "repack", "appearance", "launch", "reset", "unattributed", "readinessSeconds", "controller", "simulator"], "capture");
+  exactKeys(capture, ["maxMinutes", "maxActions", "maxSessions", "repack", "appearance", "launch", "reset", "unattributed", "readinessSeconds", "controller", "simulator"], "capture");
   const controller = literal(capture.controller, ["agent-device", "argent"] as const, "capture.controller", "agent-device");
   const simulator = literal(capture.simulator, ["eas", "local"] as const, "capture.simulator", "eas");
   const mode = literal(root.mode, ["deterministic", "agent"] as const, "mode", "deterministic");
@@ -342,6 +347,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
     capture: {
       maxMinutes: positiveInteger(capture.maxMinutes, "capture.maxMinutes", 30),
       maxActions: positiveInteger(capture.maxActions, "capture.maxActions", 500),
+      ...(capture.maxSessions === undefined ? {} : { maxSessions: positiveInteger(capture.maxSessions, "capture.maxSessions", 2) }),
       ...(capture.repack === undefined ? {} : { repack: literal(capture.repack, ["eas", "local"] as const, "capture.repack") }),
       appearance: parseAppearance(capture.appearance, "capture.appearance"),
       launch: parseLaunchSetting(capture.launch, "capture.launch"),
@@ -438,6 +444,11 @@ export function configTargets(config: ExploreConfig): RunTarget[] {
   if (!config.targets) return configPlatforms(config).map(platform => ({ id: platform, platform, label: PLATFORM_LABELS[platform] }));
   return Object.entries(config.targets).map(([id, target]) => ({ id, platform: target.platform,
     label: target.label ?? `${target.device ?? (target.platform === config.app.platform ? config.device.name : DEFAULT_ANDROID_DEVICE)}${target.pose ? ` (${target.pose})` : ""}` }));
+}
+
+/** The targets with a device pose (foldables): they take the sessions `capture.maxSessions` does not divide evenly. */
+export function posedTargets(config: ExploreConfig): string[] {
+  return Object.entries(config.targets ?? {}).filter(([, target]) => target.pose).map(([id]) => id);
 }
 
 /**

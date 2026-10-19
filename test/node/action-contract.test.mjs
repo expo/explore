@@ -138,9 +138,10 @@ test("baseline captures a complete single default-branch commit without a PR", (
   const job = baseline.jobs.baseline;
   assert.match(baseline.jobs.targets.if, /github\.event\.repository\.default_branch/);
   assert.deepEqual(job.needs, "targets");
-  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { target: "${{ fromJSON(needs.targets.outputs.targets) }}" } });
+  assert.deepEqual(job.strategy, { "fail-fast": false, "max-parallel": "${{ fromJSON(needs.targets.outputs.max_parallel) }}",
+    matrix: { target: "${{ fromJSON(needs.targets.outputs.targets) }}" } });
   assert.equal(job.env.TARGET, "${{ matrix.target }}");
-  assert.match(baseline.jobs.targets.steps.at(-1).run, /config:targets .* \| jq -c '\[\.targets\[\]\.id\]'/);
+  assert.match(baseline.jobs.targets.steps.at(-1).run, /config:targets --project "\$GITHUB_WORKSPACE\/app\/\$APP_PROJECT_DIR"/);
   const verify = job.steps.find(step => step.name === "Verify deterministic source planning");
   assert.match(verify.run, /--base-sha "\$GITHUB_SHA" --head-sha "\$GITHUB_SHA" --scope all/);
   const capture = job.steps.find(step => step.name === "Capture complete single-commit baseline");
@@ -325,16 +326,21 @@ test("review captures and reports each configured target in its own matrix job, 
   assert.deepEqual(targets.permissions, { contents: "read", "pull-requests": "read" });
   assert.equal(targets.outputs.targets, "${{ steps.targets.outputs.targets }}");
   // config:targets lists ids in config order; a config without targets: lists ["ios"] / ["ios","android"], as config:platforms did.
-  assert.match(targets.steps.at(-1).run, /config:targets --project "\$GITHUB_WORKSPACE\/app-head\/\$APP_PROJECT_DIR" --config \.expo-explore\/config\.yaml \| jq -c '\[\.targets\[\]\.id\]'/);
+  assert.match(targets.steps.at(-1).run, /config:targets --project "\$GITHUB_WORKSPACE\/app-head\/\$APP_PROJECT_DIR" --config \.expo-explore\/config\.yaml/);
+  assert.equal(targets.outputs.max_parallel, "${{ steps.targets.outputs.max_parallel }}");
   assert.doesNotMatch(JSON.stringify(targets), /EXPO_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|APP_REVIEW/);
   for (const workflow of [review, compare, baseline]) {
     assert.doesNotMatch(JSON.stringify(workflow), /matrix\.platform|config:platforms|\$PLATFORM|needs\.platforms/, "every job is keyed by target, never by platform");
     assert.match(JSON.stringify(workflow), /matrix\.target/, "doctor looks for matrix.target in an installed workflow");
   }
-  for (const job of [review.jobs.capture, review.jobs.report]) {
-    assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { target: "${{ fromJSON(needs.targets.outputs.targets) }}" } });
+  // Each capture job needs a simulator session, so at most capture.maxSessions of them run at once; a report needs none.
+  for (const job of [review.jobs.capture, compare.jobs.capture]) {
+    assert.deepEqual(job.strategy, { "fail-fast": false, "max-parallel": "${{ fromJSON(needs.targets.outputs.max_parallel) }}",
+      matrix: { target: "${{ fromJSON(needs.targets.outputs.targets) }}" } });
     assert.equal(job.env.TARGET, "${{ matrix.target }}");
   }
+  assert.deepEqual(review.jobs.report.strategy, { "fail-fast": false, matrix: { target: "${{ fromJSON(needs.targets.outputs.targets) }}" } });
+  assert.equal(review.jobs.report.env.TARGET, "${{ matrix.target }}");
   assert.equal(review.jobs.capture.needs, "targets");
   assert.deepEqual(review.jobs.report.needs, ["targets", "capture"]);
   const runs = [review.jobs.capture, review.jobs.report, baseline.jobs.baseline].flatMap(job => job.steps.filter(step => step.run).map(step => step.run));
@@ -377,4 +383,28 @@ test("compare reviews any two refs from a manual run or another workflow, with n
   assert.match(compare.jobs.targets.steps.find(step => step.id === "refs").run, /ci:compare-refs --project app-head --base "\$BASE_REF" --head "\$HEAD_REF"/);
   assert.match(compare.jobs.capture.steps.find(step => step.id === "capture").run, /printf '%s' "\$COMPARE" > "\$RUNNER_TEMP\/explore-compare\.json"/);
   assert.match(compare.jobs.deploy.steps.at(-1).run, /ci:deploy --inputs/);
+});
+
+test("the targets job lists the target ids and how many capture jobs run at once: no more than capture.maxSessions", async t => {
+  const root = await mkdtemp(join(tmpdir(), "explore-targets-step-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const tools = new URL("../..", import.meta.url).pathname;
+  const run = async (workflow, checkout, config) => {
+    const project = join(root, checkout); await mkdir(join(project, ".expo-explore"), { recursive: true });
+    await writeFile(join(project, ".expo-explore", "config.yaml"), config);
+    const output = join(root, "output"); await writeFile(output, "");
+    const step = workflow.jobs.targets.steps.find(entry => entry.id === "targets");
+    const result = spawnSync("bash", ["-c", step.run], { encoding: "utf8",
+      env: { PATH: process.env.PATH, HOME: root, TOOLS: tools, GITHUB_WORKSPACE: root, APP_PROJECT_DIR: ".", GITHUB_OUTPUT: output } });
+    assert.equal(result.status, 0, result.stderr);
+    const outputs = Object.fromEntries((await readFile(output, "utf8")).trim().split("\n").map(line => line.split(/=(.*)/s).slice(0, 2)));
+    return { targets: JSON.parse(outputs.targets), maxParallel: JSON.parse(outputs.max_parallel) };
+  };
+  const app = "app:\n  bundleId: com.example.app\n  easProfile: explore\ndevice:\n  name: iPhone 17\n";
+  const five = "targets:\n" + ["iphone", "ipad", "duo-closed", "duo-open"].map(id => `  ${id}: { platform: ios }\n`).join("") + "  pixel: { platform: android, bundleId: com.example.app, easProfile: explore }\n";
+  for (const [workflow, checkout] of [[review, "app-head"], [compare, "app-head"], [baseline, "app"]]) {
+    assert.deepEqual(await run(workflow, checkout, app + five), { targets: ["iphone", "ipad", "duo-closed", "duo-open", "pixel"], maxParallel: 5 }, "unset: five");
+    assert.deepEqual((await run(workflow, checkout, app + "capture:\n  maxSessions: 2\n" + five)).maxParallel, 2, "a starter plan's two");
+    assert.deepEqual(await run(workflow, checkout, app), { targets: ["ios"], maxParallel: 1 });
+  }
 });
