@@ -533,6 +533,8 @@
   .phone-layout .canvas-minimap-shell { display: none; }
   /* The Inspector slides up over the whole screen; a drag down on its header puts it away. */
   .phone-layout .right-panel {
+    /* The sheet is the window's width; the desktop's half-window limit is not for it. */
+    max-width: none;
     position: fixed;
     z-index: 120;
     inset: 0;

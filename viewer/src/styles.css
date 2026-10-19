@@ -1002,7 +1002,7 @@ code {
   border-radius: calc(14px * var(--ui-scale));
   background: var(--surface);
   box-shadow: var(--floating-chrome-shadow);
-  transform: translateX(-50%);
+  transform: translateX(calc(-50% - var(--canvas-toolbar-shift, 0px)));
   view-transition-name: canvas-toolbar;
 }
 .canvas-toolbar-inner { display: flex; align-items: center; gap: 2px; zoom: var(--ui-scale); }
@@ -1109,7 +1109,10 @@ code {
   z-index: 100;
   display: flex;
   flex: none;
-  width: 400px;
+  /* The reader's own width when they have dragged the edge (utils/inspector-width.ts), else the
+     default; never more than half the window, so the canvas keeps the other half. */
+  width: var(--inspector-width, 400px);
+  max-width: 50%;
   height: 100%;
   min-height: 0;
   flex-direction: column;
@@ -1121,6 +1124,35 @@ code {
   /* Two Diff previews, their 8px gap, and the 14px side insets must fit this same width. */
   --inspector-shared-preview-max-width: calc((100cqw - 36px) / 2);
 }
+/* The panel's left edge is a splitter: a 10px strip over the border, quiet until it is hovered,
+   dragged or focused, when the border thickens into the accent line. */
+.right-panel-resize {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 10px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.right-panel-resize::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+  background: var(--accent);
+  content: "";
+  opacity: 0;
+  transition: opacity var(--toolbar-motion) var(--toolbar-easing) 120ms;
+}
+.right-panel-resize:hover::before,
+.right-panel-resize:focus-visible::before,
+.inspector-resizing .right-panel-resize::before { opacity: 1; transition-delay: 0ms; }
+/* While the edge is dragged nothing else may select or change the cursor. */
+.inspector-resizing, .inspector-resizing * { cursor: col-resize !important; user-select: none !important; }
 .right-head {
   display: flex;
   flex: none;
@@ -2340,7 +2372,7 @@ html [data-sonner-toaster][data-sonner-theme] {
 @keyframes tooltip-in { from { opacity: 0; } }
 
 @media (max-width: 1180px) {
-  .right-panel { width: 320px; }
+  .right-panel { width: var(--inspector-width, 320px); }
 }
 
 @media (max-width: 900px) {

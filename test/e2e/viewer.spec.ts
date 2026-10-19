@@ -2362,9 +2362,9 @@ test("keeps minimap and canvas chrome inside the responsive visible frame", asyn
   for (const box of [minimapBox!, cameraBox!]) {
     expect(box.x + box.width).toBeLessThanOrEqual(inspectorBox!.x + 1);
   }
-  expect(Math.abs(
-    toolbarBox!.x + toolbarBox!.width / 2 - page.viewportSize()!.width / 2,
-  )).toBeLessThanOrEqual(1);
+  // The toolbar keeps the window's centre unless the Inspector would cover it; this 320px overlay
+  // would, so it clears the panel's edge by 12px instead.
+  expect(toolbarBox!.x + toolbarBox!.width + 12).toBeCloseTo(inspectorBox!.x, 0);
   expect(minimapBox!.y + minimapBox!.height + 11).toBeLessThanOrEqual(toolbarBox!.y);
   expect(minimapBox!.width).toBeCloseTo(168, 0);
   expect(minimapBox!.height).toBeCloseTo(112, 0);
@@ -2379,9 +2379,8 @@ test("keeps minimap and canvas chrome inside the responsive visible frame", asyn
   const cameraBeforeTheme = await viewport.getAttribute("style");
   const maskBeforePanel = await minimap.locator(".canvas-minimap-visible-mask path").getAttribute("d");
   const lightBackground = await minimap.evaluate((element) => getComputedStyle(element).backgroundColor);
-  // At this width the open Inspector covers the end of the centred bottom bar, so T switches.
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page.keyboard.press("t");
+  // The bar has moved clear of the Inspector, so its More menu is in reach.
+  await chooseTheme(page, "dark");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(viewport).toHaveAttribute("style", cameraBeforeTheme!);
   await expect.poll(() => minimap.evaluate((element) => getComputedStyle(element).backgroundColor))
@@ -5616,4 +5615,23 @@ test("a find left on when the window narrows to the phone layout does not filter
   await expect(cells).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(cells).toHaveCount(all);
+});
+
+test.describe("a wide Inspector in a short window", () => {
+  test.use({ viewport: { width: 1180, height: 600 } });
+
+  test("holds the review's Split pair to most of the window's height", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("expo-explore:inspector-width", "590"));
+    await serveWorkspace(page);
+    await page.goto("/map?screen=current-profile");
+    const review = page.locator(".right-panel").getByRole("region", { name: "Changes in /current-profile" });
+    await expect(review).toBeVisible();
+    await review.getByRole("button", { name: /^Split/ }).click();
+    const frame = review.locator(".compare-frame").first();
+    await expect(frame).toBeVisible();
+    // Two frames of a 590px panel would be over 600px tall unbounded; the cap is 70% of the window,
+    // the same as Swipe's and Flip's one frame.
+    await expect.poll(async () => (await frame.boundingBox())!.height).toBeLessThanOrEqual(421);
+    await expect.poll(async () => (await frame.boundingBox())!.height).toBeGreaterThan(300);
+  });
 });

@@ -14,6 +14,7 @@ import { setOutlinesShown, useOutlinesShown } from "../compare/compare-section";
 import { AutoHideScrollArea } from "../shared/auto-hide-scroll-area";
 import { usePhoneLayout } from "../../utils/phone-layout";
 import { useDragToDismiss } from "../phone/phone-chrome";
+import { useInspectorResize } from "./inspector-resize";
 
 type RightPanelProps = {
   index: MapIndex;
@@ -36,6 +37,9 @@ export function RightPanel(props: RightPanelProps) {
   // On a phone the panel is a bottom sheet; dragging its header down closes it.
   const phone = usePhoneLayout();
   const drag = useDragToDismiss(props.onToggleCollapsed);
+  // On a desktop its left edge is a splitter; the sheet keeps the window's width.
+  const panelRef = useRef<HTMLElement>(null);
+  const resize = useInspectorResize(panelRef);
   const selectedPath = props.screen ? displayPathForScreen(props.screen) : undefined;
   const screenDiff = props.screen ? props.diff?.screens.get(props.screen.id) : undefined;
   // Compare opens only a screen it reviews: a changed screen in the review order, not a state
@@ -75,7 +79,8 @@ export function RightPanel(props: RightPanelProps) {
   // button leads the row instead, away from the screen stepper's arrows. Theme and full screen
   // live in the bottom bar's "More" menu.
   return (
-    <aside className="right-panel" data-drag-sheet aria-label="Inspector panel">
+    <aside ref={panelRef} className="right-panel" data-drag-sheet aria-label="Inspector panel" style={phone ? undefined : resize.style}>
+      {phone ? null : <div className="right-panel-resize" {...resize.handleProps} />}
       <header className="right-head" {...(phone ? drag : {})}>
         {phone ? <span className="right-sheet-grabber" aria-hidden="true" /> : null}
         {phone ? panelButton : null}
