@@ -12,14 +12,14 @@ import { startReportViewer } from "../ci/lib/report-viewer.mjs";
 const REPORT = new URL("../fixtures/example-review-artifact.zip", import.meta.url);
 const FLOW = JSON.parse(await readFile(new URL("../fixtures/flows/public-review-flow.json", import.meta.url), "utf8"));
 
-async function reportWithFlow(flowsFailure) {
+async function reportWithFlow(flowsFailure, flow = FLOW) {
   const reader = new ZipReader(new BlobReader(new Blob([await readFile(REPORT)])));
   const writer = new ZipWriter(new BlobWriter("application/zip"), { useWebWorkers: false });
   for (const entry of await reader.getEntries()) {
     const bytes = await entry.getData(new Uint8ArrayWriter());
     if (entry.filename !== "review.json") { await writer.add(entry.filename, new Uint8ArrayReader(bytes), { level: 0 }); continue; }
     const report = JSON.parse(new TextDecoder().decode(bytes));
-    report.review = { ...report.review, flows: [FLOW], ...(flowsFailure ? { flowsFailure } : {}) };
+    report.review = { ...report.review, flows: [flow], ...(flowsFailure ? { flowsFailure } : {}) };
     await writer.add("review.json", new Uint8ArrayReader(new TextEncoder().encode(JSON.stringify(report))), { level: 6 });
   }
   await reader.close();
@@ -49,20 +49,22 @@ test("the Flows view shows each flow's outcome per side, its frames and steps, a
   // Both sides took contacts and amount; only base reached review.
   await expect(card.locator(".flow-frame-caption", { hasText: "contacts" })).toBeVisible();
   const contacts = card.locator(".flow-frame", { has: page.locator(".flow-frame-caption", { hasText: "contacts" }) });
+  // One After | Before toggle per flow flips every frame of the strip; no badge sits on the frames themselves.
   await expect(contacts).toHaveAttribute("data-side", "head");
-  await expect(contacts.locator(".flow-frame-flip")).toHaveText("After");
-  await contacts.locator(".flow-frame-flip").click();
-  await expect(contacts).toHaveAttribute("data-side", "base");
-  await expect(contacts.locator(".flow-frame-flip")).toHaveText("Before");
-  await expect(contacts.locator(".flow-frame-image")).toHaveAttribute("alt", /Before$/);
-  await contacts.locator(".flow-frame-flip").click();
-  await expect(contacts).toHaveAttribute("data-side", "head");
+  await expect(contacts.locator(".flow-frame-flip")).toHaveCount(0);
   const review = card.locator(".flow-frame", { has: page.locator(".flow-frame-caption", { hasText: "review" }) });
   await expect(review.locator(".flow-frame-missing")).toContainText("Not reached");
-  await review.locator(".flow-frame-flip").click();
-  await expect(review.locator(".flow-frame-image")).toBeVisible();
   await expect(card).toContainText("Not reached after");
-  await expect(card.locator("img")).toHaveCount(3, "one face per frame: contacts and amount on After, review flipped to Before");
+  await expect(card.locator("img")).toHaveCount(2, "After: contacts and amount; review was not reached");
+  const toggle = card.locator(".flow-side-toggle");
+  await toggle.getByRole("radio", { name: "Before" }).click();
+  await expect(contacts).toHaveAttribute("data-side", "base");
+  await expect(contacts.locator(".flow-frame-image")).toHaveAttribute("alt", /Before$/);
+  await expect(review.locator(".flow-frame-image")).toBeVisible();
+  await expect(card.locator("img")).toHaveCount(3, "Before: all three frames");
+  await toggle.getByRole("radio", { name: "After" }).click();
+  await expect(contacts).toHaveAttribute("data-side", "head");
+  await expect(card.locator("img")).toHaveCount(2, "After again: contacts and amount");
   for (const image of await card.locator("img").all()) {
     expect(await image.evaluate(element => element.naturalWidth), "every frame decodes from the report's assets").toBeGreaterThan(0);
   }
@@ -114,4 +116,20 @@ test("on a phone the Flows tab lists the flow with its frames as a filmstrip", a
     const box = await button.boundingBox();
     assert.ok(box && box.width >= 44 && box.height >= 44, `touch target ${JSON.stringify(box)}`);
   }
+});
+
+test("a step frame identical to the previous frame on every side folds into it; checkpoints never fold", async t => {
+  const flow = structuredClone(FLOW);
+  const contacts = flow.frames.findIndex(frame => frame.key === "contacts");
+  const twin = key => ({ key, id: `${FLOW.frames[contacts].id.replace(/contacts$/, key)}`, label: `${key === "step-6" ? "6" : "7"}. expect.toBeVisible getByText("Alex Rivera")` });
+  flow.frames.splice(contacts + 1, 0, twin("step-6"), twin("step-7"));
+  for (const side of ["head", "base"]) for (const key of ["step-6", "step-7"]) flow[side].frames[key] = { ...flow[side].frames.contacts };
+  flow.base.frames["step-7"] = { ...flow.base.frames.amount };
+  const { page, url, errors } = await openReport(t, await reportWithFlow(undefined, flow));
+  await page.goto(`${url}#/flows`);
+  const card = page.getByRole("region", { name: "send money to a contact" });
+  const captions = card.locator(".flow-frame-caption strong");
+  await expect(captions).toHaveText([/^contacts\+1$/, /^7\. expect/, /^amount$/, /^review$/], "step-6 (same picture on both sides) folds into contacts; step-7 differs on base, so it shows");
+  await expect(card.locator(".flow-frame-same")).toHaveAttribute("title", /6\. expect\.toBeVisible/);
+  assert.deepEqual(errors, []);
 });

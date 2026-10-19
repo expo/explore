@@ -29,61 +29,10 @@
   flex-direction: column;
 }
 
-.flow-frame-flip {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  z-index: 1;
-  min-width: 44px;
-  min-height: 28px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 999px;
-  background: rgba(20, 20, 20, 0.72);
-  color: #fff;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-}
-
-.flow-frame-flip.is-static {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: default;
-}
-
-.flow-frame[data-side="base"] .flow-frame-flip {
-  background: rgba(120, 72, 0, 0.82);
-}
-
-/* Phone: a 44x64 hit area, but the visible pill stays the desktop size. */
-.flows-page.phone .flow-frame-flip {
-  top: 0;
-  left: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  min-width: 64px;
-  padding: 0;
-  background: none;
-}
-
-.flows-page.phone .flow-frame-flip::before {
-  content: "";
-  position: absolute;
-  inset: 8px 10px;
-  z-index: -1;
-  border-radius: 999px;
-  background: rgba(20, 20, 20, 0.72);
-}
-
-.flows-page.phone .flow-frame[data-side="base"] .flow-frame-flip::before {
-  background: rgba(120, 72, 0, 0.82);
-}
+/* A folded run of unchanged step frames: the count sits after the label; the folded steps are the tooltip. */
+.flow-frame-same { margin-left: 6px; padding: 0 5px; border-radius: 999px; background: var(--panel-hover, #f0f0f0); color: var(--text-muted, #6b6b6b); font-size: 10px; font-weight: 600; vertical-align: 1px; }
+.flow-header-side { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.flow-side-toggle { font-size: 12px; }
 
 .flow-frame-button { padding: 0; border: 0; background: none; cursor: pointer; border-radius: 10px; min-width: 44px; min-height: 44px; }
 .flow-frame-button:focus-visible { outline: 2px solid #2f6fed; outline-offset: 2px; }

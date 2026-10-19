@@ -3,6 +3,7 @@ import type { PublicFlowEvidence, PublicFlowSide, PublicReview } from "../../../
 import { artifactUrl, type Artifact } from "../../utils/model";
 import { flowSourceHref } from "../../utils/flow-source";
 import { ScreenshotImage } from "../shared/screenshot-image";
+import { ToggleGroup } from "../shared/toggle-group";
 import "./flows.css";
 
 type Side = "base" | "head";
@@ -52,13 +53,13 @@ function frameSrc(entry: PublicFlowEvidence, side: Side, key: string, taken: Non
 function Frame(props: {
   entry: PublicFlowEvidence;
   frame: PublicFlowEvidence["frames"][number];
+  side: Side;
+  /** Labels of the step frames after this one that left the screen unchanged, folded into this frame. */
+  same: string[];
   onOpen?: (surfaceId: string) => void;
 }) {
-  const { entry, frame } = props;
+  const { entry, frame, side } = props;
   const verdict = verdictLabel(frame, entry.base, entry.head);
-  const [flipped, setFlipped] = useState(false);
-  const canFlip = Boolean(entry.base && entry.head);
-  const side: "base" | "head" = canFlip && flipped ? "base" : entry.head ? "head" : "base";
   const taken = entry[side]?.frames[frame.key];
   const flow = entry[side];
   const stop = flow && !taken ? stoppedAt(flow) : undefined;
@@ -66,19 +67,6 @@ function Frame(props: {
   return (
     <li className={`flow-frame tone-${verdict.tone}`} data-side={side}>
       <figure className="flow-frame-face">
-        {canFlip ? (
-          <button
-            type="button"
-            className="flow-frame-flip"
-            onClick={() => setFlipped(value => !value)}
-            aria-pressed={side === "base"}
-            aria-label={`Show ${side === "base" ? "After" : "Before"} for ${frame.label}`}
-          >
-            {SIDE_LABEL[side]}
-          </button>
-        ) : (
-          <span className="flow-frame-flip is-static">{SIDE_LABEL[side]}</span>
-        )}
         {taken && src ? (
           <button
             type="button"
@@ -112,12 +100,78 @@ function Frame(props: {
         )}
       </figure>
       <div className="flow-frame-caption">
-        <strong title={frame.label}>{frame.label}</strong>
+        <strong title={frame.label}>
+          {frame.label}
+          {props.same.length ? (
+            <small className="flow-frame-same" title={`Unchanged after:\n${props.same.join("\n")}`}>+{props.same.length}</small>
+          ) : null}
+        </strong>
         <span className={`flow-verdict tone-${verdict.tone}`}>
           {verdict.text}
         </span>
       </div>
     </li>
+  );
+}
+
+/** A step frame whose picture equals the previous shown frame's on every side that took both adds nothing: it folds into that frame. Checkpoints always show. */
+function visibleFrames(entry: PublicFlowEvidence): { frame: PublicFlowEvidence["frames"][number]; same: string[] }[] {
+  const sameOnEverySide = (a: string, b: string) => (["head", "base"] as const).every(side => {
+    const frames = entry[side]?.frames;
+    if (!frames) return true;
+    const x = frames[a]; const y = frames[b];
+    return Boolean(x && y && x.sha256 === y.sha256);
+  });
+  const shown: { frame: PublicFlowEvidence["frames"][number]; same: string[] }[] = [];
+  for (const frame of entry.frames.filter(frame => !frame.colorScheme)) {
+    const previous = shown.at(-1);
+    if (previous && /^step-\d+$/.test(frame.key) && sameOnEverySide(previous.frame.key, frame.key)) { previous.same.push(frame.label); continue; }
+    shown.push({ frame, same: [] });
+  }
+  return shown;
+}
+
+function FlowCard(props: { entry: PublicFlowEvidence; review: PublicReview; onOpenFrame?: (surfaceId: string) => void }) {
+  const { entry, review } = props;
+  const head = entry.head; const base = entry.base;
+  const [side, setSide] = useState<Side>(head ? "head" : "base");
+  const shownSide: Side = head && base ? side : head ? "head" : "base";
+  const headStop = head ? stoppedAt(head) : undefined;
+  const tone = !head ? "muted" : head.status === "passed" ? "passed" : "failed";
+  const sourceHref = flowSourceHref(review, entry.file, entry.head?.line ?? entry.base?.line);
+  return (
+    <section className={`flow-card tone-${tone}`} aria-labelledby={`flow-${entry.id}`}>
+      <header className="flow-header">
+        <div>
+          <h2 id={`flow-${entry.id}`}>{entry.title}</h2>
+          <p className="flow-file">{sourceHref ? <a href={sourceHref} target="_blank" rel="noreferrer noopener">{entry.file}</a> : entry.file}</p>
+          {(head ?? base) ? <p className="flow-meta">{(head ?? base)!.steps.length} steps · {formatDuration((head ?? base)!.steps.reduce((sum, step) => sum + step.durationMs, 0))}</p> : null}
+        </div>
+        <div className="flow-header-side">
+          <div className="flow-outcomes">
+            <span className="flow-outcome"><span className="flow-outcome-side">After</span><span className={`flow-status tone-${tone}`}>{sideSummary(entry, "head")}</span></span>
+            <span className="flow-outcome"><span className="flow-outcome-side">Before</span><span className={`flow-status tone-${!base ? "muted" : base.status === "passed" ? "passed" : "failed"}`}>{sideSummary(entry, "base")}</span></span>
+          </div>
+          {head && base ? (
+            <div className="flow-side-toggle">
+              <ToggleGroup<Side> value={shownSide} onChange={setSide} ariaLabel="Frames shown" variant="flat"
+                options={[{ id: "head", label: "After" }, { id: "base", label: "Before" }]} />
+            </div>
+          ) : null}
+        </div>
+      </header>
+      {headStop?.step.error ? (
+        <p className="flow-failure" role="note">
+          Stopped at step {headStop.index + 1} — <code>{headStop.step.api} {headStop.step.label}</code>: {headStop.step.error.message}
+        </p>
+      ) : null}
+      <div className="flow-body">
+        <ol className="flow-filmstrip" aria-label={`Frames (${SIDE_LABEL[shownSide]})`}>
+          {visibleFrames(entry).map(({ frame, same }) => <Frame key={frame.key} entry={entry} frame={frame} side={shownSide} same={same} {...(props.onOpenFrame ? { onOpen: props.onOpenFrame } : {})} />)}
+        </ol>
+        <Steps entry={entry} review={review} />
+      </div>
+    </section>
   );
 }
 
@@ -161,37 +215,7 @@ export function FlowsView(props: { review: PublicReview; phone?: boolean; onOpen
         </section>
       ))}
       {flows.length === 0 && !props.review.flowsFailure ? <p className="flows-empty">This review ran no flows.</p> : null}
-      {flows.map(entry => {
-        const head = entry.head; const base = entry.base;
-        const headStop = head ? stoppedAt(head) : undefined;
-        const tone = !head ? "muted" : head.status === "passed" ? "passed" : "failed";
-        return (
-          <section key={entry.id} className={`flow-card tone-${tone}`} aria-labelledby={`flow-${entry.id}`}>
-            <header className="flow-header">
-              <div>
-                <h2 id={`flow-${entry.id}`}>{entry.title}</h2>
-                <p className="flow-file">{flowSourceHref(props.review, entry.file, entry.head?.line ?? entry.base?.line) ? <a href={flowSourceHref(props.review, entry.file, entry.head?.line ?? entry.base?.line)} target="_blank" rel="noreferrer">{entry.file}</a> : entry.file}</p>
-                {(head ?? base) ? <p className="flow-meta">{(head ?? base)!.steps.length} steps · {formatDuration((head ?? base)!.steps.reduce((sum, step) => sum + step.durationMs, 0))}</p> : null}
-              </div>
-              <div className="flow-outcomes">
-                <span className="flow-outcome"><span className="flow-outcome-side">After</span><span className={`flow-status tone-${tone}`}>{sideSummary(entry, "head")}</span></span>
-                <span className="flow-outcome"><span className="flow-outcome-side">Before</span><span className={`flow-status tone-${!base ? "muted" : base.status === "passed" ? "passed" : "failed"}`}>{sideSummary(entry, "base")}</span></span>
-              </div>
-            </header>
-            {headStop?.step.error ? (
-              <p className="flow-failure" role="note">
-                Stopped at step {headStop.index + 1} — <code>{headStop.step.api} {headStop.step.label}</code>: {headStop.step.error.message}
-              </p>
-            ) : null}
-            <div className="flow-body">
-              <ol className="flow-filmstrip" aria-label="Frames">
-                {entry.frames.filter(frame => !frame.colorScheme).map(frame => <Frame key={frame.key} entry={entry} frame={frame} {...(props.onOpenFrame ? { onOpen: props.onOpenFrame } : {})} />)}
-              </ol>
-              <Steps entry={entry} review={props.review} />
-            </div>
-          </section>
-        );
-      })}
+      {flows.map(entry => <FlowCard key={entry.id} entry={entry} review={props.review} {...(props.onOpenFrame ? { onOpenFrame: props.onOpenFrame } : {})} />)}
     </main>
   );
 }
