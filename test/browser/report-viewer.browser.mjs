@@ -242,6 +242,14 @@ test("Compare steps through changed screens and their changed areas", { timeout:
   await expect(outlines.nth(1)).toHaveClass(/active/);
   await page.keyboard.press("k");
   await expect(outlines.nth(0)).toHaveClass(/active/);
+  // Esc in the bottom bar's More menu closes the menu and only the menu.
+  const more = page.getByRole("button", { name: "More", exact: true });
+  await more.click();
+  await expect(page.getByRole("menu", { name: "More" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu", { name: "More" })).toHaveCount(0);
+  await expect(more).toBeFocused();
+  await expect(outlines.nth(0)).toHaveClass(/active/);
   await page.keyboard.press("Escape");
   await expect(compare.locator(".visual-change-outline.active")).toHaveCount(0);
 

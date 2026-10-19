@@ -1,5 +1,5 @@
 import { useCallback, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Ellipsis, Keyboard, Maximize, Minimize, Monitor, Moon, Sun } from "lucide-react";
+import { Check, Ellipsis, Keyboard, Maximize, Minimize, Monitor, Moon, PanelRight, Sun } from "lucide-react";
 import { Menu } from "../shared/menu";
 import { Tooltip } from "../shared/tooltip";
 import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
@@ -16,13 +16,15 @@ export type MoreMenuProps = {
   onChangeTheme: (theme: ThemePreference) => void;
   /** Full screen's state and toggle; left out where the browser has no full screen. */
   fullscreen?: { active: boolean; onToggle: () => void } | undefined;
+  /** The Inspector's state and toggle; left out where there is no Inspector (Compare). */
+  inspector?: { open: boolean; onToggle: () => void } | undefined;
   onOpenShortcuts: () => void;
 };
 
 /**
  * The bottom bar's last button: the page-wide settings that have no place on a canvas. Every row
  * reads the same way, icon, label, control and key: the Viewer's theme (Auto, Light, Dark; T
- * flips light and dark), full screen (F) and the keyboard shortcuts (?).
+ * flips light and dark), full screen (F), the Inspector (I) and the keyboard shortcuts (?).
  */
 export function MoreMenu(props: MoreMenuProps) {
   const [open, setOpen] = useState(false);
@@ -34,7 +36,9 @@ export function MoreMenu(props: MoreMenuProps) {
   const close = useCallback(() => setOpen(false), []);
 
   // ↑ and ↓ move between rows (the theme row's stop is its current choice), ← and → between the
-  // three themes. Tab leaves the menu, as it does a native one; Esc is the Menu shell's.
+  // three themes. Tab leaves the menu, as it does a native one. The menu's keys are its own: Esc
+  // and the arrows are marked used, so a canvas behind it (Compare's screens and areas) leaves them.
+  // ? opens the shortcuts as the row does, so the dialog hands focus back to More.
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const list = listRef.current;
     if (!list) return;
@@ -42,12 +46,23 @@ export function MoreMenu(props: MoreMenuProps) {
       close();
       return;
     }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key === "?" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      event.preventDefault();
+      close();
+      props.onOpenShortcuts();
+      return;
+    }
     const active = document.activeElement as HTMLElement | null;
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      event.preventDefault();
       const radios = [...list.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
       const at = active ? radios.indexOf(active) : -1;
       if (at < 0) return;
-      event.preventDefault();
       radios[(at + (event.key === "ArrowRight" ? 1 : -1) + radios.length) % radios.length]?.focus();
       return;
     }
@@ -60,7 +75,7 @@ export function MoreMenu(props: MoreMenuProps) {
       : event.key === "End" ? rows.length - 1
         : (Math.max(at, event.key === "ArrowDown" ? -1 : 0) + (event.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length;
     const row = rows[next];
-    const stop = row?.matches('[role="menuitem"]') ? row
+    const stop = row?.matches('[role="menuitem"], [role="menuitemcheckbox"]') ? row
       : row?.querySelector<HTMLElement>('[aria-checked="true"]') ?? row?.querySelector<HTMLElement>('[role="menuitemradio"]');
     stop?.focus();
   };
@@ -121,6 +136,25 @@ export function MoreMenu(props: MoreMenuProps) {
               <span className="more-menu-icon" aria-hidden="true">{props.fullscreen.active ? <Minimize /> : <Maximize />}</span>
               <span className="more-menu-label">{props.fullscreen.active ? "Exit full screen" : "Full screen"}</span>
               <kbd className="more-menu-key" aria-hidden="true">{formatShortcut(SHORTCUTS.view.fullscreen)}</kbd>
+            </button>
+          ) : null}
+          {props.inspector ? (
+            <button
+              type="button"
+              className="more-menu-row more-menu-item"
+              role="menuitemcheckbox"
+              aria-checked={props.inspector.open}
+              tabIndex={-1}
+              aria-keyshortcuts={SHORTCUTS.panel.right.key}
+              data-more-row
+              onClick={() => {
+                props.inspector?.onToggle();
+                close();
+              }}>
+              <span className="more-menu-icon" aria-hidden="true"><PanelRight /></span>
+              <span className="more-menu-label">Inspector</span>
+              {props.inspector.open ? <span className="more-menu-check" aria-hidden="true"><Check /></span> : null}
+              <kbd className="more-menu-key" aria-hidden="true">{formatShortcut(SHORTCUTS.panel.right)}</kbd>
             </button>
           ) : null}
           <button

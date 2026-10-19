@@ -237,12 +237,29 @@ export function Menu({ items = [], children, initialFocusRef, open, ariaLabel, c
       if (initialFocusRef && event.target instanceof Node
         && !popoverRef.current?.contains(event.target) && !anchorRef?.current?.contains(event.target)) dismissRef.current();
     };
+    // A trigger can also move with no scroll or resize, as the bottom bar does when the Inspector
+    // opens beside it; an anchored menu checks where its trigger is once a frame while it is open.
+    let frame = 0;
+    let anchorAt = "";
+    const follow = () => {
+      const rect = anchorRef?.current?.getBoundingClientRect();
+      const at = rect ? `${rect.left},${rect.top}` : "";
+      if (at !== anchorAt) {
+        if (anchorAt) place();
+        anchorAt = at;
+      }
+      frame = requestAnimationFrame(follow);
+    };
     window.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("resize", place);
-    if (anchorRef) window.addEventListener("scroll", onScroll, true);
+    if (anchorRef) {
+      window.addEventListener("scroll", onScroll, true);
+      follow();
+    }
     window.addEventListener("focusin", onFocusIn);
     return () => {
+      cancelAnimationFrame(frame);
       window.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("resize", place);

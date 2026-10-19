@@ -1710,6 +1710,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
             themePreference={themePreference}
             onChangeTheme={setThemePreference}
             {...(fullscreenSupported() ? { fullscreen: { active: fullscreen, onToggle: toggleFullscreen } } : {})}
+            {...(comparingScreens ? {} : { inspector: { open: !rightCollapsed, onToggle: toggleRightPanel } })}
             onOpenShortcuts={() => setShortcutsOpen(true)}
           />}
           onSelectCanvas={selectCanvas}

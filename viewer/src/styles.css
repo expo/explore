@@ -2048,9 +2048,9 @@ code {
 
 /* The menu is anchored to its button, but clears the bar the button sits in. The popover itself
    is the surface, as the Changes menu's is: an anchored popover scrolls, and would clip a shadow
-   drawn by the list inside it. */
+   drawn by the list inside it. Only a window too short for the menu scrolls it. */
 .menu-popover.more-menu {
-  overflow: hidden !important;
+  overflow-x: hidden !important;
   border: 1px solid var(--popover-line);
   border-radius: calc(9px * var(--ui-scale));
   background: var(--popover);
@@ -2077,6 +2077,8 @@ code {
 .more-menu-icon { display: flex; width: 16px; flex: none; align-items: center; justify-content: center; color: var(--secondary); }
 .more-menu-icon > svg { width: 15px; height: 15px; }
 .more-menu-label { min-width: 0; flex: 1; white-space: nowrap; }
+.more-menu-check { display: flex; flex: none; color: var(--secondary); }
+.more-menu-check > svg { width: 14px; height: 14px; }
 /* The key column lines up down the menu, whatever the row holds before it. */
 .more-menu-key { min-width: 22px; flex: none; text-align: center; }
 /* A compact three-way switch: Auto, Light, Dark, on the segmented control's track and thumb. */

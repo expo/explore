@@ -4,9 +4,13 @@ function fullscreenActive(): boolean {
   return typeof document !== "undefined" && document.fullscreenElement !== null;
 }
 
-/** Whether this browser can put the page in full screen at all (iPhone Safari cannot). */
+/**
+ * Whether this browser can put the page in full screen at all: iPhone Safari has no element full
+ * screen, and a frame that was not allowed it (an embedded Viewer) refuses every request.
+ */
 export function fullscreenSupported(): boolean {
-  return typeof document !== "undefined" && typeof document.documentElement.requestFullscreen === "function";
+  return typeof document !== "undefined" && typeof document.documentElement.requestFullscreen === "function"
+    && document.fullscreenEnabled !== false;
 }
 
 /** Tracks the page-level fullscreen state, including exits triggered by the browser itself. */

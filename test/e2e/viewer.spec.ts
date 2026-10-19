@@ -5301,7 +5301,9 @@ test("the bottom bar's More menu holds the theme, full screen and keyboard short
   await expect(menu.getByRole("menuitem")).toHaveCount(2);
   await expect(menu.getByRole("menuitem").nth(0)).toHaveAccessibleName("Full screen");
   await expect(menu.getByRole("menuitem").nth(1)).toHaveAccessibleName("Keyboard shortcuts");
-  await expect(menu.locator("kbd")).toHaveText(["T", "F", "?"]);
+  await expect(menu.getByRole("menuitemcheckbox")).toHaveAccessibleName("Inspector");
+  await expect(menu.locator(".more-menu-label")).toHaveText(["Theme", "Full screen", "Inspector", "Keyboard shortcuts"]);
+  await expect(menu.locator("kbd")).toHaveText(["T", "F", "I", "?"]);
   for (const label of await menu.locator(".more-menu-label").all()) {
     await expect(label).toHaveCSS("text-transform", "none");
   }
@@ -5314,6 +5316,8 @@ test("the bottom bar's More menu holds the theme, full screen and keyboard short
   await expect(themes.getByRole("menuitemradio", { name: "Light" })).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(menu.getByRole("menuitem", { name: "Full screen" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitemcheckbox", { name: "Inspector" })).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(menu.getByRole("menuitem", { name: "Keyboard shortcuts" })).toBeFocused();
   await page.keyboard.press("ArrowDown");
@@ -5364,20 +5368,117 @@ test("the bottom bar's More menu holds the theme, full screen and keyboard short
   await expect(dialog).toBeVisible();
 });
 
-test("without the browser's full screen, the More menu, F and the shortcuts leave it out", async ({ page }) => {
-  await page.addInitScript(() => {
-    // iPhone Safari has no element full screen.
+for (const [setup, withoutFullscreen] of [
+  // iPhone Safari has no element full screen.
+  ["no element full screen", async (page: Page) => page.addInitScript(() => {
     delete (Element.prototype as Partial<Element>).requestFullscreen;
+  })],
+  // A frame not allowed full screen (an embedded Viewer) has the method, but every request fails.
+  ["a frame without full screen", async (page: Page) => {
+    await stubFullscreen(page);
+    await page.addInitScript(() => {
+      Object.defineProperty(Document.prototype, "fullscreenEnabled", { configurable: true, get: () => false });
+    });
+  }],
+] as const) {
+  test(`without the browser's full screen (${setup}), the More menu, F and the shortcuts leave it out`, async ({ page }) => {
+    await withoutFullscreen(page);
+    await page.goto("/map");
+    await page.getByRole("button", { name: "More", exact: true }).click();
+    const menu = page.getByRole("menu", { name: "More" });
+    await expect(menu.getByRole("menuitem")).toHaveCount(1);
+    await expect(menu.getByRole("menuitem", { name: /full screen/i })).toHaveCount(0);
+    await expect(menu.locator("kbd")).toHaveText(["T", "I", "?"]);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("f");
+    expect(await page.evaluate(() => (window as typeof window & { __fullscreenCalls?: string[] }).__fullscreenCalls ?? [])).toEqual([]);
+    await page.keyboard.press("?");
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).not.toContainText("full screen");
   });
+}
+
+test("the More menu's keys are its own: on Compare, ← → step no screen behind it, and ? hands focus back to More", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 860 });
+  await serveWorkspace(page);
+  await page.goto("/compare?screen=current-profile");
+  const compare = page.locator(".compare-section");
+  const route = compare.locator(".compare-bar .compare-nav-route");
+  await expect(route).toHaveText("/current-profile");
+  const more = page.getByRole("button", { name: "More", exact: true });
+  const menu = page.getByRole("menu", { name: "More" });
+  // Compare has no Inspector, so the menu leaves its row out.
+  await more.click();
+  await expect(menu.getByRole("menuitemcheckbox", { name: "Inspector" })).toHaveCount(0);
+
+  // ← and → on a row that is not the theme switch do nothing, and step no screen behind the menu.
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem").first()).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowRight");
+  await expect(menu).toBeVisible();
+  await expect(route).toHaveText("/current-profile");
+  await expect(page).toHaveURL(/screen=current-profile/);
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+
+  // ? opens the shortcuts as the row does; closing them returns focus to More.
+  await more.click();
+  await page.keyboard.press("?");
+  const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(dialog).toBeVisible();
+  await expect(menu).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(more).toBeFocused();
+});
+
+test("with nothing selected, the More menu's Inspector row opens the Inspector, and the open menu follows the bar it moves", async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 820 });
+  await page.goto("/map");
+  const more = page.getByRole("button", { name: "More", exact: true });
+  const menu = page.getByRole("menu", { name: "More" });
+  const inspector = page.locator(".right-panel");
+  await expect(inspector).toHaveCount(0);
+  await more.click();
+  const row = menu.getByRole("menuitemcheckbox", { name: "Inspector" });
+  await expect(row).toHaveAttribute("aria-checked", "false");
+  await expect(row).toHaveAttribute("aria-keyshortcuts", "I");
+  await row.click();
+  await expect(menu).toHaveCount(0);
+  await expect(inspector).toBeVisible();
+  await more.click();
+  await expect(row).toHaveAttribute("aria-checked", "true");
+  await row.click();
+  await expect(inspector).toHaveCount(0);
+
+  // I opens the Inspector with the menu up; the bar moves left out of its way, and the menu with it.
+  await more.click();
+  await expect(menu).toBeVisible();
+  const before = (await more.boundingBox())!;
+  await page.keyboard.press("i");
+  await expect(inspector).toBeVisible();
+  await expect.poll(async () => (await more.boundingBox())!.x).toBeLessThan(before.x - 1);
+  await expect(menu).toBeVisible();
+  await expect.poll(async () => {
+    const [menuBox, moreBox] = await Promise.all([menu.boundingBox(), more.boundingBox()]);
+    return Math.abs(menuBox!.x + menuBox!.width - (moreBox!.x + moreBox!.width));
+  }).toBeLessThanOrEqual(2);
+});
+
+test("in a window too short for it, the More menu scrolls", async ({ page }) => {
+  await page.setViewportSize({ width: 1180, height: 150 });
   await page.goto("/map");
   await page.getByRole("button", { name: "More", exact: true }).click();
-  const menu = page.getByRole("menu", { name: "More" });
-  await expect(menu.getByRole("menuitem")).toHaveCount(1);
-  await expect(menu.getByRole("menuitem", { name: /full screen/i })).toHaveCount(0);
-  await expect(menu.locator("kbd")).toHaveText(["T", "?"]);
-  await page.keyboard.press("Escape");
-  await page.keyboard.press("?");
-  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).not.toContainText("full screen");
+  const popover = page.locator(".menu-popover.more-menu");
+  await expect(popover).toBeVisible();
+  expect(await popover.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  const box = (await popover.boundingBox())!;
+  expect(box.y + box.height).toBeLessThanOrEqual(150);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 200);
+  await expect.poll(() => popover.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(page.getByRole("menu", { name: "More" }).getByRole("menuitem", { name: "Keyboard shortcuts" })).toBeInViewport({ ratio: 1 });
 });
 
 test("the top right is the camera's alone: fit, center and zoom on the Map, nothing on Screens or Compare", async ({ page }) => {
