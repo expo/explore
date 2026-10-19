@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 /**
  * Runs the app's e2e flows (the `e2e` package) on the device Explore already drives. A child process of the capture:
  * the flows are the reviewed commit's own test code, so they run with the narrowed environment the capture gives
@@ -106,6 +107,28 @@ export async function runFlowsWorker(requestPath: string, environment: NodeJS.Pr
  * Takes a frame of the flows' session after every step ends, through the same daemon e2e drives it on. e2e does not wait
  * for a reporter, so the frame shows the device as the next step begins; a frame that fails is skipped, not fatal.
  */
+/**
+ * The step ends while the app may still be settling (a list easing into place, a control fading in), and a frame shot
+ * at that instant is a near-duplicate of its neighbours that never folds. Shoot again after a short pause until two
+ * shots agree, within a bounded number of tries; the last shot is kept either way.
+ */
+export async function settledScreenshot(client: { capture: { screenshot(options: { path: string }): Promise<unknown> } }, file: string,
+  options: { pauseMs?: number; tries?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<{ tries: number; settled: boolean }> {
+  const pauseMs = options.pauseMs ?? 150; const maxTries = options.tries ?? 4;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const digest = async () => createHash("sha256").update(await readFile(file)).digest("hex");
+  await client.capture.screenshot({ path: file });
+  let previous = await digest();
+  for (let tries = 1; tries < maxTries; tries++) {
+    await sleep(pauseMs);
+    await client.capture.screenshot({ path: file });
+    const current = await digest();
+    if (current === previous) return { tries: tries + 1, settled: true };
+    previous = current;
+  }
+  return { tries: maxTries, settled: false };
+}
+
 export function stepFrameRecorder(request: FlowsRequest, token: string | undefined): { onEvent: RunEventSink; finish: () => Promise<{ frames: Map<string, StepFrameFile[]>; failures: string[] }> } {
   const root = join(request.output, "results");
   const directory = join(root, "explore-step-frames");
@@ -127,7 +150,7 @@ export function stepFrameRecorder(request: FlowsRequest, token: string | undefin
       const file = join(directory, `${testId.replace(/[^A-Za-z0-9._-]+/g, "_")}-${stepIndex}.png`);
       ready ??= mkdir(directory, { recursive: true }).then(() => undefined);
       pending.push(ready
-        .then(() => client.capture.screenshot({ path: file }))
+        .then(() => settledScreenshot(client, file))
         .then(() => { (frames.get(testId) ?? frames.set(testId, []).get(testId)!).push({ stepIndex, path: relative(root, file), capturedAt: new Date().toISOString() }); })
         .catch(error => {
           const message = `step frame ${stepIndex + 1} of ${testId} was not taken: ${(error as Error).message}`;
