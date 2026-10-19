@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import ts from "typescript";
 import type { SourceChange } from "./git-diff.js";
 import { validateSourceRoutes, type SourceRoute } from "../contracts/source-route.js";
-import { readTsconfigAlias } from "../shared/tsconfig-alias.js";
+import { readTsconfigAlias, resolveTsconfigAlias } from "../shared/tsconfig-alias.js";
 
 /** Repository path → file text at one exact commit. Non-source files carry an empty string. */
 export type SourceSnapshot = ReadonlyMap<string, string>;
@@ -50,9 +50,9 @@ export function surfaceDependencies(routes: readonly SourceRoute[], files: Sourc
   if (alias.unsupported) unresolved.add("Custom TypeScript module resolution requires conservative capture");
   const cache = new Map<string, string[]>();
   const resolveModule = (importer: string, specifier: string): string | undefined => {
-    const base = specifier.startsWith("@/") ? `${alias.target}${specifier.slice(2)}`
-      : specifier.startsWith(".") ? posix.normalize(posix.join(posix.dirname(importer), specifier))
-        : undefined;
+    const base = resolveTsconfigAlias(alias, specifier)
+      ?? (specifier.startsWith(".") ? posix.normalize(posix.join(posix.dirname(importer), specifier))
+        : undefined);
     if (!base) return undefined;
     const extensions = ["tsx", "ts", "jsx", "js"].flatMap(ext => [`.${platform}.${ext}`, ...(platform === "web" ? [] : [`.native.${ext}`]), `.${ext}`]).concat([".mjs", ".cjs", ".json"]);
     return [...extensions.map((ext) => base + ext), base,

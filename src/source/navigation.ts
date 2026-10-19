@@ -1,7 +1,7 @@
 import { posix } from "node:path";
 import ts from "typescript";
 import type { SourceSnapshot } from "./dependency-graph.js";
-import { readTsconfigAlias } from "../shared/tsconfig-alias.js";
+import { readTsconfigAlias, resolveTsconfigAlias } from "../shared/tsconfig-alias.js";
 import { detectAppDir, routeGroupOf } from "./route-providers/expo-router.js";
 import { validateSourceRoutes, type SourceRoute } from "../contracts/source-route.js";
 import { validateNavigationGraph, type NavigationEdge, type NavigationGraph } from "../contracts/navigation-graph.js";
@@ -65,8 +65,8 @@ export function extractSourceNavigation(routes: readonly SourceRoute[], files: S
   const alias = readTsconfigAlias(files.get("tsconfig.json"));
   if (alias.unsupported) unresolved.add(`Unresolved navigation: tsconfig.json: ${alias.unsupported}`);
   const resolveModule = (specifier: string, importer: string): string | undefined => {
-    const base = specifier.startsWith("@/") ? `${alias.target}${specifier.slice(2)}`
-      : specifier.startsWith(".") ? posix.normalize(posix.join(posix.dirname(importer.replace(/^\//, "")), specifier)) : undefined;
+    const base = resolveTsconfigAlias(alias, specifier)
+      ?? (specifier.startsWith(".") ? posix.normalize(posix.join(posix.dirname(importer.replace(/^\//, "")), specifier)) : undefined);
     if (!base || base.startsWith("../")) return undefined;
     const withoutJs = /\.[cm]?jsx?$/.test(base) ? base.replace(/\.[cm]?jsx?$/, "") : base;
     return [...extensions.map((ext) => base + ext), base,

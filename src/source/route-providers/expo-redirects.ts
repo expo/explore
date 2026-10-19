@@ -1,6 +1,6 @@
 import { posix } from "node:path";
 import ts from "typescript";
-import { readTsconfigAlias } from "../../shared/tsconfig-alias.js";
+import { readTsconfigAlias, resolveTsconfigAlias } from "../../shared/tsconfig-alias.js";
 
 const UNKNOWN = "\u0000";
 const MAX_VALUES = 64;
@@ -34,8 +34,8 @@ export function expoRedirectTargets(files: ReadonlyMap<string, string>, routeFil
   };
   const alias = readTsconfigAlias(files.get("tsconfig.json"));
   const resolveModule = (specifier: string, importer: string): string | undefined => {
-    const base = specifier.startsWith("@/") && !alias.unsupported ? `${alias.target}${specifier.slice(2)}`
-      : specifier.startsWith(".") ? posix.normalize(posix.join(posix.dirname(importer.replace(/^\//, "")), specifier)) : undefined;
+    const base = (alias.unsupported ? undefined : resolveTsconfigAlias(alias, specifier))
+      ?? (specifier.startsWith(".") ? posix.normalize(posix.join(posix.dirname(importer.replace(/^\//, "")), specifier)) : undefined);
     if (!base || base.startsWith("../")) return undefined;
     const withoutJs = base.replace(/\.[cm]?jsx?$/, "");
     return [...extensions.map(ext => base + ext), base, ...extensions.map(ext => `${base}/index${ext}`),

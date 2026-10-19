@@ -21,6 +21,18 @@ test("import closure attributes component and platform-source changes to depende
   assert.deepEqual(selectedPaths(plan({base:files,platform:"android",changes:[{status:"modified",path:"src/theme.ios.ts"}]})), []);
 });
 
+test("tsconfig paths with several single-directory aliases resolve by their longest prefix, as TypeScript does", () => {
+  const tsconfig = JSON.stringify({ extends: "expo/tsconfig.base", compilerOptions: { paths: { "@/*": ["./src/*"], "@/assets/*": ["./assets/*"] } } });
+  const files = [["tsconfig.json", tsconfig], ["src/app/one.tsx", 'import { tint } from "@/theme"; import icon from "@/assets/icon"; export default () => [tint, icon];'],
+    ["src/app/two.tsx", page], ["src/theme.ts", "export const tint = 'blue';"], ["assets/icon.ts", "export default 'icon';"], ["src/assets/icon.ts", "export default 'other';"]];
+  const result = plan({ base: files, changes: [{ status: "modified", path: "assets/icon.ts" }] });
+  assert.deepEqual(selectedPaths(result), ["/one"]);
+  assert.equal(result.surfaces.flatMap(row => row.reasons ?? []).some(reason => /module resolution/.test(reason)), false);
+  // `@/assets/icon` is `assets/icon.ts`, not `src/assets/icon.ts`, so an edit to the latter changes nothing.
+  assert.deepEqual(selectedPaths(plan({ base: files, changes: [{ status: "modified", path: "src/assets/icon.ts" }] })), []);
+  assert.deepEqual(selectedPaths(plan({ base: files, changes: [{ status: "modified", path: "src/theme.ts" }] })), ["/one"]);
+});
+
 test("route additions and removals are independently inventoried at each commit", () => {
   const result = plan({base:[["app/removed.tsx",page]],head:[["app/added.tsx",page]]});
   assert.deepEqual(selectedPaths(result,"base"), ["/removed"]);
