@@ -28,4 +28,11 @@ test('a step frame is shot again until two shots agree, and the last shot is kep
   const result = await settledScreenshot(restless.client, join(dir, 'c.png'), { sleep, tries: 3 });
   assert.deepEqual(result, { tries: 3, settled: false }, 'bounded: an animating screen is kept after the last try');
   assert.equal(await readFile(join(dir, 'c.png'), 'utf8'), '3');
+
+  const closing = fakeDevice(['x', 'y', 'z']);
+  let open = true;
+  const stopAfterFirstPause = async ms => { pauses.push(ms); open = false; };
+  assert.deepEqual(await settledScreenshot(closing.client, join(dir, 'd.png'), { sleep: stopAfterFirstPause, more: () => open }), { tries: 1, settled: false },
+    'once the device is going away the shot in hand is kept instead of asking for another');
+  assert.equal(closing.shots.length, 1);
 });

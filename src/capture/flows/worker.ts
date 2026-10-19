@@ -91,6 +91,8 @@ export async function runFlowsWorker(requestPath: string, environment: NodeJS.Pr
   const stepFrames = request.frames === "steps" && !request.engineModule ? stepFrameRecorder(request, token) : undefined;
   try {
     const result = await run({ cwd: request.projectRoot, config, interruptSignal: controller.signal, ...(stepFrames ? { onEvent: stepFrames.onEvent } : {}) });
+    // e2e closes its device session as the run ends; a frame still settling keeps the shot it has instead of asking for another.
+    stepFrames?.stop();
     const stepResult = stepFrames ? await stepFrames.finish() : undefined;
     const frames = stepResult?.frames;
     const report = result.report as unknown as { run: { errors?: unknown[] } };
@@ -113,7 +115,7 @@ export async function runFlowsWorker(requestPath: string, environment: NodeJS.Pr
  * shots agree, within a bounded number of tries; the last shot is kept either way.
  */
 export async function settledScreenshot(client: { capture: { screenshot(options: { path: string }): Promise<unknown> } }, file: string,
-  options: { pauseMs?: number; tries?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<{ tries: number; settled: boolean }> {
+  options: { pauseMs?: number; tries?: number; sleep?: (ms: number) => Promise<void>; /** False once the device is about to go away: keep the shot in hand. */ more?: () => boolean } = {}): Promise<{ tries: number; settled: boolean }> {
   const pauseMs = options.pauseMs ?? 150; const maxTries = options.tries ?? 4;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const digest = async () => createHash("sha256").update(await readFile(file)).digest("hex");
@@ -121,6 +123,7 @@ export async function settledScreenshot(client: { capture: { screenshot(options:
   let previous = await digest();
   for (let tries = 1; tries < maxTries; tries++) {
     await sleep(pauseMs);
+    if (options.more && !options.more()) return { tries, settled: false };
     await client.capture.screenshot({ path: file });
     const current = await digest();
     if (current === previous) return { tries: tries + 1, settled: true };
@@ -129,7 +132,7 @@ export async function settledScreenshot(client: { capture: { screenshot(options:
   return { tries: maxTries, settled: false };
 }
 
-export function stepFrameRecorder(request: FlowsRequest, token: string | undefined): { onEvent: RunEventSink; finish: () => Promise<{ frames: Map<string, StepFrameFile[]>; failures: string[] }> } {
+export function stepFrameRecorder(request: FlowsRequest, token: string | undefined): { onEvent: RunEventSink; stop: () => void; finish: () => Promise<{ frames: Map<string, StepFrameFile[]>; failures: string[] }> } {
   const root = join(request.output, "results");
   const directory = join(root, "explore-step-frames");
   // @e2e-dev/mobile drives the device as `<session>-<slot>` and Explore runs one worker, so the flows' session is `<session>-0`.
@@ -141,7 +144,9 @@ export function stepFrameRecorder(request: FlowsRequest, token: string | undefin
   const pending: Promise<void>[] = [];
   const failures: string[] = [];
   let ready: Promise<void> | undefined;
+  let stopped = false;
   return {
+    stop() { stopped = true; },
     onEvent(event) {
       if (event.type !== "step" || event.progress.phase !== "end" || event.progress.status !== "passed") return;
       const { testId } = event;
@@ -150,7 +155,7 @@ export function stepFrameRecorder(request: FlowsRequest, token: string | undefin
       const file = join(directory, `${testId.replace(/[^A-Za-z0-9._-]+/g, "_")}-${stepIndex}.png`);
       ready ??= mkdir(directory, { recursive: true }).then(() => undefined);
       pending.push(ready
-        .then(() => settledScreenshot(client, file))
+        .then(() => settledScreenshot(client, file, { more: () => !stopped }))
         .then(() => { (frames.get(testId) ?? frames.set(testId, []).get(testId)!).push({ stepIndex, path: relative(root, file), capturedAt: new Date().toISOString() }); })
         .catch(error => {
           const message = `step frame ${stepIndex + 1} of ${testId} was not taken: ${(error as Error).message}`;
