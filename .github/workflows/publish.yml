@@ -61,7 +61,13 @@ jobs:
         env:
           # npm cannot generate provenance for a private repository.
           NPM_CONFIG_PROVENANCE: "false"
-        run: npm publish --access public
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        # A prerelease (0.20.0-next.0) goes to the next tag, so latest keeps the last release.
+        run: |
+          set -euo pipefail
+          if [[ "$VERSION" == *-* ]]; then tag=next; else tag=latest; fi
+          npm publish --access public --tag "$tag"
       - name: Tag the release
         if: steps.version.outputs.publish == 'true'
         env:
