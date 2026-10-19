@@ -12,8 +12,8 @@ This is a repository-maintenance skill (it is not shipped in the npm package; `s
 The README's screenshots and its live example (`https://explore-example--euxy.expo.app/p/<token>`, deployed by `.github/workflows/example-report.yml`) must show the same report. The example serves the `viewer-preview-fixtures` release, the same reports every pull request's Viewer preview uses, so start there:
 
 ```sh
-gh release download viewer-preview-fixtures --pattern reports.json --output - | jq -r '.[0].source'   # e.g. brentvatne/euxy#154
-mkdir -p ~/euxy-report && gh release download viewer-preview-fixtures --pattern ios.zip --dir ~/euxy-report --clobber
+gh release download viewer-preview-fixtures --pattern reports.json --output - | jq -r '.[0] | "\(.target) \(.source)"'   # e.g. iphone brentvatne/euxy#163
+mkdir -p ~/euxy-report && gh release download viewer-preview-fixtures --pattern iphone.zip --dir ~/euxy-report --clobber
 ```
 
 Keep those fixtures when their euxy PR still shows a real change (an added or removed screen, modified screens with outlined regions). To move to a newer euxy PR, open its Explore comment and follow **iOS report** to the hosted link `https://euxy-explore--<id>.expo.app/p/<token>`. Then refresh the fixtures from that link and download them again:
@@ -28,7 +28,7 @@ Do not pick a same-tree demo PR, where every change is noise. The refreshed fixt
 
 ```sh
 npm ci
-node scripts/readme-screenshots.mjs --report ~/euxy-report/ios.zip --select /about --compare patterns --pr https://github.com/brentvatne/euxy/pull/<n>
+node scripts/readme-screenshots.mjs --report ~/euxy-report/iphone.zip --select /lane-editor/0 --compare new-pattern --pr https://github.com/brentvatne/euxy/pull/<n>
 ```
 
 - `--select` is the route the hero's pointer clicks on the Map (the Inspector opens on it): choose an added or clearly modified screen. The script zooms in around it, so it must be a screen the Map shows.
@@ -53,7 +53,7 @@ npx @expo/explore reports list                                         # your sa
 export EXPLORE_CACHE_DIR=$(mktemp -d)                                  # a scratch store for the image, not your own runs
 cd ~/code/euxy                                                         # inside euxy, so the commit messages are found
 npx @expo/explore reports add ~/.cache/expo-explore/reports/<that id>/ios.zip
-npx @expo/explore reports add ~/euxy-report/ios.zip                    # the PR report from step 1
+npx @expo/explore reports add ~/euxy-report/iphone.zip                 # the PR report from step 1
 npx @expo/explore reports add <an explore:binary report directory>     # an exploration, so all three kinds show
 cd - && npm run build:cli && node scripts/readme-reports-rows.mjs > /tmp/reports-rows.html
 ```

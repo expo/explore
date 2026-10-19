@@ -26,18 +26,39 @@ function keyframes(name, loop, frames) {
 }
 
 /**
+ * The Map card of `route`: the screenshot button of the node whose id is that route's surface in `review`. The button
+ * is named after the screen's title, which is not the route when the report has plain titles.
+ */
+export function mapCard(page, review, route) {
+  const surface = review.surfaces.find(s => (s.head ?? s.base)?.route === route && s.colorScheme !== "dark");
+  if (!surface) throw new Error(`The report has no screen at ${route}.`);
+  return page.locator(`.react-flow__node-screen[data-id="${surface.id}"] .screen-screenshot-target`);
+}
+
+/**
  * Photographs the hero's states from a Viewer page whose Map has its camera set and nothing selected: the Map without
  * its screens, without its edges, and whole; then it clicks `select`, which opens the Inspector without moving the
- * camera, and photographs that. Returns the frames and where each screen card, the Inspector and the selected card are.
+ * camera, and photographs that (`card` is its screenshot button, from mapCard). Returns the frames and where each screen card, the Inspector and the selected card are.
  */
-export async function captureHeroFrames(page, { select, viewport }) {
+export async function captureHeroFrames(page, { select, card: target, viewport }) {
   const shoot = () => page.screenshot({ type: "jpeg", quality: JPEG_QUALITY });
-  const neutral = () => page.mouse.move(viewport.width - 4, viewport.height - 4);
+  // Park the pointer on bare canvas, found once the camera is set: over a card it takes a grey ring and darkens the
+  // card's transitions, over a transition it darkens that one, and over a control it can raise a tooltip.
+  const rest = await page.evaluate(({ width, height }) => {
+    for (let y = height - 120; y > 120; y -= 20) for (let x = 40; x < width - 40; x += 20) {
+      if (document.elementFromPoint(x, y)?.classList.contains("react-flow__pane")) return { x, y };
+    }
+    return null;
+  }, viewport);
+  if (!rest) throw new Error("The hero's Map has no bare canvas to park the pointer on.");
+  const neutral = async () => {
+    await page.mouse.move(rest.x, rest.y);
+    await page.waitForTimeout(200);
+    if (await page.locator(".canvas-hovering, .graph-node-hover-subject").count()) throw new Error("The pointer at rest still hovers the Map.");
+  };
   const rect = locator => locator.boundingBox().then(b => b && { x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
   const camera = () => page.locator(".react-flow__viewport").evaluate(el => el.style.transform);
-  const target = page.locator(`.screen-screenshot-target[title="${select}"]`);
 
-  // A card under the pointer dims the others and highlights its edges; let that fade before the first frame.
   await neutral();
   await page.waitForTimeout(1000);
   const at = await camera();
@@ -124,8 +145,9 @@ export function heroSvg(frames, theme, alt) {
   ]));
   defs.push(`<clipPath id="canvas"><rect x="0" y="0" width="${p.x}" height="${v.height}"/></clipPath>`);
   defs.push(`<clipPath id="panel"><rect ${box(p)}/></clipPath>`);
-  css.push(`.sel{animation:sel ${LOOP}s ease-out infinite}`);
-  css.push(keyframes("sel", LOOP, [[0, "opacity:0"], [CLICK + 0.1, "opacity:0"], [CLICK + 0.4, "opacity:1"], [LOOP, "opacity:1"]]));
+  // The selection lands as the Viewer draws it, at once: a ring and its transitions in the accent, nothing fading.
+  css.push(`.sel{animation:sel ${LOOP}s linear infinite}`);
+  css.push(keyframes("sel", LOOP, [[0, "opacity:0"], [CLICK + 0.1, "opacity:0"], [CLICK + 0.2, "opacity:1"], [LOOP, "opacity:1"]]));
   css.push(`.insp{animation:insp ${LOOP}s cubic-bezier(.2,.8,.2,1) infinite}`);
   css.push(keyframes("insp", LOOP, [[0, "opacity:0;transform:translateX(48px)"], [CLICK + 0.15, "opacity:0;transform:translateX(48px)"], [CLICK + 0.75, "opacity:1;transform:translateX(0)"], [LOOP, "opacity:1;transform:translateX(0)"]]));
   layers.push(`<use class="sel" href="#inspecting" clip-path="url(#canvas)"/>`);
@@ -237,7 +259,7 @@ export async function compareSvg(browser, report, surface, theme, alt) {
     + `<g class="divider"><rect x="${x - 1.5}" y="${y}" width="3" height="${PH}" fill="${t.accent}"/><circle cx="${x}" cy="${y + PH / 2}" r="13" fill="${t.accent}"/>`
     + `<path d="M${x - 5} ${y + PH / 2 - 4}l-3 4l3 4M${x + 5} ${y + PH / 2 - 4}l3 4l-3 4" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></g>`
     + `<g class="regions">${regions}</g>`
-    + label("before-label", "end", x - 44, "Before", `${pullRequest.base.ref} ·${pullRequest.base.sha.slice(0, 7)}`)
+    + label("before-label", "end", x - 44, "Before", `${pullRequest.base.ref} · ${pullRequest.base.sha.slice(0, 7)}`)
     + label("after-label", "start", x + PW + 44, "After", `PR #${pullRequest.number} · ${pullRequest.head.sha.slice(0, 7)}`, `${count} changed region${count === 1 ? "" : "s"}`)
     + "</g></svg>";
 }

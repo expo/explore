@@ -4,26 +4,26 @@ Explore maps your app: a screenshot of every screen, connected by the taps betwe
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-hero-dark.svg">
-  <img alt="Explore's Map of a euxy pull request, animated: the screen cards appear row by row, the new About screen marked Added among the modified Patterns screens, the transitions between them wipe in, then a click selects About, its transitions light up and the Inspector slides in on it, shown as a window on a soft stage" src="docs/screenshots/readme-hero-light.svg">
+  <img alt="Explore's Map of a euxy pull request, animated: the screen cards appear row by row, the new /lane-editor/0 marked Added beside the removed /lane-editor and the modified /new-pattern, the transitions between them wipe in, then a click selects /lane-editor/0: a blue ring circles it, its transitions turn blue while the rest fade to hairlines, and the Inspector slides in on it, shown as a window on a soft stage" src="docs/screenshots/readme-hero-light.svg">
 </picture>
 
 **See a real report:** [euxy](https://explore-example--euxy.expo.app/p/rfcoic27ccgnrmzgijubxkmuzmptcrva?platform=ios), a MIDI sequencer, reviewed by Explore. It is redeployed with the current Viewer on every merge to main.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-compare-dark.svg">
-  <img alt="The euxy Patterns screen wiping from its capture before the pull request to its capture after it: each pattern row's tempo moves out of the subtitle into its own column on the right, then the changed subtitles are outlined" src="docs/screenshots/readme-compare-light.svg">
+  <img alt="The euxy New Pattern sheet wiping from its capture before the pull request to its capture after it: the suggested pattern name and the row of pattern icons differ, and those regions are outlined on the after capture" src="docs/screenshots/readme-compare-light.svg">
 </picture>
 
-**Compare**: each changed screen before and after, with the changed regions outlined.
+**Compare**: each changed screen before and after, with the changed regions outlined on the after.
 
 <table>
 <tr>
 <td width="50%" valign="top">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-screens-dark.png">
-  <img width="100%" alt="The Screens view of a euxy review: the app/ route tree on the left under Changed 9 and All 19, and a grid of screen cards beside it in the same order, each with its route below the screenshot and a dot before it: green for the new /about, orange for modified screens such as /activity-log, /settings and /patterns, red for the removed /channel-surf" src="docs/screenshots/readme-screens-light.png">
+  <img width="100%" alt="The Screens view of a euxy review showing Changed 7 of All 19: the app/ route tree on the left, and beside it a grid of the changed screens in the same order, each with its route below the screenshot: a red dot for the removed /lane-editor, orange for the modified /new-pattern and /channel-surf, green for the new /lane-editor/0, and Changed in dark under /p and /patterns" src="docs/screenshots/readme-screens-light.png">
 </picture>
-<strong>Screens</strong>: every capture in one grid, beside the route tree, with a dot for what changed.
+<strong>Screens</strong>: every capture in one grid, or only the changed ones, beside the route tree, with a dot for what changed.
 </td>
 <td width="50%" valign="top">
 <picture>
@@ -41,7 +41,9 @@ Explore maps your app: a screenshot of every screen, connected by the taps betwe
 Paste this into Claude Code, Codex, Cursor, or any tool that can fetch a URL. In the Viewer, **Hand off to AI** fills it in for you:
 
 ```text
-Review the visual changes in this PR. Expo Explore report: <report link>
+Review the visual changes in PR #<number> of <owner>/<repo>.
+Expo Explore report:
+<report link>
 
 Fetch the link first. It explains the report's JSON API. Go through the changed screens,
 compare the before and after screenshots, and tell me which changes look intended and
@@ -320,6 +322,7 @@ targets:
 - A target takes the `app` fields it does not set, and `device.name` when it is of `app.platform`; a target of another platform sets its own `bundleId` and `easProfile` (an Android one's device defaults to `pixel_7`). `pose` is `closed`, `half-open` or `open`. `label` names it in reports (by default its device and pose).
 - Ids are up to 32 lowercase letters, digits and dashes, start with a letter, and are not `base`, `head` or `report`. A config names at most 8 targets. A config with `platforms` has one target per platform, named `ios` and `android`.
 - The workflows run one capture job per target, the PR comment has a section per target, and each report links its sibling targets' reports.
+- A review runs at most `capture.maxSessions` EAS Simulator sessions at once across its targets (default 5, a typical plan's limit); see the [config reference](docs/quickstart-ci.md#config-reference).
 - A target can also set its own `controller` and `simulator` over `capture`'s, such as Android on agent-device beside iOS targets on Argent. `--controller` and `--simulator` override every target's for one run.
 - `capture --target duo-open` reviews one target on this machine; `--platform ios` the iOS ones. On your machine a review's targets run at once (at most `--parallel N`), and targets of one platform and EAS profile share each commit's build; in CI each target is its own job. A target that fails outright costs only its own report.
 - A device controller that stops answering on one screen costs that route, up to three times per capture: Explore restarts the app, goes on with the next route, and records what happened in `capture-diagnostics/controller-recoveries.jsonl`.

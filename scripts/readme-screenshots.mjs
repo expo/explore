@@ -18,7 +18,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { startReportViewer } from "../test/ci/lib/report-viewer.mjs";
-import { captureHeroFrames, compareSurface, compareSvg, heroSvg, openReport } from "./readme-animations.mjs";
+import { captureHeroFrames, compareSurface, compareSvg, heroSvg, mapCard, openReport } from "./readme-animations.mjs";
 
 const { values: args } = parseArgs({
   options: {
@@ -36,8 +36,9 @@ if (!args.report) {
 
 const out = fileURLToPath(new URL("../docs/screenshots/", import.meta.url));
 const SHOTS = [
-  { file: "readme-hero", hash: "#/map", viewport: { width: 1376, height: 774 }, click: "Fit canvas", select: args.select, zoom: Number(args.zoom), animated: true },
-  { file: "readme-screens", hash: "#/screens", viewport: { width: 1760, height: 1000 } },
+  { file: "readme-hero", hash: "#/map", viewport: { width: 1376, height: 774 }, click: page => page.getByRole("button", { name: "Fit canvas" }), select: args.select, zoom: Number(args.zoom), animated: true },
+  // Screens shows its Changed filter, so the added, removed and modified dots are all in view wherever the tree sorts them.
+  { file: "readme-screens", hash: "#/screens", viewport: { width: 1760, height: 1000 }, click: page => page.locator(".screens-chip", { hasText: "Changed" }) },
 ];
 
 const bytes = await readFile(args.report);
@@ -60,20 +61,20 @@ try {
     await page.waitForSelector(".react-flow__node, .compare-stage, .screens-cell", { timeout: 60_000 });
     await page.waitForTimeout(4000);
     if (shot.click) {
-      await page.getByRole("button", { name: shot.click }).click();
+      await shot.click(page).click();
       await page.mouse.move(400, shot.viewport.height - 30);
       await page.waitForTimeout(1500);
     }
     if (shot.select && !shot.animated) {
       // Selecting a screen opens the Inspector without moving the fitted camera. The animated hero selects it last.
-      await page.locator(`.screen-screenshot-target[title="${shot.select}"]`).click();
+      await mapCard(page, report.review, shot.select).click();
       await page.mouse.move(400, shot.viewport.height - 30);
       await page.waitForTimeout(1500);
     }
     if (shot.zoom) {
       // Zoom around the selected screen with the wheel, which keeps it under the pointer, then pan it left and up, clear
       // of the minimap and the bottom bar. The camera stops at the first wheel step past the zoom asked for.
-      const box = await page.locator(`.screen-screenshot-target[title="${shot.select}"]`).boundingBox();
+      const box = await mapCard(page, report.review, shot.select).boundingBox();
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       for (let step = 0; step < 60; step++) {
         if (Number((await page.locator(".zoom-button span").first().textContent()).replace("%", "")) >= shot.zoom) break;
@@ -88,7 +89,7 @@ try {
     }
     const path = `${out}${shot.file}-${theme}.${shot.animated ? "svg" : "png"}`;
     if (shot.animated) {
-      const frames = await captureHeroFrames(page, { select: shot.select, viewport: shot.viewport });
+      const frames = await captureHeroFrames(page, { select: shot.select, card: mapCard(page, report.review, shot.select), viewport: shot.viewport });
       await writeFile(path, heroSvg(frames, theme,
         `Explore's Map of a euxy pull request: the screen cards appear row by row, the transitions between them wipe in, then a click selects ${shot.select} and the Inspector opens on it`));
     } else await page.screenshot({ path });
