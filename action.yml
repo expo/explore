@@ -157,6 +157,10 @@ runs:
         EXPO_TOKEN: ${{ inputs.expo_token }}
       run: |
         set -euo pipefail
-        if [[ ! -e "$OUTPUT/head-session" && ! -L "$OUTPUT/head-session" && ! -e "$OUTPUT/base-session" && ! -L "$OUTPUT/base-session" ]]; then exit 0; fi
-        node "$TOOLS/scripts/cleanup-ci-sessions.mjs" --eas "$TOOLS/node_modules/.bin/eas" \
-          --session-file "$OUTPUT/head-session" --session-file "$OUTPUT/base-session"
+        # A side that captures an appearance in a session of its own records it as <side>-session-<scheme>.
+        files=()
+        for name in head-session base-session head-session-light head-session-dark base-session-light base-session-dark; do
+          if [[ -e "$OUTPUT/$name" || -L "$OUTPUT/$name" ]]; then files+=(--session-file "$OUTPUT/$name"); fi
+        done
+        if (( ${#files[@]} == 0 )); then exit 0; fi
+        node "$TOOLS/scripts/cleanup-ci-sessions.mjs" --eas "$TOOLS/node_modules/.bin/eas" "${files[@]}"

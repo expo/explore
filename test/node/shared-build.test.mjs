@@ -59,3 +59,33 @@ test("a capture that ends without finishing its shared build releases the target
   assert.equal(error.code, "CAPTURE_BUILD_FAILED");
   assert.match(error.message, /the capture building it stopped \(CAPTURE_WORKER_EXITED\)/);
 });
+
+test("a waiter is told the build is repacking only when its builder says so, not while a native build may run", async t => {
+  const directory = await scratch(t);
+  let started, repack, finish;
+  const building = new Promise(resolve => { started = resolve; });
+  const owner = sharedBuild({ directory, key, appName: "App.app", build: (_keepApp, repacking) => new Promise(resolve => {
+    started(); repack = repacking; finish = () => resolve({ buildId: "native" }); }) });
+  await building;
+  const told = [];
+  const waiter = sharedBuild({ directory, key, appName: "App.app", build: async () => assert.fail("only the owner builds"),
+    waiting: () => told.push("waiting"), repacking: () => told.push("repacking") });
+  // The owner is still in its native build: two polls go by without the waiter's session starting.
+  await new Promise(resolve => setTimeout(resolve, 4_500));
+  assert.deepEqual(told, ["waiting"]);
+  await repack();
+  await new Promise(resolve => setTimeout(resolve, 2_500));
+  assert.deepEqual(told, ["waiting", "repacking"]);
+  finish();
+  await owner; await waiter;
+  assert.deepEqual(told, ["waiting", "repacking"]);
+});
+
+test("a waiter whose build finished before it looked is told it is repacking once, with the result", async t => {
+  const directory = await scratch(t);
+  await sharedBuild({ directory, key, appName: "App.app", build: async () => ({ buildId: "native" }) });
+  const told = [];
+  assert.deepEqual(await sharedBuild({ directory, key, appName: "App.app", build: async () => assert.fail("only the owner builds"),
+    waiting: () => told.push("waiting"), repacking: () => told.push("repacking") }), { buildId: "native" });
+  assert.deepEqual(told, ["waiting", "repacking"]);
+});

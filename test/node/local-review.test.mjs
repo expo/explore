@@ -437,6 +437,30 @@ test('a review runs at most --parallel targets at once, and every target settles
   assert.deepEqual(results.map(result => result.status === 'fulfilled' ? result.value : result.reason.message), [10, 20, 'three', 40, 50]);
 });
 
+test('a local review runs no more targets at once than capture.maxSessions', async t => {
+  const targets = { phone: { platform: 'ios' }, tablet: { platform: 'ios', device: 'iPad Air' } };
+  // Whether one target's review began before the other's ended, from the order of their progress lines.
+  const overlapped = async (maxSessions, parallel) => {
+    const f = await fixture(t, 'expo-router', { targets, maxSessions });
+    t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
+    const environment = { ...f.environment, EXPLORE_CACHE_DIR: await scratch(t, 'explore-local-cache-'), GITHUB_RUN_ID: '', GITHUB_RUN_ATTEMPT: '', GITHUB_TOKEN: '' };
+    const lines = [];
+    const result = await runLocalReview({ project: f.headProject, base: f.baseSha, head: f.headSha, environment, cache: false, ...(parallel ? { parallel } : {}),
+      install: async checkout => { await writeCaptureObserverPackages(checkout, { provider: 'expo-router' }); }, runner: f.runner, now: f.now, sleep: f.sleep,
+      progress: message => lines.push(message) });
+    t.after(() => rm(result.work, { recursive: true, force: true }));
+    assert.deepEqual(result.reports.map(report => report.target.id).sort(), ['phone', 'tablet']);
+    const span = id => [lines.findIndex(line => line.startsWith(`${id}: `)), lines.findLastIndex(line => line.startsWith(`${id}: `))];
+    const [phone, tablet] = [span('phone'), span('tablet')];
+    return phone[0] < tablet[1] && tablet[0] < phone[1];
+  };
+  // One simulator at a time: the targets take turns.
+  assert.equal(await overlapped(1), false);
+  // The default ceiling (five) runs both at once, and --parallel still chooses for itself.
+  assert.equal(await overlapped(undefined), true);
+  assert.equal(await overlapped(1, 2), true);
+});
+
 test('a target that fails outright costs only its own report', async t => {
   const targets = { phone: { platform: 'ios' }, tablet: { platform: 'ios', device: 'iPad Air' } };
   const f = await fixture(t, 'expo-router', { targets });
