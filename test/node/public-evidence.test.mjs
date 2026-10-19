@@ -340,8 +340,10 @@ test("expired comparison budgets produce diagnostics rather than review verdicts
   const root = await mkdtemp(join(tmpdir(), "explore-public-evidence-")); t.after(() => rm(root, { recursive: true, force: true }));
   const base = await side(root, "base", manifests.base);
   const head = await side(root, "head", manifests.head);
-  let clock = 0;
-  const result = await assessPublicEvidence({ plan: plan(), base, head, profile: "explore:bundle", agentDeviceCommand: "/nonexistent/agent-device", timeBudgetMs: 0, now: () => clock++, measure: async () => { assert.fail('expired comparisons do not run'); } });
+  let clock = 0, measured = 0;
+  const result = await assessPublicEvidence({ plan: plan(), base, head, profile: "explore:bundle", agentDeviceCommand: "/nonexistent/agent-device", timeBudgetMs: 0, now: () => clock++,
+    measure: async (...args) => { measured += 1; return measurer({})(...args); } });
+  assert.equal(measured, 0, "expired comparisons do not run");
   assert.equal(result.summary.visual.compared, 0);
   assert.equal(result.summary.visual.failed, 3);
   assert.equal(result.summary.visual.needsReview, 0);
@@ -524,6 +526,47 @@ test("a presence verdict for a long route (an encoded share link) stays within t
     assert.ok(description.startsWith(`${prefix}/p/AAA`) && description.endsWith(`\u2026${suffix}`));
   }
   assert.equal(presenceDescription("Added ", "/home", " screen."), "Added /home screen.");
+});
+
+test("screenshot pairs compare a few at a time, in the loop's order, with the same verdicts as one at a time", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "explore-public-evidence-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const base = await side(root, "base", manifests.base);
+  const head = await side(root, "head", manifests.head);
+  const run = async (concurrency) => {
+    let active = 0, peak = 0;
+    const started = [];
+    const measure = async (baselinePath, currentPath) => {
+      started.push(baselinePath);
+      active += 1; peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      active -= 1;
+      return measurer({ changed: 3.2, stable: 0.4 })(baselinePath, currentPath);
+    };
+    const result = await assessPublicEvidence({ plan: plan(), base, head, profile: "explore:bundle", agentDeviceCommand: "/nonexistent/agent-device", measure, concurrency });
+    return { peak, started, surfaces: result.surfaces, summary: result.summary };
+  };
+  const sequential = await run(1);
+  const parallel = await run(4);
+  assert.equal(sequential.peak, 1);
+  assert.ok(parallel.peak > 1, `comparisons overlap (peak ${parallel.peak})`);
+  assert.deepEqual(parallel.started, sequential.started, "pairs start in the loop's order");
+  assert.deepEqual(parallel.surfaces, sequential.surfaces);
+  assert.deepEqual(parallel.summary, sequential.summary);
+});
+
+test("a pair whose turn comes after the budget expired is not started, and one started in time is used", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "explore-public-evidence-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const base = await side(root, "base", manifests.base);
+  const head = await side(root, "head", manifests.head);
+  // The first comparison takes past the budget: it was started in time, the two queued behind it were not.
+  let time = 0, measured = 0;
+  const measure = async (...args) => { measured += 1; time += 1_000; return measurer({})(...args); };
+  const result = await assessPublicEvidence({ plan: plan(), base, head, profile: "explore:bundle", agentDeviceCommand: "/nonexistent/agent-device",
+    timeBudgetMs: 100, now: () => time, measure, concurrency: 1 });
+  assert.equal(measured, 1);
+  assert.equal(result.summary.visual.compared, 1);
+  assert.equal(result.summary.visual.failed, 2);
+  assert.ok(result.summary.diagnostics.every(item => item.code === 'VISUAL_COMPARISON_BUDGET_EXHAUSTED'));
 });
 
 test("unstable text never makes a screen Modified, and names a variant's runtime state", () => {

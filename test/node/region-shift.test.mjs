@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Buffer } from "node:buffer";
-import { regionMoves, regionShifts } from "../../dist/review/region-shift.js";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PNG } from "pngjs";
+import { measureRegionMoves, regionMoves, regionShifts } from "../../dist/review/region-shift.js";
+import { measureRegionMovesInWorker } from "../../dist/review/region-shift-worker.js";
 
 /** A 120×160 frame of a light background with dark text-like bars, drawn `offsetY` pixels lower (fractions blend rows). */
 function frame(offsetY, { barColor = 40, extraBar = false } = {}) {
@@ -102,6 +107,18 @@ test("a half-pixel move up and down is judged alike", () => {
   assert.deepEqual([up?.y, down?.y], [-0.5, 0.5]);
 });
 
+test("a move whose best fit ties with a smaller one is still a move: the search stops no fit that could make it ambiguous", () => {
+  // Two and a half pixels lower, with a sparse speckle of noise. The tie goes to a fit a little worse than the least error,
+  // and an ambiguity is judged against that one, so a fit stopped short against the least error must not pass for one.
+  const moved = frame(2.5), speckled = { ...moved, data: Buffer.from(moved.data) };
+  for (let y = 0; y < moved.height; y += 1) for (let x = 0; x < moved.width; x += 1) {
+    if ((x * 3 + y * 5) % 11 !== 0) continue;
+    const offset = (y * moved.width + x) * 4, value = Math.max(0, Math.min(255, moved.data[offset] + ((x + y) % 2 ? 10 : -10)));
+    speckled.data.fill(value, offset, offset + 3);
+  }
+  assert.deepEqual(regionShifts(frame(0), speckled, [region]), [{ x: 0, y: 2.5 }]);
+});
+
 /**
  * A light frame with a dark card of irregular blocks at (x, y): the blocks make every offset look different, as a
  * real card's text and icons do. `tile` repeats one such block pattern every `tile` pixels across the whole row
@@ -136,6 +153,22 @@ test("a card that moved far along a row is one move, from the regions where it l
   assert.deepEqual(shifts, [undefined, undefined], "too far for the drift search");
   assert.deepEqual(regionMoves(cardFrame(), cardFrame({ x: 330 }), regions, shifts),
     [{ rect: { x: 330, y: 80, width: 150, height: 120 }, shift: { x: 270, y: 0 }, members: [1, 0] }], "the region it arrived in first");
+});
+
+test("a large move is measured on a worker thread the same as on the calling thread", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "explore-region-shift-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const write = async (name, frame) => {
+    const png = new PNG({ width: frame.width, height: frame.height }); frame.data.copy(png.data);
+    await writeFile(join(root, name), PNG.sync.write(png)); return join(root, name);
+  };
+  const basePath = await write("base.png", cardFrame()), headPath = await write("head.png", cardFrame({ x: 330 }));
+  const regions = [
+    { x: 60, y: 80, width: 150, height: 120, dominantChange: "brighter" },
+    { x: 330, y: 80, width: 150, height: 120, dominantChange: "darker" },
+  ];
+  const measured = await measureRegionMovesInWorker(basePath, headPath, regions);
+  assert.deepEqual(measured, await measureRegionMoves(basePath, headPath, regions));
+  assert.deepEqual(measured.moves, [{ rect: { x: 330, y: 80, width: 150, height: 120 }, shift: { x: 270, y: 0 }, members: [1, 0] }]);
 });
 
 test("a move whose old and new places overlap takes in the fragments of it the comparison found in between", () => {

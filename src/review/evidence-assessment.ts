@@ -1,5 +1,5 @@
 import { unattributedIssue } from "../capture/health.js";
-import { appearancePairs, bundleColorSchemes } from "../capture/appearance.js";
+import { appearancePairs, bundleColorSchemes, type ColorScheme } from "../capture/appearance.js";
 import { launchSurfaceId, systemRegions as defaultSystemRegions, type SystemRegion } from "../contracts/capture.js";
 import { readFileSync, statSync } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -27,7 +27,9 @@ import {
 } from "./visual-evidence.js";
 import { AGENT_DEVICE_VERSION } from "../shared/agent-device-version.js";
 import { STATUS_BAR_BAND_PERCENT, decodePng, differentPixelsInRect, maxColorDistance, type DecodedFrame } from "../shared/png-evidence.js";
-import { measureRegionMoves, type RegionMove, type RegionShift } from "./region-shift.js";
+import type { RegionMove, RegionShift } from "./region-shift.js";
+import { measureRegionMovesInWorker } from "./region-shift-worker.js";
+import { availableParallelism } from "node:os";
 
 export const DEFAULT_VISUAL_THRESHOLD = 0.1;
 export const DEFAULT_EVIDENCE_TIME_BUDGET_MS = 10 * 60_000;
@@ -194,7 +196,7 @@ export function publishMeasuredRegions(all: readonly VisualDiffRegion[], shifts:
 async function withRegionShifts(basePath: string, headPath: string, all: readonly VisualDiffRegion[], published: NonNullable<PublicVisualVerdict["regions"]>):
   Promise<Pick<PublicVisualVerdict, "regions" | "allRegionsMoved">> {
   try {
-    const { shifts, moves, width, height } = await measureRegionMoves(basePath, headPath,
+    const { shifts, moves, width, height } = await measureRegionMovesInWorker(basePath, headPath,
       all.map(region => ({ ...region.rect, dominantChange: region.dominantChange })));
     if (moves.length) return publishMeasuredRegions(all, shifts, moves, width, height);
     const shiftOf = new Map(all.map((region, index) => [region.rect, shifts[index]] as const));
@@ -406,6 +408,40 @@ function impactFor(surface: PlanSurface, presence: ComparatorSurfaceImpact["pres
   };
 }
 
+/** The screenshot pairs `assessPublicEvidence` compares: both sides captured and landed, in the loop's order. */
+function comparablePairs(options: { plan: SourceCapturePlan; base: PublicEvidenceSide; head: PublicEvidenceSide }, colorSchemes: readonly ColorScheme[],
+  baseColorSchemes: readonly ColorScheme[]): Array<{ id: string; basePath: string; headPath: string }> {
+  const pairs: Array<{ id: string; basePath: string; headPath: string }> = [];
+  for (const surface of options.plan.surfaces) {
+    if (surface.baseSurface?.kind !== "screen" || surface.headSurface?.kind !== "screen" || (!surface.baseCapture && !surface.headCapture)) continue;
+    for (const { id, baseId } of appearancePairs(surface.id, colorSchemes, baseColorSchemes)) {
+      if (baseId === null) continue;
+      const basePath = localImagePath(options.base, baseId);
+      const headPath = localImagePath(options.head, id);
+      if (!basePath || !headPath || captureDiagnostic(surface, "base", options.base, baseId) || captureDiagnostic(surface, "head", options.head, id)) continue;
+      pairs.push({ id, basePath, headPath });
+    }
+  }
+  return pairs;
+}
+
+/** Runs tasks at most `size` at a time, each started in the order it was queued. */
+function concurrencyLimit(size: number): <T>(task: () => Promise<T>) => Promise<T> {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  const next = () => { if (active < size) queue.shift()?.(); };
+  return task => new Promise((resolve, reject) => {
+    queue.push(() => {
+      active += 1;
+      task().then(resolve, reject).finally(() => { active -= 1; next(); });
+    });
+    next();
+  });
+}
+
+/** The limit the reviews in this process share when none is given: a local review compares its targets at once. */
+let processLimit: ReturnType<typeof concurrencyLimit> | undefined;
+
 function localImagePath(side: PublicEvidenceSide, id: string): string | undefined {
   const frame = side.bundle.images[id];
   return frame ? localEvidencePath(side, frame.path) : undefined;
@@ -499,6 +535,8 @@ export async function assessPublicEvidence(options: {
   timeBudgetMs?: number;
   now?: () => number;
   measure?: (baselinePath: string, currentPath: string) => Promise<ScreenshotDiffMeasurement>;
+  /** How many screenshot pairs compare at once. Absent: one per available CPU, shared by every review in this process. */
+  concurrency?: number;
 }): Promise<PublicEvidenceResult> {
   const threshold = options.threshold ?? DEFAULT_VISUAL_THRESHOLD;
   const system = options.systemRegions ?? defaultSystemRegions({ platform: options.platform });
@@ -517,6 +555,34 @@ export async function assessPublicEvidence(options: {
   const measure = options.measure ?? (async (baselinePath: string, currentPath: string) => (
     await diffScreenshots({ baselinePath, currentPath, command: options.agentDeviceCommand, threshold })
   ));
+  type ComparedPair = { visual: PublicVisualVerdict; assessment: VisualEvidenceAssessment };
+  /** One pair's measurement, verdict and region moves: the work that runs ahead of the surface loop. */
+  const comparePair = async (basePath: string, headPath: string): Promise<ComparedPair> => {
+    const raw = await measure(basePath, headPath);
+    const { measurement, ignoredStatusBar: ignoredTop, ignoredHomeIndicator: ignoredBottom } = ignoreSystemRegions(raw, system, systemBandFrameLoader(raw, threshold));
+    const assessment = assessVisualMeasurements({
+      baselineSamples: 1,
+      currentSamples: 1,
+      requiredSamples: 1,
+      baselineWithin: [],
+      currentWithin: [],
+      crossBuild: [measurement],
+      representative: measurement,
+    });
+    const visual = visualVerdict(assessment, threshold);
+    // Measuring moves is extra: once the comparison budget is spent, regions go out unmeasured.
+    if (visual.verdict === "modified" && visual.regions?.length && now() <= deadline) {
+      Object.assign(visual, await withRegionShifts(basePath, headPath, measurement.regions, visual.regions));
+    }
+    if (ignoredTop > 0) visual.ignoredStatusBarRegions = ignoredTop;
+    if (ignoredBottom > 0) visual.ignoredHomeIndicatorRegions = ignoredBottom;
+    if (ignoredTop > 0 || ignoredBottom > 0) visual.systemRegions = system.map((area) => ({ ...area }));
+    return { visual, assessment };
+  };
+  /** A pair compared if the budget has not expired when its turn to start comes; undefined when it has. */
+  const compareInBudget = async (basePath: string, headPath: string): Promise<ComparedPair | undefined> => (
+    now() > deadline ? undefined : await comparePair(basePath, headPath)
+  );
   const visualCounts = { compared: 0, modified: 0, unchanged: 0, needsReview: 0, failed: 0, errors: [] as string[] };
   const accessibilityCounts = { compared: 0, described: 0, failed: 0, skipped: 0, errors: [] as string[] };
   const reviewCounts = { modified: 0, needsReview: 0, variants: 0, unchanged: 0 };
@@ -533,6 +599,20 @@ export async function assessPublicEvidence(options: {
 
   const colorSchemes = bundleColorSchemes(options.head.bundle);
   const baseColorSchemes = bundleColorSchemes(options.base.bundle);
+  // The pairs the loop below compares start now, a few at a time: each is a comparator process and a pixel search
+  // that take seconds on a large screenshot, so they overlap instead of queueing behind one another. The loop reads
+  // them in its own order, so the result does not depend on which finishes first. A pair whose turn comes after the
+  // budget expired is not started; one started in time is waited for and used.
+  const ahead = new Map<string, Promise<ComparedPair | undefined>>();
+  if (visualAvailable) {
+    const limit = options.concurrency !== undefined ? concurrencyLimit(Math.max(1, Math.floor(options.concurrency)))
+      : processLimit ??= concurrencyLimit(availableParallelism());
+    for (const { id, basePath, headPath } of comparablePairs(options, colorSchemes, baseColorSchemes)) {
+      const started = limit(() => compareInBudget(basePath, headPath));
+      started.catch(() => undefined);
+      ahead.set(id, started);
+    }
+  }
   for (const surface of options.plan.surfaces) {
     for (const side of ["base", "head"] as const) {
       if (!surface[`${side}Capture`] || surface[`${side}Surface`]?.kind !== "screen") continue;
@@ -598,48 +678,29 @@ export async function assessPublicEvidence(options: {
         continue;
       }
 
-      let visual: PublicVisualVerdict;
-      let assessment: VisualEvidenceAssessment | undefined;
-      if (now() > deadline) {
+      let compared: ComparedPair | undefined;
+      try {
+        compared = await (ahead.get(id) ?? compareInBudget(basePath, headPath));
+      } catch (error) {
+        visualCounts.failed += 1;
+        const diagnostic = comparisonError(id, error, { code: "VISUAL_COMPARISON_FAILED", stage: "compare",
+          message: "Screenshot comparison failed.", nextAction: "Check the screenshot files and the agent-device comparison diagnostics, then rerun comparison.", retryable: true });
+        recordError(visualCounts.errors, id, diagnostic.message);
+        continue;
+      }
+      if (!compared) {
         visualCounts.failed += 1;
         const diagnostic = comparisonError(id, undefined, { code: "VISUAL_COMPARISON_BUDGET_EXHAUSTED", stage: "compare",
           message: "The time budget expired before screenshot comparison.",
           nextAction: "Increase the evidence comparison time budget or reduce the number of selected routes, then rerun comparison.", retryable: true });
         recordError(visualCounts.errors, id, diagnostic.message);
         continue;
-      } else {
-        try {
-          const raw = await measure(basePath, headPath);
-          const { measurement, ignoredStatusBar: ignoredTop, ignoredHomeIndicator: ignoredBottom } = ignoreSystemRegions(raw, system, systemBandFrameLoader(raw, threshold));
-          assessment = assessVisualMeasurements({
-            baselineSamples: 1,
-            currentSamples: 1,
-            requiredSamples: 1,
-            baselineWithin: [],
-            currentWithin: [],
-            crossBuild: [measurement],
-            representative: measurement,
-          });
-          visual = visualVerdict(assessment, threshold);
-          // Measuring moves is extra: once the comparison budget is spent, regions go out unmeasured.
-          if (visual.verdict === "modified" && visual.regions?.length && now() <= deadline) {
-            Object.assign(visual, await withRegionShifts(basePath, headPath, measurement.regions, visual.regions));
-          }
-          if (ignoredTop > 0) visual.ignoredStatusBarRegions = ignoredTop;
-          if (ignoredBottom > 0) visual.ignoredHomeIndicatorRegions = ignoredBottom;
-          if (ignoredTop > 0 || ignoredBottom > 0) visual.systemRegions = system.map((area) => ({ ...area }));
-          visualCounts.compared += 1;
-          if (visual.verdict === "modified") visualCounts.modified += 1;
-          else if (visual.verdict === "unchanged") visualCounts.unchanged += 1;
-          else visualCounts.needsReview += 1;
-        } catch (error) {
-          visualCounts.failed += 1;
-          const diagnostic = comparisonError(id, error, { code: "VISUAL_COMPARISON_FAILED", stage: "compare",
-            message: "Screenshot comparison failed.", nextAction: "Check the screenshot files and the agent-device comparison diagnostics, then rerun comparison.", retryable: true });
-          recordError(visualCounts.errors, id, diagnostic.message);
-          continue;
-        }
       }
+      const { visual, assessment } = compared;
+      visualCounts.compared += 1;
+      if (visual.verdict === "modified") visualCounts.modified += 1;
+      else if (visual.verdict === "unchanged") visualCounts.unchanged += 1;
+      else visualCounts.needsReview += 1;
 
       const scope = surfaceSourceScope(surface) ?? "none";
       let review: PublicSurfaceReview | undefined;
