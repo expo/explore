@@ -103,6 +103,7 @@ exploration:
 capture:
   maxMinutes: 30
   maxActions: 500
+  # maxSessions: 16 # the most EAS Simulator sessions one review runs at once, across all its targets and sides (default: two per target, head and base; at least one per target). Each target's job gets its share, and a side spreads its light and dark passes over separate sessions only when that saves it at least a minute, so the ceiling is a limit, not a target: a 3-route target stays on two sessions. euxy's four targets: 8 is today's behaviour, 16 captures each appearance in its own session (measured: an iPhone side 6:12 → 4:26, one repack shared by its sessions, ~3.5 session-minutes more per side).
   repack: eas # eas (hosted workflow job; the default on EAS Simulator) | local (repack-app on the runner; the default with simulator: local)
   appearance: auto # auto (follow the app's userInterfaceStyle: automatic captures light and dark) | dark | light | [dark, light]
   launch: screenshot # screenshot (relaunch the app per appearance and keep its splash and first settled frame, default) | video (also keep a launch recording in the report) | off

@@ -1,14 +1,14 @@
 import type { RunTarget } from "../types.js";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { copyFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { runCiReview } from "./pipeline.js";
 import { resolveCommit } from "./workflow-steps.js";
 import { ciLayout, installCommand, type PackageManager } from "./workflow-install.js";
-import { configPlatforms, readExploreConfig, resolveTargetConfig, configTargets, withRunOverrides, DEFAULT_EXPLORE_CONFIG_PATH, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
+import { configPlatforms, readExploreConfig, resolveTargetConfig, configTargets, posedTargets, withRunOverrides, DEFAULT_EXPLORE_CONFIG_PATH, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { AGENT_PROVIDERS, defaultExploreConfig } from "../config/setup.js";
 import type { PrepareCiExplorationOptions } from "../capture/agent/exploration.js";
 import { createCiAgentSession } from "../capture/agent/session.js";
@@ -285,8 +285,15 @@ export async function keepCapture(exported: string, target: string): Promise<boo
   }
 }
 
+/** The session state files a review writes: `<side>-session`, and `<side>-session-<scheme>` for appearance passes in their own sessions. */
+function sessionStateFiles(output: string): string[] {
+  const rank = (name: string) => ["head", "base", "baseline"].indexOf(name.split("-")[0]!);
+  try { return readdirSync(output).filter(name => /^(head|base|baseline)-session(-[a-z]+)?$/.test(name)).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)); }
+  catch { return []; }
+}
+
 function recordedSessionIds(outputs: string[]): string[] {
-  return outputs.flatMap(output => ["head-session", "base-session"].flatMap(name => {
+  return outputs.flatMap(output => sessionStateFiles(output).flatMap(name => {
     try { const id = readFileSync(join(output, name), "utf8").trim(); return /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(id) ? [id] : []; } catch { return []; }
   }));
 }
@@ -307,7 +314,7 @@ export async function stopRecordedSessions(outputs: string[], environment: NodeJ
   simctl: (args: string[]) => { status: number | null } = args => spawnSync("xcrun", ["simctl", ...args], { env: environment, encoding: "utf8", timeout: 120_000 }),
   adb: (args: string[]) => { status: number | null } = args => spawnSync(androidTools(environment).adb, args, { env: environment, encoding: "utf8", timeout: 60_000 })): Promise<string[]> {
   const stopped: string[] = [];
-  for (const output of outputs) for (const name of ["head-session", "base-session"]) {
+  for (const output of outputs) for (const name of sessionStateFiles(output)) {
     const file = join(output, name);
     const id = (await readFile(file, "utf8").catch(() => "")).trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(id)) continue;
@@ -479,7 +486,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
         target, ...(targets.length > 1 ? { targets } : {}) };
       progress(`${target.id}: reviewing${target.id === platform ? "" : ` (${target.label})`}`);
       const result = await runCiReview({ projects, output, config, presentation, runId, runAttempt: "1", state, environment: platformEnvironment,
-        ...(platforms.length > 1 ? { platforms } : {}), ...(targets.length > 1 ? { targets } : {}),
+        ...(platforms.length > 1 ? { platforms } : {}), ...(targets.length > 1 ? { targets } : {}), posedTargets: posedTargets(rawConfig),
         // Targets of one platform capture the same commits from the same build; it is built and repacked once.
         ...(targets.length > 1 ? { buildShare: join(work, ".builds") } : {}),
         subscription, useLocalEasSession, progress: message => progress(`${target.id}: ${message}`),
