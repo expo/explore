@@ -1514,6 +1514,59 @@ test("Esc closes the Inspector first, then deselects; arrows and hjkl walk the m
   await expect(selected).toHaveAttribute("data-id", child!);
 });
 
+test("Return after the arrow keys opens the screen they reached, not the one clicked before, on the Map and on Screens", async ({ page }) => {
+  await serveSyntheticWorkspace(page);
+  const inspector = page.getByRole("complementary", { name: "Inspector panel" });
+  const accent = await page.evaluate(() => {
+    const probe = document.createElement("span");
+    probe.style.color = "#0588f0";
+    document.body.append(probe);
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  });
+
+  // Map: the click leaves the keyboard focus on the first screen's button; Return must not press it.
+  await page.goto("/map?screen=area-0-screen-1");
+  const selected = page.locator(".map-canvas .react-flow__node-screen.selected");
+  await expect(selected).toHaveAttribute("data-id", "area-0-screen-1");
+  await expectMapCameraAtRest(page);
+  await selected.locator(".screen-screenshot-target").click();
+  await expect(inspector).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(inspector).toBeHidden();
+  await page.keyboard.press("ArrowDown");
+  await expect(selected).not.toHaveAttribute("data-id", "area-0-screen-1");
+  const reached = (await selected.getAttribute("data-id"))!;
+  // The ring went with the selection.
+  const ring = (id: string) => page.locator(`.map-canvas .react-flow__node-screen[data-id="${id}"] .screen-node-image img`)
+    .evaluate((image) => getComputedStyle(image).boxShadow);
+  await expect.poll(() => ring(reached)).toContain(accent);
+  await expect.poll(() => ring("area-0-screen-1")).not.toContain(accent);
+  const reachedPath = (await selected.locator(".screen-node-title").textContent())!;
+  await page.keyboard.press("Enter");
+  await expect(inspector).toBeVisible();
+  await expect(selected).toHaveAttribute("data-id", reached);
+  await expect(page).toHaveURL(new RegExp(`screen=${reached}`));
+  await expect(inspector).toContainText(reachedPath);
+
+  // Screens: the same walk, from a clicked card.
+  await chooseCanvasView(page, "Screens");
+  const grid = page.getByRole("main", { name: "Screens" });
+  await grid.getByRole("button", { name: /^All/ }).click();
+  const ids = await grid.locator(".screens-grid .screens-cell")
+    .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-screen-id")!));
+  await grid.locator(`.screens-cell[data-screen-id="${ids[0]}"] .screen-screenshot-target`).click();
+  await expect(inspector).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(inspector).toBeHidden();
+  await page.keyboard.press("ArrowRight");
+  await expect(grid.locator(`.screens-cell[data-screen-id="${ids[1]}"] .screen-screenshot-card`)).toHaveClass(/selected/);
+  await page.keyboard.press("Enter");
+  await expect(inspector).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`screen=${ids[1]}`));
+});
+
 test("a held key stops when Esc, another key or a dialog takes the keyboard; a menu keeps its own arrows", async ({ page }) => {
   await page.goto("/map");
   const selected = page.locator(".map-canvas .react-flow__node-screen.selected");

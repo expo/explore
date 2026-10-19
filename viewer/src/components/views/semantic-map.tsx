@@ -31,6 +31,7 @@ import { arrowsOwnedBy, mapKeyDirection, mapKeyEntry, mapKeyTarget, type MapKeyD
 import { createKeyHold } from "../../utils/key-hold";
 
 const HOVER_CLEAR_DELAY = 180;
+const PRESSABLE = 'button, a, summary, [role="button"]';
 const MAP_LAYOUT_REVISION = "flat-v1";
 const MAP_FIT_VIEW_OPTIONS = {
   padding: 0.04,
@@ -559,7 +560,8 @@ function ConnectionCanvas(props: MapViewProps) {
   }, [applyHover]);
   // The arrow keys (or h j k l) walk the map from the selected screen: along an edge in the
   // layout's flow, across to the neighbour on the same rank otherwise. With nothing selected they
-  // enter the map at its edge, as on the Screens page. A held key keeps walking.
+  // enter the map at its edge, as on the Screens page. A held key keeps walking. Return opens the
+  // selection in the Inspector.
   const { selectedScreenId } = props;
   const selectedRef = useRef(selectedScreenId);
   selectedRef.current = selectedScreenId;
@@ -570,22 +572,39 @@ function ConnectionCanvas(props: MapViewProps) {
       if (!structure) return undefined;
       return from ? mapKeyTarget(structure, from, direction) : mapKeyEntry(structure, direction);
     };
+    // A click leaves the keyboard focus on the clicked screen's button, where Return would press it
+    // and open that screen again. A walk lets go of it, so Return reaches the screen walked to.
+    const walkTo = (id: string) => {
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && surfaceRef.current?.contains(focused)) focused.blur();
+      selectScreen(id);
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       hold.interrupt(event);
       if (event.repeat && hold.holding(event.code)) { event.preventDefault(); return; }
       if (event.defaultPrevented || !shortcutsLive(event) || arrowsOwnedBy(event.target)) return;
+      if (event.key === "Enter") {
+        // A focused button or link keeps its own Return; elsewhere on the page it opens the selection.
+        const target = event.target instanceof Element ? event.target : null;
+        const selected = selectedRef.current;
+        if (!selected || event.isComposing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+        if (target && target !== document.body && (target.closest(PRESSABLE) || !surfaceRef.current?.contains(target))) return;
+        event.preventDefault();
+        selectScreen(selected);
+        return;
+      }
       const direction = mapKeyDirection(event);
       if (!direction) return;
       if (!structureRef.current) return;
       event.preventDefault();
       let at = move(direction, selectedRef.current);
       if (!at) return;
-      selectScreen(at);
+      walkTo(at);
       hold.begin(event.code, () => {
         const target = move(direction, at);
         if (!target) return false;
         at = target;
-        selectScreen(target);
+        walkTo(target);
         return true;
       });
     };
