@@ -1,6 +1,9 @@
-import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type RefObject } from "react";
 import {
-  clampInspectorWidth, inspectorWidthBounds, INSPECTOR_WIDTH_STEP, setInspectorWidth, useInspectorWidth,
+  useCallback, useRef, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type PointerEvent, type RefObject,
+} from "react";
+import {
+  clampInspectorWidth, inspectorWidthBounds, INSPECTOR_WIDTH_MAX, INSPECTOR_WIDTH_MIN, INSPECTOR_WIDTH_STEP,
+  setInspectorWidth, useInspectorWidth,
   type InspectorWidthBounds,
 } from "../../utils/inspector-width";
 
@@ -19,7 +22,17 @@ function panelWidth(panel: HTMLElement): number {
 }
 
 function defaultWidth(): number {
-  return typeof window !== "undefined" && window.matchMedia("(max-width: 1180px)").matches ? 320 : 400;
+  return window.matchMedia("(max-width: 1180px)").matches ? 320 : 400;
+}
+
+/** The panel's widest and default widths follow the window (and `--ui-scale`, which follows it too). */
+function subscribeToWindow(onChange: () => void): () => void {
+  window.addEventListener("resize", onChange);
+  return () => window.removeEventListener("resize", onChange);
+}
+
+function widestWidth(): number {
+  return inspectorWidthBounds(window.innerWidth, uiScale()).max;
 }
 
 type Drag = {
@@ -29,6 +42,8 @@ type Drag = {
   scale: number;
   bounds: InspectorWidthBounds;
   last: number;
+  /** The panel's own `--inspector-width` before the drag, put back when the drag changes nothing. */
+  inline: string;
 };
 
 /**
@@ -39,9 +54,36 @@ type Drag = {
  */
 export function useInspectorResize(panelRef: RefObject<HTMLElement | null>) {
   const width = useInspectorWidth();
+  const widest = useSyncExternalStore(subscribeToWindow, widestWidth, () => INSPECTOR_WIDTH_MAX);
+  const fallback = useSyncExternalStore(subscribeToWindow, defaultWidth, () => 400);
   const drag = useRef<Drag | null>(null);
 
-  useEffect(() => () => document.documentElement.classList.remove(RESIZING_CLASS), []);
+  // Every way a drag can stop ends here, once: the pointer lifting, the browser taking the pointer
+  // back, the window losing focus, or the edge itself going away (the Inspector closed mid-drag).
+  const endDrag = useCallback(() => {
+    const state = drag.current;
+    if (!state) return;
+    drag.current = null;
+    document.documentElement.classList.remove(RESIZING_CLASS);
+    if (state.last !== state.startWidth) {
+      setInspectorWidth(state.last);
+      return;
+    }
+    // Nothing changed, so nothing re-renders to replace the width the drag wrote.
+    const panel = panelRef.current;
+    if (!panel) return;
+    if (state.inline) panel.style.setProperty("--inspector-width", state.inline);
+    else panel.style.removeProperty("--inspector-width");
+  }, [panelRef]);
+
+  const handleRef = useCallback((element: HTMLElement | null) => {
+    if (!element) return;
+    window.addEventListener("blur", endDrag);
+    return () => {
+      window.removeEventListener("blur", endDrag);
+      endDrag();
+    };
+  }, [endDrag]);
 
   const onPointerDown = (event: PointerEvent<HTMLElement>) => {
     const panel = panelRef.current;
@@ -51,6 +93,7 @@ export function useInspectorResize(panelRef: RefObject<HTMLElement | null>) {
     drag.current = {
       pointerId: event.pointerId, startX: event.clientX, startWidth, scale,
       bounds: inspectorWidthBounds(window.innerWidth, scale), last: startWidth,
+      inline: panel.style.getPropertyValue("--inspector-width"),
     };
     event.currentTarget.setPointerCapture(event.pointerId);
     document.documentElement.classList.add(RESIZING_CLASS);
@@ -61,6 +104,11 @@ export function useInspectorResize(panelRef: RefObject<HTMLElement | null>) {
     const state = drag.current;
     const panel = panelRef.current;
     if (!state || state.pointerId !== event.pointerId || !panel) return;
+    // A release the handle never heard about.
+    if (event.buttons === 0) {
+      endDrag();
+      return;
+    }
     // The edge is on the left: moving the pointer left widens the panel.
     const next = clampInspectorWidth(state.startWidth + (state.startX - event.clientX) / state.scale, state.bounds);
     if (next === state.last) return;
@@ -71,10 +119,8 @@ export function useInspectorResize(panelRef: RefObject<HTMLElement | null>) {
   const onPointerEnd = (event: PointerEvent<HTMLElement>) => {
     const state = drag.current;
     if (!state || state.pointerId !== event.pointerId) return;
-    drag.current = null;
-    document.documentElement.classList.remove(RESIZING_CLASS);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    if (state.last !== state.startWidth) setInspectorWidth(state.last);
+    endDrag();
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -92,24 +138,30 @@ export function useInspectorResize(panelRef: RefObject<HTMLElement | null>) {
     }
     event.preventDefault();
     event.stopPropagation();
-    setInspectorWidth(clampInspectorWidth(next, bounds));
+    // A key that cannot move the edge (End at a smaller window's cap) keeps the saved width.
+    next = clampInspectorWidth(next, bounds);
+    if (next !== Math.round(current)) setInspectorWidth(next);
   };
 
-  const bounds = typeof window === "undefined" ? undefined : inspectorWidthBounds(window.innerWidth, uiScale());
-  const style = (width === undefined ? undefined : { "--inspector-width": `${width}px` }) as CSSProperties | undefined;
+  // The saved width is the reader's preference; the panel takes as much of it as this window allows.
+  const bounds = { min: INSPECTOR_WIDTH_MIN, max: widest };
+  const shown = width === undefined ? undefined : clampInspectorWidth(width, bounds);
+  const style = (shown === undefined ? undefined : { "--inspector-width": `${shown}px` }) as CSSProperties | undefined;
   const handleProps = {
     role: "separator",
     "aria-orientation": "vertical",
     "aria-label": "Resize inspector",
-    "aria-valuemin": bounds?.min,
-    "aria-valuemax": bounds?.max,
-    "aria-valuenow": width === undefined ? defaultWidth() : bounds ? clampInspectorWidth(width, bounds) : width,
+    "aria-valuemin": bounds.min,
+    "aria-valuemax": bounds.max,
+    "aria-valuenow": shown ?? fallback,
     title: "Drag to resize. Double-click to reset.",
     tabIndex: 0,
+    ref: handleRef,
     onPointerDown,
     onPointerMove,
     onPointerUp: onPointerEnd,
     onPointerCancel: onPointerEnd,
+    onLostPointerCapture: endDrag,
     onKeyDown,
     onDoubleClick: () => setInspectorWidth(undefined),
   } as const;

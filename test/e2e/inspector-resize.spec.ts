@@ -89,6 +89,95 @@ test.describe("Inspector resize", () => {
     await expect(handle(page)).toHaveAttribute("aria-valuenow", "640");
   });
 
+  test("a drag that ends where it started leaves the default width in place", async ({ page }) => {
+    await page.goto("/map?screen=area-0-screen-1");
+    await expect(panel(page)).toBeVisible();
+    const box = (await handle(page).boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x - 100, y);
+    await expect.poll(() => panelWidth(page)).toBe(500);
+    await page.mouse.move(x, y);
+    await page.mouse.up();
+    await expect.poll(() => panelWidth(page)).toBe(400);
+    expect(await storedWidth(page)).toBeNull();
+    // Still the default: a narrower window takes the narrow default, not the 400 the drag passed through.
+    await page.setViewportSize({ width: 1100, height: 820 });
+    await expect.poll(() => panelWidth(page)).toBe(320);
+  });
+
+  test("a saved width below the minimum is held to it", async ({ page }) => {
+    await page.addInitScript((key) => localStorage.setItem(key, "40"), STORAGE_KEY);
+    await page.goto("/map?screen=area-0-screen-1");
+    await expect(panel(page)).toBeVisible();
+    expect(await panelWidth(page)).toBe(320);
+    await expect(handle(page)).toHaveAttribute("aria-valuenow", "320");
+  });
+
+  test.describe("in a window wider than two maximum panels", () => {
+    test.use({ viewport: { width: 1700, height: 900 } });
+
+    test("a saved width above the maximum is held to it", async ({ page }) => {
+      await page.addInitScript((key) => localStorage.setItem(key, "5000"), STORAGE_KEY);
+      await page.goto("/map?screen=area-0-screen-1");
+      await expect(panel(page)).toBeVisible();
+      // Half of this window is 850.
+      expect(await panelWidth(page)).toBe(800);
+      await expect(handle(page)).toHaveAttribute("aria-valuenow", "800");
+    });
+  });
+
+  test("a key that cannot move the edge keeps the saved width", async ({ page }) => {
+    await page.addInitScript((key) => localStorage.setItem(key, "760"), STORAGE_KEY);
+    await page.goto("/map?screen=area-0-screen-1");
+    await expect(panel(page)).toBeVisible();
+    expect(await panelWidth(page)).toBe(640);
+    await handle(page).focus();
+    await page.keyboard.press("End");
+    await page.keyboard.press("ArrowLeft");
+    expect(await storedWidth(page)).toBe("760");
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => panelWidth(page)).toBe(624);
+    expect(await storedWidth(page)).toBe("624");
+  });
+
+  test("the separator's values follow the window", async ({ page }) => {
+    await page.goto("/map?screen=area-0-screen-1");
+    await expect(panel(page)).toBeVisible();
+    await handle(page).focus();
+    await page.keyboard.press("End");
+    await expect(handle(page)).toHaveAttribute("aria-valuenow", "640");
+    await page.setViewportSize({ width: 1000, height: 820 });
+    await expect.poll(() => panelWidth(page)).toBe(500);
+    await expect(handle(page)).toHaveAttribute("aria-valuemax", "500");
+    await expect(handle(page)).toHaveAttribute("aria-valuenow", "500");
+    // Back in the wide window the saved width returns.
+    await page.setViewportSize({ width: 1280, height: 820 });
+    await expect.poll(() => panelWidth(page)).toBe(640);
+    await expect(handle(page)).toHaveAttribute("aria-valuenow", "640");
+  });
+
+  test("closing the Inspector mid-drag ends the drag", async ({ page }) => {
+    await page.goto("/map?screen=area-0-screen-1");
+    await expect(panel(page)).toBeVisible();
+    const box = (await handle(page).boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x - 100, y);
+    await expect(page.locator("html")).toHaveClass(/inspector-resizing/);
+    await page.keyboard.press("i");
+    await expect(panel(page)).toHaveCount(0);
+    await page.mouse.up();
+    await expect(page.locator("html")).not.toHaveClass(/inspector-resizing/);
+    // The width the drag reached is kept.
+    await page.keyboard.press("i");
+    await expect.poll(() => panelWidth(page)).toBe(500);
+  });
+
   test.describe("in a narrow window", () => {
     test.use({ viewport: { width: 1180, height: 820 } });
 
