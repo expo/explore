@@ -19,17 +19,21 @@ Explore maps your app: a screenshot of every screen, connected by the taps betwe
 <table>
 <tr>
 <td width="50%" valign="top">
+<a href="docs/screenshots/readme-screens-light.png">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-screens-dark.png">
   <img width="100%" alt="The Screens view of a euxy review showing Changed 7 of All 19: the app/ route tree on the left, and beside it a grid of the changed screens in the same order, each with its route below the screenshot: a red dot for the removed /lane-editor, orange for the modified /new-pattern and /channel-surf, green for the new /lane-editor/0, and Changed in dark under /p and /patterns" src="docs/screenshots/readme-screens-light.png">
 </picture>
+</a>
 <strong>Screens</strong>: every capture in one grid, or only the changed ones, beside the route tree, with a dot for what changed.
 </td>
 <td width="50%" valign="top">
+<a href="docs/screenshots/readme-pr-comment-light.png">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-pr-comment-dark.png">
   <img width="100%" alt="Explore's GitHub PR comment on a euxy PR: the heading 2 screens changed with a Review in Explore link; a line of links to each device's report (iPhone 17, three iPhone Duo poses and Android) and to the two commits compared; then the changed screens as a list, /tempo with the text it added and the devices it is on, fading out below" src="docs/screenshots/readme-pr-comment-light.png">
 </picture>
+</a>
 <strong>A comment on every PR</strong>: with <a href="#set-up-ci">CI</a>, the report links and the added, removed and modified screens.
 </td>
 </tr>
