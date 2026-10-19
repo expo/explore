@@ -273,7 +273,14 @@ function publicFlows(base: { bundle: CaptureBundle; flows: Record<string, Public
     const record = head.bundle.flows?.[id] ?? base.bundle.flows?.[id];
     const keys = [...new Set([...(head.bundle.flows?.[id]?.steps ?? []).flatMap(step => step.frame ? [step.frame] : []),
       ...(base.bundle.flows?.[id]?.steps ?? []).flatMap(step => step.frame ? [step.frame] : [])])];
-    const labelOf = (key: string) => (head.bundle.flows?.[id] ?? base.bundle.flows?.[id])?.steps.find(step => step.frame === key)?.label ?? key;
+    // A checkpoint frame is named by its `app.screenshot(label)`; a per-step frame by its step number and what the step did.
+    const labelOf = (key: string) => {
+      const steps = (head.bundle.flows?.[id] ?? base.bundle.flows?.[id])?.steps ?? [];
+      const index = steps.findIndex(step => step.frame === key);
+      const step = steps[index];
+      if (!step) return key;
+      return step.api === "app.screenshot" ? step.label || key : `${index + 1}. ${step.label || step.api}`.slice(0, 80);
+    };
     return { id, title: record?.title ?? id, file: record?.file ?? "",
       ...(base.flows[id] ? { base: base.flows[id] } : {}), ...(head.flows[id] ? { head: head.flows[id] } : {}),
       frames: keys.flatMap(key => [key, ...schemes.slice(1).map(scheme => `${key}@${scheme}`)]
