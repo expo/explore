@@ -154,6 +154,8 @@
   /* The bottom bar resizes with the same timing as the canvas it switches. */
   --toolbar-motion: 220ms;
   --toolbar-easing: ease-in-out;
+  /* A screenshot fades in over its empty frame once its pixels are decoded. */
+  --screenshot-reveal: 160ms;
 }
 
 :root[data-theme="dark"] {
@@ -634,9 +636,10 @@ code {
 /* A screen without a screenshot, or whose screenshot could not be read, frames its placeholder
    where an image of --screenshot-width x --screenshot-height would sit under the rules above:
    contained in the slot inside its border, never enlarged. It lines up with the screenshots
-   beside it, and a failed screenshot keeps the frame it waited in. */
-.screen-node-image:has(> .image-placeholder) { container-type: size; }
-.screen-node-image > .image-placeholder {
+   beside it, and a failed screenshot keeps the frame it waited in. A Map card's screenshot waits
+   over a backing of the same frame (below; a phone's Screens cell sizes it in phone.css). */
+.screen-node-image:has(> :is(.image-placeholder, .screenshot-backing)) { container-type: size; }
+.screen-node-image > :is(.image-placeholder, .screenshot-backing) {
   --frame-border: 1px;
   display: flex;
   box-sizing: content-box;
@@ -670,8 +673,28 @@ code {
    specificity. The Map leaves the border to the status and rings the card from outside instead. */
 .screen-node-image:hover img,
 .screen-screenshot-card.selected .screen-node-image img { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
-.screen-node-image:hover > .image-placeholder,
-.screen-screenshot-card.selected .screen-node-image > .image-placeholder { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.screen-node-image:hover > :is(.image-placeholder, .screenshot-backing),
+.screen-screenshot-card.selected .screen-node-image > :is(.image-placeholder, .screenshot-backing) { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+/* A Map card, and a Screens card on a phone, draws its frame (fill, border, status and rings) on
+   the image itself, which is hidden while it loads. The backing draws the same frame under it, in
+   the image's geometry, while the image waits and while it fades in, so the frame and its rings
+   hold steady; then it hides. The fading image leaves its rings to the backing, so their soft lift
+   is not drawn twice, and takes them back in the frame the backing hides. */
+.screen-node-image > .screenshot-backing {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  pointer-events: none;
+  visibility: hidden;
+}
+.screen-node-image:has(> .screenshot-backing) > img { position: relative; }
+.screen-node-image:has(> img[data-screenshot-state="loading"]) > .screenshot-backing { visibility: visible; }
+.screen-node-image:has(> img[data-screenshot-reveal]) > .screenshot-backing { animation: screenshot-backing var(--screenshot-reveal) step-end; }
+.screen-node-image:has(> .screenshot-backing) > img[data-screenshot-reveal] {
+  animation: screenshot-reveal var(--screenshot-reveal) ease-out, screenshot-backed var(--screenshot-reveal) step-end;
+}
+@keyframes screenshot-backing { from, to { visibility: visible; } }
+@keyframes screenshot-backed { from, to { box-shadow: none; } }
 .canvas-active-frame {
   position: relative;
   display: block;
@@ -726,11 +749,11 @@ code {
   --ring-status: 0px;
 }
 .map-surface .screen-screenshot-card:is(.diff-added, .diff-modified, .diff-removed) { --ring-status: 2px; }
-.map-surface .screen-screenshot-card .screen-node-image :is(img, .image-placeholder) {
+.map-surface .screen-screenshot-card .screen-node-image :is(img, .image-placeholder, .screenshot-backing) {
   border-color: var(--border-subtle);
   box-shadow: none;
 }
-.map-surface .react-flow__node-screen:is(.selected, .graph-node-hover-subject) .screen-screenshot-card .screen-node-image :is(img, .image-placeholder) {
+.map-surface .react-flow__node-screen:is(.selected, .graph-node-hover-subject) .screen-screenshot-card .screen-node-image :is(img, .image-placeholder, .screenshot-backing) {
   box-shadow:
     0 0 0 var(--ring-status) var(--diff, transparent),
     0 0 0 calc(var(--ring-status) + 4 * var(--ring-unit)) var(--screen),
@@ -1348,12 +1371,17 @@ code {
   align-items: center;
   justify-content: center;
 }
+/* The frame holds the fill, so a screenshot that is hidden while it loads leaves its frame in place.
+   Nothing clips to it: an outline's ring and measurement may cross the frame's edge. */
+.inspector-diff-preview:has(> img) {
+  border-radius: 9px;
+  background: var(--subtle);
+}
 .inspector-diff-preview img {
   display: block;
   width: 100%;
   height: 100%;
   border-radius: 9px;
-  background: var(--subtle);
   object-fit: cover;
 }
 /* The frame line is drawn over the screenshot's edge, not inside its box, so the image fills
@@ -1700,9 +1728,9 @@ code {
   border-color: var(--diff);
   box-shadow: 0 0 0 2px var(--diff);
 }
-.screen-screenshot-card .diff-frame.diff-added .screen-node-image > .image-placeholder,
-.screen-screenshot-card .diff-frame.diff-modified .screen-node-image > .image-placeholder,
-.screen-screenshot-card .diff-frame.diff-removed .screen-node-image > .image-placeholder {
+.screen-screenshot-card .diff-frame.diff-added .screen-node-image > :is(.image-placeholder, .screenshot-backing),
+.screen-screenshot-card .diff-frame.diff-modified .screen-node-image > :is(.image-placeholder, .screenshot-backing),
+.screen-screenshot-card .diff-frame.diff-removed .screen-node-image > :is(.image-placeholder, .screenshot-backing) {
   border-color: var(--diff);
   box-shadow: 0 0 0 2px var(--diff);
 }
@@ -1778,6 +1806,24 @@ code {
 @keyframes screenshot-loading-in { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .screenshot-loading > svg { animation: none; }
+}
+/* A screenshot that is loading or could not be read is hidden at once, in the same frame as its
+   new source, so no view paints the picture of the source before (the browser keeps painting it
+   until the new one loads) under a new screen's name or outlines; its frame stays. Hiding never
+   fades, and outranks a view's own image opacity, such as a dimmed variant thumbnail's. A held
+   picture (the app icon) stays shown until the new one is there. */
+:root img:is([data-screenshot-state="loading"]:not([data-screenshot-held]), [data-screenshot-state="failed"]) {
+  opacity: 0;
+  transition: none;
+}
+/* A picture that fills an empty frame fades in. An animation, not a transition: the image can be
+   ready before its first paint, and it keeps a view's own resting opacity. */
+img[data-screenshot-reveal] { animation: screenshot-reveal var(--screenshot-reveal) ease-out; }
+@keyframes screenshot-reveal { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  img[data-screenshot-reveal],
+  .screen-node-image:has(> .screenshot-backing) > img[data-screenshot-reveal],
+  .screen-node-image:has(> img[data-screenshot-reveal]) > .screenshot-backing { animation: none; }
 }
 .status-badge { display: inline-flex; align-items: center; width: fit-content; padding: 4px 7px; border-radius: 6px; color: var(--secondary); background: var(--element); font-size: 10px; font-weight: 500; line-height: 1.2; text-transform: capitalize; }
 .status-badge.info { color: var(--accent-strong); background: var(--accent-soft); }

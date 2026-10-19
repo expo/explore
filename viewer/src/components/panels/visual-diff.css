@@ -109,7 +109,10 @@
   object-fit: cover;
   pointer-events: none;
 }
+/* Each side shows only its own half of the frame, so a side still loading leaves its half empty
+   instead of showing the other side's picture there. */
 .visual-swipe-before { clip-path: inset(0 calc(100% - var(--swipe-position)) 0 0); }
+.visual-swipe-after { clip-path: inset(0 0 0 var(--swipe-position)); }
 /* With a moved area, each side's outlines over its own half (see ChangeOutlines). */
 .visual-swipe-outlines { position: absolute; z-index: 1; inset: 0; pointer-events: none; }
 .visual-swipe-outlines.before { --outline-before: 1; clip-path: inset(0 calc(100% - var(--swipe-position)) 0 0); }

@@ -29,6 +29,12 @@ export type ScreenScreenshotCardProps = {
   /** The frame of a screen without a screenshot: its run's screenshots, so it lines up beside them. */
   placeholderSize?: { width: number; height: number };
   loading?: "eager" | "lazy";
+  /**
+   * Frame the screenshot from behind while it loads and fades in, where the frame and its rings are drawn on the image
+   * itself: the Map, and Screens on a phone. Screens' wells frame their own screenshots on wider windows. Only a
+   * screenshot of recorded size has one.
+   */
+  backing?: boolean;
   leading?: ReactNode;
   trailing?: ReactNode;
   /** Say "Open in Inspector" in a tooltip over the screenshot (Screens). The Map's cards go without. */
@@ -47,13 +53,13 @@ export type ScreenScreenshotCardProps = {
 export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
   // The placeholder takes the frame of the image it stands in for: a failed screenshot keeps the
   // frame it waited in, and a screen without one is framed like a phone screenshot beside it.
-  const frame = props.screenshot && props.imageWidth && props.imageHeight
-    ? { width: props.imageWidth, height: props.imageHeight }
+  const sized = Boolean(props.screenshot && props.imageWidth && props.imageHeight);
+  const frame = sized
+    ? { width: props.imageWidth!, height: props.imageHeight! }
     : props.placeholderSize ?? DEFAULT_SCREENSHOT_SIZE;
+  const frameStyle = { "--screenshot-width": frame.width, "--screenshot-height": frame.height } as CSSProperties;
   const missing = (
-    <span
-      className="image-placeholder"
-      style={{ "--screenshot-width": frame.width, "--screenshot-height": frame.height } as CSSProperties}>
+    <span className="image-placeholder" style={frameStyle}>
       <ImageOff aria-hidden="true" size={20} />
       No screenshot
       {props.missingReason ? <small className="image-placeholder-reason">{props.missingReason}</small> : null}
@@ -104,6 +110,7 @@ export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
             onClick={props.onClick}>
             <DiffFrame status={props.diff} accessibilityOnly={props.accessibilityOnly}>
               <span className={`screen-node-image${props.screenshot ? " has-screenshot" : " is-missing"}`}>
+                {props.backing && sized ? <span className="screenshot-backing" style={frameStyle} aria-hidden="true" /> : null}
                 {props.screenshot ? (
                   <ScreenshotImage
                     src={props.screenshot}
@@ -114,7 +121,6 @@ export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
                     decoding="async"
                     loading={props.loading ?? "lazy"}
                     fallback={missing}
-                    holdPrevious
                   />
                 ) : missing}
                 {/* On a phone's map, says what the second tap on the selected screen does. */}

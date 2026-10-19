@@ -327,13 +327,24 @@
   border-radius: 14px;
   background: var(--subtle);
 }
-.compare-frame > img {
+.compare-frame > img,
+.compare-flip-layer > img {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
 }
 .compare-flip-frame { cursor: pointer; }
+/* Flip's two sides fill the frame, one over the other; the frame takes its size from its aspect ratio, not from them.
+   The side off screen is hidden, spinner and all, and a flip shows it at once. */
+.compare-flip-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.compare-flip-layer[aria-hidden="true"] { visibility: hidden; }
 .compare-flip-frame:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .compare-swipe .visual-swipe { width: auto; height: var(--compare-frame-height); }
 

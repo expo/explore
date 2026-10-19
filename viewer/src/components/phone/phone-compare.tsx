@@ -94,7 +94,7 @@ export function PhoneCompare(props: CompareControllerOptions & {
         />
       </div>
 
-      <div className={`compare-stage phone-compare-stage mode-${mode}`}
+      <div ref={compare.stageRef} className={`compare-stage phone-compare-stage mode-${mode}`}
         style={{ "--compare-aspect": compare.aspect } as CSSProperties}
         onPointerDownCapture={(event) => { pressed.current = { x: event.clientX, y: event.clientY }; }}
         onClickCapture={stepFromEdge}>

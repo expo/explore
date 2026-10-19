@@ -5,11 +5,13 @@ import { chromium, expect } from "@playwright/test";
 import { PNG } from "pngjs";
 import { createBrowserVite } from "../helpers/browser-vite.mjs";
 
-function png(width, height, color) {
+function pngBytes(width, height, color) {
   const image = new PNG({ width, height });
   for (let index = 0; index < image.data.length; index += 4) image.data.set([...color, 255], index);
-  return `data:image/png;base64,${PNG.sync.write(image).toString("base64")}`;
+  return PNG.sync.write(image);
 }
+const png = (width, height, color) => `data:image/png;base64,${pngBytes(width, height, color).toString("base64")}`;
+const GREEN = [40, 200, 40];
 
 // Split over one screen with two changed areas and a card that moved 40% of the width right (at 60% in After, so
 // at 20% in Before), and a second screen with one changed area elsewhere. The status bar CI left out is a foldable's
@@ -45,7 +47,9 @@ function Harness() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  const diff = { id: "s" + screen, status: "modified", beforeScreenshot: window.before, afterScreenshot: window.after };
+  // The second screen has screenshots of its own when the test gives it some.
+  const diff = { id: "s" + screen, status: "modified", beforeScreenshot: screen && window.nextBefore || window.before,
+    afterScreenshot: screen && window.nextAfter || window.after };
   return (
     <div className={"compare-stage mode-" + mode} style={{ width: 800, height: 500, display: "flex" }}>
       <CompareStage key="stage" mode={mode} diff={diff} title="Share" areas={screens[screen]} activeArea={active}
@@ -57,7 +61,7 @@ function Harness() {
 createRoot(document.getElementById("root")).render(<Harness />);
 `;
 
-async function openSplit(t, contextOptions = {}) {
+async function openSplit(t, contextOptions = {}, images = {}) {
   const vite = await createBrowserVite(t, {
     configFile: false, root: fileURLToPath(new URL("../../viewer", import.meta.url)),
     logLevel: "error", esbuild: { jsx: "automatic" },
@@ -67,6 +71,12 @@ async function openSplit(t, contextOptions = {}) {
       load: id => id === "/__split-outlines.tsx" ? entry : undefined,
       configureServer(server) {
         server.middlewares.use((request, response, next) => {
+          // The next screen's Before, which takes a while to arrive.
+          if (request.url === "/__slow-before.png") {
+            response.setHeader("Content-Type", "image/png");
+            setTimeout(() => response.end(pngBytes(100, 100, GREEN)), 1000);
+            return;
+          }
           if (new URL(request.url, "http://localhost").pathname !== "/") return next();
           response.setHeader("Content-Type", "text/html");
           response.end('<!doctype html><html><body style="margin:0"><div id="root"></div><script type="module" src="/__split-outlines.tsx"></script></body></html>');
@@ -82,7 +92,7 @@ async function openSplit(t, contextOptions = {}) {
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, []));
-  await page.addInitScript(images => Object.assign(window, images), { before: png(100, 100, [240, 240, 240]), after: png(100, 100, [230, 230, 230]) });
+  await page.addInitScript(images => Object.assign(window, images), { before: png(100, 100, [240, 240, 240]), after: png(100, 100, [230, 230, 230]), ...images });
   await page.goto(`http://127.0.0.1:${vite.httpServer.address().port}/`);
   const outline = (side, index) => page.locator(`[data-side="${side}"] .visual-change-outline`).nth(index);
   await expect(outline("after", 0)).toBeVisible();
@@ -142,4 +152,35 @@ test("A screen without hover keeps Before's outlines, as it cannot reveal one", 
   assert.equal(await page.evaluate(() => matchMedia("(hover: none)").matches), true);
   await expect.poll(() => opacity(outline("before", 0))).toBe(1);
   await expect.poll(() => opacity(outline("before", 2))).toBe(1);
+});
+
+test("Stepping never shows the screen before's pictures under the next one's outlines: a side still loading is an empty frame", { timeout: 30_000 }, async t => {
+  const images = { before: png(100, 100, [200, 40, 40]), after: png(100, 100, [40, 40, 200]),
+    nextBefore: "/__slow-before.png", nextAfter: png(100, 100, [200, 200, 40]) };
+  const { page } = await openSplit(t, {}, images);
+  for (const side of ["before", "after"]) await expect(page.locator(`[data-side="${side}"] img`)).toHaveAttribute("data-screenshot-state", "ready");
+  // Every frame from the step on: the screen the outlines belong to, and any picture of the screen before still showing.
+  await page.evaluate(previous => {
+    window.stepFrames = [];
+    const sample = () => {
+      const outlines = document.querySelectorAll('[data-side="after"] .visual-change-outline').length;
+      const stale = [...document.querySelectorAll(".compare-frame img")].filter(image => previous.includes(image.getAttribute("src"))
+        && Number(getComputedStyle(image).opacity) > 0).length;
+      window.stepFrames.push({ outlines, stale });
+      if (window.stepFrames.length < 30) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  }, [images.before, images.after]);
+  await page.keyboard.press("n");
+  await expect.poll(() => page.evaluate(() => window.stepFrames.length)).toBe(30);
+  const frames = await page.evaluate(() => window.stepFrames);
+  assert.ok(frames.some(frame => frame.outlines === 1), "The step landed while the frames were sampled");
+  assert.deepEqual(frames.filter(frame => frame.outlines === 1 && frame.stale > 0), [], "No frame showed a picture of the screen before under the next one's outlines");
+
+  // Before is still loading: its frame is empty, After's shows the new screen.
+  const before = page.locator('[data-side="before"] img');
+  await expect(before).toHaveAttribute("data-screenshot-state", "loading");
+  await expect(before).toHaveCSS("opacity", "0");
+  await expect(page.locator('[data-side="after"] img')).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(before).toHaveAttribute("data-screenshot-state", "ready", { timeout: 5000 });
 });

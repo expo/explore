@@ -48,6 +48,8 @@ const entry = `
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ScreenshotImage } from "/src/components/shared/screenshot-image.tsx";
+// The Viewer's own rules hide a waiting screenshot and fade a ready one in.
+if (window.fixture.styles) await import("/src/styles.css");
 
 function Harness() {
   const [state, setState] = useState(window.fixture);
@@ -66,10 +68,13 @@ function Harness() {
   return <main style={{ position: "relative", height: state.layout === "scroll" ? 3300 : 300,
     width: 600, overflow: state.layout === "pan" ? "hidden" : undefined }}>
     {state.normalSource && <ScreenshotImage src={state.normalSource} alt="Hosted screenshot"
-      width={24} height={18} decoding="async" onLoad={loaded} />}
+      width={24} height={18} decoding="async" onLoad={loaded} {...(state.holdPrevious ? { holdPrevious: true } : {})}
+      {...(state.fallback ? { fallback: <span data-testid="hosted-fallback">No hosted screenshot</span> } : {})} />}
     <div data-testid="positioner" style={{ position: "absolute", left: 20,
       top: state.layout === "scroll" ? 3000 : 30,
-      transform: state.layout === "pan" ? "translateX(2500px)" : undefined }}>
+      transform: state.layout === "pan" ? "translateX(2500px)" : undefined }}
+      {...(state.instant ? { "data-screenshot-instant": "" } : {})}
+      {...(state.thumbnail ? { className: "variant-thumbnail", "aria-selected": "false" } : {})}>
       {state.mounted !== false && <ScreenshotImage src={state.source} alt="Captured checkout"
         width={120} height={80} loading={state.loading} decoding="async" className="captured-image"
         data-screen="checkout" onLoad={loaded} onError={failed}
@@ -104,6 +109,18 @@ async function fixture(t, options = {}) {
           if (request.url === "/__normal.png") {
             response.setHeader("Content-Type", "image/png");
             response.end(firstImage);
+            return;
+          }
+          // A hosted screenshot that is not there.
+          if (request.url === "/__missing.png") {
+            response.statusCode = 404;
+            response.end("Not found");
+            return;
+          }
+          // A hosted screenshot that takes a while to arrive.
+          if (request.url === "/__slow.png") {
+            response.setHeader("Content-Type", "image/png");
+            setTimeout(() => response.end(secondImage), 600);
             return;
           }
           if (request.url !== "/") return next();
@@ -163,7 +180,15 @@ async function fixture(t, options = {}) {
       window.pendingScreenshots.delete(source);
       for (const { reject } of pending) reject(new Error("Screenshot resolution failed"));
     };
+    if (fixture.decode === "manual") {
+      // The test settles each decode; one it never settles stands in for a decode that hangs.
+      window.pendingDecodes = [];
+      HTMLImageElement.prototype.decode = function () {
+        return new Promise((resolve, reject) => window.pendingDecodes.push({ image: this, resolve, reject }));
+      };
+    }
   }, { source: firstSource, layout: "visible", ...options });
+  if (options.reducedMotion) await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto(`http://127.0.0.1:${address.port}/`);
   await page.waitForFunction(() => window.harnessReady);
   return { page, image: page.getByRole("img", { name: "Captured checkout", exact: true }) };
@@ -504,4 +529,188 @@ test("an image that leaves and re-enters the viewport within one render is ready
   await expect(image).toHaveAttribute("data-screenshot-state", "ready");
   await expect(image).not.toHaveAttribute("aria-busy", /.*/);
   assert.equal(await page.evaluate(() => window.imageLoads.length), 1, "No second load event fired");
+});
+
+/** The image's opacity and state in each of the next `frames` frames, from the frame after `change` runs. */
+async function framesAfter(page, change, frames = 4, selector = "img[alt='Captured checkout']") {
+  return page.evaluate(({ change, frames, selector }) => new Promise(resolve => {
+    const samples = [];
+    new Function(change)();
+    const sample = () => {
+      const image = document.querySelector(selector);
+      samples.push(image ? { source: image.dataset.screenshotSrc ?? image.getAttribute("src"),
+        state: image.dataset.screenshotState, opacity: getComputedStyle(image).opacity } : undefined);
+      if (samples.length < frames) requestAnimationFrame(sample);
+      else resolve(samples);
+    };
+    requestAnimationFrame(sample);
+  }), { change, frames, selector });
+}
+
+/** The reveal animation on the image, paused and sought to `at` milliseconds: its opacity there. */
+async function revealOpacityAt(image, at) {
+  return image.evaluate((element, at) => {
+    const [animation] = element.getAnimations().filter(animation => animation.animationName === "screenshot-reveal");
+    if (!animation) return undefined;
+    animation.pause();
+    animation.currentTime = at;
+    return Number(getComputedStyle(element).opacity);
+  }, at);
+}
+
+test("a waiting screenshot is hidden from its first frame, and one that fills its empty frame fades in", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", styles: true });
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
+  await expect(image).toHaveCSS("opacity", "0");
+  await resolveImage(page, firstSource);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(image).toHaveAttribute("data-screenshot-reveal", "");
+  assert.equal(await revealOpacityAt(image, 0), 0, "The fade starts from nothing");
+  const midway = await revealOpacityAt(image, 80);
+  assert.ok(midway > 0 && midway < 1, `Halfway through the fade the picture is partly shown (${midway})`);
+  await image.evaluate(element => element.getAnimations().forEach(animation => animation.finish()));
+  await expect(image).toHaveCSS("opacity", "1");
+
+  // Another source: the picture before is hidden in the very frame the new source lands, never faded out.
+  const samples = await framesAfter(page, `window.updateScreenshot({ source: ${JSON.stringify(secondSource)} })`);
+  const landed = samples.filter(sample => sample?.source === secondSource);
+  assert.ok(landed.length > 0, "The new source landed within a few frames");
+  assert.deepEqual(landed.map(sample => sample.opacity), landed.map(() => "0"));
+  assert.deepEqual(samples.filter(sample => sample?.source !== secondSource).map(sample => sample.opacity),
+    samples.filter(sample => sample?.source !== secondSource).map(() => "1"), "Until then, the shown picture is the one it names");
+  assert.deepEqual(await image.evaluate(element => element.getAnimations().map(animation => animation.constructor.name)), [],
+    "Nothing animates the hiding");
+});
+
+test("a loaded screenshot is shown only once it has decoded, or after a short wait for a decode that hangs", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", styles: true, decode: "manual" });
+  await resolveImage(page, firstSource);
+  // The caller hears the load at once (Compare takes its shape from it); the picture waits for its pixels.
+  await expect.poll(() => page.evaluate(() => window.imageLoads.length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => window.pendingDecodes.length)).toBe(1);
+  await page.waitForTimeout(100);
+  await expect(image).toHaveAttribute("data-screenshot-state", "loading");
+  await expect(image).toHaveCSS("opacity", "0");
+  await page.evaluate(() => window.pendingDecodes.shift().resolve());
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(image).toHaveAttribute("data-screenshot-reveal", "");
+
+  // A decode that never settles: shown anyway, with its fade.
+  await page.evaluate(source => window.updateScreenshot({ source }), secondSource);
+  await resolveImage(page, secondSource, secondImage);
+  await expect.poll(() => page.evaluate(() => window.pendingDecodes.length)).toBe(1);
+  const loadedAt = await page.evaluate(() => performance.now());
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  const waited = await page.evaluate(() => performance.now()) - loadedAt;
+  assert.ok(waited >= 200, `The hung decode was waited for before the picture was shown (${Math.round(waited)}ms)`);
+  await expect(image).toHaveAttribute("data-screenshot-reveal", "");
+  assert.equal(await image.evaluate(element => element.naturalWidth), 4);
+});
+
+test("a screenshot the report still holds decoded fades in when it is shown again", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", styles: true });
+  const url = await blobUrl(page, firstImage);
+  await expect.poll(() => page.evaluate(() => window.resolverCalls)).toEqual([firstSource]);
+  await page.evaluate(({ source, url }) => window.resolveScreenshot(source, url), { source: firstSource, url });
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+
+  // Shown again (Compare stepping back to it, a view mounting again) while the report still holds its decoded URL.
+  await page.evaluate(() => window.updateScreenshot({ mounted: false }));
+  await expect(image).toHaveCount(0);
+  await page.evaluate(({ source, url }) => {
+    window.immediateScreenshots.set(source, url);
+    window.updateScreenshot({ mounted: true });
+  }, { source: firstSource, url });
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(image).toHaveAttribute("data-screenshot-reveal", "");
+  assert.equal(await revealOpacityAt(image, 0), 0);
+});
+
+test("an ordinary URL is a new image for each source and never shows the one before while it loads", { timeout: 30_000 }, async t => {
+  const { page } = await fixture(t, { loading: "eager", styles: true, normalSource: "/__normal.png" });
+  const hosted = page.getByRole("img", { name: "Hosted screenshot", exact: true });
+  await expect(hosted).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(hosted).toHaveAttribute("data-screenshot-reveal", "");
+  await hosted.evaluate(element => { element.dataset.first = "true"; });
+
+  const samples = await framesAfter(page, "window.updateScreenshot({ normalSource: '/__slow.png' })", 6, "img[alt='Hosted screenshot']");
+  const landed = samples.filter(sample => sample?.source === "/__slow.png");
+  assert.ok(landed.length > 0);
+  assert.deepEqual(landed.map(sample => [sample.state, sample.opacity]), landed.map(() => ["loading", "0"]));
+  await expect(hosted).not.toHaveAttribute("data-first", /.*/);
+  await expect(hosted).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(hosted).toHaveAttribute("data-screenshot-reveal", "");
+  await expectDecoded(hosted, 4, 5);
+});
+
+test("a held picture stays shown while its replacement loads, and the replacement appears without a fade", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", styles: true, holdPrevious: true, fallback: true });
+  await resolveImage(page, firstSource);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  await page.evaluate(source => window.updateScreenshot({ source }), secondSource);
+  await expect(image).toHaveAttribute("data-screenshot-held", "");
+  await expect(image).toHaveCSS("opacity", "1");
+  await resolveImage(page, secondSource, secondImage);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  await expectDecoded(image, 4, 5);
+  await expect(image).not.toHaveAttribute("data-screenshot-reveal", /.*/);
+  await expect(image).not.toHaveAttribute("data-screenshot-held", /.*/);
+  assert.deepEqual(await image.evaluate(element => element.getAnimations().length), 0);
+});
+
+test("inside an instant stage a picture appears at once", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", styles: true, instant: true });
+  await resolveImage(page, firstSource);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(image).not.toHaveAttribute("data-screenshot-reveal", /.*/);
+  await expect(image).toHaveCSS("opacity", "1");
+});
+
+test("with reduced motion a screenshot appears without a fade", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", styles: true, reducedMotion: true });
+  await resolveImage(page, firstSource);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  // The Viewer's reduced-motion rule leaves every transition a hundredth of a millisecond long; the fade is gone.
+  assert.deepEqual(await image.evaluate(element => element.getAnimations().map(animation => animation.animationName).filter(Boolean)), []);
+  await expect(image).toHaveCSS("opacity", "1");
+});
+
+test("an unselected variant thumbnail that changes source hides at once, despite its own dimmed opacity and its transition", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", styles: true, thumbnail: true });
+  await resolveImage(page, firstSource);
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  await image.evaluate(element => element.getAnimations().forEach(animation => animation.finish()));
+  await expect(image).toHaveCSS("opacity", "0.35");
+  const samples = await framesAfter(page, `window.updateScreenshot({ source: ${JSON.stringify(secondSource)} })`);
+  const landed = samples.filter(sample => sample?.source === secondSource);
+  assert.ok(landed.length > 0);
+  assert.deepEqual(landed.map(sample => sample.opacity), landed.map(() => "0"));
+});
+
+test("an ordinary URL that cannot be loaded shows the fallback, and a held one gives way to it", { timeout: 30_000 }, async t => {
+  const { page } = await fixture(t, { loading: "eager", styles: true, fallback: true, holdPrevious: true, normalSource: "/__normal.png" });
+  const hosted = page.getByRole("img", { name: "Hosted screenshot", exact: true });
+  await expect(hosted).toHaveAttribute("data-screenshot-state", "ready");
+  // The app icon's case: a held picture whose replacement is missing ends on the fallback, not on the picture before.
+  await page.evaluate(() => window.updateScreenshot({ normalSource: "/__missing.png" }));
+  await expect(page.getByTestId("hosted-fallback")).toHaveText("No hosted screenshot");
+  await expect(hosted).toHaveCount(0);
+  // A new source tries again.
+  await page.evaluate(() => window.updateScreenshot({ normalSource: "/__normal.png" }));
+  await expect(hosted).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(page.getByTestId("hosted-fallback")).toHaveCount(0);
+});
+
+test("re-rendering an image that waits for its decode starts no second wait", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", styles: true, decode: "manual" });
+  await resolveImage(page, firstSource);
+  await expect.poll(() => page.evaluate(() => window.pendingDecodes.length)).toBe(1);
+  // Renders while the decode is pending find the image loaded but not shown yet.
+  for (let render = 0; render < 5; render++) {
+    await page.evaluate(render => window.updateScreenshot({ render }), render);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+  }
+  assert.equal(await page.evaluate(() => window.pendingDecodes.length), 1, "One decode wait for the one picture");
+  await page.evaluate(() => window.pendingDecodes.shift().resolve());
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
 });

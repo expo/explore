@@ -58,7 +58,7 @@ export function ImageLightbox(props: { images: readonly LightboxImage[]; initial
             <ChevronLeft aria-hidden="true" />
           </button>
         ) : null}
-        <ScreenshotImage key={image.src} src={image.src} alt={image.alt} loading="eager" draggable={false} />
+        <ScreenshotImage key={image.src} src={image.src} alt={image.alt} loading="eager" indicator="spinner" draggable={false} />
         {multiple ? (
           <button type="button" className="image-lightbox-step" aria-label="Next image"
             disabled={index === props.images.length - 1} onClick={() => move(1)}>

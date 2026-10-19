@@ -41,9 +41,10 @@ export type KeyPress = {
 export type KeyHold = {
   /**
    * Starts holding `code` after its first step already landed. `step` takes the next step and
-   * says whether there was one; the hold ends by itself when there is not.
+   * says whether there was one; the hold ends by itself when there is not. `onEnd` hears the hold
+   * end, however it ends.
    */
-  begin: (code: string, step: () => boolean) => KeyPress;
+  begin: (code: string, step: () => boolean, onEnd?: () => void) => KeyPress;
   /** Ends the hold as an interruption: another key, blur, a field or dialog taking the keyboard. */
   end: () => void;
   /** Ends the hold because `code` went up, if it is the key being held. */
@@ -53,8 +54,8 @@ export type KeyHold = {
    * not end it, so ⇧ or ⌘ can join a held key. Call it first in the listener, before any guard.
    */
   interrupt: (event: KeyboardEvent) => void;
-  /** Whether `code` is the key being held. */
-  holding: (code: string) => boolean;
+  /** Whether `code` is the key being held, or without one, whether any key is. */
+  holding: (code?: string) => boolean;
 };
 
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta"]);
@@ -115,18 +116,20 @@ export function glideWhileHeld(press: KeyPress, move: (steps: number) => boolean
 
 /** One held key at a time, timed on the schedule above. */
 export function createKeyHold(): KeyHold {
-  let current: { code: string; timer: ReturnType<typeof setTimeout>; press: { held: boolean; released: boolean } } | undefined;
+  let current: { code: string; timer: ReturnType<typeof setTimeout>; press: { held: boolean; released: boolean }; onEnd?: (() => void) | undefined } | undefined;
   const finish = (released: boolean) => {
-    if (current) {
-      clearTimeout(current.timer);
-      current.press.held = false;
-      current.press.released = released;
-    }
+    const ended = current;
     current = undefined;
+    if (ended) {
+      clearTimeout(ended.timer);
+      ended.press.held = false;
+      ended.press.released = released;
+      ended.onEnd?.();
+    }
   };
   const end = () => finish(false);
   return {
-    begin(code, step) {
+    begin(code, step, onEnd) {
       end();
       let count = 1;
       const tick = () => {
@@ -137,7 +140,7 @@ export function createKeyHold(): KeyHold {
         count += 1;
       };
       const state = { held: true, released: false };
-      current = { code, timer: setTimeout(tick, HOLD_INITIAL_DELAY_MS), press: state };
+      current = { code, timer: setTimeout(tick, HOLD_INITIAL_DELAY_MS), press: state, onEnd };
       return {
         get held() { return state.held; },
         get released() { return state.released; },
@@ -151,6 +154,6 @@ export function createKeyHold(): KeyHold {
     interrupt(event) {
       if (current && !event.repeat && event.code !== current.code && !MODIFIER_KEYS.has(event.key)) end();
     },
-    holding: (code) => current?.code === code,
+    holding: (code) => (code === undefined ? current !== undefined : current?.code === code),
   };
 }

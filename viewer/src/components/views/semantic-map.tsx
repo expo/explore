@@ -117,6 +117,7 @@ function ScreenNodeCard({ data, selected }: NodeProps<ScreenGraphNode>) {
       imageHeight={data.screenshotSize?.imageHeight ?? data.frame.screen.height}
       placeholderSize={data.frame.screen}
       loading="lazy"
+      backing
       // The ring says which screen is which; a click opening it in the Inspector needs no tooltip.
       inspectorTooltip={false}
       leading={<Handle type="target" position={horizontal ? Position.Left : Position.Top} className="graph-handle" />}

@@ -64,7 +64,10 @@
 .image-lightbox-step:disabled { opacity: 0.3; cursor: default; }
 .image-lightbox-close:focus-visible,
 .image-lightbox-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The image is all the stage shows, and it is hidden while it loads: the spinner centres in the
+   stage meanwhile, in the bar's light text colour. */
 .image-lightbox-stage {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
@@ -82,3 +85,4 @@
   object-fit: contain;
   box-shadow: 0 20px 60px rgb(0 0 0 / 0.5);
 }
+.image-lightbox-stage > .screenshot-loading { color: rgb(237 238 240 / 0.6); }

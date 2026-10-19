@@ -60,6 +60,29 @@ test("ending a hold, or beginning another key, stops the first", (t) => {
   assert.equal(left, 2);
 });
 
+test("a hold says when it ends, however it ends, and whether any key is held", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const hold = createKeyHold();
+  const ended = [];
+  assert.ok(!hold.holding());
+  hold.begin("ArrowRight", () => true, () => ended.push("released"));
+  assert.ok(hold.holding());
+  hold.release("ArrowLeft");
+  assert.deepEqual(ended, [], "another key going up leaves it held");
+  hold.release("ArrowRight");
+  hold.begin("ArrowLeft", () => true, () => ended.push("replaced"));
+  hold.begin("ArrowRight", () => true, () => ended.push("ended"));
+  hold.end();
+  let steps = 0;
+  hold.begin("ArrowDown", () => (steps += 1) < 2, () => ended.push("at the end"));
+  t.mock.timers.tick(HOLD_INITIAL_DELAY_MS);
+  t.mock.timers.tick(holdIntervalMs(1));
+  assert.deepEqual(ended, ["released", "replaced", "ended", "at the end"]);
+  assert.ok(!hold.holding());
+  hold.end();
+  assert.equal(ended.length, 4, "an ended hold does not end again");
+});
+
 test("another key ends a hold, as the OS's own repeat stops; its own repeats and a modifier do not", () => {
   const key = (code, key = code, repeat = false) => ({ code, key, repeat });
   const hold = createKeyHold();
