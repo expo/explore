@@ -567,8 +567,7 @@ export function CompareStage(props: StageProps) {
       <>
         <ChangeOutlines changes={props.areas} activeIndex={props.activeArea} hoverIndex={hoverIndex}
           reveal={side === "after" ? "linked" : "ghost"} onHover={side === "after" ? setHoverIndex : undefined} />
-        {props.statusBarIgnored ? <StatusBarBand /> : null}
-        {props.homeIndicatorIgnored ? <HomeIndicatorBand /> : null}
+        <SystemRegionBands regions={props.systemRegions} />
       </>
     );
   };
