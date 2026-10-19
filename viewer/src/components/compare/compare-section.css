@@ -490,9 +490,9 @@
    the size a changed screen's is. */
 .sidebar-review-off .variant-preview.has-image-ratio { width: min(100%, calc(70dvh * var(--preview-aspect))); }
 .sidebar-review-stage {
-  /* Two frames and a 12px gap share the panel's width. One frame takes the whole width, up to
-     most of the window's height. */
-  --compare-frame-height: calc((100cqw - 12px) / 2 / var(--compare-aspect));
+  /* Two frames and a 12px gap share the panel's width, up to most of the window's height (a wide
+     panel would otherwise push What changed below the fold). One frame takes the whole width. */
+  --compare-frame-height: min(calc((100cqw - 12px) / 2 / var(--compare-aspect)), 70dvh);
   gap: 12px;
 }
 .sidebar-review-stage.mode-swipe,
