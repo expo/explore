@@ -100,14 +100,14 @@ function Frame(props: {
         )}
       </figure>
       <div className="flow-frame-caption">
-        <strong title={frame.label}>
-          {frame.label}
+        <strong title={frame.label}>{frame.label}</strong>
+        <span className="flow-frame-tags">
+          <span className={`flow-verdict tone-${verdict.tone}`}>
+            {verdict.text}
+          </span>
           {props.same.length ? (
             <small className="flow-frame-same" title={`Unchanged after:\n${props.same.join("\n")}`}>+{props.same.length}</small>
           ) : null}
-        </strong>
-        <span className={`flow-verdict tone-${verdict.tone}`}>
-          {verdict.text}
         </span>
       </div>
     </li>

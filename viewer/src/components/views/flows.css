@@ -30,7 +30,8 @@
 }
 
 /* A folded run of unchanged step frames: the count sits after the label; the folded steps are the tooltip. */
-.flow-frame-same { margin-left: 6px; padding: 0 5px; border-radius: 999px; background: var(--panel-hover, #f0f0f0); color: var(--text-muted, #6b6b6b); font-size: 10px; font-weight: 600; vertical-align: 1px; }
+.flow-frame-tags { display: flex; align-items: center; gap: 6px; }
+.flow-frame-same { padding: 1px 6px; border-radius: 999px; background: var(--panel-hover, #f0f0f0); color: var(--text-muted, #6b6b6b); font-size: 10px; font-weight: 600; vertical-align: 1px; }
 .flow-header-side { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
 .flow-side-toggle { font-size: 12px; }
 
