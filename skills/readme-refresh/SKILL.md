@@ -12,8 +12,8 @@ This is a repository-maintenance skill (it is not shipped in the npm package; `s
 The README's screenshots and its live example (`https://explore-example--euxy.expo.app/p/<token>`, deployed by `.github/workflows/example-report.yml`) must show the same report. The example serves the `viewer-preview-fixtures` release, the same reports every pull request's Viewer preview uses, so start there:
 
 ```sh
-gh release download viewer-preview-fixtures --pattern reports.json --output - | jq -r '.[0].source'   # e.g. brentvatne/euxy#154
-mkdir -p ~/euxy-report && gh release download viewer-preview-fixtures --pattern ios.zip --dir ~/euxy-report --clobber
+gh release download viewer-preview-fixtures --pattern reports.json --output - | jq -r '.[0] | "\(.target) \(.source)"'   # e.g. iphone brentvatne/euxy#163
+mkdir -p ~/euxy-report && gh release download viewer-preview-fixtures --pattern iphone.zip --dir ~/euxy-report --clobber
 ```
 
 Keep those fixtures when their euxy PR still shows a real change (an added or removed screen, modified screens with outlined regions). To move to a newer euxy PR, open its Explore comment and follow **iOS report** to the hosted link `https://euxy-explore--<id>.expo.app/p/<token>`. Then refresh the fixtures from that link and download them again:
@@ -28,12 +28,12 @@ Do not pick a same-tree demo PR, where every change is noise. The refreshed fixt
 
 ```sh
 npm ci
-node scripts/readme-screenshots.mjs --report ~/euxy-report/ios.zip --select /about --compare patterns --pr https://github.com/brentvatne/euxy/pull/<n>
+node scripts/readme-screenshots.mjs --report ~/euxy-report/iphone.zip --select /lane-editor/0 --compare new-pattern --pr https://github.com/brentvatne/euxy/pull/<n>
 ```
 
 - `--select` is the route the hero's pointer clicks on the Map (the Inspector opens on it): choose an added or clearly modified screen. The script zooms in around it, so it must be a screen the Map shows.
 - `--compare` is the key in the Viewer's `#/compare/<key>` URL for a **modified** screen with outlined regions (open the report, click the screen in Compare, copy the key): the route without its slash. The script fails if the report has no visually modified screen at that route.
-- `--pr` screenshots the Explore comment on that PR: the fixtures' `source`. Headless Chromium needs a colour emoji font for the result glyphs (`sudo apt-get install fonts-noto-color-emoji` on Debian/Ubuntu); a comment with hollow boxes where 🟩 should be is not acceptable.
+- `--pr` screenshots the Explore comment on that PR: the fixtures' `source`, or a newer euxy PR when that comment predates the current layout. `--only pr-comment --pr <url>` rewrites only the comment pictures (it needs no `--report`); `--only` takes any of `hero`, `compare`, `screens` and `pr-comment`. Headless Chromium needs a colour emoji font for the result glyphs (`sudo apt-get install fonts-noto-color-emoji` on Debian/Ubuntu); a comment with hollow boxes where 🟩 should be is not acceptable.
 - The script serves the report through the Viewer's Vite dev server, so no build is needed. It writes a `-light` and a `-dark` file for every picture (the PR comment too: signed-out github.com follows `prefers-color-scheme`). The README shows each pair with `<picture>`: a `<source media="(prefers-color-scheme: dark)">` for the dark file and an `<img>` with the alt text and the light file, which is what GitHub Mobile shows (it ignores the dark source), so the light file is the one that must always be right.
 
 Two of the pictures are animated SVGs, built by `scripts/readme-animations.mjs` in the same run; there is nothing else to run when the screenshots change:
@@ -53,7 +53,7 @@ npx @expo/explore reports list                                         # your sa
 export EXPLORE_CACHE_DIR=$(mktemp -d)                                  # a scratch store for the image, not your own runs
 cd ~/code/euxy                                                         # inside euxy, so the commit messages are found
 npx @expo/explore reports add ~/.cache/expo-explore/reports/<that id>/ios.zip
-npx @expo/explore reports add ~/euxy-report/ios.zip                    # the PR report from step 1
+npx @expo/explore reports add ~/euxy-report/iphone.zip                 # the PR report from step 1
 npx @expo/explore reports add <an explore:binary report directory>     # an exploration, so all three kinds show
 cd - && npm run build:cli && node scripts/readme-reports-rows.mjs > /tmp/reports-rows.html
 ```
@@ -61,7 +61,7 @@ cd - && npm run build:cli && node scripts/readme-reports-rows.mjs > /tmp/reports
 - The script renders the picker as the CLI draws it (96 columns, the newest run selected) and writes the terminal body as HTML: each coloured piece is exactly its characters wide, so columns line up, and the wordmark is drawn as cell rectangles, since a design tool's font does not draw `█▀▄` cell for cell.
 - In Paper, replace the frame named "Terminal" inside each artboard's window with that HTML, check both artboards in a screenshot (crisp wordmark, aligned columns, the selected row highlighted to the end, coloured counts), and export both at 2x as `readme-reports-light.png` and `readme-reports-dark.png`. The window's title bar reads `npx @expo/explore reports`, as people run it.
 
-Look at every PNG you produced before committing, light and dark: the Screens grid must show the added, removed and modified status dots, the PR comment must show the heading links and result glyphs. Describe each in its Markdown alt text as what the picture shows, not what the feature is.
+Look at every PNG you produced before committing, light and dark: the Screens grid must show the added, removed and modified status dots, the PR comment must show the heading links, the line of device links and the list of changed screens. Describe each in its Markdown alt text as what the picture shows, not what the feature is.
 
 ## 3. Pass over the content as a first-time user
 

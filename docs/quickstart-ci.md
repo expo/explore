@@ -132,7 +132,7 @@ platforms:
     easProfile: explore-android
 ```
 
-Commands that capture or publish (`source:verify`, `capture:review`, `capture:baseline`, `ci:report`, `ci:publish`) take `--platform ios|android`; with one configured platform it is optional, with two it is required (`PLATFORM_REQUIRED`). `expo-explore config:platforms` prints the configured list as JSON, which the workflows use as their matrix. Artifacts carry the platform (`explore-capture-<run>-<attempt>-android`, `explore-baseline-<sha>-ios`); an iOS job still reuses an older unsuffixed baseline. The PR comment has one section per platform, and a hosted preview serves both reports from one link.
+Commands that capture or publish (`source:verify`, `capture:review`, `capture:baseline`, `ci:report`, `ci:publish`) take `--platform ios|android`; with one configured platform it is optional, with two it is required (`PLATFORM_REQUIRED`). `expo-explore config:platforms` prints the configured list as JSON, which the workflows use as their matrix. Artifacts carry the platform (`explore-capture-<run>-<attempt>-android`, `explore-baseline-<sha>-ios`); an iOS job still reuses an older unsuffixed baseline. The PR comment is one list of changed screens that says which platforms each is on, and a hosted preview serves both reports from one link.
 
 ### Several devices (targets)
 
