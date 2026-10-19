@@ -26,6 +26,7 @@ import { abandonSharedBuilds } from "../capture/shared-build.js";
 import { exploreCacheRoot } from "../shared/cache-root.js";
 import { packageBin } from "../shared/package-paths.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
+import { maxParallelTargets } from "./session-plan.js";
 
 /**
  * `capture:review --base REF [--head REF]` on a laptop: the same review CI runs (`runCiReview`), on two commits of the
@@ -44,7 +45,7 @@ export type LocalReviewOptions = {
   platform?: ExplorePlatform | undefined;
   /** `--target`: capture this config.yaml target alone; with `platform`, the targets of that platform. */
   target?: string | undefined;
-  /** `--parallel`: how many targets capture at once (each runs a simulator or emulator per side); all of them by default. */
+  /** `--parallel`: how many targets capture at once (each runs a simulator or emulator per side); by default all of them, up to capture.maxSessions. */
   parallel?: number | undefined;
   scope?: string | undefined;
   expiresIn?: string | undefined;
@@ -544,7 +545,8 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
         await abandonSharedBuilds(join(work, ".builds"), owner => owner === join(work, target.id, `${side}-export`), failure.code);
       }
     };
-    const settled = await settleLimited(targets, options.parallel ?? targets.length,
+    // Each target needs a simulator session: no more run at once than capture.maxSessions, unless --parallel says.
+    const settled = await settleLimited(targets, options.parallel ?? maxParallelTargets(rawConfig.capture.maxSessions, targets.length),
       target => captureTarget(target).catch(async (error: unknown) => { await releaseBuilds(target, error).catch(() => undefined); throw error; }));
     // One target that fails costs that target's report, not the others': they are kept, and the failure is named.
     // Only an interrupted review, or one where every target failed, fails as a whole.

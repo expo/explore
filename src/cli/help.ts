@@ -31,7 +31,7 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
         machine, instead of EAS Simulator, and removes it afterwards (or set capture.simulator in config.yaml); builds
         still run on EAS, and the host switches appearance for either controller; the app is repacked with the route
         observer on this machine too (--repack eas, or capture.repack, keeps the hosted EAS job);
-        with targets in config.yaml it reviews them at once (--parallel N at most N at a time; the targets of a platform
+        with targets in config.yaml it reviews them at once, up to capture.maxSessions (--parallel N at most N at a time; the targets of a platform
         share each commit's build), --target ID one of them, --platform those of a platform)
   view [--catalog FILE] [--port N] [--no-open]
        (opens a report in the Viewer)

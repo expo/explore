@@ -10,7 +10,7 @@ import { buildVerifiedPlan } from "./verified-plan.js";
 import { runCiMap, type CiMapOptions, type CommandRunner } from "../capture/run.js";
 import { resolveColorSchemes, routeIdOfScreen, type ColorScheme } from "../capture/appearance.js";
 import { baseEnvironment } from "../capture/common.js";
-import { planSideSessions, sessionShare } from "./session-plan.js";
+import { DEFAULT_MAX_SESSIONS, planSideSessions, sessionShare } from "./session-plan.js";
 import { mergeCaptureExports } from "./export-merge.js";
 import { abandonSharedBuilds } from "../capture/shared-build.js";
 import { prepareCaptureReview, readCaptureBundle } from "../review/capture-review.js";
@@ -159,12 +159,11 @@ function targetSessionShare(config: ExploreConfig, targets: readonly RunTarget[]
 
 /**
  * The appearance passes one side spreads over sessions of its own, out of its target's share of `capture.maxSessions`;
- * undefined keeps the side in one session. Unset, every side keeps one, as before the option. The side's app config is
- * read only when its share and routes could pay for a split.
+ * undefined keeps the side in one session. The side's app config is read only when its share and routes could pay for
+ * a split.
  */
 export async function sideAppearancePasses(config: ExploreConfig, environment: NodeJS.ProcessEnv,
   input: { share: number; sides: 1 | 2; routes: number; project: string; easCommand?: string }): Promise<ColorScheme[][] | undefined> {
-  if (config.capture.maxSessions === undefined) return undefined;
   // A pass observes its launch only when capture.launch asks for it.
   const plan = (schemes: readonly ColorScheme[]) => planSideSessions({ share: input.share, sides: input.sides, routes: input.routes, schemes,
     ...(config.capture.launch === "off" ? { launchSeconds: 0 } : {}) }).passes;
@@ -412,11 +411,10 @@ export async function runCiReview(options: {
     if (!exploration.agent && !options.runner) await Promise.all((["head", "base"] as const).map(async side => {
       sidePasses[side] = await sideAppearancePasses(config, environment, { share, sides: concurrent ? 2 : 1, routes: plan[`${side}CaptureSurfaceIds`].length, project: projects[side] });
     }));
-    if (config.capture.maxSessions !== undefined) {
-      const split = (["head", "base"] as const).filter(side => sidePasses[side]);
-      progress(`sessions: ${share} of ${config.capture.maxSessions} for this target; `
-        + (split.length ? `${split.join(" and ")} ${split.length === 1 ? "captures its" : "capture their"} appearances in separate sessions` : "one session per side"));
-    }
+    const split = (["head", "base"] as const).filter(side => sidePasses[side]);
+    progress(`sessions: ${share} of ${config.capture.maxSessions ?? DEFAULT_MAX_SESSIONS} for this target; `
+      + (split.length ? `${split.join(" and ")} ${split.length === 1 ? "captures its" : "capture their"} appearances in separate sessions`
+        : concurrent ? "one session per side" : "the sides in turn"));
     const captureSide = async (side: "head" | "base") => {
       const directory = join(output, `${side}-export`);
       const selectedIds = plan[`${side}CaptureSurfaceIds`];
@@ -609,7 +607,7 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
   // Passes on worker threads cannot take an injected runner or an agent session.
   const passes = !options.runner && !exploration.agent
     ? await sideAppearancePasses(options.config, environment, { share, sides: 1, routes: plan.headCaptureSurfaceIds.length, project: options.project }) : undefined;
-  if (options.config.capture.maxSessions !== undefined) progress(`sessions: ${share} of ${options.config.capture.maxSessions} for this target; `
+  progress(`sessions: ${share} of ${options.config.capture.maxSessions ?? DEFAULT_MAX_SESSIONS} for this target; `
     + (passes ? `capturing ${passes.map(pass => pass.join("+")).join(" and ")} in separate sessions` : "one session"));
   const result = await captureSideInSessions(baselineOptions, passes, progress, undefined, passes !== undefined);
   const cacheRecipe = await recipe(options.config, plan, "head", environment, exploration.instructionsSha256);

@@ -349,11 +349,12 @@ test("target ids and entries are validated", () => {
   const twoTargets = { iphone: { platform: "ios" }, ipad: { platform: "ios" } };
   assert.equal(validateExploreConfig({ ...base(), targets: twoTargets, capture: { maxSessions: 2 } }).capture.maxSessions, 2);
   assert.equal("maxSessions" in validateExploreConfig({ ...base(), targets: twoTargets }).capture, false);
-  assert.throws(() => validateExploreConfig({ ...base(), targets: twoTargets, capture: { maxSessions: 1 } }), /capture.maxSessions must be at least the number of targets \(2\)/);
+  // A ceiling below the number of targets runs that many target jobs at once (a starter plan's one simulator per platform).
+  assert.equal(validateExploreConfig({ ...base(), targets: twoTargets, capture: { maxSessions: 1 } }).capture.maxSessions, 1);
+  assert.throws(() => validateExploreConfig({ ...base(), capture: { maxSessions: 0 } }), /capture.maxSessions must be a positive integer/);
   assert.throws(() => validateExploreConfig({ ...base(), capture: { maxSessions: 1.5 } }), /capture.maxSessions must be a positive integer/);
   const platforms = { ios: {}, android: { bundleId: "com.example.app", easProfile: "explore" } };
-  assert.throws(() => validateExploreConfig({ ...base(), platforms, capture: { maxSessions: 1 } }), /capture.maxSessions must be at least the number of targets \(2\)/);
-  assert.equal(validateExploreConfig({ ...base(), platforms, capture: { maxSessions: 2 } }).capture.maxSessions, 2);
+  assert.equal(validateExploreConfig({ ...base(), platforms, capture: { maxSessions: 1 } }).capture.maxSessions, 1);
 });
 
 test("a target can choose its own controller and simulator over capture's", () => {

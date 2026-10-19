@@ -94,7 +94,10 @@ export type ExploreConfig = {
   /** `exclude` names routes, as `requiresRoute` does, that stay in the map but are never captured. */
   exploration: { scope: "changes" | "all"; exclude?: string[] };
   capture: { maxMinutes: number; maxActions: number;
-    /** The most EAS Simulator sessions one review may run at once, across its targets and sides; absent: two per target. */
+    /**
+     * The most EAS Simulator sessions one review may run at once, across its targets and sides; absent:
+     * DEFAULT_MAX_SESSIONS (5). Below the number of targets, that many target jobs run at once, one session each.
+     */
     maxSessions?: number;
     /** Where the route observer is bundled into the app, when the config chooses; captureRepack gives the default. */
     repack?: "eas" | "local"; appearance: AppearanceSetting; launch: LaunchSetting; reset: RouteResetSetting; unattributed: UnattributedSetting; readinessSeconds?: number;
@@ -309,10 +312,6 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
   const platforms = platformsConfig(root.platforms, platform);
   const targets = targetsConfig(root.targets, platform);
   if (platforms && targets) fail("Use targets or platforms, not both", "targets", "Move each platforms entry into targets, with its platform.");
-  const targetCount = Object.keys(targets ?? platforms ?? { [platform]: true }).length;
-  if (capture.maxSessions !== undefined && positiveInteger(capture.maxSessions, "capture.maxSessions") < targetCount) {
-    fail(`capture.maxSessions must be at least the number of targets (${targetCount}): each target's job needs one session`, "capture.maxSessions");
-  }
   let agent: ExploreConfig["agent"];
   if (root.agent !== undefined || mode === "agent") {
     const input = record(root.agent, "agent");

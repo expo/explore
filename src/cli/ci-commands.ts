@@ -21,6 +21,7 @@ import { help } from "./help.js";
 import { CiError } from "../shared/ci-errors.js";
 import { cleanupAfterCapture, findOptionalBaseline, resolveCompareRefs, resolvePullRequest, writeCaptureOutputs, writeStepOutputs } from "../ci/workflow-steps.js";
 import { stderrProgress } from "../shared/progress.js";
+import { maxParallelTargets } from "../ci/session-plan.js";
 
 export async function doctor(): Promise<void> {
   if (has("help")) return help();
@@ -159,10 +160,14 @@ export async function configPlatforms(): Promise<void> {
   output({ ok: true, platforms: configTargets(config).map(target => target.id) });
 }
 
-/** The targets config.yaml captures, in order, with their platforms and labels: the review workflow's matrix. */
+/**
+ * The targets config.yaml captures, in order, with their platforms and labels: the review workflow's matrix, and how
+ * many of its jobs run at once (`maxParallel`), since each needs a session of capture.maxSessions.
+ */
 export async function configTargetList(): Promise<void> {
   const config = await readExploreConfig(flag("project") ?? process.cwd(), flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH);
-  output({ ok: true, targets: configTargets(config) });
+  const targets = configTargets(config);
+  output({ ok: true, targets, maxParallel: maxParallelTargets(config.capture.maxSessions, targets.length) });
 }
 
 async function exists(path: string): Promise<boolean> {
