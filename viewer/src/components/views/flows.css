@@ -17,7 +17,9 @@
 .flow-failure code { font-size: 12px; }
 .flow-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); gap: 20px; align-items: start; }
 .flows-page.phone .flow-body { grid-template-columns: 1fr; }
-.flow-filmstrip { list-style: none; margin: 0; padding: 4px 0 8px; display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x proximity; }
+.flow-filmstrip { list-style: none; margin: 0; padding: 4px 0 8px; display: flex; flex-wrap: wrap; gap: 16px; }
+/* Phone: one horizontal strip, swiped frame by frame. Desktop wraps so a long flow is visible at a glance. */
+.flows-page.phone .flow-filmstrip { flex-wrap: nowrap; overflow-x: auto; scroll-snap-type: x proximity; }
 .flow-frame { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; scroll-snap-align: start; }
 .flow-frame-face {
   position: relative;
