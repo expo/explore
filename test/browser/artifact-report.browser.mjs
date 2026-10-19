@@ -1774,3 +1774,354 @@ test("a near-square landscape pair in a short window keeps both halves on screen
   }
   assert.deepEqual(errors, []);
 });
+
+/** A capture in a colour of its own, so every side of every screen is a screenshot of its own. */
+function tintedCapture(seed) {
+  const picture = new PNG({ width: 32, height: 64 });
+  for (let offset = 0; offset < picture.data.length; offset += 4) picture.data.set([(seed * 53) % 256, (seed * 101 + 40) % 256, (seed * 151 + 90) % 256, 255], offset);
+  const bytes = PNG.sync.write(picture);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  return { bytes, sha256: digest, path: `assets/${digest}.png`, reference: `expo-explore-asset:${digest}.png`,
+    record: { url: `https://artifact.expo-explore.invalid/${digest}.png`, sha256: digest, width: 32, height: 64 } };
+}
+
+/**
+ * `count` modified screens, screen-1 to screen-<count>, each with a Before and an After of its own. `seed` gives
+ * another target its own captures. `screens[i]` holds screen-(i + 1)'s `before` and `after`.
+ */
+async function changedScreensArchive(count, { seed = 1, runtime } = {}) {
+  const report = reportFixture();
+  const home = report.review.surfaces[0];
+  const route = id => ({ ...home.head, id, route: `/${id}`, path: `/${id}`, routeFile: `app/${id}.tsx`, logicalPath: `app/${id}.tsx` });
+  const extra = [];
+  const screens = [];
+  report.assets = [];
+  report.review.surfaces = Array.from({ length: count }, (_, index) => {
+    const id = `screen-${index + 1}`;
+    const before = tintedCapture(seed * 100 + index * 2);
+    const after = tintedCapture(seed * 100 + index * 2 + 1);
+    screens.push({ id, before, after });
+    for (const capture of [before, after]) {
+      report.assets.push({ sha256: capture.sha256, path: capture.path });
+      extra.push({ name: capture.path, bytes: capture.bytes });
+    }
+    return { ...structuredClone(home), id, base: route(id), head: route(id),
+      baseImage: { ...home.baseImage, ...before.record }, headImage: { ...home.headImage, ...after.record } };
+  });
+  const empty = { contract: "explore.navigation", edges: [], modalSurfaceIds: [], unresolved: [] };
+  report.review.navigation = { base: structuredClone(empty), head: empty };
+  if (runtime) report.review.runtime = { ...report.review.runtime, ...runtime };
+  return { bytes: await archive(report, extra), screens };
+}
+
+/** Records each screenshot request (reference, priority, when) and release on the page's report archives. */
+async function recordScreenshotReads(page) {
+  await page.evaluate(async () => {
+    const { ArtifactReportArchive } = await import("/src/utils/artifact-report.ts");
+    window.reads = [];
+    window.releases = [];
+    const { resolve, release } = ArtifactReportArchive.prototype;
+    ArtifactReportArchive.prototype.resolve = function (reference, priority) {
+      window.reads.push({ reference, priority: priority ?? "lazy", at: performance.now() });
+      return resolve.call(this, reference, priority);
+    };
+    ArtifactReportArchive.prototype.release = function (reference) {
+      window.releases.push({ reference, at: performance.now() });
+      return release.call(this, reference);
+    };
+  });
+}
+
+/** How many uses of each screenshot the shown report counts, by reference. */
+const screenshotUses = page => page.evaluate(async () => {
+  const { activeArtifactReport } = await import("/src/utils/artifact-report.ts");
+  return Object.fromEntries([...activeArtifactReport.loads.values()].map(load => [`expo-explore-asset:${load.sha256}.png`, load.users]));
+});
+
+/** How many mounted images show each screenshot, by reference. */
+const mountedScreenshots = page => page.evaluate(() => {
+  const counts = {};
+  for (const image of document.querySelectorAll("img[data-screenshot-src]")) counts[image.dataset.screenshotSrc] = (counts[image.dataset.screenshotSrc] ?? 0) + 1;
+  return counts;
+});
+
+/** Every use the report counts belongs to an image on the page; nothing else holds a screenshot. */
+async function expectBalancedUses(page, message) {
+  await expect.poll(async () => {
+    const uses = await screenshotUses(page);
+    const mounted = await mountedScreenshots(page);
+    return Object.entries(uses).filter(([reference, users]) => users > (mounted[reference] ?? 0));
+  }, { message }).toEqual([]);
+}
+
+test("Compare reads the next screen's screenshots once it rests on a screen, never while an arrow is held, and they are released when it moves on", { timeout: 90_000 }, async t => {
+  const { bytes, screens } = await changedScreensArchive(9);
+  const { page, errors } = await harness(t, bytes, { app: true, open: false, query: "&view=compare&screen=screen-1" });
+  await recordScreenshotReads(page);
+  await chooseFile(page, bytes);
+  const compare = page.locator(".compare-section");
+  await expect(compare.locator(".compare-frame img")).toHaveCount(2);
+  for (const image of await compare.locator(".compare-frame img").all()) await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  const position = compare.locator(".compare-nav-position");
+  await expect(position).toHaveText(/^1 of 9$/);
+  const shownAt = await page.evaluate(() => Math.min(...window.reads.filter(read => read.priority === "eager").map(read => read.at)));
+
+  // Resting on screen-1, its neighbour in the direction of travel (screen-2) is read, after the settle delay, as a
+  // prefetch that leaves the next step's slots free.
+  const prefetchesOf = screen => page.evaluate(references => window.reads.filter(read => read.priority === "prefetch" && references.includes(read.reference)),
+    [screen.before.reference, screen.after.reference]);
+  await expect.poll(async () => (await prefetchesOf(screens[1])).length).toBe(2);
+  assert.ok((await prefetchesOf(screens[1]))[0].at - shownAt >= 240, "Nothing is read before Compare rests on the screen");
+  assert.equal((await page.evaluate(() => window.reads.filter(read => read.priority === "prefetch"))).length, 2, "Only the neighbour is read");
+  await expect.poll(() => screenshotUses(page)).toMatchObject({ [screens[1].before.reference]: 1, [screens[1].after.reference]: 1 });
+
+  // The step finds its pictures decoded: nothing new is decoded for them.
+  await expect.poll(() => page.evaluate(() => window.createdUrls.length)).toBe(4);
+  await page.keyboard.press("ArrowRight");
+  await expect(position).toHaveText(/^2 of 9$/);
+  for (const image of await compare.locator(".compare-frame img").all()) await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  assert.equal(await page.evaluate(() => window.createdUrls.length), 4, "The prefetched screenshots were shown without a new decode");
+
+  // A held arrow steps past several screens; nothing is read for a neighbour until it is released.
+  await expect.poll(async () => (await prefetchesOf(screens[2])).length).toBe(2);
+  const downAt = await page.evaluate(() => performance.now());
+  await page.keyboard.down("ArrowRight");
+  await expect.poll(async () => Number((await position.textContent()).split(" ")[0]), { timeout: 4000 }).toBeGreaterThanOrEqual(6);
+  // The stage is marked while the key repeats, so the screenshots it passes appear without a fade.
+  await expect(compare.locator(".compare-stage")).toHaveAttribute("data-screenshot-instant", "");
+  await page.waitForTimeout(150);
+  const upAt = await page.evaluate(() => performance.now());
+  await page.keyboard.up("ArrowRight");
+  await expect(compare.locator(".compare-stage")).not.toHaveAttribute("data-screenshot-instant", /.*/);
+  const heldPrefetches = await page.evaluate(({ downAt, upAt }) => window.reads.filter(read => read.priority === "prefetch" && read.at > downAt && read.at <= upAt), { downAt, upAt });
+  assert.deepEqual(heldPrefetches, [], "No neighbour was read while the arrow was held");
+  const landed = Number((await position.textContent()).split(" ")[0]);
+  const next = screens[landed];
+  if (next) await expect.poll(async () => (await prefetchesOf(next)).length).toBe(2);
+
+  // Leaving Compare lets go of every screenshot it, and its prefetch, held.
+  await page.getByRole("group", { name: "Canvas view" }).getByRole("button", { name: "Screens", exact: true }).click();
+  await expect(page.locator(".screens-page")).toBeVisible();
+  await expect(compare).toHaveCount(0);
+  await expectBalancedUses(page, "Every use left after Compare belongs to an image on Screens");
+  const uses = await screenshotUses(page);
+  for (const screen of screens) assert.equal(uses[screen.before.reference] ?? 0, 0, `${screen.id}'s Before is no longer in use`);
+  assert.deepEqual(errors, []);
+});
+
+test("a prefetch never holds a slot the screen the reviewer steps to needs, whichever way the step goes", { timeout: 20_000 }, async t => {
+  const { page, errors } = await harness(t);
+  const { bytes, shas } = await multiImageArchive(8);
+  const result = await page.evaluate(async ({ bytes, identity, shas, probe }) => {
+    const archive = await window.openReport(bytes, identity);
+    const decodes = new Function(`return (${probe})()`)();
+    const [shown, shownToo, ahead, aheadToo, behind, behindToo, later, laterToo] = shas.map(sha => archive.reference(sha));
+    const settle = () => new Promise(resolve => setTimeout(resolve, 30));
+    // The screen on show is still being read when Compare rests on it: its neighbour's prefetches wait.
+    const visible = [archive.resolve(shown, "eager"), archive.resolve(shownToo, "eager")];
+    await decodes.until(() => decodes.held() === 2);
+    const waited = [archive.resolve(ahead, "prefetch"), archive.resolve(aheadToo, "prefetch")].map(read => read.then(() => "read", error => error.message));
+    await settle();
+    const heldWhileShownReads = decodes.held();
+    // The reviewer steps the other way before they start: they are dropped, unread.
+    archive.release(ahead);
+    archive.release(aheadToo);
+    const stepped = [archive.resolve(behind, "eager"), archive.resolve(behindToo, "eager")];
+    await decodes.until(() => decodes.held() === 4);
+    decodes.all();
+    await Promise.all([...visible, ...stepped]);
+    const dropped = await Promise.all(waited);
+
+    // Resting on that screen, its own neighbour's prefetches start, in the slots its reads have finished with.
+    const running = [archive.resolve(later, "prefetch"), archive.resolve(laterToo, "prefetch")];
+    await decodes.until(() => decodes.held() === 2);
+    // The reviewer steps the other way while they run: they keep their slots, and the screen stepped to starts at once.
+    archive.release(later);
+    archive.release(laterToo);
+    archive.release(shown);
+    archive.release(shownToo);
+    const back = [archive.resolve(shown, "eager"), archive.resolve(shownToo, "eager")];
+    await settle();
+    const heldAfterStep = decodes.held();
+    decodes.all();
+    await Promise.all([...running, ...back]);
+    return { heldWhileShownReads, dropped, heldAfterStep, hashed: decodes.hashed() };
+  }, { bytes, identity, shas, probe: decodeProbe.toString() });
+  assert.equal(result.heldWhileShownReads, 2, "The prefetches waited while the shown screen was still being read");
+  assert.deepEqual(result.dropped, ["This screenshot is no longer in use.", "This screenshot is no longer in use."]);
+  assert.ok(!result.hashed.includes(shas[2]) && !result.hashed.includes(shas[3]), "A prefetch let go before it started was never read");
+  assert.equal(result.heldAfterStep, 2, "The screen stepped to was read at once, beside the running prefetches");
+  assert.deepEqual(errors, []);
+});
+
+test("Flip reads a screen's Before only once its After has loaded, and flipping reads nothing new", { timeout: 90_000 }, async t => {
+  const { bytes, screens } = await changedScreensArchive(4);
+  const { page, errors } = await harness(t, bytes, { app: true, open: false, query: "&view=compare&screen=screen-1" });
+  await page.addInitScript(() => localStorage.setItem("expo-explore:compare-mode", "flip"));
+  await page.reload();
+  await recordScreenshotReads(page);
+  await chooseFile(page, bytes);
+  const frame = page.locator(".compare-section .compare-flip-frame");
+  await expect(frame.locator(".compare-flip-layer")).toHaveCount(2);
+  for (const image of await frame.locator("img").all()) await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  // The side off screen is hidden, its spinner with it.
+  await expect(frame.locator(".compare-flip-layer[data-side='before']")).toHaveAttribute("aria-hidden", "true");
+  await expect(frame.locator(".compare-flip-layer[data-side='before']")).toHaveCSS("visibility", "hidden");
+
+  // The next screen's After is held back: its Before is not read meanwhile, and only After's layer is mounted.
+  await page.evaluate(after => {
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    const hex = buffer => Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, "0")).join("");
+    window.heldAfter = [];
+    crypto.subtle.digest = async (algorithm, data) => {
+      const value = await digest(algorithm, data);
+      if (hex(value) === after) await new Promise(resolve => window.heldAfter.push(resolve));
+      return value;
+    };
+  }, screens[1].after.sha256);
+  const readsOf = reference => page.evaluate(reference => window.reads.filter(read => read.reference === reference && read.priority !== "prefetch").length, reference);
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator(".compare-section .compare-nav-position")).toHaveText(/^2 of 4$/);
+  await expect(frame.locator(".compare-flip-layer")).toHaveCount(1);
+  await page.waitForTimeout(150);
+  assert.equal(await readsOf(screens[1].before.reference), 0, "Before is not read while After loads");
+  await page.evaluate(() => window.heldAfter.splice(0).forEach(release => release()));
+  await expect(frame.locator(".compare-flip-layer")).toHaveCount(2);
+  for (const image of await frame.locator("img").all()) await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  // StrictMode mounts each image's lease twice in development.
+  assert.ok(await readsOf(screens[1].before.reference) > 0, "Before is read once After has loaded");
+
+  // Flipping swaps the two decoded sides at once.
+  const reads = await page.evaluate(() => window.reads.length);
+  await page.keyboard.press("KeyX");
+  await expect(frame.locator(".compare-flip-layer[data-side='before']")).not.toHaveAttribute("aria-hidden", /.*/);
+  await expect(frame.locator(".compare-flip-layer[data-side='after']")).toHaveCSS("visibility", "hidden");
+  await expect(frame.locator(".compare-flip-layer[data-side='before'] img")).toHaveCSS("opacity", "1");
+  await page.keyboard.press("KeyX");
+  await expect(frame.locator(".compare-flip-layer[data-side='after']")).not.toHaveAttribute("aria-hidden", /.*/);
+  assert.equal(await page.evaluate(() => window.reads.length), reads, "A flip reads nothing");
+  assert.deepEqual(errors, []);
+});
+
+test("a Map card's backing draws the frame its screenshot waits and fades in over, and steps aside for No screenshot", { timeout: 60_000 }, async t => {
+  const { page, errors } = await harness(t, await archive(), { app: true, fault: holdScreenshotHashes() });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const slot = page.locator(".map-canvas .screen-node-image").first();
+  const image = slot.locator("img[data-screenshot-src]");
+  const backing = slot.locator(".screenshot-backing");
+  await expect(image).toHaveAttribute("data-screenshot-state", "loading");
+  await expect(image).toHaveCSS("opacity", "0");
+  await expect(backing).toHaveCSS("visibility", "visible");
+  const frames = () => slot.evaluate(element => {
+    const box = node => { const { left, top, width, height } = node.getBoundingClientRect(); return [left, top, width, height].map(value => Math.round(value * 10) / 10); };
+    const style = node => { const { borderTopColor, borderTopWidth, borderTopLeftRadius, backgroundColor, boxShadow } = getComputedStyle(node); return { borderTopColor, borderTopWidth, borderTopLeftRadius, backgroundColor, boxShadow }; };
+    const [img, backing] = [element.querySelector("img"), element.querySelector(".screenshot-backing")];
+    return { image: box(img), backing: box(backing), imageStyle: style(img), backingStyle: style(backing) };
+  });
+  // The link selects Home, so the frame carries the selection ring past the Modified status.
+  await expect(page.locator(".map-canvas .react-flow__node-screen.selected")).toHaveCount(1);
+  // The ring follows the canvas zoom, and the backing's ring eases to it as the opening camera settles.
+  await expect.poll(async () => { const { backingStyle, imageStyle } = await frames(); return backingStyle.boxShadow === imageStyle.boxShadow; }).toBe(true);
+  const waiting = await frames();
+  assert.deepEqual(waiting.backing, waiting.image, "The backing sits exactly where the image does");
+  assert.deepEqual(waiting.backingStyle, waiting.imageStyle, "and draws the same frame: fill, border, radius, status and ring");
+  assert.match(waiting.backingStyle.boxShadow, /rgb\(5, 136, 240\)/);
+
+  await page.evaluate(() => window.releaseScreenshotHashes());
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(image).toHaveAttribute("data-screenshot-reveal", "");
+  assert.deepEqual((await frames()).image, waiting.image, "Loading moved nothing");
+  // Once the picture has faded in, the backing hides.
+  await expect(backing).toHaveCSS("visibility", "hidden");
+  await expect(image).toHaveCSS("opacity", "1");
+  assert.deepEqual(errors, []);
+});
+
+test("a Map card whose screenshot cannot be read shows No screenshot in one frame, its backing hidden", async t => {
+  const damaged = Buffer.from(png);
+  damaged[damaged.length - 1] ^= 1;
+  const { page, errors } = await harness(t, await archive(reportFixture(), [], damaged), { app: true });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const slot = page.locator(".map-canvas .screen-node-image").first();
+  await expect(slot.locator(".image-placeholder")).toHaveText("No screenshot");
+  await expect(slot.locator(".screenshot-backing")).toHaveCSS("visibility", "hidden");
+  assert.deepEqual(errors, []);
+});
+
+test("on a phone, a Screens card's screenshot keeps its height while it loads and once it has", { timeout: 60_000 }, async t => {
+  const { bytes } = await changedScreensArchive(2);
+  const { page, errors } = await harness(t, bytes, { app: true, open: false, fault: holdScreenshotHashes(tintedCapture(100).bytes.length) });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await chooseFile(page, bytes);
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await page.goto(`${page.url().split("#")[0]}#/screens`);
+  const slot = page.locator(".screens-cell .screen-node-image.has-screenshot").first();
+  await expect(slot).toBeVisible();
+  const height = () => slot.evaluate(element => [element.getBoundingClientRect().height, element.querySelector("img").getBoundingClientRect().height]);
+  const [waiting, waitingImage] = await height();
+  assert.ok(waiting > 100 && Math.abs(waiting - waitingImage) < 1, `The waiting screenshot holds the slot open: ${waiting}, ${waitingImage}`);
+  await page.evaluate(() => window.releaseScreenshotHashes());
+  await expect(slot.locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  assert.deepEqual(await height(), [waiting, waitingImage]);
+  assert.deepEqual(errors, []);
+});
+
+test("a target switch blanks every card whose screenshot differs, never showing the other target's picture, and switching back reuses the kept pictures", { timeout: 90_000 }, async t => {
+  const runtime = { platform: "android", platforms: ["ios", "android"] };
+  const android = await changedScreensArchive(3, { seed: 1, runtime });
+  const ios = await changedScreensArchive(3, { seed: 2, runtime: { ...runtime, platform: "ios" } });
+  const preview = { token: "pqrstuvwxyz234567234567234567234", listing: [{ platform: "ios" }, { platform: "android" }],
+    archives: { "?platform=ios": ios.bytes } };
+  const { page, errors } = await harness(t, android.bytes, { app: true, reportIdentity: null, preview, query: "&platform=android" });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const cards = page.locator(".map-canvas img[data-screenshot-src]");
+  await expect(cards).toHaveCount(3);
+  for (const card of await cards.all()) await expect(card).toHaveAttribute("data-screenshot-state", "ready");
+  const shown = await cards.evaluateAll(images => Object.fromEntries(images.map(image => [image.getAttribute("src"), image.dataset.screenshotSrc])));
+  // Hold iOS's screenshots back so the switch is caught while they load.
+  await page.evaluate(sizes => {
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    window.heldIos = [];
+    window.releaseIos = () => window.heldIos.splice(0).forEach(release => release());
+    window.holdIos = true;
+    crypto.subtle.digest = (algorithm, data) => window.holdIos && sizes.includes(data.byteLength)
+      ? new Promise(resolve => window.heldIos.push(() => resolve(digest(algorithm, data)))) : digest(algorithm, data);
+  }, ios.screens.flatMap(screen => [screen.before.bytes.length, screen.after.bytes.length]));
+  // Every frame from the switch on: no card shows a picture under another screenshot's name, and a waiting one is hidden.
+  await page.evaluate(shown => {
+    window.staleFrames = [];
+    window.sampling = true;
+    const sample = () => {
+      for (const image of document.querySelectorAll(".map-canvas img[data-screenshot-src]")) {
+        const source = shown[image.getAttribute("src")];
+        const opacity = Number(getComputedStyle(image).opacity);
+        if (source && source !== image.dataset.screenshotSrc && opacity > 0) window.staleFrames.push({ source, named: image.dataset.screenshotSrc, opacity });
+        if (image.dataset.screenshotState === "loading" && opacity > 0) window.staleFrames.push({ waiting: image.dataset.screenshotSrc, opacity });
+      }
+      if (window.sampling) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  }, shown);
+  await page.getByRole("button", { name: "Platform: Android. Open another platform's report" }).click();
+  await page.getByRole("menu", { name: "Platform" }).getByRole("menuitemradio").nth(0).click();
+  await page.waitForURL(url => new URL(url).searchParams.get("platform") === "ios");
+  await expect(cards.first()).toHaveAttribute("data-screenshot-src", ios.screens[0].after.reference);
+  for (const card of await cards.all()) await expect(card).toHaveAttribute("data-screenshot-state", "loading");
+  await page.waitForTimeout(200);
+  await page.evaluate(() => { window.holdIos = false; window.releaseIos(); });
+  for (const card of await cards.all()) await expect(card).toHaveAttribute("data-screenshot-state", "ready");
+  await page.evaluate(() => { window.sampling = false; });
+  assert.deepEqual(await page.evaluate(() => window.staleFrames), [], "No frame showed Android's picture on iOS's cards, or a waiting picture");
+  await expectBalancedUses(page, "After the switch, the iOS report counts only the cards' uses");
+
+  // Back to Android: its kept pictures come back without a new decode.
+  const created = await page.evaluate(() => window.createdUrls.length);
+  await page.goBack();
+  await page.waitForURL(url => new URL(url).searchParams.get("platform") === "android");
+  for (const card of await cards.all()) await expect(card).toHaveAttribute("data-screenshot-state", "ready");
+  const back = await cards.evaluateAll(images => Object.fromEntries(images.map(image => [image.getAttribute("src"), image.dataset.screenshotSrc])));
+  assert.deepEqual(back, shown, "Android's cards show the Blob URLs they showed before");
+  assert.equal(await page.evaluate(() => window.createdUrls.length), created, "nothing was decoded again");
+  await expectBalancedUses(page, "After switching back, the Android report counts only the cards' uses");
+  assert.deepEqual(errors, []);
+});

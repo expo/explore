@@ -9,6 +9,7 @@ import { formatShortcut, matchesShortcut, SHORTCUTS, shortcutsLive } from "../..
 import { createKeyHold, DIVIDER_GLIDE, glideWhileHeld, type KeyHold } from "../../utils/key-hold";
 import { optionalStorage } from "../../utils/embedded-report";
 import { usePhoneLayout } from "../../utils/phone-layout";
+import { useNeighborScreenshots } from "../../hooks/use-neighbor-screenshots";
 import { ToggleGroup } from "../shared/toggle-group";
 import { Tooltip } from "../shared/tooltip";
 import { DEFAULT_SCREENSHOT_RATIO, ScreenshotImage, ScreenshotPlaceholder } from "../shared/screenshot-image";
@@ -199,6 +200,17 @@ export function useCompareController(options: CompareControllerOptions) {
   holdRef.current ??= createKeyHold();
   const hold = holdRef.current;
   useEffect(() => hold.end, [hold]);
+  // A held key steps faster than a screenshot fades in, so while it repeats each screen's pictures appear at once:
+  // the stage is marked for ScreenshotImage directly, without a render of its own.
+  const stageRef = useRef<HTMLDivElement>(null);
+  const stepHeld = (direction: 1 | -1): boolean => {
+    const stepped = stepScreen(direction);
+    if (stepped) stageRef.current?.setAttribute("data-screenshot-instant", "");
+    return stepped;
+  };
+  const endHeldSteps = () => stageRef.current?.removeAttribute("data-screenshot-instant");
+  useNeighborScreenshots({ diff: options.diff, order: options.order, screenId: options.screenId,
+    enabled: options.stepScreens !== false, hold });
   // A tap of [ or ] moves the divider one step; held, it keeps going from the same motion. The hold only
   // tracks the key; the glide reads it every frame and stops with it.
   const glideDivider = (code: string, direction: 1 | -1) => {
@@ -215,9 +227,9 @@ export function useCompareController(options: CompareControllerOptions) {
       const keys = SHORTCUTS.compare;
       const stepScreens = state.options.stepScreens !== false;
       if (stepScreens && matchesShortcut(event, keys.previousScreen)) {
-        if (stepScreen(-1)) hold.begin(event.code, () => stepScreen(-1));
+        if (stepScreen(-1)) hold.begin(event.code, () => stepHeld(-1), endHeldSteps);
       } else if (stepScreens && matchesShortcut(event, keys.nextScreen)) {
-        if (stepScreen(1)) hold.begin(event.code, () => stepScreen(1));
+        if (stepScreen(1)) hold.begin(event.code, () => stepHeld(1), endHeldSteps);
       } else if (matchesShortcut(event, keys.nextArea)) {
         stepArea(1);
       } else if (matchesShortcut(event, keys.previousArea)) {
@@ -279,7 +291,7 @@ export function useCompareController(options: CompareControllerOptions) {
     screen, screenDiff, route, position, previous, next, comparable, areas, facts, split, layoutShift, measurable,
     mode, chosenMode, modesDisabled, chooseMode, modeOptions, outlines, shownOutlines, statusBarIgnored, homeIndicatorIgnored, systemRegions, toggleOutlines,
     activeArea, setActiveArea, stepArea, flipSide, flip, swipePosition, setSwipePosition,
-    aspect, setAspect, factsOpen, setFactsOpen,
+    aspect, setAspect, factsOpen, setFactsOpen, stageRef,
   };
 }
 
@@ -393,7 +405,7 @@ export function CompareSection(props: CompareSectionProps) {
         </div>
       </header>
 
-      <div className={`compare-stage mode-${mode}`}>
+      <div ref={compare.stageRef} className={`compare-stage mode-${mode}`}>
         {/* Every mode names Before and After in a row above the screenshots. */}
         <CompareStage
           mode={mode}
@@ -472,6 +484,13 @@ export function CompareStage(props: StageProps) {
   // An outline taken out from under the pointer reports no leave, so another screen, mode or outline
   // toggle drops the hover rather than lighting an area the pointer is not on.
   useLayoutEffect(() => setHoverIndex(undefined), [props.areas, props.mode, props.showOutlines]);
+  // Flip keeps both sides mounted, so flipping is an instant swap of two decoded pictures. The side off screen mounts
+  // once the side on screen has loaded, or on the first flip, so a held key stepping through Flip reads one side of
+  // each screen it passes, not two.
+  const pair = `${before ?? ""} ${after ?? ""}`;
+  const [flipPair, setFlipPair] = useState<string>();
+  const flipBoth = flipPair === pair || props.flipSide === "before";
+  if (props.mode === "flip" && props.flipSide === "before" && flipPair !== pair) setFlipPair(pair);
   if (!before && !after) {
     const reason = diff.captureNotes?.after ?? diff.captureNotes?.before;
     return (
@@ -515,6 +534,7 @@ export function CompareStage(props: StageProps) {
   }
   if (props.mode === "flip" && before && after) {
     const showing = props.flipSide;
+    const sides = (["before", "after"] as const).filter((side) => side === showing || flipBoth);
     return (
       <figure className="compare-side">
         {/* Both names, with the one on screen lit; the other one flips to it. */}
@@ -529,8 +549,19 @@ export function CompareStage(props: StageProps) {
         <div className="compare-frame-wrap">
           <button type="button" className="compare-frame compare-flip-frame" data-side={showing}
             aria-label={`Show ${showing === "after" ? "Before" : "After"}`} onClick={props.onFlip}>
-            <CompareImage src={showing === "after" ? after : before} alt={`${props.title}, ${showing}`}
-              placeholder="No screenshot" side={showing} onAspect={props.onAspect} />
+            {/* Each side is a layer of its own, with its spinner and its no-screenshot state; the one off screen
+                is hidden, and its pictures land without a fade, so a flip shows the other side at once. */}
+            {sides.map((side) => (
+              <span key={side} className="compare-flip-layer" data-side={side}
+                {...(side === showing ? {} : { "aria-hidden": true, "data-screenshot-instant": "" })}>
+                <CompareImage src={side === "after" ? after : before} alt={`${props.title}, ${side}`}
+                  placeholder="No screenshot" side={side}
+                  onAspect={(aspect, loaded) => {
+                    if (loaded === showing) setFlipPair(pair);
+                    props.onAspect(aspect, loaded);
+                  }} />
+              </span>
+            ))}
             {props.overlay}
           </button>
         </div>

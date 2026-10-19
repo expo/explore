@@ -3576,6 +3576,9 @@ test("the Map's top right holds only fit, center and zoom; theme and full screen
   await expect.poll(() => viewport.getAttribute("style")).not.toBe(panned);
   await expect.poll(async () => scaleFromTransform(await viewport.getAttribute("style")))
     .toBeCloseTo(pannedScale, 6);
+  // The flight to the centre dips the scale on its way, and a drag interrupts it where it is: let it
+  // land first. The check above can pass on the flight's first frame, before the dip shows.
+  await page.waitForTimeout(250);
 
   // The keyboard shortcut performs the same scale-preserving camera action.
   await page.mouse.move(panPoint.x, panPoint.y);
@@ -4432,6 +4435,75 @@ test("pull-request comment deep links open the Changes filter and a surface's Di
   expect(new URL(page.url()).searchParams.get("workspace")).toBe(workspaceUrl);
 });
 
+/**
+ * Records, every frame, the route Compare names and the screenshots it shows: those at any opacity above nothing,
+ * not on a hidden Flip side. An image still loading counts as the source it had before, which the browser keeps
+ * painting until the new one is there. `staleCompareFrames` then checks each frame showed only its own screen's.
+ */
+async function sampleCompareFrames(page: Page, root: string) {
+  await page.evaluate((root) => {
+    const record = window as unknown as { compareFrames: { route: string; shown: string[] }[]; sampling: boolean };
+    record.compareFrames = [];
+    record.sampling = true;
+    const sample = () => {
+      const scope = document.querySelector(root);
+      const route = scope?.querySelector(".compare-nav-route")?.textContent ?? "";
+      const shown = [...(scope?.querySelectorAll<HTMLImageElement>(".compare-stage img") ?? [])]
+        .filter((image) => Number(getComputedStyle(image).opacity) > 0 && getComputedStyle(image).visibility !== "hidden")
+        .map((image) => image.complete && image.naturalWidth > 0 ? image.getAttribute("src") ?? "" : "(still loading)");
+      record.compareFrames.push({ route, shown });
+      if (record.sampling) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  }, root);
+}
+
+/** Every screenshot the stage holds for the route on show, once its pictures have loaded. */
+async function settledCompareScreen(page: Page, root: string) {
+  const stage = page.locator(`${root} .compare-stage`);
+  await expect(stage.locator("img[data-screenshot-state='loading']")).toHaveCount(0);
+  return stage.evaluate((element, root) => ({
+    route: document.querySelector(root)?.querySelector(".compare-nav-route")?.textContent ?? "",
+    sources: [...element.querySelectorAll("img")].map((image) => image.getAttribute("src") ?? ""),
+  }), root);
+}
+
+/** The sampled frames in which a picture showed under a route it does not belong to. */
+async function staleCompareFrames(page: Page, screens: { route: string; sources: string[] }[]) {
+  const frames = await page.evaluate(() => {
+    const record = window as unknown as { compareFrames: { route: string; shown: string[] }[]; sampling: boolean };
+    record.sampling = false;
+    return record.compareFrames;
+  });
+  const sources = new Map<string, Set<string>>();
+  for (const screen of screens) sources.set(screen.route, new Set([...(sources.get(screen.route) ?? []), ...screen.sources]));
+  expect(new Set(frames.map((frame) => frame.route)).size, "The steps were sampled").toBeGreaterThan(1);
+  return frames.filter((frame) => frame.shown.some((source) => !sources.get(frame.route)?.has(source)));
+}
+
+test("stepping Compare by key or by its buttons never shows the screen before's pictures under the next one's name", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 860 });
+  await serveWorkspace(page);
+  await page.goto("/compare?screen=current-profile");
+  const root = ".compare-section";
+  const bar = page.locator(`${root} .compare-bar`);
+  await expect(bar).toBeVisible();
+  for (const mode of ["1", "2", "3"]) {
+    await page.keyboard.press(mode);
+    const screens = [await settledCompareScreen(page, root)];
+    await sampleCompareFrames(page, root);
+    await page.keyboard.press("ArrowRight");
+    screens.push(await settledCompareScreen(page, root));
+    await bar.getByRole("button", { name: "Previous changed screen" }).click();
+    screens.push(await settledCompareScreen(page, root));
+    await bar.getByRole("button", { name: "Next changed screen" }).click();
+    screens.push(await settledCompareScreen(page, root));
+    await page.keyboard.press("ArrowLeft");
+    screens.push(await settledCompareScreen(page, root));
+    expect(await staleCompareFrames(page, screens), `Mode ${mode}`).toEqual([]);
+  }
+});
+
 test("desktop Compare: one command bar with the modes in it, even gaps to both bars", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 860 });
   await serveWorkspace(page);
@@ -4904,6 +4976,24 @@ test.describe("phone layout", () => {
       await page.touchscreen.tap(stage.x + 8, middle);
       await expect(position).toHaveText(new RegExp(`^${at - 1} of `));
     }
+  });
+
+  test("stepping Compare from the header never shows the screen before's pictures under the next one's name", async ({ page }) => {
+    await serveWorkspace(page);
+    await page.goto("/map");
+    await page.getByRole("navigation", { name: "Views" }).getByRole("button", { name: /Compare/ }).tap();
+    const root = ".phone-compare";
+    const compare = page.locator(root);
+    await expect(compare).toBeVisible();
+    const next = compare.getByRole("button", { name: "Next changed screen" });
+    const previous = compare.getByRole("button", { name: "Previous changed screen" });
+    const screens = [await settledCompareScreen(page, root)];
+    await sampleCompareFrames(page, root);
+    for (const step of [next, next, previous]) {
+      await step.tap();
+      screens.push(await settledCompareScreen(page, root));
+    }
+    expect(await staleCompareFrames(page, screens)).toEqual([]);
   });
 
   test("Compare is full screen, opens in Flip and steps from the header", async ({ page }) => {

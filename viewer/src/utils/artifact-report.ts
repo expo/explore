@@ -266,8 +266,12 @@ function validateManifest(value: unknown): PreviewManifest {
   }
   return manifest;
 }
-/** Eager screenshots (the Inspector's) are decoded before lazy ones (canvas nodes and thumbnails). */
-export type ScreenshotPriority = "eager" | "lazy";
+/**
+ * Eager screenshots (the Inspector's) are decoded before lazy ones (canvas nodes and thumbnails), and both before a
+ * prefetch (the screen Compare would step to next), which only takes a slot while PREFETCH_RESERVE others stay free.
+ */
+export type ScreenshotPriority = "eager" | "lazy" | "prefetch";
+const PRIORITY_RANK: Record<ScreenshotPriority, number> = { eager: 0, lazy: 1, prefetch: 2 };
 type ImageLoad = {
   sha256: string;
   users: number;
@@ -279,6 +283,12 @@ type ImageLoad = {
 };
 
 const DECODE_SLOTS = 4;
+/**
+ * The slots a prefetch leaves free: a running read keeps its slot after it is let go, so these are what the two
+ * screenshots of the screen the reviewer does step to start in, whichever way that is. A prefetch waiting for a slot
+ * is dropped, unread, when it is let go first.
+ */
+const PREFETCH_RESERVE = 2;
 /**
  * Released screenshots keep their Blob URL, up to this many and this many bytes in all, so panning
  * back needs no new decode.
@@ -299,7 +309,7 @@ export class ArtifactReportArchive {
   /** Decoded screenshots nobody uses, least recently released first, and their total size. */
   private readonly retained = new Map<string, { url: string; bytes: number }>();
   private retainedBytes = 0;
-  private readonly queues: Record<ScreenshotPriority, ImageLoad[]> = { eager: [], lazy: [] };
+  private readonly queues: Record<ScreenshotPriority, ImageLoad[]> = { eager: [], lazy: [], prefetch: [] };
   private disposed = false;
   private running = 0;
   private retainedLimit = RETAINED_SCREENSHOTS;
@@ -418,7 +428,8 @@ export class ArtifactReportArchive {
 
   /**
    * A verified Blob URL for an embedded screenshot. Each call is one use until `release`. At most
-   * four screenshots are read and hashed at once; eager requests wait ahead of lazy ones.
+   * four screenshots are read and hashed at once; eager requests wait ahead of lazy ones, and both
+   * ahead of a prefetch.
    */
   async resolve(reference: string, priority: ScreenshotPriority = "lazy"): Promise<string> {
     const sha256 = IMAGE_REFERENCE.exec(reference)?.[1];
@@ -429,7 +440,7 @@ export class ArtifactReportArchive {
     const existing = this.loads.get(sha256);
     if (existing) {
       existing.users++;
-      if (priority === "eager" && existing.priority === "lazy") this.promote(existing);
+      if (PRIORITY_RANK[priority] < PRIORITY_RANK[existing.priority]) this.promote(existing, priority);
       return existing.pending;
     }
     const kept = this.retained.get(sha256);
@@ -460,7 +471,7 @@ export class ArtifactReportArchive {
 
   dispose(): void {
     this.disposed = true;
-    for (const load of this.queues.eager.splice(0).concat(this.queues.lazy.splice(0))) {
+    for (const load of this.waitingLoads()) {
       load.waiting?.drop(new Error("This report was closed."));
     }
     for (const load of this.loads.values()) if (load.url) URL.revokeObjectURL(load.url);
@@ -476,7 +487,7 @@ export class ArtifactReportArchive {
    * used them releases them against the report shown next, so the ones still in use are dropped here instead.
    */
   trim(): void {
-    for (const load of this.queues.eager.splice(0).concat(this.queues.lazy.splice(0))) {
+    for (const load of this.waitingLoads()) {
       load.waiting?.drop(new Error("This screenshot is no longer in use."));
     }
     // What the Viewer was showing is kept as released, most recent last, so switching back shows it at once.
@@ -523,7 +534,7 @@ export class ArtifactReportArchive {
   }
 
   private acquireSlot(load: ImageLoad): Promise<void> {
-    if (this.running < DECODE_SLOTS) {
+    if (this.running < this.slotsFor(load)) {
       this.running++;
       return Promise.resolve();
     }
@@ -531,6 +542,11 @@ export class ArtifactReportArchive {
       load.waiting = { start, drop };
       this.queues[load.priority].push(load);
     });
+  }
+
+  /** How many slots may be running when `load` starts: all of them, or for a prefetch all but the reserve. */
+  private slotsFor(load: ImageLoad): number {
+    return load.priority === "prefetch" ? DECODE_SLOTS - PREFETCH_RESERVE : DECODE_SLOTS;
   }
 
   /** Hand a finished decode's slot to the next waiting load that someone still uses. */
@@ -549,16 +565,27 @@ export class ArtifactReportArchive {
     this.running--;
   }
 
+  /**
+   * The next waiting load the slot being handed on may start. A prefetch waits while the other running loads would
+   * leave less than the reserve free, unless it was let go, which drops it.
+   */
   private nextWaiting(): ImageLoad | undefined {
-    return this.queues.eager.shift() ?? this.queues.lazy.shift();
+    const load = this.queues.eager[0] ?? this.queues.lazy[0] ?? this.queues.prefetch[0];
+    if (load && load.users > 0 && this.running > this.slotsFor(load)) return undefined;
+    return load ? this.queues[load.priority].shift() : undefined;
   }
 
-  private promote(load: ImageLoad): void {
-    load.priority = "eager";
-    const index = this.queues.lazy.indexOf(load);
+  private waitingLoads(): ImageLoad[] {
+    return this.queues.eager.splice(0).concat(this.queues.lazy.splice(0), this.queues.prefetch.splice(0));
+  }
+
+  private promote(load: ImageLoad, priority: ScreenshotPriority): void {
+    const queue = this.queues[load.priority];
+    load.priority = priority;
+    const index = queue.indexOf(load);
     if (index < 0) return;
-    this.queues.lazy.splice(index, 1);
-    this.queues.eager.push(load);
+    queue.splice(index, 1);
+    this.queues[priority].push(load);
   }
 
   /** Keep a released URL; beyond either limit the least recently released ones are revoked. */
