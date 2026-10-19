@@ -1,6 +1,6 @@
 {
   "name": "@expo/explore",
-  "version": "0.19.8",
+  "version": "0.20.0-next.0",
   "description": "Source-driven mobile app maps, deterministic CI capture, and visual reviews",
   "license": "MIT",
   "type": "module",
