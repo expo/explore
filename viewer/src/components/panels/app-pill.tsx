@@ -1,5 +1,5 @@
 import { appearanceLabel, type Appearance } from "../../utils/appearance";
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { LoaderCircle, Search } from "lucide-react";
 import { toast } from "sonner";
 import { ExpoLogo } from "../shared/expo-logo";
@@ -13,6 +13,7 @@ import { KeyHint } from "../shared/key-hint";
 import { formatShortcut, matchesShortcut, shortcutsLive, SHORTCUTS, TARGET_NUMBER_KEYS } from "../../utils/shortcuts";
 import { ChangesMenu } from "./changes-menu";
 import { placeForAnotherTarget, type FocusStatus } from "../../utils/navigation";
+import { usePhoneLayout } from "../../utils/phone-layout";
 import type { ExploreMap, MapIndex } from "../../utils/model";
 import type { BuildDiff } from "../../utils/build-diff";
 import type { PullRequestPresentation } from "../../utils/review-model";
@@ -103,6 +104,29 @@ function useSiblingReports(page: URL | undefined): SiblingReport[] | undefined {
   return reports;
 }
 
+/**
+ * A chip's label, truncating from its end when the chip is squeezed, except a trailing parenthetical: a target's
+ * pose, "iPhone Duo (open)", keeps "(open)" and loses letters of the device.
+ */
+function ChipLabel({ text }: { text: string }) {
+  const suffix = /^(.*\S) (\(.+\))$/.exec(text);
+  return (
+    <span className="collapsed-platform-label">
+      <span className="collapsed-platform-label-text">{suffix ? suffix[1] : text}</span>
+      {suffix ? <span className="collapsed-platform-label-suffix">{` ${suffix[2]}`}</span> : null}
+    </span>
+  );
+}
+
+/** Each item's width with nothing squeezed or left out: what the row would take if it could. */
+function naturalWidth(item: HTMLElement): number {
+  const text = item.querySelector<HTMLElement>(".collapsed-platform-label-text");
+  if (text) return item.offsetWidth + text.scrollWidth - text.offsetWidth;
+  const range = document.createRange();
+  range.selectNodeContents(item);
+  return Math.max(item.offsetWidth, range.getBoundingClientRect().width);
+}
+
 type AppPillProps = {
   /** The phone layout puts Search in the pill, at its trailing edge. */
   onOpenSearch?: (() => void) | undefined;
@@ -136,6 +160,9 @@ type AppPillProps = {
 export function AppPill(props: AppPillProps) {
   const pillRef = useRef<HTMLDivElement>(null);
   const platformRef = useRef<HTMLButtonElement>(null);
+  const phone = usePhoneLayout();
+  const identityRef = useRef<HTMLDivElement>(null);
+  const [drop, setDrop] = useState("");
   const [platformOpen, setPlatformOpen] = useState(false);
   // A target still downloading: this report stays up, the trigger and the menu row say so. One that failed says why.
   const { switching, switchError } = useSyncExternalStore(REPORT_SOURCE.subscribe, REPORT_SOURCE.getSnapshot, REPORT_SOURCE.getSnapshot);
@@ -170,6 +197,42 @@ export function AppPill(props: AppPillProps) {
   const run = runTargets(props.map.run);
   const currentTarget = run.targets.find(target => target.id === run.current);
   const targetLabel = currentTarget?.label ?? PLATFORM_NAMES[platform] ?? platform;
+
+  // The phone's header is the window's width. When the row's natural width exceeds its room, it leaves items out in
+  // order: the app's name (its icon still names it), then the pull request link (Search keeps "Open pull request");
+  // only then does the target's label truncate. Measured from natural widths, so the result is a function of the
+  // row's width alone, never of the last result. The desktop's pill is sized by its content, so it leaves nothing out.
+  const appearanceCurrent = props.appearance?.current;
+  useLayoutEffect(() => {
+    const row = identityRef.current;
+    if (!row || !phone) {
+      setDrop("");
+      return;
+    }
+    const fit = () => {
+      const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
+      const items = Array.from(row.children) as HTMLElement[];
+      let deficit = items.reduce((sum, item) => sum + naturalWidth(item), 0) + gap * (items.length - 1) - row.getBoundingClientRect().width;
+      const drops: string[] = [];
+      const optional: [string, HTMLElement | undefined][] = [
+        ["name", items.find(item => item.tagName === "STRONG")],
+        ["pr", items.find(item => item.querySelector(".collapsed-pr"))],
+      ];
+      for (const [name, item] of optional) {
+        if (deficit <= 0.5 || !item) continue;
+        drops.push(name);
+        deficit -= naturalWidth(item) + gap;
+      }
+      if (deficit > 0.5) drops.push("squeeze");
+      setDrop(drops.join(" "));
+    };
+    fit();
+    // The row's room, and its items' natural widths: a font arriving after the first paint changes the latter alone.
+    const observer = new ResizeObserver(fit);
+    for (const node of [row, ...row.children]) observer.observe(node);
+    void document.fonts.ready.then(fit);
+    return () => observer.disconnect();
+  }, [targetLabel, appearanceCurrent, pullRequest, phone]);
   // Platform-named targets (every report from before targets) switch platforms; named targets switch devices.
   const noun = run.targets.every(target => target.id === target.platform) ? "platform" : "device";
   const siblings = run.targets
@@ -249,7 +312,7 @@ export function AppPill(props: AppPillProps) {
           </button>
         </Tooltip>
         <span className="panel-logo-divider" aria-hidden="true" />
-        <div className="collapsed-app-identity">
+        <div ref={identityRef} className="collapsed-app-identity" data-drop={drop || undefined}>
           <strong title={appTitle}>
             {repositoryUrl ? (
               <a className="collapsed-app-name" href={repositoryUrl} target="_blank" rel="noreferrer noopener"
@@ -261,11 +324,11 @@ export function AppPill(props: AppPillProps) {
           {siblings.length ? (
             <>
               <Tooltip label={`${device || targetLabel} · open another ${noun}'s report`} shortcut={formatShortcut(SHORTCUTS.target.menu)} placement="bottom">
-                <button ref={platformRef} type="button" className="collapsed-platform" aria-haspopup="menu" aria-expanded={platformOpen}
+                <button ref={platformRef} type="button" className="collapsed-platform collapsed-target" aria-haspopup="menu" aria-expanded={platformOpen}
                   aria-label={`${noun === "device" ? "Device" : "Platform"}: ${targetLabel}. Open another ${noun}'s report`}
                   aria-busy={switching ? true : undefined}
                   onClick={() => setPlatformOpen(open => !open)}>
-                  {targetLabel}
+                  <ChipLabel text={targetLabel} />
                   {switching
                     ? <LoaderCircle aria-hidden="true" className="collapsed-platform-busy" />
                     : <svg aria-hidden="true" width="8" height="8" viewBox="0 0 8 8"><path d="M1 2.5 4 5.5 7 2.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
@@ -280,7 +343,7 @@ export function AppPill(props: AppPillProps) {
                 <button ref={appearanceRef} type="button" className="collapsed-platform" aria-haspopup="menu" aria-expanded={appearanceOpen}
                   aria-label={`Appearance: ${appearanceLabel(props.appearance.current)}. Show the other appearance`}
                   onClick={() => setAppearanceOpen(open => !open)}>
-                  {appearanceLabel(props.appearance.current)}
+                  <ChipLabel text={appearanceLabel(props.appearance.current)} />
                   <svg aria-hidden="true" width="8" height="8" viewBox="0 0 8 8"><path d="M1 2.5 4 5.5 7 2.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                   <KeyHint shortcut={SHORTCUTS.appearance.app} />
                 </button>
@@ -307,7 +370,7 @@ export function AppPill(props: AppPillProps) {
                 target="_blank"
                 rel="noreferrer noopener"
                 aria-label={`PR #${pullRequest.number} on GitHub`}>
-                PR #{pullRequest.number}
+                {phone ? `#${pullRequest.number}` : `PR #${pullRequest.number}`}
               </a>
             </Tooltip>
           ) : pullRequest ? (

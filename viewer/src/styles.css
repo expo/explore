@@ -1930,6 +1930,7 @@ img[data-screenshot-reveal] { animation: screenshot-reveal var(--screenshot-reve
   backdrop-filter: blur(8px);
 }
 .collapsed-app-identity {
+  position: relative;
   display: flex;
   min-width: 0;
   flex: 1;
@@ -2449,6 +2450,17 @@ html [data-sonner-toaster][data-sonner-theme] {
   background: var(--element); color: var(--secondary); font: inherit; font-size: 12.5px; font-weight: 500; line-height: 16px; white-space: nowrap; cursor: pointer;
 }
 .collapsed-platform > svg { width: 9px; height: 9px; }
+/* What the fit leaves out (AppPill's data-drop) stays in the tree to be measured, out of flow and unseen. */
+.collapsed-app-identity[data-drop~="name"] > strong,
+.collapsed-app-identity[data-drop~="pr"] > .tooltip-anchor:has(> .collapsed-pr) { position: absolute; top: 0; left: 0; visibility: hidden; pointer-events: none; }
+.collapsed-platform-label { display: flex; min-width: 0; }
+.collapsed-platform-label-text { min-width: 0; overflow: hidden; }
+.collapsed-platform-label-suffix { flex: none; white-space: pre; }
+/* The target's label is the pill's one long configured text: once the phone's row has left out all it can, the
+   label's device fades out at its end rather than ending in "…" and the slack an ellipsis leaves; the full name is
+   a tap away in its menu. */
+.collapsed-app-identity[data-drop~="squeeze"] .collapsed-target .collapsed-platform-label-text { mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); }
+.phone-layout .collapsed-target, .phone-layout .collapsed-app-identity > .tooltip-anchor:has(> .collapsed-target) { flex: 0 1 auto; min-width: 72px; }
 .collapsed-platform > .collapsed-platform-busy { width: 11px; height: 11px; animation: spin 1s linear infinite; }
 .collapsed-platform:hover, .collapsed-platform[aria-expanded="true"] { color: var(--text); background: var(--hover); }
 .collapsed-platform:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

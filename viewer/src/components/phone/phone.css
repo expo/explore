@@ -375,6 +375,13 @@
   }
   .collapsed-search > svg { width: 20px; height: 20px; }
   .collapsed-search:active { background: var(--panel-hover); }
+  /* Hand off sits before Search: only Search fills the pill's trailing padding. */
+  .phone-layout .handoff-icon-button.collapsed-search { margin-right: -6px; }
+  /* Whatever the row cannot fit is clipped at its end, never drawn under Hand off and Search. */
+  .phone-layout .collapsed-app-identity { overflow-x: clip; overflow-y: visible; }
+  /* The 24px chips keep their size; their hit area is the pill's height. */
+  .phone-layout .collapsed-platform { position: relative; }
+  .phone-layout .collapsed-platform::before { content: ""; position: absolute; inset: -10px 0; }
   /* Text links and titles keep their size; their hit area grows into the space around them. */
   .phone-layout .collapsed-app-name,
   .phone-layout .collapsed-pr,

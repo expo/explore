@@ -647,6 +647,79 @@ test("a switch to a target whose screenshots have another shape lays the map out
   assert.deepEqual(errors, []);
 });
 
+test("at a phone's width the header leaves out the app's name, then the pull request link, then fades the target's device; nothing overlaps", { timeout: 60_000 }, async t => {
+  const targets = [{ id: "iphone", platform: "ios", label: "iPhone 17" }, { id: "duo-half", platform: "ios", label: "iPhone 17 Pro Max Duo (half-open)" }];
+  const report = reportFixture();
+  report.review.runtime = { ...report.review.runtime, platform: "ios", platforms: ["ios"], target: targets[1], targets };
+  report.review.pullRequest.number = 1234;
+  const { page, errors } = await harness(t, await archive(report), { app: true });
+  const pill = page.locator(".left-panel-collapsed-pill");
+  const name = pill.locator(".collapsed-app-identity > strong");
+  const target = pill.locator(".collapsed-target");
+  const device = target.locator(".collapsed-platform-label-text");
+  const pose = target.locator(".collapsed-platform-label-suffix");
+  const pr = pill.locator(".collapsed-pr");
+  /** The pill's shown controls: how many pairs overlap, how far any runs past the window, and the page's overflow. */
+  const layout = () => pill.evaluate(element => {
+    const shown = [...element.querySelectorAll("strong, .collapsed-platform, .collapsed-pr, .collapsed-search")]
+      .filter(node => node.checkVisibility({ visibilityProperty: true }));
+    const boxes = shown.map(node => node.getBoundingClientRect());
+    let overlaps = 0;
+    for (const [index, a] of boxes.entries()) for (const b of boxes.slice(index + 1)) if (a.left < b.right - 1 && b.left < a.right - 1) overlaps += 1;
+    return { overlaps, past: Math.max(0, ...boxes.map(box => Math.ceil(box.right - innerWidth))), overflow: document.documentElement.scrollWidth - innerWidth };
+  });
+  const clipped = locator => locator.evaluate(node => node.scrollWidth - node.offsetWidth > 1);
+  const whole = async () => ({ device: !await clipped(device), pose: !await clipped(pose) });
+  const dropped = () => pill.locator(".collapsed-app-identity").evaluate(node => node.dataset.drop ?? "");
+  // The fit measures text: the Viewer's font must be in before the row's widths mean anything.
+  await page.evaluate(() => document.fonts.ready);
+
+  // A desktop window's pill is sized by its content and shows the whole row.
+  await page.setViewportSize({ width: 1180, height: 820 });
+  await expect(name).toBeVisible();
+  await expect(target).toHaveText("iPhone 17 Pro Max Duo (half-open)");
+  await expect(pr).toHaveText("PR #1234");
+  await expect(pr).toBeVisible();
+  expect(await whole()).toEqual({ device: true, pose: true });
+  expect(await dropped()).toBe("");
+  await expect.poll(layout).toEqual({ overlaps: 0, past: 0, overflow: 0 });
+
+  // A large phone has no room for the name beside Search: the row leaves it out (the icon still names the app) and
+  // keeps the whole target and a shorter link.
+  await page.setViewportSize({ width: 430, height: 932 });
+  await expect(name).toBeHidden();
+  await expect(pr).toHaveText("#1234");
+  await expect(pr).toBeVisible();
+  await expect(target).toHaveText("iPhone 17 Pro Max Duo (half-open)");
+  expect(await whole()).toEqual({ device: true, pose: true });
+  await expect.poll(layout).toEqual({ overlaps: 0, past: 0, overflow: 0 });
+  const search = pill.getByRole("button", { name: "Search", exact: true });
+  const finger = await search.boundingBox();
+  assert.ok(finger.width >= 44 && finger.height >= 44, `Search is ${finger.width}×${finger.height}`);
+
+  // An iPhone's width leaves out the link too (Search keeps "Open pull request") before it touches the target.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(pr).toBeHidden();
+  await expect(target).toHaveText("iPhone 17 Pro Max Duo (half-open)");
+  expect(await whole()).toEqual({ device: true, pose: true });
+  await expect.poll(layout).toEqual({ overlaps: 0, past: 0, overflow: 0 });
+
+  // The narrowest phones fade the device's name; the pose stays whole and nothing overlaps.
+  await page.setViewportSize({ width: 320, height: 568 });
+  await expect(pill.locator(".collapsed-app-identity")).toHaveAttribute("data-drop", /squeeze/);
+  expect(await whole()).toEqual({ device: false, pose: true });
+  await expect.poll(layout).toEqual({ overlaps: 0, past: 0, overflow: 0 });
+
+  // Widened again, the row takes everything back.
+  await page.setViewportSize({ width: 1180, height: 820 });
+  await expect(name).toBeVisible();
+  await expect(pr).toHaveText("PR #1234");
+  await expect(pr).toBeVisible();
+  expect(await whole()).toEqual({ device: true, pose: true });
+  expect(await dropped()).toBe("");
+  assert.deepEqual(errors, []);
+});
+
 test("a hosted manifest larger than the Viewer reads is refused before it is parsed", { timeout: 60_000 }, async t => {
   const preview = { token: "klmnopqrstuvwxyz2345672345672345", padding: 11 * 1024 * 1024 };
   const { page, errors } = await harness(t, await archive(), { app: true, reportIdentity: null, preview, query: "" });
