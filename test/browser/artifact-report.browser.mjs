@@ -88,6 +88,8 @@ async function harness(t, bytes, { app = false, open = true, name = fileName, re
           preview.requests = (preview.requests ?? 0) + 1;
           preview.queries = [...(preview.queries ?? []), url.search];
           if (preview.status && preview.status !== 200) { response.statusCode = preview.status; return response.end(preview.body ?? "Not found"); }
+          // A target the Worker cannot read (`failures` by query) answers with that status.
+          if (preview.failures?.[url.search]) { response.statusCode = preview.failures[url.search]; return response.end("Unavailable"); }
           response.setHeader("content-type", "application/json");
           // A slow target (`delays` by query) keeps its manifest in flight while the reviewer moves on.
           // `padding` makes the manifest larger than the Viewer reads.
@@ -545,6 +547,30 @@ test("switching back to a prefetched target shows the screenshots it showed befo
   assert.deepEqual(errors, []);
 });
 
+test("a target whose download fails leaves the report on screen and its link, and a toast says why", { timeout: 60_000 }, async t => {
+  const report = reportFixture();
+  report.review.runtime = { ...report.review.runtime, platform: "android", platforms: ["ios", "android"] };
+  const preview = { token: "mnopqrstuvwxyz234567234567234567", listing: [{ platform: "ios" }, { platform: "android" }],
+    failures: { "?platform=ios": 500 } };
+  const { page, errors } = await harness(t, await archive(report), { app: true, reportIdentity: null, preview, query: "&platform=android" });
+  const trigger = page.getByRole("button", { name: "Platform: Android. Open another platform's report" });
+  await expect(trigger).toBeVisible();
+  await page.evaluate(() => { window.__samePage = true; });
+  const place = new URL(page.url()).hash;
+  await trigger.click();
+  await page.getByRole("menu", { name: "Platform" }).getByRole("menuitemradio").nth(0).click();
+  await expect(page.locator(".app-toast")).toContainText("Couldn’t open iOS");
+  await expect(page.locator(".app-toast")).toContainText("The report could not be downloaded (HTTP 500).");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(page.locator(".report-loading-shell")).toHaveCount(0);
+  await expect(trigger).not.toHaveAttribute("aria-busy", /.*/);
+  // The link is the Android report's again, at the place it was.
+  await expect.poll(() => new URL(page.url()).searchParams.get("platform")).toBe("android");
+  assert.equal(new URL(page.url()).hash, place);
+  assert.equal(await page.evaluate(() => window.__samePage), true, "the failed switch stays on the page");
+  assert.deepEqual(errors, []);
+});
+
 test("Forward onto a target still downloading keeps the preview link and its place in history", { timeout: 60_000 }, async t => {
   const { page, errors, switchToIos } = await slowSwitchHarness(t, "jklmnopqrstuvwxyz234567234567234", 3000);
   await page.evaluate(() => { window.location.hash = "#/map?inspect=diff"; });
@@ -564,6 +590,60 @@ test("Forward onto a target still downloading keeps the preview link and its pla
   await page.goBack();
   await page.waitForTimeout(200);
   assert.equal(page.url(), androidUrl, "Back restores the Android entry as it was");
+  assert.deepEqual(errors, []);
+});
+
+test("a switch to a target whose screenshots have another shape lays the map out again for its cards, so none overlap", { timeout: 60_000 }, async t => {
+  const targets = [
+    { id: "iphone", platform: "ios", label: "iPhone 17" },
+    { id: "duo-open", platform: "ios", label: "iPhone Duo (open)" },
+  ];
+  // Home leads to Settings and About, Settings on to Profile: three layers, so the map runs left to right with
+  // Settings and About stacked, a card's height plus a gap apart. A Duo card is shorter than a phone's.
+  const shaped = async (target, width, height) => {
+    const picture = new PNG({ width, height });
+    picture.data.fill(255);
+    const capture = PNG.sync.write(picture);
+    const report = reportFixture();
+    const home = report.review.surfaces[0];
+    for (const side of ["baseImage", "headImage"]) {
+      Object.assign(home[side], { width, height, sha256: createHash("sha256").update(capture).digest("hex") });
+    }
+    const route = id => {
+      const side = { ...home.head, id, route: `/${id}`, path: `/${id}`, routeFile: `app/${id}.tsx`, logicalPath: `app/${id}.tsx` };
+      return { id, status: "unchanged", base: { ...side }, head: side, baseImage: { ...home.baseImage }, headImage: { ...home.headImage },
+        baseOutcome: { ...home.baseOutcome }, headOutcome: { ...home.headOutcome } };
+    };
+    report.review.surfaces.push(route("settings"), route("about"), route("profile"));
+    const edge = (from, to) => ({ from, to, kind: "push", provenance: "source", sourceFile: `app/${from}.tsx` });
+    const graph = { contract: "explore.navigation", edges: [edge("home", "settings"), edge("home", "about"), edge("settings", "profile")],
+      modalSurfaceIds: [], unresolved: [] };
+    report.review.navigation = { base: structuredClone(graph), head: graph };
+    report.review.runtime = { ...report.review.runtime, platform: "ios", platforms: ["ios"], target: targets.find(entry => entry.id === target), targets };
+    return Buffer.from((await imageArchive([capture], 0, report)).bytes);
+  };
+  const preview = { token: "klmnopqrstuvwxyz2345672345672345",
+    listing: targets.map(({ id, platform, label }) => ({ target: id, platform, label })),
+    archives: { "?target=iphone": await shaped("iphone", 130, 282) } };
+  const { page, errors } = await harness(t, await shaped("duo-open", 233, 339), { app: true, reportIdentity: null, preview,
+    query: "&target=duo-open" });
+  const nodes = page.locator(".map-canvas .react-flow__node");
+  await expect(nodes).toHaveCount(4);
+  /** Overlaps between the cards' boxes on screen, and how tall the cards stand against their width. */
+  const layout = () => nodes.evaluateAll(elements => {
+    const boxes = elements.map(element => element.getBoundingClientRect());
+    let overlaps = 0;
+    for (const [index, a] of boxes.entries()) for (const b of boxes.slice(index + 1)) {
+      if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) overlaps += 1;
+    }
+    return { overlaps, shape: Math.round(boxes[0].height / boxes[0].width * 10) / 10 };
+  });
+  await expect.poll(layout).toEqual({ overlaps: 0, shape: 1.6 });
+
+  await page.getByRole("button", { name: "Device: iPhone Duo (open). Open another device's report" }).click();
+  await page.getByRole("menu", { name: "Device" }).getByRole("menuitemradio").nth(0).click();
+  await expect(page.locator(".collapsed-platform").first()).toHaveText("iPhone 17");
+  await expect.poll(layout, { timeout: 10_000 }).toEqual({ overlaps: 0, shape: 2.3 });
   assert.deepEqual(errors, []);
 });
 
@@ -592,11 +672,13 @@ test("D, ⌥1–⌥8 and ` switch targets from the keyboard, and the other repor
   const place = new URL(page.url()).hash;
   await page.evaluate(() => { window.__samePage = true; });
   const target = () => new URL(page.url()).searchParams.get("platform");
+  // The other report swaps into the running Viewer (no loading screen between): the pill names it once it is up.
+  const shown = async (label) => expect(page.locator(".collapsed-platform").first()).toHaveText(label);
 
   // ` returns to the last target; before there is one, it opens the next in the menu.
   await page.keyboard.press("Backquote");
   await expect.poll(target).toBe("ios");
-  await expect(page.locator(".app-shell")).toBeVisible();
+  await shown("iOS");
   const carried = new URL(page.url()).hash;
   assert.equal(carried.split("?")[0], place.split("?")[0], "the other report opens at the same canvas and route");
   assert.equal(new URLSearchParams(carried.split("?")[1]).get("inspect"), "diff");
@@ -604,9 +686,9 @@ test("D, ⌥1–⌥8 and ` switch targets from the keyboard, and the other repor
   await expect(page.locator(".map-canvas .is-selected")).toHaveCount(1);
   await page.keyboard.press("Backquote");
   await expect.poll(target).toBe("android");
+  await shown("Android");
 
   // D opens the menu, which prints each target's ⌥ key.
-  await expect(page.locator(".app-shell")).toBeVisible();
   await page.keyboard.press("KeyD");
   const items = page.getByRole("menu", { name: "Platform" }).getByRole("menuitemradio");
   await expect(items).toHaveCount(2);
@@ -616,11 +698,12 @@ test("D, ⌥1–⌥8 and ` switch targets from the keyboard, and the other repor
 
   await page.keyboard.press("Alt+Digit1");
   await expect.poll(target).toBe("ios");
-  await expect(page.locator(".app-shell")).toBeVisible();
+  await shown("iOS");
   // The shown target's own key does nothing.
   await page.keyboard.press("Alt+Digit1");
   await page.keyboard.press("Alt+Digit2");
   await expect.poll(target).toBe("android");
+  await shown("Android");
   assert.equal(await page.evaluate(() => window.__samePage), true, "every switch stays on the page");
 
   await page.keyboard.press("Shift+Slash");
@@ -1279,20 +1362,22 @@ test("a docs-only report with zero images and no EAS build opens Screens without
   await page.getByRole("button", { name: "Screens", exact: true }).click();
   await expect(page.locator(".screens-page .screens-cell")).toHaveCount(1);
   await expect(page.locator(".screens-page .diff-frame.diff-not-compared")).toHaveCount(1);
-  // The Inspector's missing screenshot matches the canvas node: the icon above a short label,
-  // centred in a phone-shaped preview frame.
+  // The Inspector's missing screenshot matches the canvas node: the icon above a short label and
+  // the report's reason for the gap, centred in a phone-shaped preview frame.
   await page.locator(".screens-page .screen-screenshot-target").click();
   const placeholder = page.locator(".inspector .inspector-preview .screenshot-placeholder");
-  await expect(placeholder).toHaveText("No screenshot");
+  await expect(placeholder.locator("span")).toHaveText("No screenshot");
+  await expect(placeholder.locator(".screenshot-placeholder-detail")).toHaveText("Not compared; no capture was recorded");
   const layout = await placeholder.evaluate(node => {
     const box = element => element.getBoundingClientRect();
     const frame = box(node.closest(".inspector-preview"));
     const icon = box(node.querySelector("svg"));
     const label = box(node.querySelector("span"));
+    const detail = box(node.querySelector(".screenshot-placeholder-detail"));
     return { frameRatio: frame.width / frame.height, iconSize: [icon.width, icon.height], iconAboveLabel: icon.bottom <= label.top,
       iconOffset: Math.abs(icon.left + icon.width / 2 - (frame.left + frame.width / 2)),
       labelOffset: Math.abs(label.left + label.width / 2 - (frame.left + frame.width / 2)),
-      verticalOffset: Math.abs((icon.top + label.bottom) / 2 - (frame.top + frame.height / 2)),
+      verticalOffset: Math.abs((icon.top + detail.bottom) / 2 - (frame.top + frame.height / 2)),
       labelSize: getComputedStyle(node.querySelector("span")).fontSize };
   });
   assert.deepEqual(layout.iconSize, [20, 20]);
@@ -1456,5 +1541,148 @@ test("local run ZIP opens and reloads without a fabricated GitHub identity", asy
   await page.reload();
   await expect(page.locator(".app-shell")).toBeVisible();
   await expect(localRun).toHaveText("Local");
+  assert.deepEqual(errors, []);
+});
+
+test("the Inspector stacks Before over After for a landscape screenshot; Swipe and Flip keep one frame", async t => {
+  // An opened iPhone Duo's inner display, as a screenshot: wider than tall.
+  const picture = new PNG({ width: 951, height: 669 });
+  picture.data.fill(255);
+  const capture = PNG.sync.write(picture);
+  const report = reportFixture();
+  for (const side of ["baseImage", "headImage"]) Object.assign(report.review.surfaces[0][side], { width: 951, height: 669 });
+  const { bytes } = await imageArchive([capture], 0, report);
+  const { page, errors } = await harness(t, Buffer.from(bytes), { app: true, fault: holdScreenshotHashes(capture.length) });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const stage = page.locator(".sidebar-review-stage");
+  const box = locator => locator.evaluate(element => {
+    const { left, top, width, height } = element.getBoundingClientRect();
+    return { left, top, width, height };
+  });
+  const frames = page.locator(".sidebar-review .compare-frame");
+  await expect(frames).toHaveCount(2);
+  // The report's recorded size shapes the pair before the screenshots load: no side-by-side flash.
+  await expect(frames.first().locator("img")).toHaveAttribute("data-screenshot-state", "loading");
+  await expect(stage).toHaveClass(/landscape/);
+  const waiting = await Promise.all([box(frames.nth(0)), box(frames.nth(1))]);
+  await page.evaluate(() => window.releaseScreenshotHashes());
+  await expect(frames.first().locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(stage).toHaveClass(/landscape/);
+  const [before, after] = await Promise.all([box(frames.nth(0)), box(frames.nth(1))]);
+  assert.deepEqual([before, after], waiting, "The frames do not move or resize when the screenshots load");
+  const panel = await box(stage);
+  // Each frame takes the review's width; After sits under Before, not beside it.
+  assert.ok(Math.abs(before.width - panel.width) <= 2, `Before spans the panel: ${JSON.stringify({ before, panel })}`);
+  assert.ok(Math.abs(after.width - panel.width) <= 2, `After spans the panel: ${JSON.stringify({ after, panel })}`);
+  assert.ok(after.top >= before.top + before.height, `After is under Before: ${JSON.stringify({ before, after })}`);
+  assert.ok(Math.abs(before.width / before.height - 951 / 669) < 0.02, `The frame keeps the screenshot's shape: ${JSON.stringify(before)}`);
+  // Swipe and Flip show one frame the panel's width, as before.
+  for (const mode of ["Swipe", "Flip"]) {
+    await page.locator(".sidebar-review-modes").getByRole("button", { name: mode, exact: true }).click();
+    const frame = await box(page.locator(".sidebar-review :is(.visual-swipe, .compare-frame)").first());
+    assert.ok(Math.abs(frame.width - panel.width) <= 2, `${mode} spans the panel: ${JSON.stringify({ frame, panel })}`);
+  }
+  await page.locator(".sidebar-review-modes").getByRole("button", { name: "Split", exact: true }).click();
+  await expect(frames).toHaveCount(2);
+  assert.deepEqual(errors, []);
+});
+
+test("the Inspector keeps a portrait pair side by side", async t => {
+  const { page, errors } = await harness(t, await archive(), { app: true });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const frames = page.locator(".sidebar-review .compare-frame");
+  await expect(frames).toHaveCount(2);
+  await expect(frames.first().locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(page.locator(".sidebar-review-stage")).not.toHaveClass(/landscape/);
+  const box = locator => locator.evaluate(element => {
+    const { left, top, width } = element.getBoundingClientRect();
+    return { left, top, width };
+  });
+  const [before, after] = await Promise.all([box(frames.nth(0)), box(frames.nth(1))]);
+  assert.equal(after.top, before.top, `Before and After share a row: ${JSON.stringify({ before, after })}`);
+  assert.ok(after.left >= before.left + before.width, `After is beside Before: ${JSON.stringify({ before, after })}`);
+  assert.deepEqual(errors, []);
+});
+
+/** A white PNG of `width` × `height`, and the asset entry and record fields a report gives it. */
+function sizedCapture(width, height) {
+  const picture = new PNG({ width, height });
+  picture.data.fill(255);
+  const bytes = PNG.sync.write(picture);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  return { bytes, sha256: digest, path: `assets/${digest}.png`,
+    record: { url: `https://artifact.expo-explore.invalid/${digest}.png`, sha256: digest, width, height } };
+}
+
+test("the Inspector takes a pair's shape from After, whichever side loads last", async t => {
+  // A screen that turned landscape: Before is the 32×64 portrait fixture, After is landscape.
+  const landscape = sizedCapture(951, 669);
+  const report = reportFixture();
+  Object.assign(report.review.surfaces[0].headImage, landscape.record);
+  report.assets.push({ sha256: landscape.sha256, path: landscape.path });
+  // Before's screenshot is held until After's has loaded, so it loads last.
+  const { page, errors } = await harness(t, await archive(report, [{ name: landscape.path, bytes: landscape.bytes }]),
+    { app: true, fault: holdScreenshotHashes(png.length) });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const stage = page.locator(".sidebar-review-stage");
+  const frames = page.locator(".sidebar-review .compare-frame");
+  await expect(frames).toHaveCount(2);
+  await expect(frames.nth(1).locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(stage).toHaveClass(/landscape/);
+  await page.evaluate(() => window.releaseScreenshotHashes());
+  await expect(frames.nth(0).locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(stage).toHaveClass(/landscape/);
+  const ratio = await frames.nth(0).evaluate(element => element.getBoundingClientRect().width / element.getBoundingClientRect().height);
+  assert.ok(Math.abs(ratio - 951 / 669) < 0.02, `Both frames keep After's shape: ${ratio}`);
+  assert.deepEqual(errors, []);
+});
+
+test("Swipe takes the loaded screenshot's shape when it differs from the recorded one", async t => {
+  // The record says portrait; the screenshot is landscape. Swipe's frame follows the image, as
+  // Split's and Flip's do, so a capture whose size the report does not hold is not cropped.
+  const landscape = sizedCapture(951, 669);
+  const { bytes } = await imageArchive([landscape.bytes]);
+  const { page, errors } = await harness(t, Buffer.from(bytes), { app: true, fault: holdScreenshotHashes(landscape.bytes.length) });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  // Swipe is chosen before any screenshot loads, so only Swipe's images report a size.
+  await page.locator(".sidebar-review-modes").getByRole("button", { name: "Swipe", exact: true }).click();
+  const swipe = page.locator(".sidebar-review .visual-swipe");
+  await expect(swipe).toBeVisible();
+  await page.evaluate(() => window.releaseScreenshotHashes());
+  await expect(swipe.locator("img.visual-swipe-after")).toHaveAttribute("data-screenshot-state", "ready");
+  await expect.poll(() => swipe.evaluate(element => {
+    const { width, height } = element.getBoundingClientRect();
+    return Math.abs(width / height - 951 / 669) < 0.02;
+  })).toBe(true);
+  assert.deepEqual(errors, []);
+});
+
+test("a near-square landscape pair in a short window keeps both halves on screen, centred", async t => {
+  // An unfolded foldable's inner display on its side: barely wider than tall.
+  const foldable = sizedCapture(960, 800);
+  const report = reportFixture();
+  for (const side of ["baseImage", "headImage"]) Object.assign(report.review.surfaces[0][side], { width: 960, height: 800 });
+  const { bytes } = await imageArchive([foldable.bytes], 0, report);
+  const { page, errors } = await harness(t, Buffer.from(bytes), { app: true });
+  await page.setViewportSize({ width: 1440, height: 760 });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const stage = page.locator(".sidebar-review-stage");
+  await expect(stage).toHaveClass(/landscape/);
+  const frames = page.locator(".sidebar-review .compare-frame");
+  await expect(frames).toHaveCount(2);
+  await expect(frames.nth(1).locator("img")).toHaveAttribute("data-screenshot-state", "ready");
+  const box = locator => locator.evaluate(element => {
+    const { left, top, width, height, bottom } = element.getBoundingClientRect();
+    return { left, top, width, height, bottom };
+  });
+  const [before, after, panel] = await Promise.all([box(frames.nth(0)), box(frames.nth(1)), box(stage)]);
+  const viewport = page.viewportSize();
+  assert.ok(after.top >= before.top + before.height, `After is under Before: ${JSON.stringify({ before, after })}`);
+  assert.ok(before.top >= 0 && after.bottom <= viewport.height, `Both halves are on screen: ${JSON.stringify({ before, after, viewport })}`);
+  for (const frame of [before, after]) {
+    assert.ok(frame.width < panel.width - 2, `The frame is held under the panel's width: ${JSON.stringify({ frame, panel })}`);
+    assert.ok(Math.abs(frame.left + frame.width / 2 - (panel.left + panel.width / 2)) <= 1, `The frame is centred: ${JSON.stringify({ frame, panel })}`);
+    assert.ok(Math.abs(frame.width / frame.height - 960 / 800) < 0.02, `The frame keeps the screenshot's shape: ${JSON.stringify(frame)}`);
+  }
   assert.deepEqual(errors, []);
 });

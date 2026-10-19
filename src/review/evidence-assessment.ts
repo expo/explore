@@ -1,6 +1,6 @@
 import { unattributedIssue } from "../capture/health.js";
-import { appearancePairs, bundleColorSchemes } from "../capture/appearance.js";
-import { homeIndicatorBandPercent, launchSurfaceId, statusBarBandPercent } from "../contracts/capture.js";
+import { appearancePairs, bundleColorSchemes, type ColorScheme } from "../capture/appearance.js";
+import { launchSurfaceId, systemRegions as defaultSystemRegions, type SystemRegion } from "../contracts/capture.js";
 import { readFileSync, statSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
@@ -26,8 +26,10 @@ import {
   type VisualEvidenceAssessment,
 } from "./visual-evidence.js";
 import { AGENT_DEVICE_VERSION } from "../shared/agent-device-version.js";
-import { STATUS_BAR_BAND_PERCENT } from "../shared/png-evidence.js";
-import { measureRegionShifts } from "./region-shift.js";
+import { STATUS_BAR_BAND_PERCENT, decodePng, differentPixelsInRect, maxColorDistance, type DecodedFrame } from "../shared/png-evidence.js";
+import type { RegionMove, RegionShift } from "./region-shift.js";
+import { measureRegionMovesInWorker } from "./region-shift-worker.js";
+import { availableParallelism } from "node:os";
 
 export const DEFAULT_VISUAL_THRESHOLD = 0.1;
 export const DEFAULT_EVIDENCE_TIME_BUDGET_MS = 10 * 60_000;
@@ -142,16 +144,61 @@ function visualVerdict(assessment: VisualEvidenceAssessment, threshold: number):
   };
 }
 
+type PublishedRegion = NonNullable<PublicVisualVerdict["regions"]>[number];
+
+/** A region as published: the fields a review carries, without the comparison's own bookkeeping. */
+function publishedRegion(region: VisualDiffRegion): PublishedRegion {
+  return { rect: region.rect, normalizedRect: region.normalizedRect, differentPixels: region.differentPixels,
+    shareOfDiffPercentage: region.shareOfDiffPercentage, dominantChange: region.dominantChange, location: region.location };
+}
+
+/**
+ * The regions to publish from every region the comparison found, given what moved: each region with its small
+ * shift, if one explains it, and each large move as one region in place of the regions it explains (where the
+ * content is now, their pixels and share, its location the region the content arrived in), largest share first.
+ * `allRegionsMoved` when every region, before any are left out, moved.
+ */
+export function publishMeasuredRegions(all: readonly VisualDiffRegion[], shifts: ReadonlyArray<RegionShift | undefined>,
+  moves: readonly RegionMove[], width: number, height: number): Pick<PublicVisualVerdict, "regions" | "allRegionsMoved"> {
+  const merged = new Set(moves.flatMap(move => move.members));
+  const percent = (value: number, total: number) => Math.round((value / total) * 10_000) / 100;
+  const regions: PublishedRegion[] = [
+    ...all.flatMap((region, index) => {
+      if (merged.has(index)) return [];
+      const shift = shifts[index];
+      return [{ ...publishedRegion(region), ...(shift ? { shift } : {}) }];
+    }),
+    ...moves.map(move => {
+      const members = move.members.map(index => all[index]!);
+      return {
+        rect: move.rect,
+        normalizedRect: { x: percent(move.rect.x, width), y: percent(move.rect.y, height), width: percent(move.rect.width, width), height: percent(move.rect.height, height) },
+        differentPixels: members.reduce((sum, region) => sum + region.differentPixels, 0),
+        // Each member's share is rounded, so their sum can pass 100; a share is at most the whole difference.
+        shareOfDiffPercentage: Math.min(100, Math.round(members.reduce((sum, region) => sum + region.shareOfDiffPercentage, 0) * 100) / 100),
+        dominantChange: "mixed", location: members[0]!.location, shift: move.shift,
+      };
+    }),
+  ];
+  return {
+    regions: regions.sort((left, right) => right.shareOfDiffPercentage - left.shareOfDiffPercentage).slice(0, MAX_REGIONS),
+    ...(regions.length > 0 && regions.every(region => region.shift) ? { allRegionsMoved: true as const } : {}),
+  };
+}
+
 /**
  * The published regions with how far their content moved, where a move explains it: a layout that shifted by a
- * device pixel reads as moved, not as changed. Every region the comparison found is measured, not only the ones
- * published, so `allRegionsMoved` can say nothing else on the screen changed. A measurement that fails leaves the
- * regions as they were.
+ * device pixel reads as moved, not as changed, and an element that moved further (a card recentred on a wider
+ * screen) reads as one moved region instead of the fragments the comparison split it into. Every region the
+ * comparison found is measured, not only the ones published, so `allRegionsMoved` can say nothing else on the
+ * screen changed. A measurement that fails leaves the regions as they were.
  */
 async function withRegionShifts(basePath: string, headPath: string, all: readonly VisualDiffRegion[], published: NonNullable<PublicVisualVerdict["regions"]>):
   Promise<Pick<PublicVisualVerdict, "regions" | "allRegionsMoved">> {
   try {
-    const shifts = await measureRegionShifts(basePath, headPath, all.map(region => region.rect));
+    const { shifts, moves, width, height } = await measureRegionMovesInWorker(basePath, headPath,
+      all.map(region => ({ ...region.rect, dominantChange: region.dominantChange })));
+    if (moves.length) return publishMeasuredRegions(all, shifts, moves, width, height);
     const shiftOf = new Map(all.map((region, index) => [region.rect, shifts[index]] as const));
     return {
       regions: published.map(region => {
@@ -171,31 +218,103 @@ export function ignoreStatusBar(measurement: ScreenshotDiffMeasurement, bandPerc
   return { measurement: bands.measurement, ignored: bands.ignoredTop };
 }
 
-/**
- * Leaves out of a measurement every diff region that lies entirely inside the system's bands: the status bar at the
- * top and, on iOS, the home indicator at the bottom. Both are drawn by the OS and differ between captures without
- * the app having changed. A region that crosses into the app's area is kept whole.
- */
-export function ignoreSystemBands(measurement: ScreenshotDiffMeasurement, bands: { top: number; bottom: number }):
+/** Both frames a measurement compared, decoded on demand: only a region that crosses a band's edge needs them. */
+export type SystemBandFrames = { baseline: DecodedFrame; current: DecodedFrame; distance: number };
+export type SystemBandFrameLoader = () => SystemBandFrames | undefined;
+
+/** Reads the measurement's two screenshots when a band's edge has to be resolved pixel by pixel. */
+export function systemBandFrameLoader(measurement: ScreenshotDiffMeasurement, threshold: number): SystemBandFrameLoader {
+  return () => {
+    try {
+      const baseline = decodePng(readFileSync(measurement.baselinePath)); const current = decodePng(readFileSync(measurement.currentPath));
+      if (!baseline || !current || baseline.width !== current.width || baseline.height !== current.height) return undefined;
+      return { baseline, current, distance: maxColorDistance(threshold) };
+    } catch { return undefined; }
+  };
+}
+
+/** `ignoreSystemRegions` for the plain case: a status-bar band across the top and a home-indicator band along the bottom. */
+export function ignoreSystemBands(measurement: ScreenshotDiffMeasurement, bands: { top: number; bottom: number }, frames?: SystemBandFrameLoader):
 { measurement: ScreenshotDiffMeasurement; ignoredTop: number; ignoredBottom: number } {
-  if (measurement.match || measurement.regions.length === 0) return { measurement, ignoredTop: 0, ignoredBottom: 0 };
-  const inTop = (region: VisualDiffRegion) => bands.top > 0 && region.normalizedRect.y + region.normalizedRect.height <= bands.top;
-  const inBottom = (region: VisualDiffRegion) => bands.bottom > 0 && region.normalizedRect.y >= 100 - bands.bottom;
-  const inBand = (region: VisualDiffRegion) => inTop(region) || inBottom(region);
-  const ignoredRegions = measurement.regions.filter(inBand);
-  if (ignoredRegions.length === 0) return { measurement, ignoredTop: 0, ignoredBottom: 0 };
-  const ignoredPixels = ignoredRegions.reduce((total, region) => total + region.differentPixels, 0);
+  const regions: SystemRegion[] = [
+    ...(bands.top > 0 ? [{ kind: "status-bar" as const, x: 0, y: 0, width: 100, height: bands.top }] : []),
+    ...(bands.bottom > 0 ? [{ kind: "home-indicator" as const, x: 0, y: 100 - bands.bottom, width: 100, height: bands.bottom }] : []),
+  ];
+  const result = ignoreSystemRegions(measurement, regions, frames);
+  return { measurement: result.measurement, ignoredTop: result.ignoredStatusBar, ignoredBottom: result.ignoredHomeIndicator };
+}
+
+/**
+ * Leaves out of a measurement every diff region that lies inside a system-drawn area: the status bar (a band across
+ * the top of a phone, a pill in the rail of a foldable) and, on iOS, the home indicator at the bottom. Both differ
+ * between captures without the app having changed. A region that crosses the edge of a band across the whole width
+ * is clipped to the part outside it when the frames can be read: its pixels inside the band are dropped, and it stays
+ * only for what differs in the app's area. Without frames, and across a pill's edge, such a region is kept whole.
+ * (A region's pixel count is its own cluster's, while its rect can overlap other regions, so what it keeps is counted
+ * outside the band and clamped to its own count.)
+ */
+export function ignoreSystemRegions(measurement: ScreenshotDiffMeasurement, system: readonly SystemRegion[], frames?: SystemBandFrameLoader):
+{ measurement: ScreenshotDiffMeasurement; ignoredStatusBar: number; ignoredHomeIndicator: number } {
+  if (measurement.match || measurement.regions.length === 0 || system.length === 0) return { measurement, ignoredStatusBar: 0, ignoredHomeIndicator: 0 };
+  // agent-device rounds each of x, y, width and height to 0.01%, so an edge it reports can be up to 0.01% past the real one.
+  const slack = 0.015;
+  const inside = (region: VisualDiffRegion, area: SystemRegion) => {
+    const rect = region.normalizedRect;
+    return rect.x >= area.x - slack && rect.y >= area.y - slack
+      && rect.x + rect.width <= area.x + area.width + slack && rect.y + rect.height <= area.y + area.height + slack;
+  };
+  const across = system.filter((area) => area.x <= slack && area.x + area.width >= 100 - slack);
+  const topBand = across.find((area) => area.y <= slack);
+  const bottomBand = across.find((area) => area !== topBand && area.y + area.height >= 100 - slack);
+  const crossesTop = (region: VisualDiffRegion) => topBand !== undefined && region.normalizedRect.y < topBand.y + topBand.height - slack;
+  const crossesBottom = (region: VisualDiffRegion) => bottomBand !== undefined && region.normalizedRect.y + region.normalizedRect.height > bottomBand.y + slack;
+  let loaded: SystemBandFrames | undefined | null = null;
+  const load = () => { if (loaded === null) loaded = frames?.() ?? undefined; return loaded; };
+  const ignored: Record<SystemRegion["kind"], number> = { "status-bar": 0, "home-indicator": 0 };
+  let ignoredPixels = 0;
+  const remaining: VisualDiffRegion[] = [];
+  for (const region of measurement.regions) {
+    const area = system.find((candidate) => inside(region, candidate));
+    if (area) { ignored[area.kind] += 1; ignoredPixels += region.differentPixels; continue; }
+    const top = crossesTop(region) ? topBand : undefined; const bottom = crossesBottom(region) ? bottomBand : undefined;
+    const decoded = top || bottom ? load() : undefined;
+    if (!decoded) { remaining.push(region); continue; }
+    const { height, width } = decoded.baseline;
+    const rect = { ...region.rect };
+    if (top) {
+      const bandRows = Math.floor((height * (top.y + top.height)) / 100);
+      const rows = Math.max(0, Math.min(rect.y + rect.height, bandRows) - rect.y); rect.y += rows; rect.height -= rows;
+    }
+    if (bottom) rect.height = Math.min(rect.y + rect.height, height - Math.floor((height * bottom.height) / 100)) - rect.y;
+    // Counted in what is left of the rect, not in what the band takes: the rect can enclose another region's pixels,
+    // which can only add to what is kept (up to the region's own count), never take from it.
+    const differentPixels = rect.height > 0 ? Math.min(region.differentPixels, differentPixelsInRect(decoded.baseline, decoded.current, rect, decoded.distance)) : 0;
+    const inBand = region.differentPixels - differentPixels;
+    if (differentPixels === 0) {
+      ignored[(top ?? bottom)!.kind] += 1;
+      ignoredPixels += region.differentPixels;
+      continue;
+    }
+    // Its pixels inside the band were left out too, so the band is marked as not compared, as for a dropped region.
+    if (inBand > 0) { if (top) ignored[top.kind] += 1; if (bottom) ignored[bottom.kind] += 1; }
+    ignoredPixels += inBand;
+    const round = (value: number) => Math.round(value * 100) / 100;
+    remaining.push({ ...region, rect, differentPixels,
+      normalizedRect: { x: round((rect.x / width) * 100), y: round((rect.y / height) * 100), width: round((rect.width / width) * 100), height: round((rect.height / height) * 100) } });
+  }
+  if (ignoredPixels === 0) return { measurement, ignoredStatusBar: 0, ignoredHomeIndicator: 0 };
   const differentPixels = Math.max(0, measurement.differentPixels - ignoredPixels);
-  const remaining = measurement.regions.filter((region) => !inBand(region));
+  const regions = remaining.map((region) => ({ ...region,
+    shareOfDiffPercentage: differentPixels > 0 ? Math.round((region.differentPixels / differentPixels) * 10000) / 100 : 0 }));
   return {
-    ignoredTop: ignoredRegions.filter(inTop).length,
-    ignoredBottom: ignoredRegions.filter((region) => !inTop(region)).length,
+    ignoredStatusBar: ignored["status-bar"],
+    ignoredHomeIndicator: ignored["home-indicator"],
     measurement: {
       ...measurement,
       differentPixels,
       mismatchPercentage: measurement.totalPixels > 0 ? Math.round((differentPixels / measurement.totalPixels) * 10000) / 100 : 0,
-      match: differentPixels === 0 || remaining.length === 0,
-      regions: remaining,
+      match: differentPixels === 0 || regions.length === 0,
+      regions,
     },
   };
 }
@@ -289,6 +408,40 @@ function impactFor(surface: PlanSurface, presence: ComparatorSurfaceImpact["pres
   };
 }
 
+/** The screenshot pairs `assessPublicEvidence` compares: both sides captured and landed, in the loop's order. */
+function comparablePairs(options: { plan: SourceCapturePlan; base: PublicEvidenceSide; head: PublicEvidenceSide }, colorSchemes: readonly ColorScheme[],
+  baseColorSchemes: readonly ColorScheme[]): Array<{ id: string; basePath: string; headPath: string }> {
+  const pairs: Array<{ id: string; basePath: string; headPath: string }> = [];
+  for (const surface of options.plan.surfaces) {
+    if (surface.baseSurface?.kind !== "screen" || surface.headSurface?.kind !== "screen" || (!surface.baseCapture && !surface.headCapture)) continue;
+    for (const { id, baseId } of appearancePairs(surface.id, colorSchemes, baseColorSchemes)) {
+      if (baseId === null) continue;
+      const basePath = localImagePath(options.base, baseId);
+      const headPath = localImagePath(options.head, id);
+      if (!basePath || !headPath || captureDiagnostic(surface, "base", options.base, baseId) || captureDiagnostic(surface, "head", options.head, id)) continue;
+      pairs.push({ id, basePath, headPath });
+    }
+  }
+  return pairs;
+}
+
+/** Runs tasks at most `size` at a time, each started in the order it was queued. */
+function concurrencyLimit(size: number): <T>(task: () => Promise<T>) => Promise<T> {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  const next = () => { if (active < size) queue.shift()?.(); };
+  return task => new Promise((resolve, reject) => {
+    queue.push(() => {
+      active += 1;
+      task().then(resolve, reject).finally(() => { active -= 1; next(); });
+    });
+    next();
+  });
+}
+
+/** The limit the reviews in this process share when none is given: a local review compares its targets at once. */
+let processLimit: ReturnType<typeof concurrencyLimit> | undefined;
+
 function localImagePath(side: PublicEvidenceSide, id: string): string | undefined {
   const frame = side.bundle.images[id];
   return frame ? localEvidencePath(side, frame.path) : undefined;
@@ -309,19 +462,21 @@ function localEvidencePath(side: PublicEvidenceSide, relativePath: string): stri
  */
 export function decideReview(scope: SurfaceSourceScope, visual: PublicVisualVerdict, summary?: WhatChangedSummary): PublicSurfaceReview {
   const facts = summary?.facts.map((fact) => ({ category: fact.category, templateId: fact.templateId, bullet: truncate(fact.bullet) })) ?? [];
-  const differs = visual.verdict === "modified" || facts.length > 0;
+  // Text that also differs between two captures of the same build is runtime state: listed, never what makes a change.
+  const changes = facts.filter((fact) => fact.templateId !== "visible-text.unstable-within-build");
+  const differs = visual.verdict === "modified" || changes.length > 0;
   const inconclusive = !differs && (visual.verdict === "needs-review" || Boolean(summary?.needsReview));
   const issue = summary?.reviewIssues[0]?.reason;
-  const evidenceText = facts[0]?.bullet ?? visualDescription(visual);
+  const evidenceText = changes[0]?.bullet ?? visualDescription(visual);
   if (scope === "none") {
     if (!differs) return { status: "unchanged", description: "No visible change" };
     // The comparator's generic visual fact reads as a styling change; a variant names what differs.
-    const state = facts.find((fact) => fact.category !== "visual")?.bullet
+    const state = [...changes, ...facts].find((fact) => fact.category !== "visual")?.bullet
       ?? `${percentage(visual.mismatchPercentage)}${visual.regions?.[0]?.location ? ` · ${visual.regions[0].location}` : ""}`;
     return { status: "variant", description: truncate(`Runtime state differs: ${state}`), ...(facts.length ? { facts } : {}) };
   }
   if (differs) {
-    const description = !facts.length && issue ? `${visualDescription(visual)} · ${issue}` : evidenceText;
+    const description = !changes.length && issue ? `${visualDescription(visual)} · ${issue}` : evidenceText;
     return { status: "modified", description: truncate(description), ...(facts.length ? { facts } : {}) };
   }
   if (inconclusive) {
@@ -369,6 +524,8 @@ function captureDiagnostic(surface: PlanSurface, side: "base" | "head", evidence
 export async function assessPublicEvidence(options: {
   /** The captured platform; its status bar band is left out of the visual verdict. Absent: iOS. */
   platform?: "ios" | "android";
+  /** The system-drawn areas left out of the visual verdict; absent, the platform's bands. */
+  systemRegions?: SystemRegion[];
   plan: SourceCapturePlan;
   base: PublicEvidenceSide;
   head: PublicEvidenceSide;
@@ -378,8 +535,11 @@ export async function assessPublicEvidence(options: {
   timeBudgetMs?: number;
   now?: () => number;
   measure?: (baselinePath: string, currentPath: string) => Promise<ScreenshotDiffMeasurement>;
+  /** How many screenshot pairs compare at once. Absent: one per available CPU, shared by every review in this process. */
+  concurrency?: number;
 }): Promise<PublicEvidenceResult> {
   const threshold = options.threshold ?? DEFAULT_VISUAL_THRESHOLD;
+  const system = options.systemRegions ?? defaultSystemRegions({ platform: options.platform });
   const now = options.now ?? Date.now;
   const deadline = now() + (options.timeBudgetMs ?? DEFAULT_EVIDENCE_TIME_BUDGET_MS);
   const surfaces: Record<string, PublicSurfaceAssessment> = {};
@@ -395,6 +555,34 @@ export async function assessPublicEvidence(options: {
   const measure = options.measure ?? (async (baselinePath: string, currentPath: string) => (
     await diffScreenshots({ baselinePath, currentPath, command: options.agentDeviceCommand, threshold })
   ));
+  type ComparedPair = { visual: PublicVisualVerdict; assessment: VisualEvidenceAssessment };
+  /** One pair's measurement, verdict and region moves: the work that runs ahead of the surface loop. */
+  const comparePair = async (basePath: string, headPath: string): Promise<ComparedPair> => {
+    const raw = await measure(basePath, headPath);
+    const { measurement, ignoredStatusBar: ignoredTop, ignoredHomeIndicator: ignoredBottom } = ignoreSystemRegions(raw, system, systemBandFrameLoader(raw, threshold));
+    const assessment = assessVisualMeasurements({
+      baselineSamples: 1,
+      currentSamples: 1,
+      requiredSamples: 1,
+      baselineWithin: [],
+      currentWithin: [],
+      crossBuild: [measurement],
+      representative: measurement,
+    });
+    const visual = visualVerdict(assessment, threshold);
+    // Measuring moves is extra: once the comparison budget is spent, regions go out unmeasured.
+    if (visual.verdict === "modified" && visual.regions?.length && now() <= deadline) {
+      Object.assign(visual, await withRegionShifts(basePath, headPath, measurement.regions, visual.regions));
+    }
+    if (ignoredTop > 0) visual.ignoredStatusBarRegions = ignoredTop;
+    if (ignoredBottom > 0) visual.ignoredHomeIndicatorRegions = ignoredBottom;
+    if (ignoredTop > 0 || ignoredBottom > 0) visual.systemRegions = system.map((area) => ({ ...area }));
+    return { visual, assessment };
+  };
+  /** A pair compared if the budget has not expired when its turn to start comes; undefined when it has. */
+  const compareInBudget = async (basePath: string, headPath: string): Promise<ComparedPair | undefined> => (
+    now() > deadline ? undefined : await comparePair(basePath, headPath)
+  );
   const visualCounts = { compared: 0, modified: 0, unchanged: 0, needsReview: 0, failed: 0, errors: [] as string[] };
   const accessibilityCounts = { compared: 0, described: 0, failed: 0, skipped: 0, errors: [] as string[] };
   const reviewCounts = { modified: 0, needsReview: 0, variants: 0, unchanged: 0 };
@@ -411,6 +599,20 @@ export async function assessPublicEvidence(options: {
 
   const colorSchemes = bundleColorSchemes(options.head.bundle);
   const baseColorSchemes = bundleColorSchemes(options.base.bundle);
+  // The pairs the loop below compares start now, a few at a time: each is a comparator process and a pixel search
+  // that take seconds on a large screenshot, so they overlap instead of queueing behind one another. The loop reads
+  // them in its own order, so the result does not depend on which finishes first. A pair whose turn comes after the
+  // budget expired is not started; one started in time is waited for and used.
+  const ahead = new Map<string, Promise<ComparedPair | undefined>>();
+  if (visualAvailable) {
+    const limit = options.concurrency !== undefined ? concurrencyLimit(Math.max(1, Math.floor(options.concurrency)))
+      : processLimit ??= concurrencyLimit(availableParallelism());
+    for (const { id, basePath, headPath } of comparablePairs(options, colorSchemes, baseColorSchemes)) {
+      const started = limit(() => compareInBudget(basePath, headPath));
+      started.catch(() => undefined);
+      ahead.set(id, started);
+    }
+  }
   for (const surface of options.plan.surfaces) {
     for (const side of ["base", "head"] as const) {
       if (!surface[`${side}Capture`] || surface[`${side}Surface`]?.kind !== "screen") continue;
@@ -439,7 +641,19 @@ export async function assessPublicEvidence(options: {
     if (surface.baseSurface?.kind !== "screen" || surface.headSurface?.kind !== "screen"
       || (!surface.baseCapture && !surface.headCapture)) continue;
     // Every appearance the capture rendered is compared like-for-like: `<id>@<scheme>` frames against each other.
-    for (const { id, scheme, baseId } of appearancePairs(surface.id, colorSchemes, baseColorSchemes)) {
+    const pairs = appearancePairs(surface.id, colorSchemes, baseColorSchemes);
+    // The screen's other appearances, rendered by both builds and verified on both: a label that varies between a
+    // build's own appearances is runtime state. An unverified capture may show another screen, so it is no evidence.
+    const baseRoute = surface.baseSurface, headRoute = surface.headSurface;
+    const siblings = (current: string) => pairs.flatMap((pair) => {
+      if (pair.id === current || pair.baseId === null || captureDiagnostic(surface, "base", options.base, pair.baseId)
+        || captureDiagnostic(surface, "head", options.head, pair.id)) return [];
+      try {
+        return [{ base: matchedSide("base", options.base, { ...baseRoute, id: pair.baseId }, options.profile),
+          head: matchedSide("head", options.head, { ...headRoute, id: pair.id }, options.profile) }];
+      } catch { return []; }
+    });
+    for (const { id, scheme, baseId } of pairs) {
       // An appearance the base never rendered has nothing to compare against: the head frame is new evidence.
       if (baseId === null) {
         if (localImagePath(options.head, id)) {
@@ -464,47 +678,29 @@ export async function assessPublicEvidence(options: {
         continue;
       }
 
-      let visual: PublicVisualVerdict;
-      let assessment: VisualEvidenceAssessment | undefined;
-      if (now() > deadline) {
+      let compared: ComparedPair | undefined;
+      try {
+        compared = await (ahead.get(id) ?? compareInBudget(basePath, headPath));
+      } catch (error) {
+        visualCounts.failed += 1;
+        const diagnostic = comparisonError(id, error, { code: "VISUAL_COMPARISON_FAILED", stage: "compare",
+          message: "Screenshot comparison failed.", nextAction: "Check the screenshot files and the agent-device comparison diagnostics, then rerun comparison.", retryable: true });
+        recordError(visualCounts.errors, id, diagnostic.message);
+        continue;
+      }
+      if (!compared) {
         visualCounts.failed += 1;
         const diagnostic = comparisonError(id, undefined, { code: "VISUAL_COMPARISON_BUDGET_EXHAUSTED", stage: "compare",
           message: "The time budget expired before screenshot comparison.",
           nextAction: "Increase the evidence comparison time budget or reduce the number of selected routes, then rerun comparison.", retryable: true });
         recordError(visualCounts.errors, id, diagnostic.message);
         continue;
-      } else {
-        try {
-          const raw = await measure(basePath, headPath);
-          const { measurement, ignoredTop, ignoredBottom } = ignoreSystemBands(raw, { top: statusBarBandPercent(options.platform), bottom: homeIndicatorBandPercent(options.platform) });
-          assessment = assessVisualMeasurements({
-            baselineSamples: 1,
-            currentSamples: 1,
-            requiredSamples: 1,
-            baselineWithin: [],
-            currentWithin: [],
-            crossBuild: [measurement],
-            representative: measurement,
-          });
-          visual = visualVerdict(assessment, threshold);
-          // Measuring moves is extra: once the comparison budget is spent, regions go out unmeasured.
-          if (visual.verdict === "modified" && visual.regions?.length && now() <= deadline) {
-            Object.assign(visual, await withRegionShifts(basePath, headPath, measurement.regions, visual.regions));
-          }
-          if (ignoredTop > 0) visual.ignoredStatusBarRegions = ignoredTop;
-          if (ignoredBottom > 0) visual.ignoredHomeIndicatorRegions = ignoredBottom;
-          visualCounts.compared += 1;
-          if (visual.verdict === "modified") visualCounts.modified += 1;
-          else if (visual.verdict === "unchanged") visualCounts.unchanged += 1;
-          else visualCounts.needsReview += 1;
-        } catch (error) {
-          visualCounts.failed += 1;
-          const diagnostic = comparisonError(id, error, { code: "VISUAL_COMPARISON_FAILED", stage: "compare",
-            message: "Screenshot comparison failed.", nextAction: "Check the screenshot files and the agent-device comparison diagnostics, then rerun comparison.", retryable: true });
-          recordError(visualCounts.errors, id, diagnostic.message);
-          continue;
-        }
       }
+      const { visual, assessment } = compared;
+      visualCounts.compared += 1;
+      if (visual.verdict === "modified") visualCounts.modified += 1;
+      else if (visual.verdict === "unchanged") visualCounts.unchanged += 1;
+      else visualCounts.needsReview += 1;
 
       const scope = surfaceSourceScope(surface) ?? "none";
       let review: PublicSurfaceReview | undefined;
@@ -515,6 +711,7 @@ export async function assessPublicEvidence(options: {
             base: matchedSide("base", options.base, { ...surface.baseSurface, id: baseId }, options.profile),
             head: matchedSide("head", options.head, { ...surface.headSurface, id }, options.profile),
             visualAssessment: assessment,
+            siblings: siblings(id),
           });
           const summary = summarizeReviewerChanges({ changes: result.reviewerChanges });
           accessibilityCounts.compared += 1;
@@ -544,11 +741,13 @@ export async function assessPublicEvidence(options: {
     const basePath = localEvidencePath(options.base, baseLaunch.splash.path); const headPath = localEvidencePath(options.head, headLaunch.splash.path);
     if (!basePath || !headPath) continue;
     try {
-      const { measurement, ignoredTop, ignoredBottom } = ignoreSystemBands(await measure(basePath, headPath), { top: statusBarBandPercent(options.platform), bottom: homeIndicatorBandPercent(options.platform) });
+      const raw = await measure(basePath, headPath);
+      const { measurement, ignoredStatusBar: ignoredTop, ignoredHomeIndicator: ignoredBottom } = ignoreSystemRegions(raw, system, systemBandFrameLoader(raw, threshold));
       const visual = visualVerdict(assessVisualMeasurements({ baselineSamples: 1, currentSamples: 1, requiredSamples: 1,
         baselineWithin: [], currentWithin: [], crossBuild: [measurement], representative: measurement }), threshold);
       if (ignoredTop > 0) visual.ignoredStatusBarRegions = ignoredTop;
       if (ignoredBottom > 0) visual.ignoredHomeIndicatorRegions = ignoredBottom;
+      if (ignoredTop > 0 || ignoredBottom > 0) visual.systemRegions = system.map((area) => ({ ...area }));
       surfaces[id] = { visual };
     } catch (error) {
       comparisonError(id, error, { code: "VISUAL_COMPARISON_FAILED", stage: "compare",

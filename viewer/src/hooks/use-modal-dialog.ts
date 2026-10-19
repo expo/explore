@@ -9,7 +9,7 @@ const FOCUSABLE = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(", ");
 
-/** Escape to close, Tab wrapped inside the dialog, focus restored to the opener. */
+/** Escape to close, Tab wrapped inside the dialog, focus restored to the opener unless what closed it moved focus on. */
 export function useModalDialog(open: boolean, onClose: () => void) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef<Element | null>(null);
@@ -17,6 +17,7 @@ export function useModalDialog(open: boolean, onClose: () => void) {
   useEffect(() => {
     if (!open) return;
     restoreFocusRef.current = document.activeElement;
+    const dialog = dialogRef.current;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
       if (event.key !== "Tab") return;
@@ -36,7 +37,7 @@ export function useModalDialog(open: boolean, onClose: () => void) {
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      (restoreFocusRef.current as HTMLElement | null)?.focus?.();
+      if (document.activeElement === document.body || dialog?.contains(document.activeElement)) (restoreFocusRef.current as HTMLElement | null)?.focus?.();
     };
   }, [open, onClose]);
 

@@ -3,6 +3,7 @@ import ts from "typescript";
 import { parseTwoDotNameStatus, type SourceChange } from "./git-diff.js";
 import type { SourceCapturePlan } from "./capture-plan.js";
 import { DEFAULT_GLOBAL_IMPACT_PATHS } from "./impact.js";
+import { sameCodeIgnoringTrivia } from "./trivia.js";
 import { sourceImpactKinds, sourceImpactSentences } from "../contracts/source-change.js";
 
 export type SourceLineRange = { start: number; end: number };
@@ -376,10 +377,13 @@ function changedPaths(change: SourceChange): string[] {
   return [change.path, ...("previousPath" in change ? [change.previousPath] : [])];
 }
 
+/** A modified file whose program did not change (comments or whitespace only) leaves no evidence: it changes no screen. */
+type FileEvidence = Omit<SourceFileChangeSummary, "relation"> | { triviaOnly: true };
+
 function fileEvidence(options: {
   baseProject: string; headProject: string; baseSha: string; headSha: string;
   change: SourceChange; budget: { remaining: number };
-}): Omit<SourceFileChangeSummary, "relation"> {
+}): FileEvidence {
   const { change } = options;
   const previousPath = "previousPath" in change ? change.previousPath : undefined;
   const base = readBlob(options.baseProject, options.baseSha, previousPath ?? change.path, options.budget);
@@ -392,6 +396,7 @@ function fileEvidence(options: {
     baseStart: Number(match[1]), baseLines: Number(match[2] ?? 1),
     headStart: Number(match[3]), headLines: Number(match[4] ?? 1),
   }));
+  if (change.status === "modified" && !base.truncated && !head.truncated && sameCodeIgnoringTrivia(change.path, base.source, head.source)) return { triviaOnly: true };
   const extracted = base.truncated || head.truncated ? undefined : codeFacts(change.path, base.source ?? "", head.source ?? "");
   const facts = extracted?.length ? extracted : [{
     kind: "code" as const,
@@ -461,7 +466,7 @@ export function createSourceChangeSummaries(options: {
   ], 4 * 1024 * 1024).stdout));
   if (changes.length > SOURCE_CHANGE_SUMMARY_LIMITS.changedFiles) throw new Error("Source summary exceeds changed-file limit");
   const globals = new Set<string>([...DEFAULT_GLOBAL_IMPACT_PATHS.filter((path) => !path.endsWith("/")), "tsconfig.json"]);
-  const cache = new Map<string, Omit<SourceFileChangeSummary, "relation">>();
+  const cache = new Map<string, FileEvidence>();
   const budget = { remaining: SOURCE_CHANGE_SUMMARY_LIMITS.totalSourceBytes };
   const summaries: Record<string, SourceChangeSummary> = {};
   for (const surface of plan.surfaces) {
@@ -480,18 +485,23 @@ export function createSourceChangeSummaries(options: {
         !/^(?:\.github\/|docs\/|tests?\/|scripts\/)|(?:\.md$|\.(?:test|spec)\.[jt]sx?$)/.test(path)
       ))));
     }
-    const selected = relevant.sort((left, right) => {
+    const ranked = relevant.sort((left, right) => {
       const rank = { route: 0, "declared-source": 1, dependency: 2, global: 3 };
       return rank[relation(surface, left)] - rank[relation(surface, right)] || left.path.localeCompare(right.path);
-    }).slice(0, SOURCE_CHANGE_SUMMARY_LIMITS.filesPerSurface);
-    const files = selected.map((change): SourceFileChangeSummary => {
+    });
+    // A comment-only file leaves no evidence, so it does not take one of the surface's file slots either.
+    const files: SourceFileChangeSummary[] = [];
+    let considered = 0;
+    for (const change of ranked) {
+      if (files.length === SOURCE_CHANGE_SUMMARY_LIMITS.filesPerSurface) break;
+      considered += 1;
       let evidence = cache.get(change.path);
       if (!evidence) {
         evidence = fileEvidence({ ...options, baseSha: plan.baseSha, headSha: plan.headSha, change, budget });
         cache.set(change.path, evidence);
       }
-      return { ...evidence, relation: relation(surface, change) };
-    });
+      if (!("triviaOnly" in evidence)) files.push({ ...evidence, relation: relation(surface, change) });
+    }
     const impact: SourceChangeSummary["impact"] = files.some((file) => file.relation === "route" || file.relation === "declared-source")
       ? "direct" : files.some((file) => file.relation === "dependency") ? "dependency"
         : globalImpact || (surface.status === "modified" && plan.conservative) ? "global"
@@ -501,7 +511,7 @@ export function createSourceChangeSummaries(options: {
       baseSha: plan.baseSha, headSha: plan.headSha, impact,
       summary: summaryText(surface, impact, files),
       files,
-      truncated: relevant.length > selected.length || files.some((file) => file.truncated),
+      truncated: ranked.length > considered || files.some((file) => file.truncated),
     };
   }
   return summaries;

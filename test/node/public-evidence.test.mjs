@@ -3,10 +3,11 @@ import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { PNG as PngImage } from "pngjs";
 
-import { assessPublicEvidence, presenceDescription, ignoreStatusBar, ignoreSystemBands, readExportedMap } from "../../dist/review/evidence-assessment.js";
+import { assessPublicEvidence, decideReview, presenceDescription, ignoreStatusBar, ignoreSystemBands, ignoreSystemRegions, readExportedMap } from "../../dist/review/evidence-assessment.js";
 import { STATUS_BAR_BAND_PERCENT } from "../../dist/shared/png-evidence.js";
-import { homeIndicatorBandPercent, statusBarBandPercent } from "../../dist/contracts/capture.js";
+import { homeIndicatorBandPercent, statusBarBandPercent, systemRegions } from "../../dist/contracts/capture.js";
 import { AGENT_DEVICE_VERSION } from "../../dist/capture/run.js";
 
 const BASE_SHA = "a".repeat(40);
@@ -339,8 +340,10 @@ test("expired comparison budgets produce diagnostics rather than review verdicts
   const root = await mkdtemp(join(tmpdir(), "explore-public-evidence-")); t.after(() => rm(root, { recursive: true, force: true }));
   const base = await side(root, "base", manifests.base);
   const head = await side(root, "head", manifests.head);
-  let clock = 0;
-  const result = await assessPublicEvidence({ plan: plan(), base, head, profile: "explore:bundle", agentDeviceCommand: "/nonexistent/agent-device", timeBudgetMs: 0, now: () => clock++, measure: async () => { assert.fail('expired comparisons do not run'); } });
+  let clock = 0, measured = 0;
+  const result = await assessPublicEvidence({ plan: plan(), base, head, profile: "explore:bundle", agentDeviceCommand: "/nonexistent/agent-device", timeBudgetMs: 0, now: () => clock++,
+    measure: async (...args) => { measured += 1; return measurer({})(...args); } });
+  assert.equal(measured, 0, "expired comparisons do not run");
   assert.equal(result.summary.visual.compared, 0);
   assert.equal(result.summary.visual.failed, 3);
   assert.equal(result.summary.visual.needsReview, 0);
@@ -419,6 +422,33 @@ test("status-bar glyph differences never count as an app change", async (t) => {
   const android = ignoreSystemBands({ ...statusBarOnly, differentPixels: 140, regions: [indicator] }, { top: statusBarBandPercent("android"), bottom: homeIndicatorBandPercent("android") });
   assert.deepEqual([android.ignoredTop, android.ignoredBottom, android.measurement.match], [0, 0, false]);
 
+  // A region that crosses the band's edge is clipped to its pixels below the band, read from the frames themselves:
+  // in a 100x874 frame the iOS band is 56 rows, so a glyph drawn over rows 50-59 keeps only its 4 rows below. The
+  // band still counts as ignored, so the Viewer marks the pixels left out of the comparison.
+  const frame = (paint) => { const png = new PngImage({ width: 100, height: 874 }); png.data.fill(255); paint?.(png); return png; };
+  const paintRows = (from, to) => (png) => { for (let y = from; y < to; y += 1) for (let x = 10; x < 20; x += 1) png.data.fill(0, (y * 100 + x) * 4, (y * 100 + x) * 4 + 3); };
+  const frames = (to) => () => ({ baseline: frame(), current: frame(paintRows(50, to)), distance: 0.1 * Math.sqrt(3 * 255 ** 2) });
+  const straddling = (height, pixels) => ({ index: 0, rect: { x: 10, y: 50, width: 10, height }, normalizedRect: { x: 10, y: 5.72, width: 10, height: (height / 874) * 100 }, differentPixels: pixels, shareOfDiffPercentage: 100, densityPercentage: 100, shape: "block", size: "small", location: "top-left", dominantChange: "darker" });
+  const whole = { ...statusBarOnly, totalPixels: 87400, differentPixels: 100, mismatchPercentage: 0.11, regions: [straddling(10, 100)] };
+  const clipped = ignoreSystemBands(whole, { top: statusBarBandPercent("ios"), bottom: 0 }, frames(60));
+  assert.deepEqual([clipped.ignoredTop, clipped.measurement.match, clipped.measurement.differentPixels, clipped.measurement.mismatchPercentage], [1, false, 40, 0.05]);
+  assert.deepEqual(clipped.measurement.regions.map((entry) => [entry.rect.y, entry.rect.height, entry.differentPixels, entry.shareOfDiffPercentage]), [[56, 4, 40, 100]]);
+  assert.equal(clipped.measurement.regions[0].normalizedRect.y, 6.41);
+  const glyph = ignoreSystemBands({ ...whole, differentPixels: 60, regions: [straddling(7, 60)] }, { top: statusBarBandPercent("ios"), bottom: 0 }, frames(56));
+  assert.deepEqual([glyph.ignoredTop, glyph.measurement.match, glyph.measurement.regions], [1, true, []]);
+  // agent-device's regions can overlap: a clock merged with a header line below the band has a rect that also holds the
+  // battery, a region of its own. The header line is still what the merged region keeps, not cancelled by the battery.
+  const paintRects = (...rects) => (png) => { for (const [x0, y0, w, h] of rects) for (let y = y0; y < y0 + h; y += 1) for (let x = x0; x < x0 + w; x += 1) png.data.fill(0, (y * 100 + x) * 4, (y * 100 + x) * 4 + 3); };
+  const overlapFrames = () => ({ baseline: frame(), current: frame(paintRects([10, 40, 10, 10], [70, 40, 20, 10], [0, 60, 100, 1])), distance: 0.1 * Math.sqrt(3 * 255 ** 2) });
+  const merged = { ...straddling(21, 200), rect: { x: 0, y: 40, width: 100, height: 21 }, normalizedRect: { x: 0, y: 4.58, width: 100, height: 2.4 } };
+  const battery = { ...straddling(10, 200), index: 1, rect: { x: 70, y: 40, width: 20, height: 10 }, normalizedRect: { x: 70, y: 4.58, width: 20, height: 1.14 } };
+  const overlapping = ignoreSystemBands({ ...whole, differentPixels: 400, regions: [merged, battery] }, { top: statusBarBandPercent("ios"), bottom: 0 }, overlapFrames);
+  assert.deepEqual([overlapping.ignoredTop, overlapping.measurement.match, overlapping.measurement.differentPixels], [2, false, 100]);
+  assert.deepEqual(overlapping.measurement.regions.map((entry) => [entry.rect.y, entry.rect.height, entry.differentPixels]), [[56, 5, 100]]);
+  const unreadable = ignoreSystemBands(whole, { top: statusBarBandPercent("ios"), bottom: 0 }, () => undefined);
+  assert.deepEqual([unreadable.ignoredTop, unreadable.measurement.differentPixels], [0, 100]);
+  assert.equal(statusBarBandPercent("android"), 7, "Android 15 status glyphs on a 720x1600 emulator reach 6.4 %");
+
   const root = await mkdtemp(join(tmpdir(), "explore-public-evidence-")); t.after(() => rm(root, { recursive: true, force: true }));
   const base = await side(root, "base", manifests.base);
   const head = await side(root, "head", manifests.head);
@@ -496,4 +526,161 @@ test("a presence verdict for a long route (an encoded share link) stays within t
     assert.ok(description.startsWith(`${prefix}/p/AAA`) && description.endsWith(`\u2026${suffix}`));
   }
   assert.equal(presenceDescription("Added ", "/home", " screen."), "Added /home screen.");
+});
+
+test("screenshot pairs compare a few at a time, in the loop's order, with the same verdicts as one at a time", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "explore-public-evidence-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const base = await side(root, "base", manifests.base);
+  const head = await side(root, "head", manifests.head);
+  const run = async (concurrency) => {
+    let active = 0, peak = 0;
+    const started = [];
+    const measure = async (baselinePath, currentPath) => {
+      started.push(baselinePath);
+      active += 1; peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      active -= 1;
+      return measurer({ changed: 3.2, stable: 0.4 })(baselinePath, currentPath);
+    };
+    const result = await assessPublicEvidence({ plan: plan(), base, head, profile: "explore:bundle", agentDeviceCommand: "/nonexistent/agent-device", measure, concurrency });
+    return { peak, started, surfaces: result.surfaces, summary: result.summary };
+  };
+  const sequential = await run(1);
+  const parallel = await run(4);
+  assert.equal(sequential.peak, 1);
+  assert.ok(parallel.peak > 1, `comparisons overlap (peak ${parallel.peak})`);
+  assert.deepEqual(parallel.started, sequential.started, "pairs start in the loop's order");
+  assert.deepEqual(parallel.surfaces, sequential.surfaces);
+  assert.deepEqual(parallel.summary, sequential.summary);
+});
+
+test("a pair whose turn comes after the budget expired is not started, and one started in time is used", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "explore-public-evidence-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const base = await side(root, "base", manifests.base);
+  const head = await side(root, "head", manifests.head);
+  // The first comparison takes past the budget: it was started in time, the two queued behind it were not.
+  let time = 0, measured = 0;
+  const measure = async (...args) => { measured += 1; time += 1_000; return measurer({})(...args); };
+  const result = await assessPublicEvidence({ plan: plan(), base, head, profile: "explore:bundle", agentDeviceCommand: "/nonexistent/agent-device",
+    timeBudgetMs: 100, now: () => time, measure, concurrency: 1 });
+  assert.equal(measured, 1);
+  assert.equal(result.summary.visual.compared, 1);
+  assert.equal(result.summary.visual.failed, 2);
+  assert.ok(result.summary.diagnostics.every(item => item.code === 'VISUAL_COMPARISON_BUDGET_EXHAUSTED'));
+});
+
+test("unstable text never makes a screen Modified, and names a variant's runtime state", () => {
+  const unstable = { category: "visible-text", templateId: "visible-text.unstable-within-build", bullet: 'Text varies between captures of the same build: "2m" / "4m" / "3m".' };
+  const summary = (facts) => ({ facts, needsReview: false, reviewIssues: [] });
+  const unchanged = { verdict: "unchanged", reason: "matched", mismatchPercentage: 0, threshold: 0.1, tool: "t" };
+  const modified = { ...unchanged, verdict: "modified", reason: "repeated-cross-build-delta", mismatchPercentage: 0.4, regions: [{ location: "center" }] };
+  assert.deepEqual(decideReview("screen", unchanged, summary([unstable])), { status: "unchanged", description: "No visible change" });
+  const pixels = decideReview("screen", modified, summary([unstable]));
+  assert.deepEqual([pixels.status, pixels.description, pixels.facts.length], ["modified", "Visual change · 0.4% · center", 1]);
+  const real = decideReview("screen", modified, summary([{ category: "accessibility", templateId: "accessibility.label-changed", bullet: 'Changed accessibility label from "Submit" to "Save".' }, unstable]));
+  assert.equal(real.description, 'Changed accessibility label from "Submit" to "Save".');
+  assert.equal(decideReview("none", modified, summary([unstable])).description, 'Runtime state differs: Text varies between captures of the same build: "2m" / "4m" / "3m".');
+  // A variant is named by what else differs, ahead of the runtime text.
+  const target = { category: "interaction", templateId: "interaction.target-changed", bullet: "Changed where “Open” leads." };
+  assert.equal(decideReview("none", modified, summary([unstable, target])).description, "Runtime state differs: Changed where “Open” leads.");
+});
+
+test("text that varies between both builds' own verified appearances is runtime state; an unverified one is no evidence", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "explore-public-evidence-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const capture = async (unverifiedHeadDark) => {
+    const base = await side(join(root, `${unverifiedHeadDark}`), "base", manifests.base);
+    const head = await side(join(root, `${unverifiedHeadDark}`), "head", manifests.head);
+    const labels = { base: ["edited 2m ago", "edited 3m ago"], head: ["edited 4m ago", "edited 5m ago"] };
+    for (const [name, current] of [["base", base], ["head", head]]) {
+      current.bundle.runtimeProfile = { deviceModel: "iPhone 17", osVersion: "26.0", locale: "en-US", orientation: "portrait", colorScheme: "light", colorSchemes: "light,dark" };
+      await addDarkAppearance(current, manifests[name]);
+      for (const [index, suffix] of ["", "@dark"].entries()) {
+        const observation = current.map.observations.find((entry) => entry.id === `${name}-changed-observation${suffix}`);
+        observation.elements[0].label = labels[name][index];
+      }
+    }
+    if (unverifiedHeadDark) head.bundle.outcomes["changed@dark"] = { status: "captured", attempts: 1, landing: "unverified" };
+    return assessPublicEvidence({ plan: plan(), base, head, profile: "explore:bundle", agentDeviceCommand: "/nonexistent/agent-device", measure: measurer({}) });
+  };
+  const verified = await capture(false);
+  assert.deepEqual(verified.surfaces.changed.review, { status: "unchanged", description: "No visible change" });
+  assert.deepEqual(verified.surfaces["changed@dark"].review, { status: "unchanged", description: "No visible change" });
+  // The head's dark capture may show another screen: the light label difference stays a change.
+  const unverified = await capture(true);
+  assert.equal(unverified.surfaces.changed.review.status, "modified");
+  assert.deepEqual(unverified.surfaces.changed.review.facts.map((fact) => fact.templateId), ["accessibility.label-changed"]);
+});
+
+test("a foldable's rail clock pill is left out of the verdict like a phone's status bar", () => {
+  // Measured on EAS Simulator captures of an iPhone Duo (iOS 27.1): a 40×64 pt clock + Wi-Fi pill 28 pt from the right edge.
+  const closed = systemRegions({ platform: "ios", device: "iPhone Duo", pose: "closed" });
+  const open = systemRegions({ platform: "ios", device: "iPhone Duo", pose: "open" });
+  assert.deepEqual(closed, [{ kind: "status-bar", x: 84.55, y: 12.24, width: 10.3, height: 10.62 }, { kind: "home-indicator", x: 0, y: 97, width: 100, height: 3 }]);
+  assert.deepEqual(open[0], { kind: "status-bar", x: 92.43, y: 4.48, width: 5.05, height: 10.76 });
+  assert.deepEqual(systemRegions({ platform: "ios", device: "iPhone Duo", pose: "half-open" })[0], open[0]);
+  assert.deepEqual(systemRegions({ platform: "ios", device: "iPhone Duo" })[0], closed[0], "a foldable boots closed");
+  assert.deepEqual(systemRegions({ platform: "ios", device: "iPhone 17" }), [{ kind: "status-bar", x: 0, y: 0, width: 100, height: 6.5 }, { kind: "home-indicator", x: 0, y: 97, width: 100, height: 3 }]);
+  assert.deepEqual(systemRegions({ platform: "android" }), [{ kind: "status-bar", x: 0, y: 0, width: 100, height: 7 }]);
+
+  // Diff regions from a comment-only PR's report: the ticking clock on each panel, in that report's normalized rects.
+  const region = (rect, location) => ({ index: 0, rect: { x: 0, y: 0, width: 1, height: 1 }, normalizedRect: rect, differentPixels: 400, shareOfDiffPercentage: 100, densityPercentage: 50, shape: "wide", size: "small", location, dominantChange: "brighter" });
+  const closedClock = region({ x: 85.12, y: 12.78, width: 9.08, height: 1.77 }, "middle-right");
+  const openClock = region({ x: 92.71, y: 5.08, width: 4.45, height: 1.79 }, "top-right");
+  const measurement = (regions) => ({ baselinePath: "b", currentPath: "h", totalPixels: 2843532, differentPixels: 400 * regions.length, mismatchPercentage: 0.01, match: false, regions });
+
+  const closedOnly = ignoreSystemRegions(measurement([closedClock]), closed);
+  assert.equal(closedOnly.ignoredStatusBar, 1);
+  assert.equal(closedOnly.measurement.match, true);
+  assert.deepEqual(closedOnly.measurement.regions, []);
+  assert.equal(ignoreSystemRegions(measurement([openClock]), open).measurement.match, true);
+  // Each panel's pill is only ignored on that panel: the other pose's clock is app content there.
+  assert.equal(ignoreSystemRegions(measurement([openClock]), closed).ignoredStatusBar, 0);
+  assert.equal(ignoreSystemRegions(measurement([closedClock]), open).ignoredStatusBar, 0);
+  // The phone's top band never reached the closed panel's pill, and the open clock's bottom edge (6.9%) crossed it.
+  assert.equal(ignoreSystemBands(measurement([closedClock, openClock]), { top: 6.5, bottom: 0 }).ignoredTop, 0);
+  // The app's own rail control just below the pill is kept whole, as is a region that straddles the pill's edge.
+  const railButton = region({ x: 85.4, y: 25.2, width: 8.6, height: 7.4 }, "middle-right");
+  const straddling = region({ x: 83, y: 12.78, width: 11.2, height: 1.77 }, "middle-right");
+  const mixed = ignoreSystemRegions(measurement([closedClock, railButton, straddling]), closed);
+  assert.equal(mixed.ignoredStatusBar, 1);
+  // What is kept shares the remaining difference between them.
+  assert.deepEqual(mixed.measurement.regions, [railButton, straddling].map((kept) => ({ ...kept, shareOfDiffPercentage: 50 })));
+  assert.equal(mixed.measurement.differentPixels, 800);
+  assert.equal(mixed.measurement.match, false);
+  // A region inside the home indicator counts under its own kind.
+  const indicator = region({ x: 40, y: 97.5, width: 20, height: 1 }, "bottom-center");
+  const both = ignoreSystemRegions(measurement([closedClock, indicator]), closed);
+  assert.deepEqual([both.ignoredStatusBar, both.ignoredHomeIndicator, both.measurement.match], [1, 1, true]);
+});
+
+test("only an iPhone foldable gets the rail pill, and a region reaching the right edge stays inside a band", () => {
+  // An Android device whose name matches keeps its own top band; the iPhone Duo's rail is not on its screen.
+  assert.deepEqual(systemRegions({ platform: "android", device: "Surface Duo", pose: "open" }), [{ kind: "status-bar", x: 0, y: 0, width: 100, height: 7 }]);
+
+  // agent-device rounds x and width to 0.01% each, so a region that ends at the right edge can read as ending at 100.01%.
+  const region = (rect) => ({ index: 0, rect: { x: 0, y: 0, width: 1, height: 1 }, normalizedRect: rect, differentPixels: 400, shareOfDiffPercentage: 100, densityPercentage: 50, shape: "wide", size: "small", location: "top-right", dominantChange: "brighter" });
+  const measurement = (regions) => ({ baselinePath: "b", currentPath: "h", totalPixels: 2843532, differentPixels: 400 * regions.length, mismatchPercentage: 0.01, match: false, regions });
+  const battery = region({ x: 0.63, y: 2, width: 99.38, height: 2 }); // minX 9 of 1440 px
+  assert.equal(ignoreSystemBands(measurement([battery]), { top: 6.5, bottom: 0 }).ignoredTop, 1);
+  const indicator = region({ x: 0.63, y: 97.5, width: 99.38, height: 1 });
+  assert.equal(ignoreSystemRegions(measurement([indicator]), systemRegions({ platform: "ios", device: "iPhone 17" })).ignoredHomeIndicator, 1);
+  // The slack is the rounding, no more: a region a tenth of a percent past the band is still kept.
+  assert.equal(ignoreSystemBands(measurement([region({ x: 10, y: 2, width: 20, height: 4.6 })]), { top: 6.5, bottom: 0 }).ignoredTop, 0);
+});
+
+test("on a foldable a region across the pill's edge is kept whole, and one across the home indicator's edge is clipped", () => {
+  const duo = systemRegions({ platform: "ios", device: "iPhone Duo", pose: "closed" });
+  const region = (rect, normalizedRect, differentPixels) => ({ index: 0, rect, normalizedRect, differentPixels, shareOfDiffPercentage: 100, densityPercentage: 100, shape: "block", size: "small", location: "middle-right", dominantChange: "darker" });
+  const measurement = (regions) => ({ baselinePath: "b", currentPath: "h", totalPixels: 87400, differentPixels: regions.reduce((total, entry) => total + entry.differentPixels, 0), mismatchPercentage: 0.11, match: false, regions });
+  // A pill is not a band: what crosses its edge is the app's own rail, so the frames are never read for it.
+  const belowPill = region({ x: 85, y: 190, width: 10, height: 20 }, { x: 85, y: 21.74, width: 10, height: 2.29 }, 200);
+  const kept = ignoreSystemRegions(measurement([belowPill]), duo, () => assert.fail("a pill's edge needs no frames"));
+  assert.deepEqual([kept.ignoredStatusBar, kept.measurement.match, kept.measurement.regions], [0, false, [belowPill]]);
+  // The home indicator is a band across the width, as on a phone: in a 100x874 frame its 3% is the last 26 rows, from 848.
+  const frame = (paint) => { const png = new PngImage({ width: 100, height: 874 }); png.data.fill(255); paint?.(png); return png; };
+  const painted = (png) => { for (let y = 840; y < 850; y += 1) for (let x = 10; x < 20; x += 1) png.data.fill(0, (y * 100 + x) * 4, (y * 100 + x) * 4 + 3); };
+  const crossing = region({ x: 10, y: 840, width: 10, height: 10 }, { x: 10, y: 96.11, width: 10, height: 1.14 }, 100);
+  const clipped = ignoreSystemRegions(measurement([crossing]), duo, () => ({ baseline: frame(), current: frame(painted), distance: 0.1 * Math.sqrt(3 * 255 ** 2) }));
+  assert.deepEqual([clipped.ignoredStatusBar, clipped.ignoredHomeIndicator, clipped.measurement.match, clipped.measurement.differentPixels], [0, 1, false, 80]);
+  assert.deepEqual(clipped.measurement.regions.map((entry) => [entry.rect.y, entry.rect.height, entry.differentPixels, entry.shareOfDiffPercentage]), [[840, 8, 80, 100]]);
 });

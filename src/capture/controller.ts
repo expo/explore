@@ -14,20 +14,25 @@ export function defaultRunner(request: CommandRequest): CommandResult {
     ...(request.timeoutMs ? { timeout: request.timeoutMs } : {}),
   });
   if (result.error) throw result.error;
+  return commandOutcome(request, { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" });
+}
+
+/** A finished command's output, or the error its exit status and output describe. */
+export function commandOutcome(request: CommandRequest, result: { status: number | null; stdout: string; stderr: string }): CommandResult {
   if (result.status !== 0 && !request.allowFailure) {
     const sessionIndex = request.args.indexOf("--session");
     // Our own session or a caller's session attached by explore:session: both answer --json failures with a structured error.
     const structuredFailure = (sessionIndex >= 0 && request.args[sessionIndex + 1] === CONTROLLER_SESSION) || request.args.includes("--json")
-      ? controllerCommandFailure(result.stdout ?? "", request.args[0] ?? "command") : undefined;
+      ? controllerCommandFailure(result.stdout, request.args[0] ?? "command") : undefined;
     if (structuredFailure) throw structuredFailure;
     const subcommand = typeof request.args[0] === "string" ? ` ${request.args[0]}` : "";
-    const detail = failureDetail(`${result.stderr ?? ""}\n${result.stdout ?? ""}`);
+    const detail = failureDetail(`${result.stderr}\n${result.stdout}`);
     throw new Error(
       `${request.command}${subcommand} exited with status ${result.status ?? "unknown"}`
         + (detail ? `: ${detail}` : ""),
     );
   }
-  return { stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+  return { stdout: result.stdout, stderr: result.stderr };
 }
 
 /** Keep the CLI tool host responsive while a remote controller request is in flight. */

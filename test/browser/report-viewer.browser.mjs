@@ -102,7 +102,7 @@ test("a recorded review opens on the real map and before/after evidence and surv
   await expect(page.locator(".collapsed-pr")).toContainText("PR #1");
   // The map is one card per screen; changed screens carry their diff status on the card.
   await expect(page.locator(".map-canvas .react-flow__node-screen")).toHaveCount(33);
-  await expect(page.locator('.map-canvas .screen-screenshot-target[title="/games"]')).toBeVisible();
+  await expect(page.locator('.map-canvas .screen-node-title[aria-label="Copy deep link /games"]')).toBeVisible();
   await expect(page.getByText("No report open")).toHaveCount(0);
   const menu = await openChangesMenu(page);
   // Changes lists the screens with something to see: the three with pixel changes, the added and the removed one.
@@ -421,6 +421,38 @@ test("the Screens tree folds by row, by keyboard, and all at once, and remembers
   const gridOrder = await page.locator(".screens-page .screens-cell").evaluateAll(cells => cells.map(cell => cell.dataset.screenId));
   assert.ok(gridOrder.length > 1);
   assert.deepEqual(gridOrder, treeOrder);
+  assert.deepEqual(errors, []);
+});
+
+test("a fold tried during a find changes nothing: the tree's own folds come back, and are what a reload remembers", { timeout: 60_000 }, async t => {
+  const { page, url, errors } = await openReport(t, { width: 1440, height: 900 });
+  await page.goto(`${url}#/screens`);
+  const tree = page.locator(".screens-tree");
+  await tree.getByRole("button", { name: /^All/ }).click();
+  const folder = tree.locator(".screens-tree-row.folder", { hasText: "onboarding/" });
+  const other = tree.locator(".screens-tree-row.folder").filter({ hasNotText: "onboarding/" }).first();
+  await expect(other).toHaveAttribute("aria-expanded", "true");
+  await folder.click();
+  await expect(folder).toHaveAttribute("aria-expanded", "false");
+
+  // While a find is on every row stays open; folding one there neither shows nor sticks.
+  await page.keyboard.press("/");
+  const field = page.getByRole("searchbox", { name: "Find screens" });
+  await field.fill("/");
+  await expect(folder).toHaveAttribute("aria-expanded", "true");
+  await other.click();
+  await page.keyboard.press("ArrowLeft");
+  await expect(other).toHaveAttribute("aria-expanded", "true");
+  await field.press("Escape");
+  await field.press("Escape");
+  await expect(field).toHaveCount(0);
+  await expect(folder).toHaveAttribute("aria-expanded", "false");
+  await expect(other).toHaveAttribute("aria-expanded", "true");
+
+  await page.reload();
+  await tree.getByRole("button", { name: /^All/ }).click();
+  await expect(folder).toHaveAttribute("aria-expanded", "false");
+  await expect(other).toHaveAttribute("aria-expanded", "true");
   assert.deepEqual(errors, []);
 });
 

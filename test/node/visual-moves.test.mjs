@@ -45,3 +45,12 @@ test("What changed summarizes a screen whose every area moved, per direction, an
   assert.equal(layoutShiftSummary([...moved, ...groupVisualRegions([region(90, 3)])]), undefined);
   assert.equal(layoutShiftSummary([]), undefined);
 });
+
+test("the Viewer keeps a move hundreds of pixels long: a card recentred on a wide screen", async () => {
+  const { visualDiff } = await tsImport("../../viewer/src/utils/review-model.ts", import.meta.url);
+  const parsed = visualDiff({ regions: [{ x: 31.2, y: 21.2, width: 37.6, height: 70.3, share: 63, move: { x: 13.8, y: 0, amount: { x: 395, y: 0 }, unit: "pt" } }], allRegionsMoved: true });
+  assert.deepEqual(parsed?.regions[0]?.move, { x: 13.8, y: 0, amount: { x: 395, y: 0 }, unit: "pt" });
+  // An offset is a percent of the image and still bounded by it; the amount only by the review's own limit.
+  assert.equal(visualDiff({ regions: [{ x: 1, y: 1, width: 10, height: 10, share: 50, move: { x: 140, y: 0, amount: { x: 395, y: 0 }, unit: "pt" } }] })?.regions[0]?.move, undefined);
+  assert.equal(visualDiff({ regions: [{ x: 1, y: 1, width: 10, height: 10, share: 50, move: { x: 1, y: 0, amount: { x: 9000, y: 0 }, unit: "pt" } }] })?.regions[0]?.move, undefined);
+});

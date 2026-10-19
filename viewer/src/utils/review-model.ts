@@ -95,7 +95,21 @@ export type ReviewVisualDiff = {
   ignoredStatusBarRegions?: number;
   /** Diff regions inside the home-indicator band (iOS, bottom) that CI left out of the verdict. */
   ignoredHomeIndicatorRegions?: number;
+  /** The system-drawn areas CI left out, in percent of the screenshot; older reports name only the counts above. */
+  systemRegions?: SystemRegion[];
 };
+
+/** An area the system draws (status bar, home indicator), in percent of the screenshot's width and height. */
+export type SystemRegion = { kind: "status-bar" | "home-indicator"; x: number; y: number; width: number; height: number };
+
+function systemRegion(value: unknown): SystemRegion | undefined {
+  const candidate = record(value);
+  if (!candidate || (candidate.kind !== "status-bar" && candidate.kind !== "home-indicator")) return undefined;
+  const side = (entry: unknown) => (typeof entry === "number" && Number.isFinite(entry) && entry >= 0 && entry <= 100 ? entry : undefined);
+  const x = side(candidate.x), y = side(candidate.y), width = side(candidate.width), height = side(candidate.height);
+  if (x === undefined || y === undefined || width === undefined || height === undefined || width === 0 || height === 0) return undefined;
+  return { kind: candidate.kind, x, y, width, height };
+}
 
 /** Why a side that exists in its revision has no screenshot, as the report states it. */
 export type CaptureNotes = { before?: string; after?: string };
@@ -274,11 +288,17 @@ function visualDiffRegion(value: unknown): VisualDiffRegion | undefined {
   return { x, y, width, height, share, ...(move ? { move } : {}) };
 }
 
+/** The farthest a published move may go, in screenshot pixels (the review contract's own limit). */
+const MAX_MOVE_AMOUNT = 8192;
+
 function regionMove(value: unknown): RegionMove | undefined {
   const candidate = record(value);
   const amount = record(candidate?.amount);
-  const finite = (entry: unknown): entry is number => typeof entry === "number" && Number.isFinite(entry) && Math.abs(entry) <= 100;
-  if (!candidate || !amount || !finite(candidate.x) || !finite(candidate.y) || !finite(amount.x) || !finite(amount.y)
+  // x and y place the outline in percent of the image; the amount is how far, in pixels or points, and a card
+  // recentred on a wide screen moves hundreds.
+  const within = (limit: number) => (entry: unknown): entry is number => typeof entry === "number" && Number.isFinite(entry) && Math.abs(entry) <= limit;
+  const offset = within(100), distance = within(MAX_MOVE_AMOUNT);
+  if (!candidate || !amount || !offset(candidate.x) || !offset(candidate.y) || !distance(amount.x) || !distance(amount.y)
     || (candidate.unit !== "pt" && candidate.unit !== "px")) return undefined;
   return { x: candidate.x, y: candidate.y, amount: { x: amount.x, y: amount.y }, unit: candidate.unit };
 }
@@ -294,8 +314,11 @@ export function visualDiff(value: unknown): ReviewVisualDiff | undefined {
   const count = (value: unknown) => (typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined);
   const ignoredStatusBarRegions = count(candidate.ignoredStatusBarRegions);
   const ignoredHomeIndicatorRegions = count(candidate.ignoredHomeIndicatorRegions);
+  const systemRegions = Array.isArray(candidate.systemRegions)
+    ? candidate.systemRegions.slice(0, MAX_VISUAL_REGIONS).flatMap((entry) => { const area = systemRegion(entry); return area ? [area] : []; }) : [];
   return {
     regions,
+    ...(systemRegions.length > 0 ? { systemRegions } : {}),
     ...(candidate.allRegionsMoved === true && regions.length > 0 && regions.every((region) => region.move) ? { allRegionsMoved: true as const } : {}),
     ...(mismatchPercentage !== undefined ? { mismatchPercentage } : {}),
     ...(ignoredStatusBarRegions !== undefined ? { ignoredStatusBarRegions } : {}),

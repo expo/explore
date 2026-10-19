@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { ImageOff, ScanSearch } from "lucide-react";
 import type { ChangesMenuData } from "../panels/changes-menu";
 import { diffLabel, ACCESSIBILITY_ONLY_HIGHLIGHT, type BuildDiff, type ScreenDiff } from "../../utils/build-diff";
@@ -6,13 +6,14 @@ import type { MapIndex } from "../../utils/model";
 import type { ChangedScreen } from "../../utils/changed-screens";
 import { groupVisualRegions, layoutShiftSummary, type VisualChange } from "../../utils/visual-diff";
 import { formatShortcut, matchesShortcut, SHORTCUTS, shortcutsLive } from "../../utils/shortcuts";
-import { createKeyHold, glideWhileHeld, HOLD_INITIAL_DELAY_MS, type KeyHold } from "../../utils/key-hold";
+import { createKeyHold, DIVIDER_GLIDE, glideWhileHeld, type KeyHold } from "../../utils/key-hold";
 import { optionalStorage } from "../../utils/embedded-report";
 import { usePhoneLayout } from "../../utils/phone-layout";
 import { ToggleGroup } from "../shared/toggle-group";
 import { Tooltip } from "../shared/tooltip";
 import { DEFAULT_SCREENSHOT_RATIO, ScreenshotImage, ScreenshotPlaceholder } from "../shared/screenshot-image";
-import { ChangeOutlines, HomeIndicatorBand, StatusBarBand, SwipeCompare, SWIPE_STEP } from "../panels/visual-diff";
+import { ChangeOutlines, ignoredSystemRegions, SwipeCompare, SystemRegionBands, SWIPE_STEP } from "../panels/visual-diff";
+import type { SystemRegion } from "../../utils/review-model";
 import { placeholderFor, presentedChanges, splitForAssistiveTechnology } from "../../utils/presented-changes";
 import { CompareNav, WhatChangedPopover } from "./compare-header";
 import "./compare-section.css";
@@ -135,7 +136,19 @@ export function useCompareController(options: CompareControllerOptions) {
   const [flipSide, setFlipSide] = useState<"before" | "after">("after");
   const [swipePosition, setSwipePosition] = useState(50);
   const [factsOpen, setFactsOpen] = useState(false);
-  const [aspect, setAspect] = useState(DEFAULT_SCREENSHOT_RATIO);
+  // The frame takes the recorded screenshot's shape at once, then the loaded image's (they agree
+  // unless the report's record is off), so a landscape pair stacks before its pixels arrive. A
+  // screen with no recorded size keeps the last screen's shape until its own image loads. After
+  // decides, as it does for the recorded shape: Before's image counts only on a screen without one,
+  // so a pair whose shape changed does not take whichever side loaded last.
+  const [loadedAspect, setLoadedAspect] = useState<{ screenId: string; aspect: number }>();
+  const aspect = (loadedAspect?.screenId === options.screenId ? loadedAspect.aspect : undefined)
+    ?? screenDiff?.screenshotAspect ?? loadedAspect?.aspect ?? DEFAULT_SCREENSHOT_RATIO;
+  const hasAfter = Boolean(screenDiff?.afterScreenshot);
+  const setAspect = useCallback((value: number, side: "before" | "after") => {
+    if (side === "before" && hasAfter) return;
+    setLoadedAspect({ screenId: options.screenId, aspect: value });
+  }, [options.screenId, hasAfter]);
 
   // Each screen starts whole: no area selected, After showing, the facts closed.
   useEffect(() => {
@@ -186,10 +199,10 @@ export function useCompareController(options: CompareControllerOptions) {
   holdRef.current ??= createKeyHold();
   const hold = holdRef.current;
   useEffect(() => hold.end, [hold]);
-  // The hold only tracks the key; the glide reads it every frame and stops with it.
+  // A tap of [ or ] moves the divider one step; held, it keeps going from the same motion. The hold only
+  // tracks the key; the glide reads it every frame and stops with it.
   const glideDivider = (code: string, direction: 1 | -1) => {
-    hold.begin(code, () => true);
-    glideWhileHeld(hold, code, HOLD_INITIAL_DELAY_MS, (steps) => moveDivider(direction, steps));
+    glideWhileHeld(hold.begin(code, () => true), (steps) => moveDivider(direction, steps), DIVIDER_GLIDE);
   };
 
   useEffect(() => {
@@ -225,10 +238,10 @@ export function useCompareController(options: CompareControllerOptions) {
         flip();
       } else if (matchesShortcut(event, keys.dividerLeft)) {
         if (state.mode !== "swipe") return;
-        if (moveDivider(-1)) glideDivider(event.code, -1);
+        glideDivider(event.code, -1);
       } else if (matchesShortcut(event, keys.dividerRight)) {
         if (state.mode !== "swipe") return;
-        if (moveDivider(1)) glideDivider(event.code, 1);
+        glideDivider(event.code, 1);
       } else if (matchesShortcut(event, keys.outlines)) {
         toggleOutlines();
       } else if (matchesShortcut(event, keys.whatChanged)) {
@@ -239,7 +252,7 @@ export function useCompareController(options: CompareControllerOptions) {
       event.preventDefault();
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (hold.holding(event.code)) hold.end();
+      hold.release(event.code);
     };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
@@ -255,6 +268,7 @@ export function useCompareController(options: CompareControllerOptions) {
   const shownOutlines = outlines && areas.length > 0;
   const statusBarIgnored = (screenDiff?.visual?.ignoredStatusBarRegions ?? 0) > 0;
   const homeIndicatorIgnored = (screenDiff?.visual?.ignoredHomeIndicatorRegions ?? 0) > 0;
+  const systemRegions = useMemo(() => ignoredSystemRegions(screenDiff?.visual), [screenDiff]);
   const modeOptions = compareModeOptions();
   // The switch shows the mode the reviewer chose, not the one-screenshot view a screen with nothing
   // to compare falls back to. Such a screen turns the whole switch off, with nothing current, so
@@ -263,7 +277,7 @@ export function useCompareController(options: CompareControllerOptions) {
   const modesDisabled = !comparable;
   return {
     screen, screenDiff, route, position, previous, next, comparable, areas, facts, split, layoutShift, measurable,
-    mode, chosenMode, modesDisabled, chooseMode, modeOptions, outlines, shownOutlines, statusBarIgnored, homeIndicatorIgnored, toggleOutlines,
+    mode, chosenMode, modesDisabled, chooseMode, modeOptions, outlines, shownOutlines, statusBarIgnored, homeIndicatorIgnored, systemRegions, toggleOutlines,
     activeArea, setActiveArea, stepArea, flipSide, flip, swipePosition, setSwipePosition,
     aspect, setAspect, factsOpen, setFactsOpen,
   };
@@ -318,7 +332,7 @@ export function CompareSection(props: CompareSectionProps) {
   const compare = useCompareController(props);
   const {
     screen, screenDiff, route, areas, facts, mode, chooseMode, modeOptions, outlines, shownOutlines,
-    statusBarIgnored, homeIndicatorIgnored, toggleOutlines, activeArea, flipSide, flip, swipePosition, setSwipePosition, aspect,
+    statusBarIgnored, homeIndicatorIgnored, systemRegions, toggleOutlines, activeArea, flipSide, flip, swipePosition, setSwipePosition, aspect,
     setAspect, factsOpen, setFactsOpen,
   } = compare;
   const sectionRef = useRef<HTMLElement>(null);
@@ -336,8 +350,7 @@ export function CompareSection(props: CompareSectionProps) {
   const overlay = shownOutlines ? (
     <>
       <ChangeOutlines changes={areas} activeIndex={activeArea} />
-      {statusBarIgnored ? <StatusBarBand /> : null}
-      {homeIndicatorIgnored ? <HomeIndicatorBand /> : null}
+      <SystemRegionBands regions={systemRegions} />
     </>
   ) : null;
 
@@ -390,8 +403,7 @@ export function CompareSection(props: CompareSectionProps) {
           areas={areas}
           activeArea={activeArea}
           showOutlines={shownOutlines}
-          statusBarIgnored={statusBarIgnored}
-          homeIndicatorIgnored={homeIndicatorIgnored}
+          systemRegions={systemRegions}
           overlay={overlay}
           flipSide={flipSide}
           onFlip={flip}
@@ -441,15 +453,15 @@ type StageProps = {
   areas: VisualChange[];
   activeArea: number | undefined;
   showOutlines: boolean;
-  statusBarIgnored: boolean;
-  homeIndicatorIgnored: boolean;
+  systemRegions: readonly SystemRegion[];
   overlay: ReactNode;
   flipSide: "before" | "after";
   onFlip: () => void;
   swipePosition: number;
   onSwipePosition: (position: number) => void;
   aspect: number;
-  onAspect: (aspect: number) => void;
+  /** A screenshot of the stage loaded: its width over its height, and which side it shows. */
+  onAspect: (aspect: number, side: "before" | "after") => void;
 };
 
 export function CompareStage(props: StageProps) {
@@ -475,11 +487,11 @@ export function CompareStage(props: StageProps) {
           before={before}
           after={after}
           imageAspect={props.aspect}
+          onAspect={props.onAspect}
           changes={props.areas}
           activeIndex={props.activeArea}
           showOutlines={props.showOutlines}
-          statusBarIgnored={props.statusBarIgnored}
-          homeIndicatorIgnored={props.homeIndicatorIgnored}
+          systemRegions={props.systemRegions}
           position={props.swipePosition}
           onPositionChange={props.onSwipePosition}
           labels={props.swipeLabels !== "above"}
@@ -515,7 +527,7 @@ export function CompareStage(props: StageProps) {
           <button type="button" className="compare-frame compare-flip-frame" data-side={showing}
             aria-label={`Show ${showing === "after" ? "Before" : "After"}`} onClick={props.onFlip}>
             <CompareImage src={showing === "after" ? after : before} alt={`${props.title}, ${showing}`}
-              placeholder="No screenshot" onAspect={props.onAspect} />
+              placeholder="No screenshot" side={showing} onAspect={props.onAspect} />
             {props.overlay}
           </button>
         </div>
@@ -536,7 +548,7 @@ export function CompareStage(props: StageProps) {
         <div className="compare-frame-wrap">
           <div className="compare-frame">
             <CompareImage src={src} alt={`${props.title}, ${showing}`}
-              placeholder={placeholderFor(showing, diff.status, diff.captureNotes)} onAspect={props.onAspect} />
+              placeholder={placeholderFor(showing, diff.status, diff.captureNotes)} side={showing} onAspect={props.onAspect} />
           </div>
         </div>
       </figure>
@@ -574,7 +586,7 @@ export function CompareStage(props: StageProps) {
               <div className="compare-frame">
                 {src ? (
                   <CompareImage src={src} alt={`${props.title}, ${side}`}
-                    placeholder={placeholderFor(side, diff.status, diff.captureNotes)} onAspect={props.onAspect} />
+                    placeholder={placeholderFor(side, diff.status, diff.captureNotes)} side={side} onAspect={props.onAspect} />
                 ) : (
                   <ScreenshotPlaceholder label={placeholderFor(side, diff.status, diff.captureNotes)} />
                 )}
@@ -591,7 +603,10 @@ export function CompareStage(props: StageProps) {
   );
 }
 
-function CompareImage(props: { src: string; alt: string; placeholder: string; onAspect: (aspect: number) => void }) {
+function CompareImage(props: {
+  src: string; alt: string; placeholder: string; side: "before" | "after";
+  onAspect: (aspect: number, side: "before" | "after") => void;
+}) {
   return (
     <ScreenshotImage
       src={props.src}
@@ -602,7 +617,7 @@ function CompareImage(props: { src: string; alt: string; placeholder: string; on
       fallback={<ScreenshotPlaceholder label={props.placeholder} />}
       onLoad={(event) => {
         const { naturalWidth, naturalHeight } = event.currentTarget;
-        if (naturalWidth > 0 && naturalHeight > 0) props.onAspect(naturalWidth / naturalHeight);
+        if (naturalWidth > 0 && naturalHeight > 0) props.onAspect(naturalWidth / naturalHeight, props.side);
       }}
     />
   );

@@ -58,11 +58,11 @@
    Inspector's side-by-side pair. */
 .compare-side[data-side="before"], .compare-flip-frame[data-side="before"], [data-diff-side="before"] { --outline-before: 1; }
 
-/* The status-bar band CI does not compare: blurred out, explained by its tooltip on hover. */
+/* The system-drawn areas CI does not compare (status bar, rail clock pill, home indicator): blurred out, each placed
+   by its inline percentages, explained by its tooltip on hover. */
 .visual-status-bar-band {
   position: absolute;
   z-index: 1;
-  inset: 0 0 auto 0;
   background: rgba(127, 127, 127, 0.08);
   cursor: help;
   pointer-events: auto;
@@ -71,7 +71,6 @@
   transition: background 120ms ease;
 }
 .visual-status-bar-band:hover { background: rgba(127, 127, 127, 0.2); }
-.visual-home-indicator-band { inset: auto 0 0 0; }
 
 /* ── Swipe: one frame, Before left of the divider and After right of it ─── */
 
@@ -107,6 +106,10 @@
   pointer-events: none;
 }
 .visual-swipe-before { clip-path: inset(0 calc(100% - var(--swipe-position)) 0 0); }
+/* With a moved area, each side's outlines over its own half (see ChangeOutlines). */
+.visual-swipe-outlines { position: absolute; z-index: 1; inset: 0; pointer-events: none; }
+.visual-swipe-outlines.before { --outline-before: 1; clip-path: inset(0 calc(100% - var(--swipe-position)) 0 0); }
+.visual-swipe-outlines.after { clip-path: inset(0 0 0 var(--swipe-position)); }
 .visual-swipe .visual-change-outline { background: transparent; border-style: dashed; }
 .visual-swipe-divider {
   position: absolute;
