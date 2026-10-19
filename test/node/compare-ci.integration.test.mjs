@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runCompareCi } from '../../dist/ci/pipeline.js';
 import { writeCaptureOutputs } from '../../dist/ci/workflow-steps.js';
@@ -16,6 +16,10 @@ test('any two commits: a capture and report like a pull request\'s, with no pull
   await writeFile(comparePath, JSON.stringify({ origin: 'compare', repositoryId: '123', repository: 'acme/example',
     base: { ref: 'v1.0.0', sha: f.baseSha }, head: { ref: 'v1.1.0', sha: f.headSha } }));
   const output = join(f.root, 'compare');
+  // Another target's flows may be running in the same checkout: Explore's scratch directory is not a source change.
+  const scratch = join(f.baseProject, '.expo-explore-flows');
+  await mkdir(join(scratch, 'android-abc'), { recursive: true });
+  await writeFile(join(scratch, 'android-abc', 'frame.png'), 'png');
   const result = await runCompareCi({ baseProject: f.baseProject, headProject: f.headProject, comparePath, output, config: f.config,
     environment: { ...f.environment, GITHUB_TOKEN: '' }, runner: f.runner, now: f.now, sleep: f.sleep });
 
@@ -66,6 +70,7 @@ test('any two commits: a capture and report like a pull request\'s, with no pull
   assert.match(summary, new RegExp(`\\(https://github\\.com/acme/example/compare/${f.baseSha}\\.\\.${f.headSha}\\)`));
   assert.match(summary, /^- iOS.*: \d+ changes?$/m);
 
+  await rm(scratch, { recursive: true, force: true });
   assert.equal(git(f.baseProject, 'status', '--porcelain'), '');
   assert.equal(git(f.headProject, 'status', '--porcelain'), '');
   assert.equal(f.requests.filter(request => request.args[0] === 'simulator:start').length,

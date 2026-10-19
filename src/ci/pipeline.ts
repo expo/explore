@@ -1,4 +1,5 @@
 import type { RunTarget } from "../types.js";
+import { FLOWS_OUTPUT_DIRECTORY } from "../capture/flows/run-flows.js";
 import { spawnSync } from "node:child_process";
 import { mkdir, open, readFile, realpath, writeFile } from "node:fs/promises";
 import { join, relative, resolve, isAbsolute } from "node:path";
@@ -40,10 +41,17 @@ function requireSecret(environment: NodeJS.ProcessEnv, name: string): string {
   return value;
 }
 function assertCheckout(project: string, sha: string): void {
-  for (const [args, expected] of [[ ["rev-parse", "HEAD"], sha ], [["status", "--porcelain", "--untracked-files=normal"], ""]] as const) {
+  // Explore's own flows scratch directory (another target's flows may be running in the same checkout) is not a change.
+  const checks = [
+    [["rev-parse", "HEAD"], sha],
+    [["status", "--porcelain", "--untracked-files=normal", "--", ".", `:(exclude)${FLOWS_OUTPUT_DIRECTORY}`], ""],
+  ] as const;
+  for (const [args, expected] of checks) {
     const result = spawnSync("git", ["-C", project, ...args], { encoding: "utf8" });
-    if (result.status !== 0 || result.stdout.trim() !== expected) throw new CiError({
-      code: "SOURCE_CHECKOUT_MISMATCH", stage: "preflight", message: `Source checkout does not match ${sha}.`,
+    const observed = result.stdout.trim();
+    if (result.status !== 0 || observed !== expected) throw new CiError({
+      code: "SOURCE_CHECKOUT_MISMATCH", stage: "preflight",
+      message: `Source checkout does not match ${sha} (${args[0] === "rev-parse" ? `HEAD is ${observed.slice(0, 12) || "unreadable"}` : `changed: ${observed.split("\n").slice(0, 3).join(", ")}`}).`,
       nextAction: "Check out the exact recorded commit and remove generated changes from the source checkout." });
   }
 }
