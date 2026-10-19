@@ -20,7 +20,8 @@
 .flow-filmstrip { list-style: none; margin: 0; padding: 4px 0 8px; display: flex; flex-wrap: wrap; gap: 16px; }
 /* Phone: one horizontal strip, swiped frame by frame. Desktop wraps so a long flow is visible at a glance. */
 .flows-page.phone .flow-filmstrip { flex-wrap: nowrap; overflow-x: auto; scroll-snap-type: x proximity; }
-.flow-frame { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; scroll-snap-align: start; }
+.flow-frame { flex: 0 0 auto; width: 140px; display: flex; flex-direction: column; gap: 8px; scroll-snap-align: start; }
+.flows-page.phone .flow-frame { width: 150px; }
 .flow-frame-face {
   position: relative;
   margin: 0;
@@ -90,8 +91,9 @@
 .flows-page.phone .flow-frame-image { width: 150px; }
 .flow-frame-missing { width: 140px; aspect-ratio: 402 / 874; border-radius: 10px; border: 1px dashed #d0d0d0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 12px; box-sizing: border-box; font-size: 12px; color: var(--text-muted, #6b6b6b); }
 .flow-frame-missing small { font-size: 11px; }
-.flow-frame-caption { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.flow-frame-caption strong { font-size: 13px; font-weight: 600; }
+.flow-frame-caption { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+/* The label is the step that produced the frame; long locators clamp to two lines (full text on hover). */
+.flow-frame-caption strong { font-size: 12px; font-weight: 600; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .flow-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
 .flow-step { display: grid; grid-template-columns: 22px auto 1fr auto; column-gap: 8px; row-gap: 2px; align-items: baseline; padding: 6px 8px; border-radius: 8px; min-height: 44px; box-sizing: border-box; }
 .flow-step.frame { background: #f6f8fb; }

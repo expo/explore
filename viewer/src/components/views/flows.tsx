@@ -112,7 +112,7 @@ function Frame(props: {
         )}
       </figure>
       <div className="flow-frame-caption">
-        <strong>{frame.label}</strong>
+        <strong title={frame.label}>{frame.label}</strong>
         <span className={`flow-verdict tone-${verdict.tone}`}>
           {verdict.text}
         </span>
