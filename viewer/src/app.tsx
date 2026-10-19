@@ -7,12 +7,13 @@ import { isEmbeddedArtifactUrl, leaseEmbeddedArtifactUrl, optionalStorage, viewe
 import { REPORT_SOURCE } from "./utils/report-source";
 import { CanvasToolbar } from "./components/canvas/toolbar";
 import { CanvasCameraControls } from "./components/canvas/camera-controls";
+import { MoreMenu } from "./components/canvas/more-menu";
 import { CanvasVisibleFrameProvider } from "./components/canvas/visible-frame-provider";
 import { AppLoading } from "./components/shared/app-loading";
 import { ReportLoadingShell } from "./components/shared/report-loading-shell";
 import { screenLabel } from "./utils/screen-path";
 import { AppPill, PLATFORM_NAMES, runTargets, siblingReportUrl, targetSwitch } from "./components/panels/app-pill";
-import { useFullscreen } from "./components/panels/shell-actions";
+import { fullscreenSupported, useFullscreen } from "./components/panels/shell-actions";
 import { getCanvasZoomState, runCanvasZoomCommand } from "./utils/canvas-zoom";
 import { commandItems, suggestedCommands } from "./utils/commands";
 import { changedScreens, focusCounts as countFocusStatuses, isCapturedChange, type ChangedScreen } from "./utils/changed-screens";
@@ -383,11 +384,8 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
   const revisionRef = useRef<{ runId: string; revision: number } | undefined>(undefined);
   const pollingRef = useRef(false);
   const theme = themePreference === "system" ? preferredSystemTheme : themePreference;
-  // Auto → Dark → Light → Auto, as the button's tooltip spells out.
-  const toggleTheme = useCallback(() => {
-    setThemePreference(current => current === "system" ? "dark" : current === "dark" ? "light" : "system");
-  }, []);
-  // The T key flips what is on screen, dark to light and back; only the button returns to Auto.
+  // The T key flips what is on screen, dark to light and back; only the More menu's theme switch
+  // (or the palette) returns to Auto.
   const flipTheme = useCallback(() => {
     setThemePreference(current => (current === "system" ? preferredSystemTheme : current) === "dark" ? "light" : "dark");
   }, [preferredSystemTheme]);
@@ -1043,6 +1041,10 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
         setHandoffOpen(true);
       } else if (matchesShortcut(event, SHORTCUTS.appearance.theme)) {
         flipTheme();
+      } else if (matchesShortcut(event, SHORTCUTS.view.fullscreen)) {
+        // The More menu and the palette offer full screen only where the browser has it.
+        if (phoneRef.current || !fullscreenSupported()) return;
+        toggleFullscreen();
       } else if (matchesShortcut(event, SHORTCUTS.appearance.app)) {
         // Only a report captured in both schemes has another appearance to show.
         const { options, current } = appearanceRef.current;
@@ -1064,7 +1066,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [chooseAppearance, clearSelectedScreen, flipTheme, navigate, searchOpen, selectCanvas, toggleRightPanel]);
+  }, [chooseAppearance, clearSelectedScreen, flipTheme, navigate, searchOpen, selectCanvas, toggleFullscreen, toggleRightPanel]);
 
   // A side-panel row or a deep link is a "go to": the camera fits that screen and the step is
   // kept. Screens inventory clicks only select in place; Map clicks also focus the chosen screen. Repeating a selected target refits it without adding history.
@@ -1574,7 +1576,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
     theme: themePreference,
     appearances: appearances.length > 1 ? appearances.map((option) => ({ id: option, label: appearanceLabel(option), current: option === appearance })) : [],
     inspector: phone || comparingScreens ? undefined : { open: !rightCollapsed },
-    fullscreen: !phone && typeof document.documentElement.requestFullscreen === "function" ? fullscreen : undefined,
+    fullscreen: !phone && fullscreenSupported() ? fullscreen : undefined,
     targets: (() => {
       const run = runTargets(map.run);
       const noun = run.targets.every((target) => target.id === target.platform) ? "platform" as const : "device" as const;
@@ -1692,10 +1694,8 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
             />
           )}
         </div>
-        {phone ? null : (
-          <CanvasCameraControls inspectorCollapsed={comparing ? false : rightCollapsed} theme={theme} themePreference={themePreference} onToggleTheme={toggleTheme}
-            camera={route.canvas === "map"} />
-        )}
+        {/* Top right holds the camera only, so only the Map has anything there. */}
+        {phone || route.canvas !== "map" ? null : <CanvasCameraControls />}
         {phone ? (
           <PhoneTabBar
             canvas={route.canvas}
@@ -1706,7 +1706,12 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
           canvas={route.canvas}
           searchOpen={searchOpen}
           {...(handoffAction ? { actions: handoffAction } : {})}
-          onOpenShortcuts={() => setShortcutsOpen(true)}
+          more={<MoreMenu
+            themePreference={themePreference}
+            onChangeTheme={setThemePreference}
+            {...(fullscreenSupported() ? { fullscreen: { active: fullscreen, onToggle: toggleFullscreen } } : {})}
+            onOpenShortcuts={() => setShortcutsOpen(true)}
+          />}
           onSelectCanvas={selectCanvas}
           onOpenSearch={() => setSearchOpen(true)}
         />}
@@ -1714,6 +1719,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
       {shortcutsOpen ? (
         <ShortcutsDialog
           context={{ canvas: route.canvas, review: reviewingInSidebar, hasChanges: compareOrder.length > 0, handoff: Boolean(handoffInput), appearances: appearances.length > 1,
+            fullscreen: !phone && fullscreenSupported(),
             ...(switchTargets ? { targets: switchTargets } : {}) }}
           onClose={() => setShortcutsOpen(false)}
         />

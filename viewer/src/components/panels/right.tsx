@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { GitCompareArrows, PanelRight, ScanSearch, X } from "lucide-react";
+import { GitCompareArrows, ScanSearch, X } from "lucide-react";
 import { Tooltip } from "../shared/tooltip";
 import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
 import { InspectorPanel } from "./inspector";
@@ -55,34 +55,25 @@ export function RightPanel(props: RightPanelProps) {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }, [screenId]);
 
-  // Collapsed, the panel icon brings the Inspector back; open, an X closes it.
+  // Closed, the Inspector leaves no button behind: a selection, Return or I opens it. Open, an X
+  // closes it.
+  if (props.collapsed) return null;
   const panelButton = (
-    <Tooltip
-      label={props.collapsed ? "Expand inspector" : "Close inspector"}
-      shortcut={formatShortcut(SHORTCUTS.panel.right)}
-      placement="bottom-end">
+    <Tooltip label="Close inspector" shortcut={formatShortcut(SHORTCUTS.panel.right)} placement="bottom-end">
       <button
         type="button"
         className="icon-button"
-        aria-label={props.collapsed ? "Expand inspector" : "Close inspector"}
-        aria-expanded={!props.collapsed}
+        aria-label="Close inspector"
+        aria-expanded
         onClick={props.onToggleCollapsed}>
-        {props.collapsed ? <PanelRight aria-hidden="true" /> : <X aria-hidden="true" />}
+        <X aria-hidden="true" />
       </button>
     </Tooltip>
   );
 
-  if (props.collapsed) {
-    return (
-      <div className="right-float" role="toolbar" aria-label="Canvas actions">
-        {panelButton}
-      </div>
-    );
-  }
-
   // One header row: the screen's status and path, then the close button. On a phone the close
   // button leads the row instead, away from the screen stepper's arrows. Theme and full screen
-  // live in the canvas camera controls.
+  // live in the bottom bar's "More" menu.
   return (
     <aside className="right-panel" data-drag-sheet aria-label="Inspector panel">
       <header className="right-head" {...(phone ? drag : {})}>

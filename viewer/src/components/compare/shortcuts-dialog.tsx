@@ -19,6 +19,8 @@ export type ShortcutContext = {
   handoff?: boolean;
   /** The report was captured in both light and dark, so the app's appearance can be switched. */
   appearances?: boolean;
+  /** The browser can put the Viewer in full screen. */
+  fullscreen?: boolean;
   /** The run's other targets are one switch away; the pill calls them devices, or platforms in reports from before targets. */
   targets?: { noun: "device" | "platform"; count: number };
 };
@@ -94,6 +96,7 @@ export function shortcutGroups(context: ShortcutContext): Group[][] {
       ...(context.canvas === "compare" ? [] : [{ label: "Show or hide the inspector", keys: [SHORTCUTS.panel.right] }]),
       { label: "Viewer theme: dark or light", keys: [SHORTCUTS.appearance.theme] },
       ...(context.appearances ? [{ label: "The app's appearance: light or dark", keys: [SHORTCUTS.appearance.app] }] : []),
+      ...(context.fullscreen ? [{ label: "Enter or exit full screen", keys: [SHORTCUTS.view.fullscreen] }] : []),
       { label: "Show this list", keys: ["?"] },
     ],
   };
@@ -119,7 +122,7 @@ export function shortcutGroups(context: ShortcutContext): Group[][] {
   return [here, [goTo, view]];
 }
 
-/** The keyboard reference, opened with "?" or the button at the end of the bottom bar. */
+/** The keyboard reference, opened with "?" or from the More menu at the end of the bottom bar. */
 export function ShortcutsDialog(props: { context: ShortcutContext; onClose: () => void }) {
   const dialogRef = useModalDialog(true, props.onClose);
   useEffect(() => {

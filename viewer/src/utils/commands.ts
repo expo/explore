@@ -102,7 +102,8 @@ export function commandItems(context: CommandContext, actions: CommandActions): 
       { keywords: ["app", "appearance", "scheme", "captured"], shortcut: !appearance.current && context.appearances.length === 2 ? key(SHORTCUTS.appearance.app) : undefined });
   }
   if (context.fullscreen !== undefined) {
-    add("view:fullscreen", "View", context.fullscreen ? "Exit full screen" : "Enter full screen", actions.toggleFullscreen, { keywords: ["fullscreen", "window", "focus"] });
+    add("view:fullscreen", "View", context.fullscreen ? "Exit full screen" : "Enter full screen", actions.toggleFullscreen,
+      { keywords: ["fullscreen", "window", "focus"], shortcut: key(SHORTCUTS.view.fullscreen) });
   }
 
   for (const target of context.targets) {

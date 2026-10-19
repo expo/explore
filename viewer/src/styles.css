@@ -133,13 +133,10 @@
   --icon-hit-min: 32px;
   /* Chevrons, carets and status glyphs that sit inline next to text. */
   --icon-glyph-inline: 14px;
-  /* Floating canvas chrome shares a y=30px center line. The collapsed inspector joins the
-     camera controls into one compact toolbar. Reserve space for the visible actions only. */
+  /* Floating canvas chrome shares a y=30px center line. Reserve space for the visible actions only. */
   --floating-chrome-top: 14px;
   --floating-chrome-height: 42px;
   --canvas-chrome-inline-inset: 12px;
-  --right-float-edge: 12px;
-  --right-float-width: calc(var(--icon-btn-md) + 6px);
   --left-collapsed-pill-width: 420px;
   --left-collapsed-pill-height: var(--floating-chrome-height);
   --left-collapsed-pill-top: var(--floating-chrome-top);
@@ -304,16 +301,14 @@ code {
 }
 :root[data-canvas-transition-direction]::view-transition-group(app-pill),
 :root[data-canvas-transition-direction]::view-transition-group(canvas-camera-controls),
-:root[data-canvas-transition-direction]::view-transition-group(canvas-toolbar),
-:root[data-canvas-transition-direction]::view-transition-group(right-floating-controls) {
+:root[data-canvas-transition-direction]::view-transition-group(canvas-toolbar) {
   z-index: 101;
   animation: none;
 }
 :root[data-canvas-transition-direction]::view-transition-image-pair(canvas-minimap),
 :root[data-canvas-transition-direction]::view-transition-image-pair(app-pill),
 :root[data-canvas-transition-direction]::view-transition-image-pair(canvas-camera-controls),
-:root[data-canvas-transition-direction]::view-transition-image-pair(canvas-toolbar),
-:root[data-canvas-transition-direction]::view-transition-image-pair(right-floating-controls) {
+:root[data-canvas-transition-direction]::view-transition-image-pair(canvas-toolbar) {
   isolation: isolate;
 }
 :root[data-canvas-transition-direction]::view-transition-old(canvas-view-content),
@@ -325,9 +320,7 @@ code {
 :root[data-canvas-transition-direction]::view-transition-old(canvas-toolbar),
 :root[data-canvas-transition-direction]::view-transition-old(phone-top-actions),
 :root[data-canvas-transition-direction]::view-transition-new(canvas-toolbar),
-:root[data-canvas-transition-direction]::view-transition-new(phone-top-actions),
-:root[data-canvas-transition-direction]::view-transition-old(right-floating-controls),
-:root[data-canvas-transition-direction]::view-transition-new(right-floating-controls) {
+:root[data-canvas-transition-direction]::view-transition-new(phone-top-actions) {
   mix-blend-mode: normal;
 }
 :root[data-canvas-transition-direction="forward"]::view-transition-old(canvas-view-content) {
@@ -350,15 +343,13 @@ code {
 }
 :root[data-canvas-transition-direction]::view-transition-old(app-pill),
 :root[data-canvas-transition-direction]::view-transition-old(canvas-camera-controls),
-:root[data-canvas-transition-direction]::view-transition-old(canvas-toolbar),
-:root[data-canvas-transition-direction]::view-transition-old(right-floating-controls) {
+:root[data-canvas-transition-direction]::view-transition-old(canvas-toolbar) {
   animation: none;
   opacity: 0;
 }
 :root[data-canvas-transition-direction]::view-transition-new(app-pill),
 :root[data-canvas-transition-direction]::view-transition-new(canvas-camera-controls),
-:root[data-canvas-transition-direction]::view-transition-new(canvas-toolbar),
-:root[data-canvas-transition-direction]::view-transition-new(right-floating-controls) {
+:root[data-canvas-transition-direction]::view-transition-new(canvas-toolbar) {
   animation: none;
   opacity: 1;
 }
@@ -1130,33 +1121,6 @@ code {
   /* Two Diff previews, their 8px gap, and the 14px side insets must fit this same width. */
   --inspector-shared-preview-max-width: calc((100cqw - 36px) / 2);
 }
-/* When minimised, the inspector actions join the camera controls as one floating toolbar. */
-.right-float {
-  position: fixed;
-  z-index: 100;
-  top: var(--chrome-top);
-  right: var(--right-float-edge);
-  width: calc(var(--right-float-width) * var(--ui-scale));
-  height: var(--chrome-height);
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: calc(3px * var(--ui-scale));
-  border: 0;
-  border-radius: 0 calc(8px * var(--ui-scale)) calc(8px * var(--ui-scale)) 0;
-  background: var(--side-panel-surface);
-  box-shadow: none;
-  /* No backdrop blur: the surface is opaque, and a blurred backdrop leaves this toolbar's view
-     transition snapshot stale, so a button that moves into its place paints late. */
-  view-transition-name: right-floating-controls;
-}
-.right-float > * { zoom: var(--ui-scale); }
-.right-float .icon-button.active { color: var(--text); background: var(--element); }
-.right-float .icon-button[disabled] { color: var(--border); cursor: default; background: transparent; }
-.right-float .icon-button:hover {
-  border-color: transparent;
-  background: var(--panel-hover);
-}
 .right-head {
   display: flex;
   flex: none;
@@ -1215,7 +1179,8 @@ code {
   position: absolute;
   z-index: 20;
   top: var(--chrome-top);
-  right: calc(var(--canvas-visible-right-inset, 0px) + 8px);
+  /* Mirrors the pill: the same inset from the canvas' right edge as the pill's from its left. */
+  right: calc(var(--canvas-visible-right-inset, 0px) + var(--canvas-chrome-inline-inset));
   display: inline-flex;
   height: var(--chrome-height);
   align-items: center;
@@ -1226,29 +1191,8 @@ code {
   color: var(--text);
   background: var(--side-panel-surface);
   box-shadow: var(--floating-chrome-shadow);
-  /* No backdrop blur, as on .right-float: with it, entering Compare painted full screen late. */
+  /* No backdrop blur: with it, the view transition's snapshot of these controls painted late. */
   view-transition-name: canvas-camera-controls;
-}
-.canvas-camera-controls.inspector-collapsed {
-  right: calc(
-    var(--canvas-visible-right-inset, 0px) +
-    var(--right-float-edge) + var(--right-float-width) * var(--ui-scale) - 1px
-  );
-  border: 0;
-  border-radius: calc(8px * var(--ui-scale)) 0 0 calc(8px * var(--ui-scale));
-  box-shadow: none;
-}
-.canvas-camera-controls.inspector-collapsed::before {
-  position: absolute;
-  z-index: -1;
-  top: 0;
-  right: calc((var(--right-float-width) * var(--ui-scale) - 1px) * -1);
-  bottom: 0;
-  left: 0;
-  border-radius: calc(8px * var(--ui-scale));
-  box-shadow: var(--floating-chrome-shadow);
-  content: "";
-  pointer-events: none;
 }
 .canvas-camera-controls .camera-action-button,
 .canvas-camera-controls .zoom-button {
@@ -1273,7 +1217,6 @@ code {
   flex: none;
   background: var(--border-subtle);
 }
-.canvas-camera-controls.inspector-collapsed .camera-control-divider { display: none; }
 .canvas-camera-controls .zoom-button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -2069,6 +2012,59 @@ code {
 .menu-row-shortcut { flex: none; margin-left: 16px; color: var(--tertiary); font-size: 11px; }
 .menu-separator { height: 1px; margin: 4px 6px; background: var(--popover-line); }
 
+/* ── More menu (the bottom bar's "…") ───────────────────────────────────── */
+
+/* The menu is anchored to its button, but clears the bar the button sits in. The popover itself
+   is the surface, as the Changes menu's is: an anchored popover scrolls, and would clip a shadow
+   drawn by the list inside it. */
+.menu-popover.more-menu {
+  overflow: hidden !important;
+  border: 1px solid var(--popover-line);
+  border-radius: calc(9px * var(--ui-scale));
+  background: var(--popover);
+  box-shadow: var(--popover-shadow);
+  translate: 0 calc(-12px * var(--ui-scale));
+}
+/* Rows read icon, label, control, key, in the menu's own type and colours. */
+.more-menu-list { display: flex; width: 248px; flex-direction: column; padding: 4px; }
+.more-menu-row {
+  display: flex;
+  width: 100%;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 8px;
+  border-radius: 5px;
+  color: var(--text);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+}
+.more-menu-item:hover,
+.more-menu-item:focus-visible { background: var(--popover-hover); outline: none; }
+.more-menu-icon { display: flex; width: 16px; flex: none; align-items: center; justify-content: center; color: var(--secondary); }
+.more-menu-icon > svg { width: 15px; height: 15px; }
+.more-menu-label { min-width: 0; flex: 1; white-space: nowrap; }
+/* The key column lines up down the menu, whatever the row holds before it. */
+.more-menu-key { min-width: 22px; flex: none; text-align: center; }
+/* A compact three-way switch: Auto, Light, Dark, on the segmented control's track and thumb. */
+.more-theme-switch { display: flex; flex: none; gap: 2px; padding: 2px; border-radius: 7px; background: var(--segment-track); }
+.more-theme-option {
+  display: flex;
+  width: 26px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: var(--tertiary);
+  background: transparent;
+  transition: color 120ms ease, background 120ms ease;
+}
+.more-theme-option > svg { width: 14px; height: 14px; }
+.more-theme-option:hover { color: var(--text); }
+.more-theme-option[aria-checked="true"] { color: var(--text); background: var(--segment-thumb); box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); }
+.more-theme-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+
 /* ── Feedback dialog ────────────────────────────────────────────────────── */
 
 .dialog-backdrop {
@@ -2215,7 +2211,8 @@ code {
 .search-command-result-copy code { color: inherit; font-size: inherit; }
 .search-command-section + .search-command-section { margin-top: 4px; }
 .search-command-section > .search-command-section-label { padding: 8px 8px 4px; }
-.search-command-result-key {
+.search-command-result-key,
+.more-menu-key {
   padding: 2px 6px;
   border: 1px solid var(--border);
   border-radius: 5px;

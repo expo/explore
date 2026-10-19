@@ -197,15 +197,20 @@ async function expectMapSelectionRing(page: Page) {
   await page.mouse.move(1, 1);
 }
 
-/** The camera chrome's theme button steps Auto → Dark → Light; press it until the page shows the option. */
+/** Picks a theme in the bottom bar's More menu, then closes the menu. */
 async function chooseTheme(page: Page, option: "light" | "dark") {
-  const root = page.locator("html");
-  for (let presses = 0; presses < 3; presses += 1) {
-    if (await root.getAttribute("data-theme") === option) return;
-    await page.getByRole("button", { name: "Toggle theme" }).click();
-    await page.waitForTimeout(50);
-  }
-  await expect(root).toHaveAttribute("data-theme", option);
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  const menu = page.getByRole("menu", { name: "More" });
+  await menu.getByRole("menuitemradio", { name: option === "light" ? "Light" : "Dark", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", option);
+}
+
+/** There is no button to bring the Inspector back; a selection, Return or I opens it. */
+async function openInspector(page: Page) {
+  await page.keyboard.press("i");
+  await expect(page.locator(".right-panel")).toBeVisible();
 }
 
 /** Bottom toolbar → persistent canvas view control. */
@@ -1668,7 +1673,7 @@ test("collapses the Inspector when a screen is cleared but still allows an empty
   await expect.poll(() => new URL(page.url()).searchParams.has("screen")).toBe(false);
   await expect(page.locator(".right-panel")).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Expand inspector" }).click();
+  await openInspector(page);
   await expect(page.locator(".right-panel")).toBeVisible();
   await expect.poll(() => new URL(page.url()).searchParams.has("screen")).toBe(false);
 });
@@ -1854,13 +1859,12 @@ test("keeps persistent canvas chrome out of the sliding canvas snapshot", async 
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto("/map");
   await expect(page.locator(".canvas-minimap-shell")).toBeVisible();
-  await expect(page.locator(".right-float")).toBeVisible();
+  await expect(page.locator(".app-content > .canvas-camera-controls")).toBeVisible();
 
   const transitionNames = await page.locator([
     ".canvas-minimap-shell",
     ".app-content > .canvas-camera-controls",
     ".canvas-toolbar",
-    ".right-float",
   ].join(",")).evaluateAll((elements) => elements.map((element) => ({
     className: element.className,
     viewTransitionName: getComputedStyle(element).viewTransitionName,
@@ -1869,7 +1873,6 @@ test("keeps persistent canvas chrome out of the sliding canvas snapshot", async 
     expect.objectContaining({ viewTransitionName: "canvas-minimap" }),
     expect.objectContaining({ viewTransitionName: "canvas-camera-controls" }),
     expect.objectContaining({ viewTransitionName: "canvas-toolbar" }),
-    expect.objectContaining({ viewTransitionName: "right-floating-controls" }),
   ]));
 
   const animations = await captureCanvasViewAnimations(page, "Screens");
@@ -1890,7 +1893,6 @@ test("keeps persistent canvas chrome out of the sliding canvas snapshot", async 
   const movingPersistentChrome = animations.filter((animation) => (
     animation.pseudoElement?.includes("(canvas-camera-controls)")
     || animation.pseudoElement?.includes("(canvas-toolbar)")
-    || animation.pseudoElement?.includes("(right-floating-controls)")
   ));
   expect(movingPersistentChrome).toEqual([]);
 });
@@ -1916,7 +1918,7 @@ test("centres selected screens after panel changes and makes the primary Fit sel
     await expectSelectedScreenCentered(page);
     await expectPanelFitMatchesPrimaryFit(page, canvas);
 
-    await page.getByRole("button", { name: "Expand inspector" }).click();
+    await openInspector(page);
     await expect(page.locator(".right-panel")).toBeVisible();
     await expectSelectedScreenCentered(page);
     await expectPanelFitMatchesPrimaryFit(page, canvas);
@@ -2255,7 +2257,7 @@ test("keeps current Map and Screens projections overlap-free without deleting sc
   await expect(page).toHaveURL(/\/screens/);
   await expect(page.locator(".screens-page .screens-cell")).toHaveCount(SCREEN_COUNT);
   await expect.poll(() => overlapCount(".screens-page .screens-cell")).toBe(0);
-  await page.getByRole("button", { name: "Expand inspector" }).click();
+  await openInspector(page);
   await expect(page.locator(".right-panel")).toBeVisible();
   await expect.poll(() => overlapCount(".screens-page .screens-cell")).toBe(0);
 });
@@ -2337,7 +2339,7 @@ test("shows the minimap on the Map without a visibility preference", async ({ pa
 test("keeps minimap and canvas chrome inside the responsive visible frame", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 820 });
   await page.goto("/map");
-  await page.getByRole("button", { name: "Expand inspector" }).click();
+  await openInspector(page);
 
   const minimap = page.getByTestId("canvas-minimap");
   const toolbar = page.getByRole("toolbar", { name: "Canvas tools" });
@@ -2377,7 +2379,9 @@ test("keeps minimap and canvas chrome inside the responsive visible frame", asyn
   const cameraBeforeTheme = await viewport.getAttribute("style");
   const maskBeforePanel = await minimap.locator(".canvas-minimap-visible-mask path").getAttribute("d");
   const lightBackground = await minimap.evaluate((element) => getComputedStyle(element).backgroundColor);
-  await chooseTheme(page, "dark");
+  // At this width the open Inspector covers the end of the centred bottom bar, so T switches.
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.keyboard.press("t");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(viewport).toHaveAttribute("style", cameraBeforeTheme!);
   await expect.poll(() => minimap.evaluate((element) => getComputedStyle(element).backgroundColor))
@@ -2490,7 +2494,9 @@ test("animates panel Fits once in both directions", async ({ page }) => {
       }).__panelFitCameraObserver = observer;
     });
 
-    await page.getByRole("button", { name: buttonName, exact: true }).click();
+    // Closed, the Inspector has no button: I opens it.
+    if (buttonName === "Expand inspector") await page.keyboard.press("i");
+    else await page.getByRole("button", { name: buttonName, exact: true }).click();
     await expectLayout();
     await page.waitForTimeout(520);
     const samples = await page.evaluate(() => {
@@ -2624,7 +2630,9 @@ test("refits every unselected canvas when the Inspector opens or closes", async 
         host.__overviewPanelCamera = { values, observer };
       }, canvas);
 
-      await page.getByRole("button", { name: buttonName, exact: true }).click();
+      // Closed, the Inspector has no button: I opens it.
+      if (buttonName === "Expand inspector") await page.keyboard.press("i");
+      else await page.getByRole("button", { name: buttonName, exact: true }).click();
       if (buttonName === "Expand inspector") {
         await expect(page.locator(".right-panel")).toBeVisible();
       } else {
@@ -2716,7 +2724,7 @@ test("starts the opening Inspector Fit immediately and settles in one flight", a
       .__inspectorPaintSamples = samples;
   });
 
-  await page.getByRole("button", { name: "Expand inspector" }).click();
+  await openInspector(page);
   await expect(page.locator(".right-panel")).toBeVisible();
   await page.waitForTimeout(600);
   const samples = await page.evaluate(() => (
@@ -2758,47 +2766,41 @@ test("starts the opening Inspector Fit immediately and settles in one flight", a
   expect(moving[0]!.elapsed - visible[0]!.elapsed).toBeLessThan(80);
 });
 
-test("aligns the pill, camera controls, and collapsed Inspector chrome on one center line", async ({ page }) => {
+test("aligns the pill and the Map's camera controls on one center line, mirrored at the edges", async ({ page }) => {
   await page.goto("/map?screen=settings-root");
   await page.getByRole("button", { name: "Close inspector" }).click();
 
   const pill = page.locator(".left-panel-collapsed-pill");
   const camera = page.getByRole("group", { name: "Canvas camera controls" });
-  const inspector = page.locator(".right-float");
-  const share = camera.getByRole("button", { name: "Toggle theme", exact: true });
+  const fit = camera.getByRole("button", { name: "Fit canvas", exact: true });
   await expect(pill).toBeVisible();
   await expect(camera).toBeVisible();
-  await expect(inspector).toBeVisible();
+  // The closed Inspector leaves nothing behind in the top right.
+  await expect(page.getByRole("button", { name: "Expand inspector" })).toHaveCount(0);
 
-  const [pillBox, cameraBox, inspectorBox, shareBox] = await Promise.all([
+  const [pillBox, cameraBox, fitBox] = await Promise.all([
     pill.boundingBox(),
     camera.boundingBox(),
-    inspector.boundingBox(),
-    share.boundingBox(),
+    fit.boundingBox(),
   ]);
   expect(pillBox).not.toBeNull();
   expect(cameraBox).not.toBeNull();
-  expect(inspectorBox).not.toBeNull();
-  expect(shareBox).not.toBeNull();
+  expect(fitBox).not.toBeNull();
 
   expect(Math.abs(pillBox!.y - 14)).toBeLessThanOrEqual(1);
   expect(Math.abs(pillBox!.height - 42)).toBeLessThanOrEqual(1);
   expect(Math.abs(cameraBox!.y - 14)).toBeLessThanOrEqual(1);
   expect(Math.abs(cameraBox!.height - 42)).toBeLessThanOrEqual(1);
-  expect(Math.abs(inspectorBox!.y - 14)).toBeLessThanOrEqual(1);
-  expect(Math.abs(inspectorBox!.height - 42)).toBeLessThanOrEqual(1);
-  expect(Math.abs(shareBox!.height - 32)).toBeLessThanOrEqual(1);
-
-  const centerLine = cameraBox!.y + cameraBox!.height / 2;
-  for (const box of [pillBox!, inspectorBox!]) {
-    expect(Math.abs(box.y + box.height / 2 - centerLine)).toBeLessThanOrEqual(1);
-  }
+  expect(Math.abs(fitBox!.height - 32)).toBeLessThanOrEqual(1);
+  expect(Math.abs(pillBox!.y + pillBox!.height / 2 - (cameraBox!.y + cameraBox!.height / 2))).toBeLessThanOrEqual(1);
+  // The controls sit as far from the right edge as the pill does from the left.
+  expect(Math.abs(page.viewportSize()!.width - (cameraBox!.x + cameraBox!.width) - pillBox!.x)).toBeLessThanOrEqual(1);
 });
 
 test("floats the pill over the canvas and remembers the Inspector across a reload", async ({ page }) => {
   await page.goto("/map");
   await expect(page.locator(".right-panel")).toHaveCount(0);
-  await page.getByRole("button", { name: "Expand inspector" }).click();
+  await openInspector(page);
   // The pill and the Inspector share one panel surface.
   const expandedPanelBackground = await page.locator(".left-panel-collapsed-pill").evaluate(
     (element) => getComputedStyle(element).backgroundColor,
@@ -2833,31 +2835,20 @@ test("floats the pill over the canvas and remembers the Inspector across a reloa
 
   await page.getByRole("button", { name: "Close inspector" }).click();
   await expect(page.locator(".right-panel")).toHaveCount(0);
-  const canvasActions = page.getByRole("toolbar", { name: "Canvas actions" });
   const cameraControls = page.getByRole("group", { name: "Canvas camera controls" });
   const canvasToolbar = page.getByRole("toolbar", { name: "Canvas tools" });
   const minimap = page.getByTestId("canvas-minimap");
-  await expect(canvasActions).toBeVisible();
+  // Closed, the Inspector leaves no toolbar of its own; the camera controls stay one floating group.
+  await expect(page.getByRole("toolbar", { name: "Canvas actions" })).toHaveCount(0);
   await expect(cameraControls).toBeVisible();
   await expect(canvasToolbar).toBeVisible();
   await expect(minimap).toBeVisible();
-  await expect(canvasActions).toHaveCSS("background-color", expandedPanelBackground);
   await expect(cameraControls).toHaveCSS("background-color", expandedPanelBackground);
-  await expect(canvasActions).toHaveCSS("border-top-width", "0px");
-  await expect(cameraControls).toHaveCSS("border-top-width", "0px");
-  await expect(cameraControls.locator(".camera-control-divider").first()).toBeHidden();
-  const [actionsBox, cameraBox] = await Promise.all([
-    canvasActions.boundingBox(),
-    cameraControls.boundingBox(),
-  ]);
-  expect(actionsBox).not.toBeNull();
-  expect(cameraBox).not.toBeNull();
-  const toolbarJoin = actionsBox!.x - (cameraBox!.x + cameraBox!.width);
-  expect(toolbarJoin).toBeGreaterThanOrEqual(-1.5);
-  expect(toolbarJoin).toBeLessThanOrEqual(0.5);
+  await expect(cameraControls).toHaveCSS("border-top-width", "1px");
+  await expect(cameraControls.locator(".camera-control-divider").first()).toBeVisible();
   const [leftShadow, rightShadow, toolbarShadow, toolbarBox, minimapBox] = await Promise.all([
     page.locator(".left-panel-collapsed-pill").evaluate((element) => getComputedStyle(element).boxShadow),
-    cameraControls.evaluate((element) => getComputedStyle(element, "::before").boxShadow),
+    cameraControls.evaluate((element) => getComputedStyle(element).boxShadow),
     canvasToolbar.evaluate((element) => getComputedStyle(element).boxShadow),
     canvasToolbar.boundingBox(),
     minimap.boundingBox(),
@@ -2874,7 +2865,7 @@ test("floats the pill over the canvas and remembers the Inspector across a reloa
   await page.reload();
   await expect(page.locator(".left-panel.collapsed")).toBeVisible();
   await expect(page.locator(".right-panel")).toHaveCount(0);
-  await page.getByRole("button", { name: "Expand inspector" }).click();
+  await openInspector(page);
   await expect(page.locator(".right-panel")).toBeVisible();
 });
 
@@ -2910,20 +2901,24 @@ test("keeps stateful shell control geometry stable across visual state changes",
   expect(Math.abs(pillAlignment.logo - pillAlignment.pill)).toBeLessThanOrEqual(1);
   expect(Math.abs(pillAlignment.name - pillAlignment.pill)).toBeLessThanOrEqual(1);
 
-  const rightClosed = await geometry(page.getByRole("button", { name: "Expand inspector" }));
-  await expect(page.getByRole("button", { name: "Expand inspector" })
-    .locator("svg.lucide-panel-right")).toHaveCount(1);
-  await page.getByRole("button", { name: "Expand inspector" }).click();
-  const rightOpen = await geometry(page.getByRole("button", { name: "Close inspector" }));
-  // Open, the same button shows an X that closes the Inspector.
+  // Closed, the Inspector has no button; open, an X closes it.
+  await expect(page.getByRole("button", { name: "Expand inspector" })).toHaveCount(0);
+  await openInspector(page);
   await expect(page.getByRole("button", { name: "Close inspector" })
     .locator("svg.lucide-x")).toHaveCount(1);
-  expect(rightOpen).toEqual(rightClosed);
 
-  const themeButton = page.getByRole("button", { name: "Toggle theme" });
-  const lightTheme = await geometry(themeButton);
-  await themeButton.click();
-  const darkTheme = await geometry(themeButton);
+  // The More button keeps its size whether its menu is open or not, and the theme switch keeps
+  // its size whichever theme is checked.
+  const more = page.getByRole("button", { name: "More", exact: true });
+  const moreClosed = await geometry(more);
+  await more.click();
+  const moreOpen = await geometry(more);
+  expect(moreOpen).toEqual(moreClosed);
+  const themes = page.getByRole("menu", { name: "More" }).getByRole("group", { name: "Theme" });
+  const lightTheme = await geometry(themes);
+  await themes.getByRole("menuitemradio", { name: "Dark", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  const darkTheme = await geometry(themes);
   expect(darkTheme).toEqual(lightTheme);
 });
 
@@ -2936,7 +2931,7 @@ test("migrates the legacy shared panel preference once into the Inspector prefer
     right: localStorage.getItem("expo-explore:right-panel-collapsed"),
   }))).toEqual({ legacy: null, right: "true" });
 
-  await page.getByRole("button", { name: "Expand inspector" }).click();
+  await openInspector(page);
   await expect(page.locator(".right-panel")).toBeVisible();
 });
 
@@ -3010,14 +3005,18 @@ test("drives the shell from the keyboard, and says so on hover", async ({ page }
   // Every remaining shortcut is discoverable: the tooltip prints the key next to the label.
   await compareButton.hover();
   await expect(page.locator(".tooltip-key")).toHaveText("C");
-  await page.getByRole("button", { name: "Expand inspector" }).hover();
-  await expect(page.locator(".tooltip-key")).toHaveText("I");
-  // The theme button names the mode in force, and T is its key.
-  const themeButton = page.getByRole("button", { name: "Toggle theme" });
-  await themeButton.hover();
-  await expect(page.locator(".tooltip-content")).toContainText("Theme: Auto");
-  await expect(page.locator(".tooltip-key")).toHaveText("T");
   await page.mouse.move(0, 0);
+  // The More menu's theme row checks the mode in force, and prints T as its key.
+  const themeChoice = async () => {
+    await page.getByRole("button", { name: "More", exact: true }).click();
+    const menu = page.getByRole("menu", { name: "More" });
+    await expect(menu.getByRole("group", { name: "Theme" }).locator("kbd")).toHaveText("T");
+    const checked = await menu.getByRole("menuitemradio", { checked: true }).getAttribute("aria-label");
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    return checked;
+  };
+  expect(await themeChoice()).toBe("Auto");
   const initialTheme = await page.locator("html").getAttribute("data-theme");
   expect(initialTheme === "light" || initialTheme === "dark").toBe(true);
   const otherTheme = initialTheme === "dark" ? "light" : "dark";
@@ -3026,9 +3025,7 @@ test("drives the shell from the keyboard, and says so on hover", async ({ page }
   await expect(page.locator("html")).toHaveAttribute("data-theme", otherTheme);
   await page.keyboard.press("t");
   await expect(page.locator("html")).toHaveAttribute("data-theme", initialTheme!);
-  await themeButton.hover();
-  await expect(page.locator(".tooltip-content")).toContainText(initialTheme === "dark" ? "Theme: Dark" : "Theme: Light");
-  await page.mouse.move(0, 0);
+  expect(await themeChoice()).toBe(initialTheme === "dark" ? "Dark" : "Light");
   // The retired theme and inspector chords no longer answer.
   await page.keyboard.press(`${mod}+Alt+t`);
   await expect(page.locator("html")).toHaveAttribute("data-theme", initialTheme!);
@@ -3081,7 +3078,7 @@ test("keeps fixed objects and canvas pan after a reload", async ({ page }) => {
 test("delays the first tooltip, then shows subsequent tooltips instantly", async ({ page }) => {
   await page.goto("/map");
   const menu = page.locator(".left-panel-collapsed-pill").getByRole("button", { name: "Map", exact: true });
-  const changes = page.getByRole("button", { name: "Expand inspector" });
+  const changes = page.getByRole("button", { name: "Fit canvas", exact: true });
   const tooltip = page.locator(".tooltip");
 
   await menu.hover();
@@ -3091,7 +3088,7 @@ test("delays the first tooltip, then shows subsequent tooltips instantly", async
   await expect(tooltip).not.toHaveAttribute("data-instant", "");
 
   await changes.hover();
-  await expect(tooltip).toContainText("Expand inspector", { timeout: 150 });
+  await expect(tooltip).toContainText("Fit canvas", { timeout: 150 });
   await expect(tooltip).toHaveAttribute("data-instant", "");
   await expect(tooltip).toHaveCSS("animation-name", "none");
 
@@ -3100,7 +3097,7 @@ test("delays the first tooltip, then shows subsequent tooltips instantly", async
   await changes.hover();
   await page.waitForTimeout(150);
   await expect(tooltip).toHaveCount(0);
-  await expect(tooltip).toContainText("Expand inspector");
+  await expect(tooltip).toContainText("Fit canvas");
   await expect(tooltip).not.toHaveAttribute("data-instant", "");
 });
 
@@ -3129,9 +3126,10 @@ test("follows system theme and polls lightweight status instead of the full map"
   await chooseTheme(page, "light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   expect(await page.evaluate(() => localStorage.getItem("expo-explore:theme"))).toBe("light");
-  // The button shows the mode in force (Light), not the next one.
-  await expect(page.getByRole("button", { name: "Toggle theme" })
-    .locator("svg.lucide-sun")).toBeVisible();
+  // The More menu checks the mode in force.
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await expect(page.getByRole("menuitemradio", { name: "Light", exact: true })).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
 
   await page.waitForTimeout(5_500);
   expect(mapRequests).toBe(1);
@@ -3154,7 +3152,7 @@ test("zooms Map inspection up to 25600% without exceeding the ceiling", async ({
   test.setTimeout(30_000);
   await page.goto("/map");
   await expect(page.locator(".map-canvas.canvas-projection-animating")).toHaveCount(0);
-  await expect(page.locator(".right-float")).toBeVisible();
+  await expect(page.getByRole("group", { name: "Canvas camera controls" })).toBeVisible();
 
   await page.keyboard.press("Shift+0");
   await expect(page.getByRole("button", { name: "Zoom — 100%" })).toBeVisible();
@@ -3175,10 +3173,11 @@ test("zooms Map inspection up to 25600% without exceeding the ceiling", async ({
   await expect(zoom).toBeVisible();
   expect(scaleFromTransform(await viewport.getAttribute("style"))).toBe(256);
   const zoomBox = await zoom.boundingBox();
-  const shareBox = await page.locator(".right-float").boundingBox();
+  const cameraBox = await page.getByRole("group", { name: "Canvas camera controls" }).boundingBox();
   expect(zoomBox).not.toBeNull();
-  expect(shareBox).not.toBeNull();
-  expect(zoomBox!.x + zoomBox!.width).toBeLessThanOrEqual(shareBox!.x);
+  expect(cameraBox).not.toBeNull();
+  expect(zoomBox!.x + zoomBox!.width).toBeLessThanOrEqual(cameraBox!.x + cameraBox!.width);
+  expect(cameraBox!.x + cameraBox!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
 
   await page.keyboard.press("Shift+0");
   await expect(page.getByRole("button", { name: "Zoom — 100%" })).toBeVisible();
@@ -3482,15 +3481,13 @@ test("restores the fitted camera after internal navigation on the Map", async ({
   });
 });
 
-test("keeps theme and full screen in the persistent canvas controls, not the inspector header", async ({ page }) => {
+test("the Map's top right holds only fit, center and zoom; theme and full screen are not in the inspector header", async ({ page }) => {
   await page.goto("/map");
-  // Collapsed inspector: the camera controls and the panel toggle form one toolbar.
+  // Closed, the Inspector leaves no toggle behind: the camera controls are all there is.
   const collapsedCamera = page.getByRole("group", { name: "Canvas camera controls" });
-  await expect(collapsedCamera.getByRole("button", { name: "Toggle theme", exact: true })).toBeVisible();
-  await expect(collapsedCamera.getByRole("button", { name: "Enter full screen", exact: true })).toBeVisible();
-  await expect(page.locator(".right-float button")).toHaveCount(1);
-  await expect(page.locator(".right-float button")).toHaveAccessibleName("Expand inspector");
-  await page.getByRole("button", { name: "Expand inspector" }).click();
+  await expect(collapsedCamera.getByRole("button")).toHaveCount(3);
+  await expect(page.getByRole("button", { name: "Expand inspector" })).toHaveCount(0);
+  await openInspector(page);
   await expect(page.getByRole("button", { name: /Share/ })).toHaveCount(0);
   await expect(page.locator(".right-head button")).toHaveCount(1);
   await expect(page.locator(".right-head button")).toHaveAccessibleName("Close inspector");
@@ -3508,18 +3505,19 @@ test("keeps theme and full screen in the persistent canvas controls, not the ins
   await expect(cameraControls).toBeVisible();
   await expect(cameraControls).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await expect(cameraControls).toHaveCSS("border-top-width", "1px");
-  await expect(cameraControls.locator(".camera-control-divider")).toHaveCount(3);
+  await expect(cameraControls.locator(".camera-control-divider")).toHaveCount(1);
   const cameraButtons = cameraControls.getByRole("button");
-  await expect(cameraButtons).toHaveCount(5);
-  await expect(cameraButtons.nth(3)).toHaveAccessibleName("Toggle theme");
-  await expect(cameraButtons.nth(4)).toHaveAccessibleName("Enter full screen");
+  await expect(cameraButtons).toHaveCount(3);
+  await expect(cameraButtons.nth(0)).toHaveAccessibleName("Fit canvas");
+  await expect(cameraButtons.nth(1)).toHaveAccessibleName("Center canvas");
+  await expect(cameraButtons.nth(2)).toHaveAccessibleName(/^Zoom — /);
+  await expect(page.getByRole("button", { name: /Toggle theme|full screen/ })).toHaveCount(0);
   for (const button of await cameraButtons.all()) {
     await expect(button).toHaveCSS("border-top-width", "0px");
     await expect(button).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   }
   await expect(page.locator(".app-content > .canvas-camera-controls")).toHaveCount(1);
-  await expect(page.locator(".right-panel .canvas-camera-controls, .right-float .canvas-camera-controls"))
-    .toHaveCount(0);
+  await expect(page.locator(".right-panel .canvas-camera-controls")).toHaveCount(0);
   const zoomButton = cameraControls.getByRole("button", { name: /^Zoom — / });
   await expect(zoomButton).toBeVisible();
   await expect(zoomButton.locator("svg")).toHaveCount(0);
@@ -3573,11 +3571,10 @@ test("keeps theme and full screen in the persistent canvas controls, not the ins
   await expect.poll(async () => scaleFromTransform(await viewport.getAttribute("style")))
     .toBeCloseTo(pannedScale, 6);
 
-  // The theme toggle changes the page theme without changing the route.
+  // The theme changes the page theme without changing the route.
   const canonical = page.url();
   const themeBefore = await page.locator("html").getAttribute("data-theme");
-  await cameraControls.getByRole("button", { name: "Toggle theme", exact: true }).click();
-  await expect(page.locator("html")).not.toHaveAttribute("data-theme", themeBefore!);
+  await chooseTheme(page, themeBefore === "dark" ? "light" : "dark");
   await expect(page).toHaveURL(canonical);
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
@@ -4089,10 +4086,10 @@ test("reload max-fits the comparison overview with the Inspector collapsed", asy
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto("/map");
   await expect(page.locator(".react-flow__node-screen")).toHaveCount(SCREEN_COUNT);
-  await expect(page.getByRole("button", { name: "Expand inspector" })).toBeVisible();
+  await expect(page.locator(".right-panel")).toHaveCount(0);
   await page.reload();
   await expect(page.locator(".react-flow__node-screen")).toHaveCount(SCREEN_COUNT);
-  await expect(page.getByRole("button", { name: "Expand inspector" })).toBeVisible();
+  await expect(page.locator(".right-panel")).toHaveCount(0);
 
   const viewport = page.locator(".map-canvas .react-flow__viewport");
   await expect(viewport).toBeVisible();
@@ -4686,10 +4683,10 @@ test.describe("phone layout", () => {
     await page.goto("/map");
     const tabs = page.getByRole("navigation", { name: "Views" });
     await expect(tabs).toBeVisible();
-    // Desktop chrome is gone: the floating toolbar with its shortcuts button, the camera controls
-    // and the minimap.
+    // Desktop chrome is gone: the floating toolbar with its More menu, the camera controls and the
+    // minimap.
     await expect(page.getByRole("toolbar", { name: "Canvas tools" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Keyboard shortcuts" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "More", exact: true })).toHaveCount(0);
     await expect(page.locator(".canvas-camera-controls")).toHaveCount(0);
     await expect(tabs.getByRole("button", { name: /Compare/ })).toBeEnabled();
 
@@ -5204,40 +5201,211 @@ test.describe("phone layout", () => {
   });
 });
 
-test("the theme is Auto until the toggle picks one: it follows the system, then steps Dark → Light → Auto and keeps the pick", async ({ page }) => {
+test("the theme is Auto until the More menu picks one: it follows the system, and a pick outlives a reload", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "dark" });
   await page.goto("/map");
   const html = page.locator("html");
-  const button = page.getByRole("button", { name: "Toggle theme" });
+  const more = page.getByRole("button", { name: "More", exact: true });
+  const menu = page.getByRole("menu", { name: "More" });
+  const theme = (name: "Auto" | "Light" | "Dark") => menu.getByRole("menuitemradio", { name, exact: true });
   await expect(html).toHaveAttribute("data-theme", "dark");
-  await expect(button).toHaveAttribute("data-theme-preference", "system");
-  await button.hover();
-  await expect(page.locator(".tooltip-content")).toContainText("Theme: Auto (system)");
+  await more.click();
+  await expect(theme("Auto")).toHaveAttribute("aria-checked", "true");
   // Auto tracks the system while it is in force.
   await page.emulateMedia({ colorScheme: "light" });
   await expect(html).toHaveAttribute("data-theme", "light");
 
-  await button.click();
+  // A pick applies at once and keeps the menu open, so the switch shows it.
+  await theme("Dark").click();
   await expect(html).toHaveAttribute("data-theme", "dark");
-  await expect(button).toHaveAttribute("data-theme-preference", "dark");
-  await expect(page.locator(".tooltip-content")).toContainText("Theme: Dark");
-  await button.click();
+  await expect(theme("Dark")).toHaveAttribute("aria-checked", "true");
+  await expect(theme("Auto")).toHaveAttribute("aria-checked", "false");
+  await theme("Light").click();
   await expect(html).toHaveAttribute("data-theme", "light");
-  await expect(button).toHaveAttribute("data-theme-preference", "light");
-  await button.click();
-  await expect(button).toHaveAttribute("data-theme-preference", "system");
+  await theme("Auto").click();
+  await expect(theme("Auto")).toHaveAttribute("aria-checked", "true");
   await expect(html).toHaveAttribute("data-theme", "light");
   await page.emulateMedia({ colorScheme: "dark" });
   await expect(html).toHaveAttribute("data-theme", "dark");
 
   // A picked theme outlives a reload and ignores the system.
-  await button.click();
-  await expect(button).toHaveAttribute("data-theme-preference", "dark");
-  await button.click();
-  await expect(button).toHaveAttribute("data-theme-preference", "light");
+  await theme("Light").click();
+  await page.keyboard.press("Escape");
   await page.reload();
   await expect(html).toHaveAttribute("data-theme", "light");
-  await expect(page.getByRole("button", { name: "Toggle theme" })).toHaveAttribute("data-theme-preference", "light");
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await expect(theme("Light")).toHaveAttribute("aria-checked", "true");
+});
+
+/** Stands in for the browser's full screen, which headless Chromium cannot enter, and records the calls. */
+async function stubFullscreen(page: Page) {
+  await page.addInitScript(() => {
+    const host = window as typeof window & { __fullscreenCalls: string[] };
+    host.__fullscreenCalls = [];
+    let element: Element | null = null;
+    Object.defineProperty(Document.prototype, "fullscreenElement", { configurable: true, get: () => element });
+    Element.prototype.requestFullscreen = function requestFullscreen() {
+      host.__fullscreenCalls.push("enter");
+      element = document.documentElement;
+      document.dispatchEvent(new Event("fullscreenchange"));
+      return Promise.resolve();
+    };
+    Document.prototype.exitFullscreen = function exitFullscreen() {
+      host.__fullscreenCalls.push("exit");
+      element = null;
+      document.dispatchEvent(new Event("fullscreenchange"));
+      return Promise.resolve();
+    };
+  });
+}
+
+function fullscreenCalls(page: Page) {
+  return page.evaluate(() => (window as typeof window & { __fullscreenCalls: string[] }).__fullscreenCalls);
+}
+
+/** The visible buttons in the window's top-right corner, where the camera controls sit on the Map. */
+async function topRightButtons(page: Page) {
+  return page.evaluate(() => [...document.querySelectorAll<HTMLElement>("button, [role='button']")]
+    .filter((element) => {
+      const box = element.getBoundingClientRect();
+      if (box.width === 0 || box.height === 0 || getComputedStyle(element).visibility === "hidden") return false;
+      return box.bottom <= 80 && box.right >= window.innerWidth - 240;
+    })
+    .map((element) => element.getAttribute("aria-label") ?? element.textContent?.trim() ?? ""));
+}
+
+test("the bottom bar's More menu holds the theme, full screen and keyboard shortcuts, each with its key", async ({ page }) => {
+  await stubFullscreen(page);
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/map");
+  const toolbar = page.getByRole("toolbar", { name: "Canvas tools" });
+  const more = toolbar.getByRole("button", { name: "More", exact: true });
+  // The keyboard button became More; it is the bar's last button.
+  await expect(toolbar.getByRole("button", { name: "Keyboard shortcuts" })).toHaveCount(0);
+  await expect(toolbar.getByRole("button").last()).toHaveAccessibleName("More");
+  await expect(more).toHaveAttribute("aria-haspopup", "menu");
+  await expect(more).toHaveAttribute("aria-expanded", "false");
+
+  await more.click();
+  const menu = page.getByRole("menu", { name: "More" });
+  await expect(menu).toBeVisible();
+  await expect(more).toHaveAttribute("aria-expanded", "true");
+  // It opens above the bar, anchored to the button.
+  const [menuBox, moreBox, toolbarBox] = await Promise.all([menu.boundingBox(), more.boundingBox(), toolbar.boundingBox()]);
+  expect(menuBox!.y + menuBox!.height).toBeLessThan(toolbarBox!.y);
+  expect(Math.abs(menuBox!.x + menuBox!.width - (moreBox!.x + moreBox!.width))).toBeLessThanOrEqual(2);
+
+  // Rows: Theme (a group of three radio items), Full screen, Keyboard shortcuts, in sentence case.
+  const themes = menu.getByRole("group", { name: "Theme" });
+  expect(await themes.getByRole("menuitemradio").evaluateAll((items) => items.map((item) => item.getAttribute("aria-label"))))
+    .toEqual(["Auto", "Light", "Dark"]);
+  await expect(menu.getByRole("menuitem")).toHaveCount(2);
+  await expect(menu.getByRole("menuitem").nth(0)).toHaveAccessibleName("Full screen");
+  await expect(menu.getByRole("menuitem").nth(1)).toHaveAccessibleName("Keyboard shortcuts");
+  await expect(menu.locator("kbd")).toHaveText(["T", "F", "?"]);
+  for (const label of await menu.locator(".more-menu-label").all()) {
+    await expect(label).toHaveCSS("text-transform", "none");
+  }
+
+  // It opens on the current theme; the arrows walk the rows and the switch, Esc closes it and
+  // returns focus to More.
+  await expect(themes.getByRole("menuitemradio", { name: "Auto" })).toBeFocused();
+  await expect(themes.getByRole("menuitemradio", { name: "Auto" })).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("ArrowRight");
+  await expect(themes.getByRole("menuitemradio", { name: "Light" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem", { name: "Full screen" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem", { name: "Keyboard shortcuts" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(themes.getByRole("menuitemradio", { name: "Auto" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(more).toBeFocused();
+  await expect(more).toHaveAttribute("aria-expanded", "false");
+
+  // The switch sets the theme and keeps the menu open; T still flips it, and the switch follows.
+  await more.click();
+  await themes.getByRole("menuitemradio", { name: "Dark" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(themes.getByRole("menuitemradio", { name: "Dark" })).toHaveAttribute("aria-checked", "true");
+  await expect(menu).toBeVisible();
+  await page.keyboard.press("t");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(themes.getByRole("menuitemradio", { name: "Light" })).toHaveAttribute("aria-checked", "true");
+
+  // Full screen: the row enters it and closes the menu; the row then offers the way out.
+  await menu.getByRole("menuitem", { name: "Full screen" }).click();
+  await expect(menu).toHaveCount(0);
+  expect(await fullscreenCalls(page)).toEqual(["enter"]);
+  await more.click();
+  await expect(menu.getByRole("menuitem", { name: "Exit full screen" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  // F is the same toggle from the keyboard.
+  await page.keyboard.press("f");
+  expect(await fullscreenCalls(page)).toEqual(["enter", "exit"]);
+  await page.keyboard.press("f");
+  expect(await fullscreenCalls(page)).toEqual(["enter", "exit", "enter"]);
+  await more.click();
+  await expect(menu.getByRole("menuitem", { name: "Exit full screen" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("f");
+
+  // Keyboard shortcuts opens the reference, which lists F.
+  await more.click();
+  await menu.getByRole("menuitem", { name: "Keyboard shortcuts" }).click();
+  await expect(menu).toHaveCount(0);
+  const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".shortcuts-row", { hasText: "Enter or exit full screen" }).locator("kbd")).toHaveText("F");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  // ? still opens it too.
+  await page.keyboard.press("?");
+  await expect(dialog).toBeVisible();
+});
+
+test("without the browser's full screen, the More menu, F and the shortcuts leave it out", async ({ page }) => {
+  await page.addInitScript(() => {
+    // iPhone Safari has no element full screen.
+    delete (Element.prototype as Partial<Element>).requestFullscreen;
+  });
+  await page.goto("/map");
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  const menu = page.getByRole("menu", { name: "More" });
+  await expect(menu.getByRole("menuitem")).toHaveCount(1);
+  await expect(menu.getByRole("menuitem", { name: /full screen/i })).toHaveCount(0);
+  await expect(menu.locator("kbd")).toHaveText(["T", "?"]);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("?");
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).not.toContainText("full screen");
+});
+
+test("the top right is the camera's alone: fit, center and zoom on the Map, nothing on Screens or Compare", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await serveWorkspace(page);
+  await page.goto("/map");
+  const camera = page.getByRole("group", { name: "Canvas camera controls" });
+  await expect(camera).toBeVisible();
+  expect(await topRightButtons(page)).toEqual(["Fit canvas", "Center canvas", expect.stringMatching(/^Zoom — \d+%$/)]);
+
+  // With the Inspector open the camera keeps to the canvas beside it; the Inspector's header has
+  // only its own actions.
+  await openInspector(page);
+  await expect(camera.getByRole("button")).toHaveCount(3);
+  await page.getByRole("button", { name: "Close inspector" }).click();
+  await expect(page.locator(".right-panel")).toHaveCount(0);
+
+  await chooseCanvasView(page, "Screens");
+  await expect(page).toHaveURL(/\/screens/);
+  await expect(page.locator(".screens-page .screens-cell").first()).toBeVisible();
+  await expect(page.locator(".canvas-camera-controls")).toHaveCount(0);
+  expect(await topRightButtons(page)).toEqual([]);
+
+  await page.goto("/compare?screen=current-profile");
+  await expect(page.getByRole("region", { name: /^Compare / })).toBeVisible();
+  await expect(page.locator(".canvas-camera-controls")).toHaveCount(0);
+  expect(await topRightButtons(page)).toEqual([]);
 });
 
 test("/ finds screens on the Screens page: the tree and the grid narrow to the query, Enter picks the first match, Esc clears then closes", async ({ page }) => {

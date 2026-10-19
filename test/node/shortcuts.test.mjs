@@ -70,3 +70,11 @@ test("⌥1–⌥8 open a target by its place, with ⌥ alone; D and ` are plain 
   assert.ok(matchesShortcut(key("KeyD"), SHORTCUTS.target.menu));
   assert.ok(matchesShortcut(key("Backquote"), SHORTCUTS.target.last));
 });
+
+test("F is full screen, a plain key: ⌘F stays the browser's find", () => {
+  assert.equal(formatShortcut(SHORTCUTS.view.fullscreen, true), "F");
+  assert.ok(matchesShortcut(key("KeyF"), SHORTCUTS.view.fullscreen));
+  assert.ok(!matchesShortcut(key("KeyF", { metaKey: true }), SHORTCUTS.view.fullscreen));
+  assert.ok(!matchesShortcut(key("KeyF", { ctrlKey: true }), SHORTCUTS.view.fullscreen));
+  assert.ok(!matchesShortcut(key("KeyF", { shiftKey: true }), SHORTCUTS.view.fullscreen));
+});

@@ -1,4 +1,4 @@
-import { GitCompareArrows, Keyboard, LayoutGrid, Map, Search } from "lucide-react";
+import { GitCompareArrows, LayoutGrid, Map, Search } from "lucide-react";
 import { type CSSProperties } from "react";
 import { Tooltip } from "../shared/tooltip";
 import { useCanvasVisibleFrame } from "./visible-frame-provider";
@@ -26,7 +26,8 @@ type CanvasToolbarProps = {
   actions?: React.ReactNode;
   onSelectCanvas: (canvas: CanvasView) => void;
   onOpenSearch: () => void;
-  onOpenShortcuts: () => void;
+  /** The bar's last button: the "More" menu with theme, full screen and keyboard shortcuts. */
+  more: React.ReactNode;
 };
 
 export function CanvasToolbar(props: CanvasToolbarProps) {
@@ -96,12 +97,7 @@ export function CanvasToolbar(props: CanvasToolbarProps) {
 
 
       <span className="toolbar-divider" aria-hidden="true" />
-      <Tooltip label="Keyboard shortcuts" shortcut="?" placement="top">
-        <button type="button" className="toolbar-button" aria-label="Keyboard shortcuts"
-          aria-haspopup="dialog" onClick={props.onOpenShortcuts}>
-          <Keyboard />
-        </button>
-      </Tooltip>
+      {props.more}
       </div>
     </div>
   );
