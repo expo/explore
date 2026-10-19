@@ -380,6 +380,8 @@
   .phone-layout .collapsed-pr,
   .screens-page.phone .screens-cell .screen-path-text,
   .phone-layout .inspector-screen-path { padding-top: 14px; padding-bottom: 14px; margin-top: -14px; margin-bottom: -14px; }
+  /* A long review title ("devin/flows-capture vs main") ends in an ellipsis instead of running under the search buttons. */
+  .phone-layout .collapsed-pr { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   /* Before/After keep a 32px line; the hit area grows into the gap on each side. */
   .phone-layout .compare-flip-side { min-height: 32px; padding: 6px 12px; margin: -6px 0; }
   .phone-layout .right-panel .icon-button { width: 44px; height: 44px; }
