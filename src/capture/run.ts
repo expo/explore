@@ -3,7 +3,7 @@ import { assertNoCaptureHealthIssues, captureHealthIssues, partitionCaptureHealt
 import { type RouteResetSetting } from "./route-reset.js";
 import { defaultReadinessSeconds } from "./readiness.js";
 import { captureLaunch, ffmpegRecordingTools, launchDirectory, type LaunchSetting, type RecordingTools } from "./launch-capture.js";
-import { flowFramePath, runFlows } from "./flows/run-flows.js";
+import { FLOWS_OUTPUT_DIRECTORY, flowFramePath, runFlows } from "./flows/run-flows.js";
 import { createHash } from "node:crypto";
 import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -203,7 +203,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const assertCheckout = () => {
     const call = (args: string[]) => runner({ command: "git", args, cwd: project, environment: restrictedEnvironment, timeoutMs: 30_000 }).stdout.trim();
     const head = call(["rev-parse", "HEAD"]);
-    const changes = call(["status", "--porcelain", "--untracked-files=normal"]);
+    // Explore's own flows scratch directory is not a change to the application; it is removed when the flows end.
+    const changes = call(["status", "--porcelain", "--untracked-files=normal", "--", ".", `:(exclude)${FLOWS_OUTPUT_DIRECTORY}`]);
     if (head !== options.gitCommit || changes) {
       const detail = head !== options.gitCommit ? `HEAD is ${head.slice(0, 12) || "unreadable"}, the plan recorded ${options.gitCommit.slice(0, 12)}`
         : `changed: ${changes.split("\n").slice(0, 3).join(", ")}${changes.split("\n").length > 3 ? ", …" : ""}`;

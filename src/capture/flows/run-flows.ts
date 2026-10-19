@@ -4,7 +4,7 @@
  * took before failing, and the capture goes on: flows are review evidence, not a gate.
  */
 import { createHash } from "node:crypto";
-import { copyFile, lstat, mkdir, readFile, realpath, rm, writeFile, mkdtemp, rmdir } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readFile, readdir, realpath, rm, writeFile, mkdtemp, rmdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BundleFlow, FlowFrame } from "../../contracts/capture.js";
@@ -70,7 +70,10 @@ export async function runFlows(options: RunFlowsOptions): Promise<FlowsOutcome> 
   finally {
     await rm(output, { recursive: true, force: true });
     // The last run out removes the directory; a concurrent run's files keep it (ENOTEMPTY).
-    await rmdir(root).catch(() => undefined);
+    await rmdir(root).catch(async () => {
+      const left = await readdir(root).catch(() => []);
+      if (left.length) say(`${FLOWS_OUTPUT_DIRECTORY} still holds ${left.slice(0, 3).join(", ")}${left.length > 3 ? ", …" : ""} (another run, or a late writer)`);
+    });
   }
 }
 
