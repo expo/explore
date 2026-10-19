@@ -19,8 +19,8 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--modified) 35%, transparent);
 }
 .visual-change-outlines.has-active .visual-change-outline:not(.active) { opacity: 0.35; }
-/* PROTOTYPE variants. Linked: the outlines take the pointer, and the hovered one reads as the selected one
-   does. Ghost: nothing shows until an outline is hovered (on its twin frame) or selected. */
+/* Split's pair: linked outlines (After) take the pointer, and the hovered one reads as the selected one
+   does; ghost outlines (Before) show nothing until their twin is hovered or the area is selected. */
 .visual-change-outlines.linked .visual-change-outline { pointer-events: auto; cursor: default; }
 .visual-change-outline.hovered { background: color-mix(in srgb, var(--modified) 22%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--modified) 35%, transparent); }
 .visual-change-outline.moved.hovered { background: color-mix(in srgb, var(--moved) 14%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--moved) 30%, transparent); }
@@ -28,17 +28,6 @@
 .visual-change-outlines.ghost .visual-change-outline.hovered,
 .visual-change-outlines.ghost .visual-change-outline.active { opacity: 1; }
 .visual-change-outlines.ghost.has-active .visual-change-outline:not(.active):not(.hovered) { opacity: 0; }
-/* PROTOTYPE: the changed pixels, tinted over After. */
-.visual-pixel-diff {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  pointer-events: none;
-}
 /* An area that only moved: dashed and quiet, in the slate of a measurement rather than the orange of a change. */
 .visual-change-outline.moved {
   border: 1.5px dashed var(--moved);
