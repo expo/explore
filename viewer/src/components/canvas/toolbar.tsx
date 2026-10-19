@@ -1,5 +1,5 @@
 import { GitCompareArrows, Keyboard, LayoutGrid, Map, Search } from "lucide-react";
-import { type CSSProperties, useLayoutEffect, useRef, useState } from "react";
+import { type CSSProperties, useLayoutEffect, useState } from "react";
 import { Tooltip } from "../shared/tooltip";
 import { useCanvasVisibleFrame } from "./visible-frame-provider";
 import { CANVAS_NUMBER_KEYS, formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
@@ -34,25 +34,35 @@ const TOOLBAR_PANEL_GAP = 12;
 
 export function CanvasToolbar(props: CanvasToolbarProps) {
   const { visibleFrame } = useCanvasVisibleFrame();
-  const ref = useRef<HTMLDivElement>(null);
+  // The bar as mounted now: it unmounts while hidden, and its last width is kept for deciding when
+  // it fits again.
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
   const [ownWidth, setOwnWidth] = useState(0);
   useLayoutEffect(() => {
-    const element = ref.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => setOwnWidth(element.getBoundingClientRect().width));
+    if (!element) return;
+    const measure = () => setOwnWidth(element.getBoundingClientRect().width);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [element]);
   // When responsive panels leave less room than the toolbar itself, hiding it is the only
   // collision-free layout. It returns as soon as either panel is collapsed.
   if (visibleFrame && visibleFrame.width < TOOLBAR_MINIMUM_FRAME_WIDTH) return null;
   // The toolbar is the canvas' persistent mode switcher. Panel geometry may raise it to avoid
   // bottom chrome, but must not pull it away from the window's stable horizontal centre. Only an
   // Inspector that would cover it (widened by the reader, or a narrow window's overlay) pushes it
-  // left, and by just that much.
-  const frameRight = visibleFrame ? visibleFrame.x + visibleFrame.width : undefined;
-  const shift = frameRight === undefined || typeof window === "undefined" ? 0
-    : Math.max(0, window.innerWidth / 2 + ownWidth / 2 + TOOLBAR_PANEL_GAP - frameRight);
+  // left, and by just that much, never past the canvas' left edge: with no room left between the
+  // two, it hides as it does above.
+  let shift = 0;
+  if (visibleFrame && typeof window !== "undefined") {
+    const centredLeft = window.innerWidth / 2 - ownWidth / 2;
+    const needed = centredLeft + ownWidth + TOOLBAR_PANEL_GAP - (visibleFrame.x + visibleFrame.width);
+    const room = centredLeft - (visibleFrame.x + TOOLBAR_PANEL_GAP);
+    if (needed > 0 && needed > room) return null;
+    shift = Math.max(0, needed);
+  }
   const style = visibleFrame ? ({
     "--canvas-visible-bottom-inset": `calc(100% - ${visibleFrame.y + visibleFrame.height}px)`,
     "--canvas-toolbar-shift": `${shift}px`,
@@ -60,7 +70,7 @@ export function CanvasToolbar(props: CanvasToolbarProps) {
   const views = CANVAS_VIEW_ORDER;
 
   return (
-    <div ref={ref} className="canvas-toolbar" role="toolbar" aria-label="Canvas tools" style={style}>
+    <div ref={setElement} className="canvas-toolbar" role="toolbar" aria-label="Canvas tools" style={style}>
       {/* The contents grow with --ui-scale; the bar itself keeps its exact place. */}
       <div className="canvas-toolbar-inner">
       <div className="toolbar-group" role="group" aria-label="Canvas actions">

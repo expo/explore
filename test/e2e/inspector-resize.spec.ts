@@ -178,6 +178,35 @@ test.describe("Inspector resize", () => {
     await expect.poll(() => panelWidth(page)).toBe(500);
   });
 
+  test.describe("in a window too narrow for the toolbar beside a wide Inspector", () => {
+    test.use({ viewport: { width: 820, height: 800 } });
+
+    test("the toolbar never moves past the canvas' left edge", async ({ page }) => {
+      await page.goto("/map?screen=area-0-screen-1");
+      await expect(panel(page)).toBeVisible();
+      const toolbar = page.getByRole("toolbar", { name: "Canvas tools" });
+      await expect(toolbar).toBeVisible();
+      await handle(page).focus();
+      await page.keyboard.press("End");
+      await expect.poll(() => panelWidth(page)).toBe(410);
+      // Either it fits between the window's edge and the panel, or it gives way, as it does when
+      // the panels leave the canvas too little room.
+      await expect.poll(async () => {
+        if (await toolbar.count() === 0) return true;
+        const toolbarBox = (await toolbar.boundingBox())!;
+        const panelBox = (await panel(page).boundingBox())!;
+        return toolbarBox.x >= 0 && toolbarBox.x + toolbarBox.width <= panelBox.x;
+      }).toBe(true);
+      // Narrowed again, the toolbar returns.
+      await page.keyboard.press("Home");
+      await expect(toolbar).toBeVisible();
+      const toolbarBox = (await toolbar.boundingBox())!;
+      const panelBox = (await panel(page).boundingBox())!;
+      expect(toolbarBox.x).toBeGreaterThanOrEqual(0);
+      expect(toolbarBox.x + toolbarBox.width + 12).toBeCloseTo(panelBox.x, 0);
+    });
+  });
+
   test.describe("in a narrow window", () => {
     test.use({ viewport: { width: 1180, height: 820 } });
 
