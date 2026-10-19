@@ -114,13 +114,13 @@ function Frame(props: {
   );
 }
 
-/** A step frame whose picture equals the previous shown frame's on every side that took both adds nothing: it folds into that frame. Checkpoints always show. */
+/** A step frame whose picture (outside the system bands, when the capture hashed that) equals the previous shown frame's on every side that took both adds nothing: it folds into that frame. Checkpoints always show. */
 function visibleFrames(entry: PublicFlowEvidence): { frame: PublicFlowEvidence["frames"][number]; same: string[] }[] {
   const sameOnEverySide = (a: string, b: string) => (["head", "base"] as const).every(side => {
     const frames = entry[side]?.frames;
     if (!frames) return true;
     const x = frames[a]; const y = frames[b];
-    return Boolean(x && y && x.sha256 === y.sha256);
+    return Boolean(x && y && (x.contentSha256 ?? x.sha256) === (y.contentSha256 ?? y.sha256));
   });
   const shown: { frame: PublicFlowEvidence["frames"][number]; same: string[] }[] = [];
   for (const frame of entry.frames.filter(frame => !frame.colorScheme)) {

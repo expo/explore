@@ -243,7 +243,7 @@ async function uploadSide(store: ScreenshotStore, directory: string, expectedCom
       if (!/^[a-z0-9-]+(?:@(?:light|dark))?$/.test(key)) throw new Error("Capture bundle flow frame key is invalid");
       const bytes = await evidenceFile(value.path); assertDecodedPng(bytes, "Flow frame");
       if (value.sha256 !== createHash("sha256").update(bytes).digest("hex") || value.width !== bytes.readUInt32BE(16) || value.height !== bytes.readUInt32BE(20)
-        || !Number.isFinite(Date.parse(value.capturedAt))) throw new Error("Flow frame provenance mismatch");
+        || !Number.isFinite(Date.parse(value.capturedAt)) || (value.contentSha256 !== undefined && !SHA256.test(value.contentSha256))) throw new Error("Flow frame provenance mismatch");
       const { path: _, ...metadata } = value;
       frames[key] = { ...metadata, url: await store.put(`${prefix}/flow-${flowId.replace("/", "-")}-${key}.png`, bytes, "image/png") };
     }

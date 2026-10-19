@@ -1,3 +1,5 @@
+import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { inflateSync } from "node:zlib";
 import { STATUS_BAR_BAND_PERCENT } from "../contracts/capture.js";
@@ -92,4 +94,17 @@ export function assertDecodedPng(contents: Buffer, label: string): void {
   for (let row = 0; row < height; row += 1) {
     if (decoded[row * (rowBytes + 1)]! > 4) throw new Error(`${label} has an invalid PNG row filter`);
   }
+}
+
+/**
+ * SHA-256 of a frame's pixels between the system bands (status bar above, home indicator below), so two frames that
+ * differ only by the clock or the indicator's inversion hash alike. Decodes with pngjs; `bands` are percentages of the height.
+ */
+export function contentSha256(png: Buffer, bands: { top: number; bottom: number }): string {
+  const { PNG } = createRequire(import.meta.url)("pngjs") as { PNG: { sync: { read(buffer: Buffer): DecodedFrame } } };
+  const frame = PNG.sync.read(png);
+  const rowBytes = frame.width * 4;
+  const first = Math.min(frame.height, Math.floor(frame.height * bands.top / 100));
+  const last = Math.max(first, frame.height - Math.ceil(frame.height * bands.bottom / 100));
+  return createHash("sha256").update(`${frame.width}x${last - first}:`).update(frame.data.subarray(first * rowBytes, last * rowBytes)).digest("hex");
 }

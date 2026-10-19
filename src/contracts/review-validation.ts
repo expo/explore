@@ -130,8 +130,9 @@ function validLaunchSide(side: unknown): boolean {
 const FLOW_STATUSES = new Set(["passed", "failed", "skipped", "flaky", "timed-out", "interrupted", "blocked"]);
 const STEP_STATUSES = new Set(["passed", "failed", "blocked", "timed-out", "cancelled"]);
 const validFlowFrame = (value: unknown): boolean => Boolean(value) && typeof value === "object"
-  && Object.keys(value as object).every(key => ["url", "sha256", "width", "height", "capturedAt"].includes(key))
+  && Object.keys(value as object).every(key => ["url", "sha256", "width", "height", "capturedAt", "contentSha256"].includes(key))
   && typeof (value as { url: unknown }).url === "string" && /^[a-f0-9]{64}$/.test(String((value as { sha256: unknown }).sha256))
+  && ((value as { contentSha256?: unknown }).contentSha256 === undefined || /^[a-f0-9]{64}$/.test(String((value as { contentSha256: unknown }).contentSha256)))
   && Number.isSafeInteger((value as { width: unknown }).width) && Number.isSafeInteger((value as { height: unknown }).height)
   && Number.isFinite(Date.parse(String((value as { capturedAt: unknown }).capturedAt)));
 function validFlowSide(value: unknown): value is PublicFlowSide {

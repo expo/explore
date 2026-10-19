@@ -63,7 +63,8 @@ export type BundleLaunchCapture = {
 };
 
 /** A frame a flow took with `app.screenshot(label)`; stored and verified like a launch frame. */
-export type FlowFrame = LaunchFrame;
+/** `contentSha256` hashes the pixels between the system bands, so frames that differ only by the clock fold together in the Viewer. */
+export type FlowFrame = LaunchFrame & { contentSha256?: string };
 /** A flows run that produced no flow records: the e2e worker failed before any test ran. */
 export type FlowsFailure = { code: string; message: string };
 export type FlowStatus = "passed" | "failed" | "skipped" | "flaky" | "timed-out" | "interrupted" | "blocked";

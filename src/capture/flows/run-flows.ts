@@ -7,8 +7,8 @@ import { createHash } from "node:crypto";
 import { copyFile, lstat, mkdir, readFile, readdir, realpath, rm, writeFile, mkdtemp, rmdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { BundleFlow, FlowFrame } from "../../contracts/capture.js";
-import { assertDecodedPng } from "../../shared/png-evidence.js";
+import { homeIndicatorBandPercent, statusBarBandPercent, type BundleFlow, type FlowFrame } from "../../contracts/capture.js";
+import { assertDecodedPng, contentSha256 } from "../../shared/png-evidence.js";
 import { CONTROLLER_SESSION } from "../common.js";
 import type { CommandRunner } from "../run.js";
 import type { SimulatorConnection } from "../simulator.js";
@@ -117,6 +117,7 @@ async function executeFlows(options: RunFlowsOptions, work: string, output: stri
         await mkdir(join(options.outputDirectory, dirname(path)), { recursive: true });
         await copyFile(source, join(options.outputDirectory, path));
         frames[frame.key] = { path, sha256: createHash("sha256").update(png).digest("hex"), width: png.readUInt32BE(16), height: png.readUInt32BE(20),
+          contentSha256: contentSha256(png, { top: statusBarBandPercent(options.platform), bottom: homeIndicatorBandPercent(options.platform) }),
           capturedAt: Number.isFinite(Date.parse(frame.capturedAt)) ? frame.capturedAt : new Date().toISOString() };
       } catch (error) {
         say(`flow ${test.id}: frame ${frame.key} was not kept (${(error as Error).message})`);
