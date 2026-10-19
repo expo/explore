@@ -2,8 +2,8 @@ import {
   useCallback, useRef, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type PointerEvent, type RefObject,
 } from "react";
 import {
-  clampInspectorWidth, inspectorWidthBounds, INSPECTOR_WIDTH_MAX, INSPECTOR_WIDTH_MIN, INSPECTOR_WIDTH_STEP,
-  setInspectorWidth, useInspectorWidth,
+  clampInspectorWidth, getToolbarRoom, inspectorWidthBounds, INSPECTOR_WIDTH_MAX, INSPECTOR_WIDTH_MIN, INSPECTOR_WIDTH_STEP,
+  setInspectorWidth, subscribeToToolbarRoom, useInspectorWidth,
   type InspectorWidthBounds,
 } from "../../utils/inspector-width";
 
@@ -31,8 +31,22 @@ function subscribeToWindow(onChange: () => void): () => void {
   return () => window.removeEventListener("resize", onChange);
 }
 
+/** The widest the panel can be now: it follows the window, `--ui-scale` and the bottom bar's width. */
+function currentBounds(): InspectorWidthBounds {
+  return inspectorWidthBounds(window.innerWidth, uiScale(), getToolbarRoom());
+}
+
+function subscribeToBounds(onChange: () => void): () => void {
+  const unsubscribeToolbar = subscribeToToolbarRoom(onChange);
+  const unsubscribeWindow = subscribeToWindow(onChange);
+  return () => {
+    unsubscribeToolbar();
+    unsubscribeWindow();
+  };
+}
+
 function widestWidth(): number {
-  return inspectorWidthBounds(window.innerWidth, uiScale()).max;
+  return currentBounds().max;
 }
 
 type Drag = {
@@ -54,7 +68,7 @@ type Drag = {
  */
 export function useInspectorResize(panelRef: RefObject<HTMLElement | null>) {
   const width = useInspectorWidth();
-  const widest = useSyncExternalStore(subscribeToWindow, widestWidth, () => INSPECTOR_WIDTH_MAX);
+  const widest = useSyncExternalStore(subscribeToBounds, widestWidth, () => INSPECTOR_WIDTH_MAX);
   const fallback = useSyncExternalStore(subscribeToWindow, defaultWidth, () => 400);
   const drag = useRef<Drag | null>(null);
 
@@ -92,7 +106,7 @@ export function useInspectorResize(panelRef: RefObject<HTMLElement | null>) {
     const startWidth = panelWidth(panel);
     drag.current = {
       pointerId: event.pointerId, startX: event.clientX, startWidth, scale,
-      bounds: inspectorWidthBounds(window.innerWidth, scale), last: startWidth,
+      bounds: currentBounds(), last: startWidth,
       inline: panel.style.getPropertyValue("--inspector-width"),
     };
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -126,7 +140,7 @@ export function useInspectorResize(panelRef: RefObject<HTMLElement | null>) {
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     const panel = panelRef.current;
     if (!panel) return;
-    const bounds = inspectorWidthBounds(window.innerWidth, uiScale());
+    const bounds = currentBounds();
     const current = panelWidth(panel);
     let next: number;
     switch (event.key) {

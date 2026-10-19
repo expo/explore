@@ -43,15 +43,39 @@ export function useInspectorWidth(): number | undefined {
   );
 }
 
+/** The room the bottom bar needs beside the Inspector, in window pixels: its measured width and a gap either side. */
+let toolbarRoom = 0;
+const toolbarListeners = new Set<() => void>();
+
+/** The bottom bar reports the room it needs whenever its measured width changes (with `--ui-scale` too). */
+export function setToolbarRoom(room: number) {
+  if (room === toolbarRoom) return;
+  toolbarRoom = room;
+  for (const listener of toolbarListeners) listener();
+}
+
+export function getToolbarRoom(): number {
+  return toolbarRoom;
+}
+
+export function subscribeToToolbarRoom(onChange: () => void): () => void {
+  toolbarListeners.add(onChange);
+  return () => toolbarListeners.delete(onChange);
+}
+
 export type InspectorWidthBounds = { min: number; max: number };
 
 /**
  * The widths the panel may take in a window `windowWidth` wide: at most half of it, so the canvas
- * keeps the other half, in the panel's own (unscaled) pixels when the chrome is zoomed by `scale`.
+ * keeps the other half, and never so wide that the canvas beside it loses the `toolbarRoom` the
+ * bottom bar needs (window pixels), in the panel's own (unscaled) pixels when the chrome is zoomed
+ * by `scale`. Neither cap goes below the minimum.
  */
-export function inspectorWidthBounds(windowWidth: number, scale = 1): InspectorWidthBounds {
-  const half = Math.floor(windowWidth / 2 / (scale > 0 ? scale : 1));
-  return { min: INSPECTOR_WIDTH_MIN, max: Math.max(INSPECTOR_WIDTH_MIN, Math.min(INSPECTOR_WIDTH_MAX, half)) };
+export function inspectorWidthBounds(windowWidth: number, scale = 1, room = 0): InspectorWidthBounds {
+  const zoom = scale > 0 ? scale : 1;
+  const half = Math.floor(windowWidth / 2 / zoom);
+  const besideBar = Math.floor((windowWidth - room) / zoom);
+  return { min: INSPECTOR_WIDTH_MIN, max: Math.max(INSPECTOR_WIDTH_MIN, Math.min(INSPECTOR_WIDTH_MAX, half, besideBar)) };
 }
 
 export function clampInspectorWidth(width: number, bounds: InspectorWidthBounds): number {
