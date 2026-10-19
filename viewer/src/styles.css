@@ -637,7 +637,7 @@ code {
    where an image of --screenshot-width x --screenshot-height would sit under the rules above:
    contained in the slot inside its border, never enlarged. It lines up with the screenshots
    beside it, and a failed screenshot keeps the frame it waited in. A Map card's screenshot waits
-   over a backing of the same frame (below). */
+   over a backing of the same frame (below; a phone's Screens cell sizes it in phone.css). */
 .screen-node-image:has(> :is(.image-placeholder, .screenshot-backing)) { container-type: size; }
 .screen-node-image > :is(.image-placeholder, .screenshot-backing) {
   --frame-border: 1px;
@@ -673,13 +673,13 @@ code {
    specificity. The Map leaves the border to the status and rings the card from outside instead. */
 .screen-node-image:hover img,
 .screen-screenshot-card.selected .screen-node-image img { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
-.screen-node-image:hover > .image-placeholder,
-.screen-screenshot-card.selected .screen-node-image > .image-placeholder { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
-/* A Map card draws its frame (fill, border, status and rings) on the image itself, which is hidden
-   while it loads. The backing draws the same frame under it, in the placeholder's geometry, while
-   the image waits and while it fades in, so the frame and its rings hold steady; then it hides.
-   The fading image leaves its rings to the backing, so their soft lift is not drawn twice, and
-   takes them back in the frame the backing hides. */
+.screen-node-image:hover > :is(.image-placeholder, .screenshot-backing),
+.screen-screenshot-card.selected .screen-node-image > :is(.image-placeholder, .screenshot-backing) { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+/* A Map card, and a Screens card on a phone, draws its frame (fill, border, status and rings) on
+   the image itself, which is hidden while it loads. The backing draws the same frame under it, in
+   the image's geometry, while the image waits and while it fades in, so the frame and its rings
+   hold steady; then it hides. The fading image leaves its rings to the backing, so their soft lift
+   is not drawn twice, and takes them back in the frame the backing hides. */
 .screen-node-image > .screenshot-backing {
   position: absolute;
   inset: 0;

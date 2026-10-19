@@ -157,6 +157,8 @@ function ScreenCell(props: {
   dimmed: boolean;
   /** The run's screenshot shape, which a screen without a screenshot is framed in. */
   typicalSize?: ScreenshotSize | undefined;
+  /** A phone's cell, whose screenshot is its own frame: no well frames it while it loads. */
+  phone?: boolean | undefined;
   onSelect: () => void;
 }) {
   const artifact = primaryScreenshotForScreen(props.screen, props.index);
@@ -179,6 +181,7 @@ function ScreenCell(props: {
         selected={props.selected}
         ariaPressed={props.selected}
         loading="lazy"
+        backing={props.phone === true}
         onClick={props.onSelect}
         {...(props.via || props.elsewhere?.length ? { note: <>
           {props.via ? <span className="screens-cell-via">via “{props.via}”</span> : null}
@@ -578,6 +581,7 @@ export function ScreensView(props: ScreensViewProps) {
         elsewhere={isChanged(props.diff, id) ? undefined : props.changedElsewhere?.get(id)}
         via={tree.via.get(id)}
         typicalSize={typicalSize}
+        phone={props.phone}
         selected={props.selectedScreenId === id}
         dimmed={Boolean(props.focus?.length) && !props.focus!.some((state) => state === focusStatusOf(props.diff?.screens.get(id)))}
         onSelect={() => props.onSelectScreen(id)} />

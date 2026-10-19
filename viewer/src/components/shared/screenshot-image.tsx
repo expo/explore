@@ -10,7 +10,7 @@ export const DEFAULT_SCREENSHOT_SIZE = { width: 390, height: Math.round(390 / DE
 type ScreenshotImageProps = ImgHTMLAttributes<HTMLImageElement> & {
   /** Large previews centre a spinner while an embedded screenshot resolves; small images wait as a quiet empty frame. */
   indicator?: "spinner";
-  /** Stands in for an embedded screenshot that cannot be read: the caller's own no-screenshot state. */
+  /** Stands in for a screenshot that cannot be read or loaded: the caller's own no-screenshot state. */
   fallback?: ReactNode;
   /**
    * Keeps the picture of the source before on screen until the new one has decoded, and shows the new one without a
@@ -43,17 +43,24 @@ function waitingSource(width: number | string | undefined, height: number | stri
   return `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}'/%3E`;
 }
 
+/** The picture each image is waiting to decode, so a load and a re-render waiting for the same one share a wait. */
+const decodeWaits = new WeakMap<HTMLImageElement, string>();
+
 /**
  * Calls `show` once `image` has decoded `picture`, so the picture fades in on its own pixels rather than on an empty
  * box its decode fills in partway; one whose decode does not settle soon is shown anyway. A rejected decode is a
- * broken image, whose error event follows, or a source replaced meanwhile, which is shown on its own load.
+ * broken image, whose error event follows, or a source replaced meanwhile, which is shown on its own load. One wait
+ * runs per image and picture: a second call while it runs adds nothing.
  */
 function whenDecoded(image: HTMLImageElement, picture: string, show: () => void) {
+  if (decodeWaits.get(image) === picture) return;
+  decodeWaits.set(image, picture);
   let settled = false;
   const settle = (shown: boolean) => {
     if (settled) return;
     settled = true;
     clearTimeout(timer);
+    if (decodeWaits.get(image) === picture) decodeWaits.delete(image);
     if (shown && image.isConnected && image.getAttribute("src") === picture) show();
   };
   const timer = setTimeout(() => settle(true), DECODE_WAIT_MS);
@@ -64,7 +71,7 @@ function whenDecoded(image: HTMLImageElement, picture: string, show: () => void)
  * Decode embedded evidence near the viewport; ordinary image URLs keep native loading. While a
  * screenshot loads, the image is hidden over its frame (an embedded one keeps its size and, with
  * `indicator`, shows a spinner) and never shows its alt text or the picture of the source before;
- * an embedded screenshot that cannot be read shows `fallback`. A picture that fills an empty frame
+ * a screenshot that cannot be read or loaded shows `fallback`. A picture that fills an empty frame
  * fades in, unless it lands inside `[data-screenshot-instant]` (Compare stepping under a held key,
  * Flip's hidden side), where it appears at once.
  */
@@ -170,7 +177,7 @@ export function ScreenshotImage({ src, loading, indicator, fallback, holdPreviou
     if (image.complete && image.naturalWidth > 0) show(image, displayed);
   });
 
-  if (state === "failed" && fallback !== undefined && embedded) return <>{fallback}</>;
+  if (state === "failed" && fallback !== undefined) return <>{fallback}</>;
   // The caller hears the screenshot's own load and error events and a failed resolve (dispatched
   // above, so untrusted), never the stand-in's.
   const isScreenshot = (event: SyntheticEvent<HTMLImageElement>) => Boolean(url) && event.currentTarget.getAttribute("src") === url;

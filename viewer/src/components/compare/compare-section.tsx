@@ -134,7 +134,10 @@ export function useCompareController(options: CompareControllerOptions) {
   const mode: CompareMode = comparable ? (phone ? phoneMode : desktopMode) : "flip";
   const outlines = useOutlinesShown();
   const [activeArea, setActiveArea] = useState<number>();
-  const [flipSide, setFlipSide] = useState<"before" | "after">("after");
+  // Flip's side belongs to the screen it was chosen on: each screen starts on After, from its very
+  // first render, so a step never shows the next screen's Before for a frame.
+  const [flipped, setFlipped] = useState<{ screenId: string; side: "before" | "after" }>();
+  const flipSide = flipped?.screenId === options.screenId ? flipped.side : "after";
   const [swipePosition, setSwipePosition] = useState(50);
   const [factsOpen, setFactsOpen] = useState(false);
   // The frame takes the recorded screenshot's shape at once, then the loaded image's (they agree
@@ -151,10 +154,11 @@ export function useCompareController(options: CompareControllerOptions) {
     setLoadedAspect({ screenId: options.screenId, aspect: value });
   }, [options.screenId, hasAfter]);
 
-  // Each screen starts whole: no area selected, After showing, the facts closed.
+  // Each screen starts whole: no area selected, After showing, the facts closed. A side flipped to on
+  // another screen is already not this one's (above); it is dropped, so coming back starts on After.
   useEffect(() => {
     setActiveArea(undefined);
-    setFlipSide("after");
+    setFlipped(undefined);
     setFactsOpen(false);
   }, [options.screenId]);
 
@@ -172,7 +176,7 @@ export function useCompareController(options: CompareControllerOptions) {
       return Math.min(areas.length - 1, Math.max(0, current + step));
     });
   };
-  const flip = () => setFlipSide((side) => (side === "after" ? "before" : "after"));
+  const flip = () => setFlipped({ screenId: options.screenId, side: flipSide === "after" ? "before" : "after" });
 
   const keyState = useRef({ previous, next, mode, activeArea, options, swipePosition });
   keyState.current = { previous, next, mode, activeArea, options, swipePosition };
@@ -485,12 +489,20 @@ export function CompareStage(props: StageProps) {
   // toggle drops the hover rather than lighting an area the pointer is not on.
   useLayoutEffect(() => setHoverIndex(undefined), [props.areas, props.mode, props.showOutlines]);
   // Flip keeps both sides mounted, so flipping is an instant swap of two decoded pictures. The side off screen mounts
-  // once the side on screen has loaded, or on the first flip, so a held key stepping through Flip reads one side of
-  // each screen it passes, not two.
+  // once the side on screen is ready for this pair of screenshots, or on the first flip to it, so a held key stepping
+  // through Flip reads one side of each screen it passes, not two.
   const pair = `${before ?? ""} ${after ?? ""}`;
   const [flipPair, setFlipPair] = useState<string>();
-  const flipBoth = flipPair === pair || props.flipSide === "before";
+  const flipBoth = flipPair === pair;
   if (props.mode === "flip" && props.flipSide === "before" && flipPair !== pair) setFlipPair(pair);
+  // The side on screen loads (CompareImage reports it), or a step kept its screenshot (the same After beside another
+  // Before), which fires no load: it is ready as it is.
+  const flipFrameRef = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    if (props.mode !== "flip" || flipPair === pair) return;
+    const shown = flipFrameRef.current?.querySelector(`.compare-flip-layer[data-side="${props.flipSide}"] img`);
+    if (shown?.getAttribute("data-screenshot-state") === "ready") setFlipPair(pair);
+  }, [props.mode, props.flipSide, flipPair, pair]);
   if (!before && !after) {
     const reason = diff.captureNotes?.after ?? diff.captureNotes?.before;
     return (
@@ -547,7 +559,7 @@ export function CompareStage(props: StageProps) {
           ))}
         </figcaption>
         <div className="compare-frame-wrap">
-          <button type="button" className="compare-frame compare-flip-frame" data-side={showing}
+          <button ref={flipFrameRef} type="button" className="compare-frame compare-flip-frame" data-side={showing}
             aria-label={`Show ${showing === "after" ? "Before" : "After"}`} onClick={props.onFlip}>
             {/* Each side is a layer of its own, with its spinner and its no-screenshot state; the one off screen
                 is hidden, and its pictures land without a fade, so a flip shows the other side at once. */}

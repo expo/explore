@@ -3577,8 +3577,12 @@ test("the Map's top right holds only fit, center and zoom; theme and full screen
   await expect.poll(async () => scaleFromTransform(await viewport.getAttribute("style")))
     .toBeCloseTo(pannedScale, 6);
   // The flight to the centre dips the scale on its way, and a drag interrupts it where it is: let it
-  // land first. The check above can pass on the flight's first frame, before the dip shows.
-  await page.waitForTimeout(250);
+  // land first, the camera unchanged across two frames. The check above can pass on the flight's
+  // first frame, before the dip shows.
+  await expect.poll(() => viewport.evaluate((element) => new Promise<boolean>((resolve) => {
+    const before = element.getAttribute("style");
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve(element.getAttribute("style") === before)));
+  }))).toBe(true);
 
   // The keyboard shortcut performs the same scale-preserving camera action.
   await page.mouse.move(panPoint.x, panPoint.y);
@@ -4480,6 +4484,24 @@ async function staleCompareFrames(page: Page, screens: { route: string; sources:
   expect(new Set(frames.map((frame) => frame.route)).size, "The steps were sampled").toBeGreaterThan(1);
   return frames.filter((frame) => frame.shown.some((source) => !sources.get(frame.route)?.has(source)));
 }
+
+test("a screenshot whose URL cannot be loaded shows No screenshot in its frame on the Map and in the Inspector", async ({ page }) => {
+  await page.route((url) => url.pathname === "/api/artifacts/artifacts/area-0-screen-1-0.svg", (route) => route.fulfill({ status: 404, body: "" }));
+  await page.goto("/map");
+  const card = (title: string) => page.locator(".map-canvas .react-flow__node").filter({ hasText: title }).locator(".screen-node-image");
+  const missing = card("/onboarding-step-2").locator(".image-placeholder");
+  await expect(missing).toContainText("No screenshot");
+  await expect(card("/onboarding-step-2").locator("img")).toHaveCount(0);
+  // The placeholder takes the frame the screenshot would have had, like the screenshot beside it.
+  const neighbour = card("/onboarding-step-1").locator("img");
+  await expect(neighbour).toHaveAttribute("data-screenshot-state", "ready");
+  const size = (locator: Locator) => locator.evaluate((element) => [element.offsetWidth, element.offsetHeight]);
+  expect(await size(missing)).toEqual(await size(neighbour));
+  await expect(card("/onboarding-step-2").locator(".screenshot-backing")).toHaveCSS("visibility", "hidden");
+
+  await page.locator(".map-canvas .react-flow__node").filter({ hasText: "/onboarding-step-2" }).locator(".screen-screenshot-target").click();
+  await expect(page.locator(".right-panel .inspector-preview .screenshot-placeholder")).toContainText("No screenshot");
+});
 
 test("stepping Compare by key or by its buttons never shows the screen before's pictures under the next one's name", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 860 });

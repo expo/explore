@@ -24,14 +24,13 @@ export type NeighborScreenshotsOptions = {
  * on, then released; nothing is decoded outside the page's own images.
  *
  * A held key steps past screens faster than they could be read, so nothing is read until it is released. The reads
- * are the report's prefetches, which leave the slots the next step needs free, and a prefetch waits while an earlier
- * one is still reading, so speculative work never holds more than two slots.
+ * are the report's prefetches: one starts only while two slots stay free for the step the reviewer takes, so
+ * speculative work never holds more than two, whatever earlier prefetches are still reading, and one that has not
+ * started when Compare moves on is dropped unread.
  */
 export function useNeighborScreenshots({ diff, order, screenId, enabled, hold }: NeighborScreenshotsOptions) {
   const position = order.findIndex((entry) => entry.id === screenId);
   const last = useRef<{ position: number; direction: 1 | -1 }>({ position, direction: 1 });
-  // Reads of earlier prefetches that have not finished or failed yet.
-  const unsettled = useRef(0);
   useEffect(() => {
     if (!enabled || position < 0) return;
     const previous = last.current;
@@ -45,7 +44,7 @@ export function useNeighborScreenshots({ diff, order, screenId, enabled, hold }:
     const leases: { release: () => boolean; held: boolean }[] = [];
     let timer: ReturnType<typeof setTimeout>;
     const read = () => {
-      if (hold.holding() || unsettled.current > 0) {
+      if (hold.holding()) {
         timer = setTimeout(read, NEIGHBOR_SETTLE_MS);
         return;
       }
@@ -53,9 +52,8 @@ export function useNeighborScreenshots({ diff, order, screenId, enabled, hold }:
         const leased = leaseEmbeddedArtifactUrl(source, "prefetch");
         const lease = { release: leased.release, held: true };
         leases.push(lease);
-        unsettled.current++;
         // A read that failed (a report switched away from, or a prefetch dropped) holds nothing to release.
-        void leased.url.then(() => {}, () => { lease.held = false; }).finally(() => { unsettled.current--; });
+        void leased.url.catch(() => { lease.held = false; });
       }
     };
     timer = setTimeout(read, NEIGHBOR_SETTLE_MS);

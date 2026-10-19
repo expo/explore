@@ -30,8 +30,9 @@ export type ScreenScreenshotCardProps = {
   placeholderSize?: { width: number; height: number };
   loading?: "eager" | "lazy";
   /**
-   * Frame the screenshot from behind while it loads and fades in (the Map), where the frame and its rings are drawn
-   * on the image itself. Screens' wells frame their own screenshots. Only a screenshot of recorded size has one.
+   * Frame the screenshot from behind while it loads and fades in, where the frame and its rings are drawn on the image
+   * itself: the Map, and Screens on a phone. Screens' wells frame their own screenshots on wider windows. Only a
+   * screenshot of recorded size has one.
    */
   backing?: boolean;
   leading?: ReactNode;

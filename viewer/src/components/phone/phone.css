@@ -562,7 +562,7 @@
 /* A screen without a screenshot: on the Map the placeholder is sized by its slot's height, which a
    Screens grid cell does not have. Here it takes the cell's width and a screenshot's proportions,
    so it lines up with the screenshots beside it. */
-.screens-cell .screen-node-image:has(> .image-placeholder) { container-type: normal; }
+.screens-cell .screen-node-image:has(> :is(.image-placeholder, .screenshot-backing)) { container-type: normal; }
 .screens-cell .screen-node-image > .image-placeholder {
   /* Like the image beside it: the screenshot's proportions inside the frame's 1px border. */
   box-sizing: content-box;
@@ -570,6 +570,13 @@
   height: auto;
   aspect-ratio: var(--screenshot-width) / var(--screenshot-height);
   font-size: var(--phone-caption-size, 12px);
+}
+/* A screenshot's backing fills the image box exactly: the image sets the cell's height from its own
+   proportions, and the backing draws its frame there while it loads. */
+.screens-cell .screen-node-image > .screenshot-backing {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
 }
 
 /* Pinch and double-tap zoom the page on a phone; only the map canvas zooms, and it handles that itself. */

@@ -68,7 +68,8 @@ function Harness() {
   return <main style={{ position: "relative", height: state.layout === "scroll" ? 3300 : 300,
     width: 600, overflow: state.layout === "pan" ? "hidden" : undefined }}>
     {state.normalSource && <ScreenshotImage src={state.normalSource} alt="Hosted screenshot"
-      width={24} height={18} decoding="async" onLoad={loaded} {...(state.holdPrevious ? { holdPrevious: true } : {})} />}
+      width={24} height={18} decoding="async" onLoad={loaded} {...(state.holdPrevious ? { holdPrevious: true } : {})}
+      {...(state.fallback ? { fallback: <span data-testid="hosted-fallback">No hosted screenshot</span> } : {})} />}
     <div data-testid="positioner" style={{ position: "absolute", left: 20,
       top: state.layout === "scroll" ? 3000 : 30,
       transform: state.layout === "pan" ? "translateX(2500px)" : undefined }}
@@ -108,6 +109,12 @@ async function fixture(t, options = {}) {
           if (request.url === "/__normal.png") {
             response.setHeader("Content-Type", "image/png");
             response.end(firstImage);
+            return;
+          }
+          // A hosted screenshot that is not there.
+          if (request.url === "/__missing.png") {
+            response.statusCode = 404;
+            response.end("Not found");
             return;
           }
           // A hosted screenshot that takes a while to arrive.
@@ -678,4 +685,32 @@ test("an unselected variant thumbnail that changes source hides at once, despite
   const landed = samples.filter(sample => sample?.source === secondSource);
   assert.ok(landed.length > 0);
   assert.deepEqual(landed.map(sample => sample.opacity), landed.map(() => "0"));
+});
+
+test("an ordinary URL that cannot be loaded shows the fallback, and a held one gives way to it", { timeout: 30_000 }, async t => {
+  const { page } = await fixture(t, { loading: "eager", styles: true, fallback: true, holdPrevious: true, normalSource: "/__normal.png" });
+  const hosted = page.getByRole("img", { name: "Hosted screenshot", exact: true });
+  await expect(hosted).toHaveAttribute("data-screenshot-state", "ready");
+  // The app icon's case: a held picture whose replacement is missing ends on the fallback, not on the picture before.
+  await page.evaluate(() => window.updateScreenshot({ normalSource: "/__missing.png" }));
+  await expect(page.getByTestId("hosted-fallback")).toHaveText("No hosted screenshot");
+  await expect(hosted).toHaveCount(0);
+  // A new source tries again.
+  await page.evaluate(() => window.updateScreenshot({ normalSource: "/__normal.png" }));
+  await expect(hosted).toHaveAttribute("data-screenshot-state", "ready");
+  await expect(page.getByTestId("hosted-fallback")).toHaveCount(0);
+});
+
+test("re-rendering an image that waits for its decode starts no second wait", { timeout: 30_000 }, async t => {
+  const { page, image } = await fixture(t, { loading: "eager", styles: true, decode: "manual" });
+  await resolveImage(page, firstSource);
+  await expect.poll(() => page.evaluate(() => window.pendingDecodes.length)).toBe(1);
+  // Renders while the decode is pending find the image loaded but not shown yet.
+  for (let render = 0; render < 5; render++) {
+    await page.evaluate(render => window.updateScreenshot({ render }), render);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+  }
+  assert.equal(await page.evaluate(() => window.pendingDecodes.length), 1, "One decode wait for the one picture");
+  await page.evaluate(() => window.pendingDecodes.shift().resolve());
+  await expect(image).toHaveAttribute("data-screenshot-state", "ready");
 });

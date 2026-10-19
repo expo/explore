@@ -579,12 +579,23 @@ export class ArtifactReportArchive {
     return this.queues.eager.splice(0).concat(this.queues.lazy.splice(0), this.queues.prefetch.splice(0));
   }
 
+  /**
+   * Move a load up to `priority`. A prefetch waiting for its reserve that the reviewer has stepped to starts at once
+   * when a slot is free, rather than waiting for a running read to finish.
+   */
   private promote(load: ImageLoad, priority: ScreenshotPriority): void {
     const queue = this.queues[load.priority];
     load.priority = priority;
     const index = queue.indexOf(load);
     if (index < 0) return;
     queue.splice(index, 1);
+    if (load.waiting && this.running < this.slotsFor(load)) {
+      const waiting = load.waiting;
+      delete load.waiting;
+      this.running++;
+      waiting.start();
+      return;
+    }
     this.queues[priority].push(load);
   }
 

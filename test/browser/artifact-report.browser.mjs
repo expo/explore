@@ -1787,9 +1787,10 @@ function tintedCapture(seed) {
 
 /**
  * `count` modified screens, screen-1 to screen-<count>, each with a Before and an After of its own. `seed` gives
- * another target its own captures. `screens[i]` holds screen-(i + 1)'s `before` and `after`.
+ * another target its own captures. `screens[i]` holds screen-(i + 1)'s `before` and `after`. `sameAfter: { i: j }`
+ * gives the screen at index i the After of the one at index j.
  */
-async function changedScreensArchive(count, { seed = 1, runtime } = {}) {
+async function changedScreensArchive(count, { seed = 1, runtime, sameAfter = {} } = {}) {
   const report = reportFixture();
   const home = report.review.surfaces[0];
   const route = id => ({ ...home.head, id, route: `/${id}`, path: `/${id}`, routeFile: `app/${id}.tsx`, logicalPath: `app/${id}.tsx` });
@@ -1799,9 +1800,10 @@ async function changedScreensArchive(count, { seed = 1, runtime } = {}) {
   report.review.surfaces = Array.from({ length: count }, (_, index) => {
     const id = `screen-${index + 1}`;
     const before = tintedCapture(seed * 100 + index * 2);
-    const after = tintedCapture(seed * 100 + index * 2 + 1);
+    const after = sameAfter[index] !== undefined ? screens[sameAfter[index]].after : tintedCapture(seed * 100 + index * 2 + 1);
     screens.push({ id, before, after });
     for (const capture of [before, after]) {
+      if (report.assets.some(asset => asset.sha256 === capture.sha256)) continue;
       report.assets.push({ sha256: capture.sha256, path: capture.path });
       extra.push({ name: capture.path, bytes: capture.bytes });
     }
@@ -2060,6 +2062,27 @@ test("on a phone, a Screens card's screenshot keeps its height while it loads an
   const height = () => slot.evaluate(element => [element.getBoundingClientRect().height, element.querySelector("img").getBoundingClientRect().height]);
   const [waiting, waitingImage] = await height();
   assert.ok(waiting > 100 && Math.abs(waiting - waitingImage) < 1, `The waiting screenshot holds the slot open: ${waiting}, ${waitingImage}`);
+  // The image is the frame here, and hidden while it loads: its backing draws the same frame in its place.
+  await expect(slot.locator("img")).toHaveCSS("opacity", "0");
+  const backing = slot.locator(".screenshot-backing");
+  await expect(backing).toHaveCSS("visibility", "visible");
+  const frames = await slot.evaluate(element => {
+    const box = node => { const { left, top, width, height } = node.getBoundingClientRect(); return [left, top, width, height].map(value => Math.round(value)); };
+    const style = node => { const { borderTopColor, borderTopWidth, borderTopLeftRadius, backgroundColor, boxShadow } = getComputedStyle(node); return { borderTopColor, borderTopWidth, borderTopLeftRadius, backgroundColor, boxShadow }; };
+    const [img, backing] = [element.querySelector("img"), element.querySelector(".screenshot-backing")];
+    return { image: box(img), backing: box(backing), imageStyle: style(img), backingStyle: style(backing) };
+  });
+  assert.deepEqual(frames.backing, frames.image);
+  assert.deepEqual(frames.backingStyle, frames.imageStyle, "The backing draws the image's frame: border, fill, radius, status and ring");
+  assert.notEqual(frames.backingStyle.backgroundColor, "rgba(0, 0, 0, 0)");
+  // Selected, the backing carries the image's ring while the screenshot still loads (a changed screen's is its status).
+  await page.goto(`${page.url().split("#")[0]}#/screens?screen=screen-1`);
+  const selected = page.locator(".screens-cell .screen-screenshot-card.selected .screen-node-image");
+  await expect(selected.locator("img")).toHaveAttribute("data-screenshot-state", "loading");
+  const rings = await selected.evaluate(element => [element.querySelector("img"), element.querySelector(".screenshot-backing")]
+    .map(node => getComputedStyle(node).boxShadow));
+  assert.equal(rings[1], rings[0]);
+  assert.notEqual(rings[1], "none");
   await page.evaluate(() => window.releaseScreenshotHashes());
   await expect(slot.locator("img")).toHaveAttribute("data-screenshot-state", "ready");
   assert.deepEqual(await height(), [waiting, waitingImage]);
@@ -2123,5 +2146,130 @@ test("a target switch blanks every card whose screenshot differs, never showing 
   assert.deepEqual(back, shown, "Android's cards show the Blob URLs they showed before");
   assert.equal(await page.evaluate(() => window.createdUrls.length), created, "nothing was decoded again");
   await expectBalancedUses(page, "After switching back, the Android report counts only the cards' uses");
+  assert.deepEqual(errors, []);
+});
+
+test("a prefetch the reviewer steps onto starts at once when a slot is free, instead of waiting for a running read", { timeout: 20_000 }, async t => {
+  const { page, errors } = await harness(t);
+  const { bytes, shas } = await multiImageArchive(4);
+  const result = await page.evaluate(async ({ bytes, identity, shas, probe }) => {
+    const archive = await window.openReport(bytes, identity);
+    const decodes = new Function(`return (${probe})()`)();
+    const [shown, shownToo, next, nextToo] = shas.map(sha => archive.reference(sha));
+    // The screen on show is still being read after the rest: the next screen's prefetches wait behind the reserve.
+    const visible = [archive.resolve(shown, "eager"), archive.resolve(shownToo, "eager")];
+    await decodes.until(() => decodes.held() === 2);
+    const prefetched = [archive.resolve(next, "prefetch"), archive.resolve(nextToo, "prefetch")];
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const heldBeforeStep = decodes.held();
+    // The reviewer steps onto that screen: its reads start in the two free slots, beside the running ones.
+    const stepped = [archive.resolve(next, "eager"), archive.resolve(nextToo, "eager")];
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const heldAfterStep = decodes.held();
+    decodes.all();
+    await Promise.all([...visible, ...prefetched, ...stepped]);
+    return { heldBeforeStep, heldAfterStep, shared: await prefetched[0] === await stepped[0] };
+  }, { bytes, identity, shas, probe: decodeProbe.toString() });
+  assert.equal(result.heldBeforeStep, 2, "The prefetches waited behind the reserve");
+  assert.equal(result.heldAfterStep, 4, "Stepped onto, they started at once");
+  assert.equal(result.shared, true);
+  assert.deepEqual(errors, []);
+});
+
+test("a prefetch read that never finishes does not stop Compare reading the next screens ahead", { timeout: 90_000 }, async t => {
+  const { bytes, screens } = await changedScreensArchive(5);
+  const { page, errors } = await harness(t, bytes, { app: true, open: false, query: "&view=compare&screen=screen-1" });
+  await recordScreenshotReads(page);
+  // Screen-2's Before never finishes verifying.
+  await page.evaluate(stuck => {
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    const hex = buffer => Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, "0")).join("");
+    crypto.subtle.digest = async (algorithm, data) => {
+      const value = await digest(algorithm, data);
+      if (hex(value) === stuck) await new Promise(() => {});
+      return value;
+    };
+  }, screens[1].before.sha256);
+  await chooseFile(page, bytes);
+  const compare = page.locator(".compare-section");
+  await expect(compare.locator(".compare-frame img[data-screenshot-state='ready']")).toHaveCount(2);
+  const prefetchesOf = screen => page.evaluate(references => window.reads.filter(read => read.priority === "prefetch" && references.includes(read.reference)).length,
+    [screen.before.reference, screen.after.reference]);
+  await expect.poll(() => prefetchesOf(screens[1])).toBe(2);
+  await page.keyboard.press("ArrowRight");
+  await expect(compare.locator(".compare-nav-position")).toHaveText(/^2 of 5$/);
+  await expect.poll(() => prefetchesOf(screens[2])).toBe(2);
+  await page.keyboard.press("ArrowRight");
+  await expect(compare.locator(".compare-nav-position")).toHaveText(/^3 of 5$/);
+  await expect.poll(() => prefetchesOf(screens[3])).toBe(2);
+  assert.deepEqual(errors, []);
+});
+
+/** Opens Compare in Flip at `screen`, recording screenshot reads. */
+async function openFlip(t, bytes, screen) {
+  const opened = await harness(t, bytes, { app: true, open: false, query: `&view=compare&screen=${screen}` });
+  await opened.page.addInitScript(() => localStorage.setItem("expo-explore:compare-mode", "flip"));
+  await opened.page.reload();
+  await recordScreenshotReads(opened.page);
+  return opened;
+}
+
+/** Holds back verifying the screenshot with this hash until `window.releaseHeld()`. */
+const holdScreenshot = (page, sha256) => page.evaluate(held => {
+  const digest = crypto.subtle.digest.bind(crypto.subtle);
+  const hex = buffer => Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, "0")).join("");
+  const waiting = [];
+  window.releaseHeld = () => waiting.splice(0).forEach(release => release());
+  crypto.subtle.digest = async (algorithm, data) => {
+    const value = await digest(algorithm, data);
+    if (hex(value) === held) await new Promise(resolve => waiting.push(resolve));
+    return value;
+  };
+}, sha256);
+
+test("Flip reads the next screen's Before when a step keeps the After it shows, which fires no load", { timeout: 90_000 }, async t => {
+  // Screen-2 keeps screen-1's After beside a Before of its own.
+  const { bytes, screens } = await changedScreensArchive(3, { sameAfter: { 1: 0 } });
+  const { page, errors } = await openFlip(t, bytes, "screen-1");
+  await chooseFile(page, bytes);
+  const frame = page.locator(".compare-section .compare-flip-frame");
+  await expect(frame.locator(".compare-flip-layer img[data-screenshot-state='ready']")).toHaveCount(2);
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator(".compare-section .compare-nav-position")).toHaveText(/^2 of 3$/);
+  await expect(frame.locator(".compare-flip-layer[data-side='before'] img")).toHaveAttribute("data-screenshot-src", screens[1].before.reference);
+  await expect(frame.locator(".compare-flip-layer img[data-screenshot-state='ready']")).toHaveCount(2);
+  assert.deepEqual(errors, []);
+});
+
+test("Flip stepped from Before shows the next screen's After from its first frame and reads its Before only once After is ready", { timeout: 90_000 }, async t => {
+  const { bytes, screens } = await changedScreensArchive(3);
+  const { page, errors } = await openFlip(t, bytes, "screen-1");
+  await chooseFile(page, bytes);
+  const frame = page.locator(".compare-section .compare-flip-frame");
+  await expect(frame.locator(".compare-flip-layer img[data-screenshot-state='ready']")).toHaveCount(2);
+  await page.keyboard.press("KeyX");
+  await expect(frame).toHaveAttribute("data-side", "before");
+  await holdScreenshot(page, screens[1].after.sha256);
+  // Every frame from the step: which side the frame shows, and which layers are mounted.
+  await page.evaluate(() => {
+    window.flipFrames = [];
+    const sample = () => {
+      const element = document.querySelector(".compare-flip-frame");
+      window.flipFrames.push({ route: document.querySelector(".compare-nav-route")?.textContent, side: element?.dataset.side,
+        layers: [...(element?.querySelectorAll(".compare-flip-layer") ?? [])].map(layer => layer.dataset.side).join(",") });
+      if (window.flipFrames.length < 20) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => page.evaluate(() => window.flipFrames.length)).toBe(20);
+  const stepped = (await page.evaluate(() => window.flipFrames)).filter(sample => sample.route === "/screen-2");
+  assert.ok(stepped.length > 0);
+  assert.deepEqual([...new Set(stepped.map(sample => `${sample.side}:${sample.layers}`))], ["after:after"],
+    "From its first frame screen-2 shows After alone");
+  const readsOf = reference => page.evaluate(reference => window.reads.filter(read => read.reference === reference && read.priority !== "prefetch").length, reference);
+  assert.equal(await readsOf(screens[1].before.reference), 0, "Before waits for After");
+  await page.evaluate(() => window.releaseHeld());
+  await expect(frame.locator(".compare-flip-layer img[data-screenshot-state='ready']")).toHaveCount(2);
   assert.deepEqual(errors, []);
 });
