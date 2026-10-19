@@ -6,19 +6,8 @@ import { formatShortcut, SHORTCUTS } from "../../utils/shortcuts";
 import { KeyHint } from "../shared/key-hint";
 import { Menu, type MenuItem } from "../shared/menu";
 import { Tooltip } from "../shared/tooltip";
-import { FullscreenToggleButton, ThemeToggleButton, type ShellActionsProps, type ShellTheme } from "../panels/shell-actions";
 import { useCanvasVisibleFrame } from "./visible-frame-provider";
 import { setFollowSelection, useFollowSelection } from "../../utils/follow-selection";
-
-type CanvasCameraControlsProps = {
-  /** Makes room for the collapsed inspector controls at the window edge. */
-  inspectorCollapsed: boolean;
-  theme: ShellTheme;
-  themePreference: ShellActionsProps["themePreference"];
-  onToggleTheme: () => void;
-  /** Fit, center and zoom act on a canvas; a page (Screens) or Compare shows only the page actions. */
-  camera?: boolean;
-};
 
 const CAMERA_CONTROLS_MINIMUM_FRAME_WIDTH = 240;
 
@@ -114,11 +103,11 @@ function RecenterControl() {
 }
 
 /**
- * Camera actions belong to the canvas, not to either inspector panel. The page-level theme and
- * full screen actions share the toolbar, so it stays in one place whether the inspector is open
- * or not.
+ * Camera actions belong to the canvas, not to either inspector panel: fit, center and the zoom
+ * level, top right on the Map. Screens and Compare have no camera, so nothing renders there; the
+ * page-wide theme and full screen live in the bottom bar's "More" menu.
  */
-export function CanvasCameraControls({ inspectorCollapsed, theme, themePreference, onToggleTheme, camera = true }: CanvasCameraControlsProps) {
+export function CanvasCameraControls() {
   const { visibleFrame } = useCanvasVisibleFrame();
   if (visibleFrame && visibleFrame.width < CAMERA_CONTROLS_MINIMUM_FRAME_WIDTH) return null;
   const style = visibleFrame ? ({
@@ -126,24 +115,12 @@ export function CanvasCameraControls({ inspectorCollapsed, theme, themePreferenc
   } as CSSProperties) : undefined;
 
   return (
-    <div
-      className={`canvas-camera-controls${inspectorCollapsed ? " inspector-collapsed" : ""}`}
-      style={style}
-      role="group"
-      aria-label="Canvas camera controls">
+    <div className="canvas-camera-controls" style={style} role="group" aria-label="Canvas camera controls">
       <div className="canvas-camera-controls-inner">
-      {camera ? (
-        <>
-          <FitControl />
-          <span className="camera-control-divider" aria-hidden="true" />
-          <RecenterControl />
-          <span className="camera-control-divider" aria-hidden="true" />
-          <ZoomControl />
-          <span className="camera-control-divider" aria-hidden="true" />
-        </>
-      ) : null}
-      <ThemeToggleButton theme={theme} themePreference={themePreference} onToggleTheme={onToggleTheme} className="camera-action-button" />
-      <FullscreenToggleButton className="camera-action-button" />
+        <FitControl />
+        <RecenterControl />
+        <span className="camera-control-divider" aria-hidden="true" />
+        <ZoomControl />
       </div>
     </div>
   );

@@ -178,32 +178,63 @@ test.describe("Inspector resize", () => {
     await expect.poll(() => panelWidth(page)).toBe(500);
   });
 
-  test.describe("in a window too narrow for the toolbar beside a wide Inspector", () => {
+  test.describe("in a window too narrow for the toolbar beside a half-window Inspector", () => {
     test.use({ viewport: { width: 820, height: 800 } });
 
-    test("the toolbar never moves past the canvas' left edge", async ({ page }) => {
-      await page.goto("/map?screen=area-0-screen-1");
-      await expect(panel(page)).toBeVisible();
+    /** The widest the panel may be here: the window less the bottom bar and a 12px gap either side. */
+    async function widestBesideToolbar(page: Page) {
+      const toolbarBox = (await page.getByRole("toolbar", { name: "Canvas tools" }).boundingBox())!;
+      return Math.floor(820 - (toolbarBox.width + 2 * 12));
+    }
+
+    async function expectToolbarBesidePanel(page: Page) {
       const toolbar = page.getByRole("toolbar", { name: "Canvas tools" });
       await expect(toolbar).toBeVisible();
-      await handle(page).focus();
-      await page.keyboard.press("End");
-      await expect.poll(() => panelWidth(page)).toBe(410);
-      // Either it fits between the window's edge and the panel, or it gives way, as it does when
-      // the panels leave the canvas too little room.
-      await expect.poll(async () => {
-        if (await toolbar.count() === 0) return true;
-        const toolbarBox = (await toolbar.boundingBox())!;
-        const panelBox = (await panel(page).boundingBox())!;
-        return toolbarBox.x >= 0 && toolbarBox.x + toolbarBox.width <= panelBox.x;
-      }).toBe(true);
-      // Narrowed again, the toolbar returns.
-      await page.keyboard.press("Home");
-      await expect(toolbar).toBeVisible();
+      await expect(toolbar.getByRole("button", { name: "More", exact: true })).toBeVisible();
       const toolbarBox = (await toolbar.boundingBox())!;
       const panelBox = (await panel(page).boundingBox())!;
-      expect(toolbarBox.x).toBeGreaterThanOrEqual(0);
-      expect(toolbarBox.x + toolbarBox.width + 12).toBeCloseTo(panelBox.x, 0);
+      expect(toolbarBox.x).toBeGreaterThanOrEqual(12 - 1);
+      expect(toolbarBox.x + toolbarBox.width + 12).toBeLessThanOrEqual(panelBox.x + 1);
+    }
+
+    test("End stops the Inspector where the toolbar still fits beside it, with More in reach", async ({ page }) => {
+      await page.goto("/map?screen=area-0-screen-1");
+      await expect(panel(page)).toBeVisible();
+      const widest = await widestBesideToolbar(page);
+      // Half the window would be 410; the toolbar needs more of the canvas than that leaves.
+      expect(widest).toBeLessThan(410);
+      expect(widest).toBeGreaterThan(320);
+      await expect(handle(page)).toHaveAttribute("aria-valuemax", String(widest));
+      await handle(page).focus();
+      await page.keyboard.press("End");
+      await expect.poll(() => panelWidth(page)).toBe(widest);
+      await expect(handle(page)).toHaveAttribute("aria-valuenow", String(widest));
+      await page.keyboard.press("ArrowLeft");
+      await expect.poll(() => panelWidth(page)).toBe(widest);
+      await expectToolbarBesidePanel(page);
+      // Narrowed again, the toolbar keeps its gap to the panel.
+      await page.keyboard.press("Home");
+      await expect.poll(() => panelWidth(page)).toBe(320);
+      await expectToolbarBesidePanel(page);
+    });
+
+    test("a drag or a saved width stops there too", async ({ page }) => {
+      await page.goto("/map?screen=area-0-screen-1");
+      await expect(panel(page)).toBeVisible();
+      const widest = await widestBesideToolbar(page);
+      await dragEdge(page, -300);
+      await expect.poll(() => panelWidth(page)).toBe(widest);
+      expect(await storedWidth(page)).toBe(String(widest));
+      await expectToolbarBesidePanel(page);
+
+      await page.evaluate((key) => localStorage.setItem(key, "800"), STORAGE_KEY);
+      await page.reload();
+      await expect(panel(page)).toBeVisible();
+      await expect.poll(() => panelWidth(page)).toBe(widest);
+      await expectToolbarBesidePanel(page);
+      // A wider window gives the saved width more room again.
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await expect.poll(() => panelWidth(page)).toBe(640);
     });
   });
 

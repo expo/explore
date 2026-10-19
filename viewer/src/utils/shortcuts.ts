@@ -77,6 +77,10 @@ export const SHORTCUTS = {
     theme: plain("KeyT", "T"),
     app: shift("KeyT", "T"),
   },
+  /** F puts the whole Viewer in or out of full screen, where the browser allows it. */
+  view: {
+    fullscreen: plain("KeyF", "F"),
+  },
   /** Canvas edits follow the platform-standard history keys. */
   edit: {
     undo: mod("KeyZ", "Z"),

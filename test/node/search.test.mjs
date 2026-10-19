@@ -113,6 +113,10 @@ test("the palette's commands follow the canvas: Compare steps changes with the a
   assert.ok(!ids(compare).includes("go:compare"));
   assert.ok(ids(compare).includes("go:map"));
 
+  // Full screen, where the browser has it, prints F; without it there is no command.
+  assert.equal(commandItems({ ...base, canvas: "map", fullscreen: false }, actions).find((item) => item.id === "command:view:fullscreen").shortcut, "F");
+  assert.ok(!ids(map).includes("view:fullscreen"));
+
   // A phone has no keyboard shortcuts to list.
   assert.ok(ids(map).includes("go:shortcuts"));
   assert.ok(!ids(commandItems({ ...base, canvas: "map", phone: true }, actions)).includes("go:shortcuts"));

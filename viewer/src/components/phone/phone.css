@@ -531,8 +531,6 @@
   .changes-menu .panel-search-clear { width: 44px; height: 44px; }
   /* The minimap repeats what a phone already shows whole, and covers a sixth of it. */
   .phone-layout .canvas-minimap-shell { display: none; }
-  /* With nothing selected there is no Inspector to reopen. */
-  .phone-layout .right-float { display: none; }
   /* The Inspector slides up over the whole screen; a drag down on its header puts it away. */
   .phone-layout .right-panel {
     /* The sheet is the window's width; the desktop's half-window limit is not for it. */
