@@ -14,7 +14,10 @@ import { AGENT_DEVICE_VERSION, captureDeepLink, controllerCommandFailure, revisi
 import { CiError, serializeCiError } from '../../dist/shared/ci-errors.js';
 import { createSourceCapturePlan } from '../../dist/source/capture-plan.js';
 import { CAPTURE_OBSERVER_IDENTIFIER } from '../../dist/capture/observer.js';
-import { parseRuntimeExecutionContext } from '../../dist/review/runtime-adapter.js';
+import { parseRuntimeExecutionContext, runtimeEvidenceInputFromMap } from '../../dist/review/runtime-adapter.js';
+import { readExportedMap } from '../../dist/review/evidence-assessment.js';
+import { projectRuntimeEvidence } from '../../dist/review/runtime-evidence.js';
+import { mergeCaptureExports } from '../../dist/ci/export-merge.js';
 import { assertCompleteCaptures, hasVerifiedCapture } from '../../dist/capture/health.js';
 import { readCaptureBundle } from '../../dist/review/capture-review.js';
 import { writeCaptureObserverPackages } from '../helpers/capture-observer-fixture.mjs';
@@ -3556,4 +3559,58 @@ test('a verified label is located on the image\'s axes when the screenshot is th
   assert.deepEqual(verifiedCaptureLabels(nodes, ['Done'])[0].rect, { x: 10, y: 900, width: 100, height: 40 });
   // A 669 x 951 portrait panel captured upright as a 951 x 669 image: the button near its bottom-left is near the image's top-left.
   assert.deepEqual(verifiedCaptureLabels(nodes, ['Done'], { height: 951 })[0].rect, { x: 11, y: 10, width: 40, height: 100 });
+});
+
+test('a session given only the dark pass (appearancePass) captures @dark screens shaped as in a single run', async t => {
+  const f = await fixture(t, { userInterfaceStyle: 'automatic' });
+  const result = await runCiMap({ ...f.options, appearancePass: { all: ['light', 'dark'], capture: ['dark'] } });
+  assert.equal(result.runStatus, 'complete');
+  assert.deepEqual(f.requests.filter(request => request.args[0] === 'settings').map(request => request.args.slice(1, 3)), [['appearance', 'dark']]);
+  assert.equal(f.requests.filter(request => request.args[0] === 'screenshot').length, 2);
+  const map = JSON.parse(await readFile(join(f.options.outputDirectory, 'screen-map.json'), 'utf8'));
+  assert.deepEqual(map.run.environment.colorSchemes, ['light', 'dark']);
+  assert.deepEqual(map.screens.map(screen => [screen.id, screen.colorScheme]), [[`${f.ids.home}@dark`, 'dark'], [`${f.ids.settings}@dark`, 'dark']]);
+  const bundle = JSON.parse(await readFile(join(f.options.outputDirectory, 'bundle.json'), 'utf8'));
+  assert.deepEqual(Object.keys(bundle.images).sort(), [`${f.ids.home}@dark`, `${f.ids.settings}@dark`]);
+  assert.deepEqual(Object.keys(bundle.outcomes).sort(), [`${f.ids.home}@dark`, `${f.ids.settings}@dark`]);
+  assert.equal(bundle.runtimeProfile.colorSchemes, 'light,dark');
+});
+
+test('a session given only the dark pass keeps a wrong landing as the unattributed frame its pass recorded, for the export merge', async t => {
+  const f = await fixture(t, { userInterfaceStyle: 'automatic', markerMismatchAt: { path: '/settings', scheme: 'dark' } });
+  const result = await runCiMap({ ...f.options, appearancePass: { all: ['light', 'dark'], capture: ['dark'] } });
+  const dark = `${f.ids.settings}@dark`;
+  // Without the light pass beside it, the frame is not demoted to a lost route: the merge decides, as one run's passes do.
+  assert.equal(result.outcomes[dark].status, 'captured');
+  assert.equal(result.outcomes[dark].landing, 'unverified');
+  assert.equal(result.outcomes[f.ids.settings], undefined);
+  assert.equal(result.runStatus, 'partial');
+  const bundle = JSON.parse(await readFile(join(f.options.outputDirectory, 'bundle.json'), 'utf8'));
+  assert.equal(bundle.images[dark].sha256, result.outcomes[dark].screenshotSha256);
+  assert.deepEqual(Object.keys(bundle.outcomes).sort(), [`${f.ids.home}@dark`, dark].sort());
+});
+
+test('a split side merges into the export one run makes: each appearance a verified sibling, its runtime evidence resolvable', async t => {
+  const f = await fixture(t, { userInterfaceStyle: 'automatic' });
+  const at = name => ({ mapDirectory: join(f.root, `map${name}`), outputDirectory: join(f.root, `export${name}`) });
+  await runCiMap({ ...f.options, ...at('-single') });
+  await runCiMap({ ...f.options, ...at(''), appearancePass: { all: ['light', 'dark'], capture: ['light'] } });
+  await runCiMap({ ...f.options, ...at('-dark'), appearancePass: { all: ['light', 'dark'], capture: ['dark'] } });
+  await mergeCaptureExports(join(f.root, 'export'), [{ directory: join(f.root, 'export-dark'), scheme: 'dark' }]);
+  const [single, merged] = await Promise.all(['export-single', 'export'].map(name => readCaptureBundle(join(f.root, name))));
+  assert.deepEqual(Object.keys(merged.images).sort(), Object.keys(single.images).sort());
+  assert.deepEqual(merged.outcomes, single.outcomes);
+  // What a review needs of a sibling appearance (#28): its own verified frame and a map that resolves it as one run's would.
+  const map = await readExportedMap(join(f.root, 'export'));
+  const execution = parseRuntimeExecutionContext(JSON.parse(await readFile(join(f.root, 'export', 'execution.json'), 'utf8')));
+  for (const [route, id] of Object.values(f.ids).flatMap(id => [[id, id], [id, `${id}@dark`]])) {
+    // A verified secondary frame has no outcome of its own: it is verified under its route's, as the review reads it.
+    const outcome = merged.outcomes[id] ?? merged.outcomes[route];
+    assert.equal(outcome.status, 'captured', id); assert.equal(outcome.landing, 'verified', id);
+    assert.ok(existsSync(join(f.root, 'export', merged.images[id].path)), id);
+    const screen = map.screens.find(entry => entry.id === id);
+    assert.equal(screen.observationIds.length, 1, id);
+    projectRuntimeEvidence(runtimeEvidenceInputFromMap({ side: 'head', map, screenId: id, representativeObservationId: screen.observationIds[0],
+      sampleObservationIds: screen.observationIds, expectedSampleCount: 1, profile: 'capture:com.example.app', execution }));
+  }
 });

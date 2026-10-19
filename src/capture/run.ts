@@ -1,4 +1,4 @@
-import { appearanceArgs, argentColorSchemes, bundleColorSchemes, mergeSchemeOutcomes, resolveColorSchemes, routeIdOfScreen, type AppearanceSetting, type ColorScheme } from "./appearance.js";
+import { appearanceArgs, argentColorSchemes, bundleColorSchemes, mergeSchemeOutcomes, resolveColorSchemes, routeIdOfScreen, schemeScreenId, type AppearanceSetting, type ColorScheme } from "./appearance.js";
 import { assertNoCaptureHealthIssues, captureHealthIssues, partitionCaptureHealthIssues } from "./health.js";
 import { type RouteResetSetting } from "./route-reset.js";
 import { defaultReadinessSeconds } from "./readiness.js";
@@ -73,6 +73,12 @@ export type CiMapOptions = {
   buildShare?: string;
   /** Which appearances to capture; `auto` (default) follows the app's `userInterfaceStyle`. */
   appearance?: AppearanceSetting;
+  /**
+   * One session's share of the appearance passes when a side splits them across sessions: `capture` names the passes
+   * this run makes, out of the `all` it would make alone, so frames keep the ids of a single run (`<id>@dark`) and the
+   * exports merge. Absent: every resolved appearance.
+   */
+  appearancePass?: { all: readonly ColorScheme[]; capture: readonly ColorScheme[] };
   /** Whether to observe the app launch (splash screen) per appearance; `video` also keeps the recording. Defaults to `off`. */
   launch?: LaunchSetting;
   /** Decodes launch recordings; defaults to ffmpeg when installed. */
@@ -354,7 +360,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   let captureFailure: unknown;
   const finish = async (): Promise<CiMapResult> => {
     if (!(await store.exists())) await store.initialize(map, false);
-    const incomplete = captureFailure !== undefined || selectedIds.some(id => outcomes[id]?.status !== "captured" || outcomes[id]?.landing !== "verified")
+    // A session making only secondary passes owns the `<id>@<scheme>` frames of those passes, not the primary ones.
+    const ownFrameIds = options.appearancePass && !options.appearancePass.capture.includes(colorSchemes[0]!)
+      ? selectedIds.flatMap(id => colorSchemes.filter(scheme => options.appearancePass!.capture.includes(scheme)).map(scheme => schemeScreenId(id, scheme)))
+      : selectedIds;
+    const incomplete = captureFailure !== undefined || ownFrameIds.some(id => outcomes[id]?.status !== "captured" || outcomes[id]?.landing !== "verified")
       || map.gaps.some(gap => gap.status === "open");
     map.run.status = incomplete || map.screens.length === 0 ? "partial" : "complete";
     if (routes.length === 0) map.run.stopReason = "No source targets require capture.";
@@ -423,7 +433,9 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     if (options.agent) assertAgentAcceptance(bundle, map, { required: true });
     // The side that produces the evidence checks it the way the review will: an integrity defect fails here, naming
     // its codes, instead of on the consuming side after both captures. Unavailable screens are not defects.
-    assertNoCaptureHealthIssues(partitionCaptureHealthIssues(captureHealthIssues(bundle, selectedIds)).integrity);
+    // A session capturing only a secondary appearance has no primary frames by design; the merged export is checked instead.
+    const partialPass = options.appearancePass !== undefined && !options.appearancePass.capture.includes(colorSchemes[0]!);
+    if (!partialPass) assertNoCaptureHealthIssues(partitionCaptureHealthIssues(captureHealthIssues(bundle, selectedIds)).integrity);
     await writeFile(join(outputDirectory, "bundle.json"), `${JSON.stringify(bundle, null, 2)}\n`, { flag: "wx" });
     if (metadata) await writeFile(join(outputDirectory, "execution.json"), `${JSON.stringify(metadata, null, 2)}\n`, { flag: "wx" });
     assertCheckout();
@@ -565,7 +577,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const appDirectory = !options.buildShare ? await realpath(await mkdtemp(join(tmpdir(), "expo-explore-app-"))) : undefined;
   let localApp: string | undefined;
   type BuiltApp = { fingerprint: string; nativeEasBuildId: string | null; easBuildId: string | null; app?: string; reused: boolean; version?: string; buildNumber?: string };
-  const buildApp = async (keepApp: string): Promise<BuiltApp> => {
+  // `repacking` tells the captures sharing this build that their sessions can start too (sharedBuild).
+  const buildApp = async (keepApp: string, repacking?: () => Promise<void>): Promise<BuiltApp> => {
     options.signal?.throwIfAborted();
     say("computing the native fingerprint");
     const fingerprintResult = eas(["fingerprint:generate", "--platform", options.platform, "--build-profile", options.easProfile, "--json", "--non-interactive"]);
@@ -575,7 +588,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         "--fingerprint-hash", sourceFingerprint, ...(options.platform === "ios" ? ["--simulator"] : []), "--limit", "1", "--json", "--non-interactive"]).stdout);
     if (reusable) {
       say(`reusing EAS build ${reusable.id} (fingerprint ${sourceFingerprint.slice(0, 12)}); repacking it with this commit's JavaScript and the route observer`);
-      startSession();
+      startSession(); await repacking?.();
       const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
         project, nativeBuildId: reusable.id, fingerprint: sourceFingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp });
       if (!repacked) throw new CiError({ code: "CAPTURE_OBSERVER_BUILD_UNSUPPORTED", stage: "instrumentation",
@@ -589,7 +602,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       : `no finished simulator build has fingerprint ${sourceFingerprint.slice(0, 12)}; building on EAS and waiting for it to finish`);
     const built = nativeBuildFrom(eas(["build", "--platform", options.platform, "--profile", options.easProfile, "--wait", "--json", "--non-interactive"], 45 * 60_000).stdout);
     say(`EAS build ${built.id} finished; repacking it with the route observer`);
-    startSession();
+    startSession(); await repacking?.();
     const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
       project, nativeBuildId: built.id, fingerprint: built.fingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp });
     if (!repacked) throw new CiError({ code: "CAPTURE_OBSERVER_BUILD_UNSUPPORTED", stage: "instrumentation",
@@ -605,9 +618,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       ? await sharedBuild({ directory: options.buildShare, appName, ...(options.signal ? { signal: options.signal } : {}), build: buildApp, owner: options.outputDirectory,
         key: { platform: options.platform, easProfile: options.easProfile, bundleId: options.bundleId, gitCommit: options.gitCommit, repack: options.repack ?? "eas", local,
           routes: inventory.map(route => route.id) },
-        waiting: () => say("using the build another target of this review is preparing for this commit") })
+        waiting: () => say("using the build another target of this review is preparing for this commit"),
+        // The session is named before its app exists, so a waiter's session boots while the other capture repacks.
+        repacking: () => startSession() })
       : await buildApp(join(appDirectory!, appName));
-    // A capture that used another target's build starts its session now.
+    // A capture that used another capture's build has its session started above; this starts the rest.
     startSession();
     fingerprint = built.fingerprint; nativeEasBuildId = built.nativeEasBuildId; easBuildId = built.easBuildId; localApp = built.app; reusedEasBuild = built.reused;
     if (!app.version && built.version) app.version = built.version;
@@ -921,7 +936,10 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     // Every pass sets the appearance explicitly, so a capture does not inherit whatever the simulator last used.
     const passes: CaptureBundle["outcomes"][] = [];
     const recordingTools = launchSetting === "off" ? undefined : options.recordingTools === undefined ? ffmpegRecordingTools() : options.recordingTools ?? undefined;
+    const capturedSchemes = options.appearancePass ? colorSchemes.filter(scheme => options.appearancePass!.capture.includes(scheme)) : colorSchemes;
     for (const [index, colorScheme] of colorSchemes.entries()) {
+      // A pass another session makes leaves its slot empty, so the passes stay aligned with the appearances they merge by.
+      if (!capturedSchemes.includes(colorScheme)) { passes.push({}); continue; }
       // Argent cannot switch the appearance yet (software-mansion/argent#1509): the host does, simctl or adb on this
       // machine and serve-sim on an EAS iOS session; elsewhere its single pass runs as the device starts.
       if (controller !== "argent") runner({ command: controllerCommand, args: [...appearanceArgs(colorScheme), "--session", CONTROLLER_SESSION, ...deviceArgs(runtime), "--platform", options.platform],
@@ -956,7 +974,12 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         ...(colorSchemes.length > 1 ? { appearance: { scheme: colorScheme, primary: index === 0 } } : {}) }));
     }
     runtime.colorScheme = colorSchemes[0]!;
-    Object.assign(outcomes, mergeSchemeOutcomes(passes, colorSchemes));
+    // A session without the primary pass keeps each outcome as its pass recorded it, under `<id>@<scheme>`: the export
+    // merge recombines them with the primary pass's (mergeSchemeOutcomes), which only then can tell an unattributed
+    // frame beside a primary one from a lost route.
+    if (options.appearancePass && !capturedSchemes.includes(colorSchemes[0]!)) {
+      for (const [index, pass] of passes.entries()) for (const [id, outcome] of Object.entries(pass)) outcomes[schemeScreenId(id, colorSchemes[index])] = outcome;
+    } else Object.assign(outcomes, mergeSchemeOutcomes(passes, colorSchemes));
   } catch (error) { primaryError = toCiError(error, { code: `CAPTURE_${runtimeStage.toUpperCase()}_FAILED`, stage: runtimeStage,
     nextAction: "Inspect the capture diagnostic, correct the failing prerequisite, and rerun Explore." }); }
   finally {
@@ -1025,7 +1048,10 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     throw primaryError;
   }
   setStage("export");
-  const captured = selectedIds.filter(id => outcomes[id]?.status === "captured").length;
-  say(`${captured} of ${selectedIds.length} ${selectedIds.length === 1 ? "route" : "routes"} captured`);
+  const ownSchemes = options.appearancePass && !options.appearancePass.capture.includes(colorSchemes[0]!)
+    ? colorSchemes.filter(scheme => options.appearancePass!.capture.includes(scheme)) : undefined;
+  const captured = selectedIds.filter(id => ownSchemes
+    ? ownSchemes.every(scheme => outcomes[schemeScreenId(id, scheme)]?.status === "captured") : outcomes[id]?.status === "captured").length;
+  say(`${captured} of ${selectedIds.length} ${selectedIds.length === 1 ? "route" : "routes"} captured${ownSchemes ? ` in ${ownSchemes.join(", ")}` : ""}`);
   return finish();
 }
