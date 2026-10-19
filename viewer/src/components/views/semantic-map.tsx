@@ -481,7 +481,11 @@ type BaseCanvasProps = {
   onSelectScreen: (id: string, options?: { replace?: boolean }) => void;
   onClearSelection?: () => void;
 };
-export type MapViewProps = BaseCanvasProps & { projectionFitKey?: number };
+export type MapViewProps = BaseCanvasProps & {
+  projectionFitKey?: number;
+  /** The routes a public report never captured: not drawn (omitted-screens.ts). */
+  omittedScreenIds?: ReadonlySet<string> | undefined;
+};
 
 function ConnectionCanvas(props: MapViewProps) {
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -494,7 +498,10 @@ function ConnectionCanvas(props: MapViewProps) {
   });
   const previousLayout = useRef<{ nodes: CanvasGraphNode[]; edges: TransitionGraphEdge[] } | undefined>(undefined);
 
-  const observedGraph = useMemo(() => buildViewerGraph(props.map, props.index), [props.index, props.map]);
+  const observedGraph = useMemo(
+    () => buildViewerGraph(props.map, props.index, props.omittedScreenIds),
+    [props.index, props.map, props.omittedScreenIds],
+  );
   const projection = useMemo(() => projectFullGraph(observedGraph), [observedGraph]);
   const structure = useMemo(
     () => projectedStructure(projection, props.index, isBlackBoxMap(props.map)),

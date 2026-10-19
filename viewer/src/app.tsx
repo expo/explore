@@ -73,7 +73,7 @@ import {
   isBlackBoxMap,
 } from "./utils/graph-model";
 import { buildSearchItems, suggestedSearchItems } from "./utils/search";
-import { reportScreens, withoutOmittedScreens } from "./utils/omitted-screens";
+import { omittedScreenIds, reportScreens, withoutOmittedScreens } from "./utils/omitted-screens";
 import {
   presentBuildDiff,
   presentScreensByPath,
@@ -1200,11 +1200,17 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
     [reviewedMap],
   );
   // A route the report never captured is not one of its screens, so the comparison names it nowhere (omitted-screens.ts).
+  const omittedIds = useMemo(
+    () => (reviewedMap && screenPresentation
+      ? omittedScreenIds(reviewedMap, { diff: sourceDiff, presentation: screenPresentation })
+      : new Set<string>()),
+    [reviewedMap, screenPresentation, sourceDiff],
+  );
   const diff = useMemo(
     () => (sourceDiff && screenPresentation
-      ? withoutOmittedScreens(presentBuildDiff(sourceDiff, screenPresentation))
+      ? withoutOmittedScreens(presentBuildDiff(sourceDiff, screenPresentation), omittedIds)
       : undefined),
-    [screenPresentation, sourceDiff],
+    [omittedIds, screenPresentation, sourceDiff],
   );
   // The Screens page says which screens changed in an appearance other than the one shown.
   const changedElsewhere = useMemo(() => {
@@ -1224,7 +1230,9 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
         comparison: filterComparisonAppearance(wholeComparison, otherScope),
         ...(wholeReview ? { review: filterReviewAppearance(wholeReview, otherScope) } : {}),
       });
-      const presented = withoutOmittedScreens(presentBuildDiff(otherDiff, presentScreensByPath(otherDiff.map)));
+      const otherPresentation = presentScreensByPath(otherDiff.map);
+      const presented = withoutOmittedScreens(presentBuildDiff(otherDiff, otherPresentation),
+        omittedScreenIds(otherDiff.map, { diff: otherDiff, presentation: otherPresentation }));
       for (const [id, entry] of presented.screens) {
         if (["modified", "added", "removed"].includes(entry.status)) changed.set(id, [...(changed.get(id) ?? []), option]);
       }
@@ -1264,8 +1272,8 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
     : "No screen looks different from the baseline.";
   // Search finds the report's screens, as Screens lists them; a link to one it never captured still opens it.
   const searchIndex = useMemo(
-    () => map ? buildSearchItems({ screens: reportScreens(map) }) : [],
-    [map],
+    () => map ? buildSearchItems({ screens: reportScreens(map.screens, omittedIds) }) : [],
+    [map, omittedIds],
   );
   const openChangedScreen = useCallback((screenId: string) => {
     const current = routeRef.current;
@@ -1637,6 +1645,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
               index={index}
               diff={diff}
               routeFiles={routeFiles}
+              omittedScreenIds={omittedIds}
               changedElsewhere={changedElsewhere}
               selectedScreenId={selectedScreenId}
               {...(focusRequest ? { focusRequest } : {})}
@@ -1689,6 +1698,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
               direction="TB"
               focus={focusFilter}
               projectionFitKey={mapProjectionFitKey}
+              omittedScreenIds={omittedIds}
               {...(diff ? { diff } : {})}
               {...(selectedScreenId ? { selectedScreenId } : {})}
               {...(focusRequest ? { focusRequest } : {})}

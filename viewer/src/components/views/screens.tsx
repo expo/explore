@@ -35,6 +35,8 @@ export type ScreensViewProps = {
   /** The other appearances each screen changed in, when the report captured several. */
   changedElsewhere?: ReadonlyMap<string, Appearance[]> | undefined;
   selectedScreenId?: string | undefined;
+  /** The routes a public report never captured: not listed, counted or found, as on the Map (omitted-screens.ts). */
+  omittedScreenIds?: ReadonlySet<string> | undefined;
   /** A request (search, the Changes menu) to bring a screen into view; a new key asks again for the same screen. */
   focusRequest?: FocusRequest | undefined;
   /** The Changes menu's status filter: screens outside it are dimmed, as on the Map. */
@@ -272,7 +274,7 @@ function Legend(props: { others: Appearance[] }) {
  */
 export function ScreensView(props: ScreensViewProps) {
   // The report's screens, as the Map draws them: a public report's routes it never captured are not among them.
-  const screens = useMemo(() => reportScreens(props.map), [props.map]);
+  const screens = useMemo(() => reportScreens(props.map.screens, props.omittedScreenIds ?? new Set()), [props.map.screens, props.omittedScreenIds]);
   const tree: ScreenTree = useMemo(
     () => screenTree(screens, props.index, props.routeFiles),
     [props.index, screens, props.routeFiles],
