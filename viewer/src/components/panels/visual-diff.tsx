@@ -15,11 +15,22 @@ import "./visual-diff.css";
 export function ChangeOutlines(props: {
   changes: readonly VisualChange[];
   activeIndex?: number | undefined;
+  /** The outline under the pointer, on this frame or its twin; drawn as the selected one is. */
+  hoverIndex?: number | undefined;
+  /** Reports the outline under the pointer; with it the outlines take the pointer (see `reveal`). */
+  onHover?: ((index: number | undefined) => void) | undefined;
+  /**
+   * How Split pairs its two frames: `linked` outlines (on After) take the pointer and report hovers;
+   * `ghost` ones (on Before) sit at the same places unseen until one is hovered on After or selected.
+   * Without it every outline shows, as on a single frame.
+   */
+  reveal?: "all" | "ghost" | "linked";
 }) {
   const measurements = useMeasurementsShown();
+  const reveal = props.reveal ?? "all";
   return (
     <span
-      className={`visual-change-outlines${props.activeIndex !== undefined ? " has-active" : ""}`}
+      className={`visual-change-outlines${props.activeIndex !== undefined ? " has-active" : ""}${reveal !== "all" ? ` ${reveal}` : ""}`}
       aria-hidden="true">
       {props.changes.map((change, index) => {
         const rect = outlineRect(change);
@@ -29,7 +40,9 @@ export function ChangeOutlines(props: {
         return (
           <span
             key={index}
-            className={`visual-change-outline${change.move ? " moved" : ""}${props.activeIndex === index ? " active" : ""}`}
+            className={`visual-change-outline${change.move ? " moved" : ""}${props.activeIndex === index ? " active" : ""}${props.hoverIndex === index ? " hovered" : ""}`}
+            onPointerEnter={props.onHover ? () => props.onHover!(index) : undefined}
+            onPointerLeave={props.onHover ? () => props.onHover!(undefined) : undefined}
             style={{
               left: back(rect.x, change.move?.x),
               top: back(rect.y, change.move?.y),

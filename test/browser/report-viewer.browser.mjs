@@ -155,7 +155,7 @@ test("Compare steps through changed screens and their changed areas", { timeout:
 
   // A changed screen opens the same review in the Inspector on every canvas: Compare at sidebar
   // size. CI compares the images pixel for pixel, so /games's four CI regions read as changed
-  // areas, outlined at the same place on both sides.
+  // areas, outlined on After; Before keeps the same outlines unseen until one is hovered on After.
   await openChangedScreen(page, /, Modified, \/games$/);
   const inspector = page.locator(".right-panel");
   const review = inspector.getByRole("region", { name: "Changes in /games" });
@@ -166,6 +166,8 @@ test("Compare steps through changed screens and their changed areas", { timeout:
   await expect.poll(() => outlineCount("after")).toBeGreaterThan(0);
   const areas = await outlineCount("after");
   assert.equal(await outlineCount("before"), areas);
+  await expect(review.locator('[data-side="after"] .visual-change-outlines')).toHaveClass(/linked/);
+  await expect(review.locator('[data-side="before"] .visual-change-outlines')).toHaveClass(/ghost/);
   // Esc closes the Inspector; the selection stays, a second Esc clears it.
   const selected = page.locator(".map-canvas .react-flow__node-screen.selected");
   await page.keyboard.press("Escape");
@@ -225,6 +227,12 @@ test("Compare steps through changed screens and their changed areas", { timeout:
     await expect.poll(() => compare.locator(`[data-side="${side}"] img`).first()
       .evaluate(image => image.naturalWidth)).toBe(402);
   }
+  // Hovering an outline on After lights the same area on Before, and only that one.
+  await compare.locator('[data-side="after"] .visual-change-outline').nth(1).hover();
+  await expect(compare.locator('[data-side="before"] .visual-change-outline.hovered')).toHaveCount(1);
+  await expect(compare.locator('[data-side="before"] .visual-change-outline').nth(1)).toHaveClass(/hovered/);
+  await page.mouse.move(0, 0);
+  await expect(compare.locator(".visual-change-outline.hovered")).toHaveCount(0);
 
   // J and K step through the changed areas; Esc clears the highlight.
   const outlines = compare.locator('[data-side="after"] .visual-change-outline');

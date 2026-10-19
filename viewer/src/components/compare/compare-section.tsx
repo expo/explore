@@ -468,6 +468,7 @@ export function CompareStage(props: StageProps) {
   const { diff } = props;
   const before = diff.beforeScreenshot;
   const after = diff.afterScreenshot;
+  const [hoverIndex, setHoverIndex] = useState<number>();
   if (!before && !after) {
     const reason = diff.captureNotes?.after ?? diff.captureNotes?.before;
     return (
@@ -556,6 +557,21 @@ export function CompareStage(props: StageProps) {
   const sides = (["before", "after"] as const).filter((side) => (
     side === "before" ? diff.status !== "added" : diff.status !== "removed"
   ));
+  // Split outlines the changed areas on After, where the eye lands; Before keeps the same outlines
+  // unseen, and shows one while its twin on After is hovered or the area is selected (J, K).
+  // One frame, or no outlines, takes the caller's overlay as the other modes do.
+  const paired = Boolean(before && after) && props.showOutlines && props.areas.length > 0;
+  const sideOverlay = (side: "before" | "after"): ReactNode => {
+    if (!paired) return props.overlay;
+    return (
+      <>
+        <ChangeOutlines changes={props.areas} activeIndex={props.activeArea} hoverIndex={hoverIndex}
+          reveal={side === "after" ? "linked" : "ghost"} onHover={side === "after" ? setHoverIndex : undefined} />
+        {props.statusBarIgnored ? <StatusBarBand /> : null}
+        {props.homeIndicatorIgnored ? <HomeIndicatorBand /> : null}
+      </>
+    );
+  };
   return (
     <>
       {sides.map((side) => {
@@ -574,7 +590,7 @@ export function CompareStage(props: StageProps) {
                 ) : (
                   <ScreenshotPlaceholder label={placeholderFor(side, diff.status, diff.captureNotes)} />
                 )}
-                {src ? props.overlay : null}
+                {src ? sideOverlay(side) : null}
               </div>
               {props.labels === "inside" ? (
                 <span className={`compare-side-label compare-side-tag ${side}`}>{label}{note}</span>
