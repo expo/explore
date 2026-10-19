@@ -469,6 +469,9 @@ export function CompareStage(props: StageProps) {
   const before = diff.beforeScreenshot;
   const after = diff.afterScreenshot;
   const [hoverIndex, setHoverIndex] = useState<number>();
+  // An outline taken out from under the pointer reports no leave, so another screen, mode or outline
+  // toggle drops the hover rather than lighting an area the pointer is not on.
+  useLayoutEffect(() => setHoverIndex(undefined), [props.areas, props.mode, props.showOutlines]);
   if (!before && !after) {
     const reason = diff.captureNotes?.after ?? diff.captureNotes?.before;
     return (
@@ -558,7 +561,8 @@ export function CompareStage(props: StageProps) {
     side === "before" ? diff.status !== "added" : diff.status !== "removed"
   ));
   // Split outlines the changed areas on After, where the eye lands; Before keeps the same outlines
-  // unseen, and shows one while its twin on After is hovered or the area is selected (J, K).
+  // unseen, and shows one while its twin on After is hovered or the area is selected (J, K). A moved area keeps
+  // its outline on Before, where its content was.
   // One frame, or no outlines, takes the caller's overlay as the other modes do.
   const paired = Boolean(before && after) && props.showOutlines && props.areas.length > 0;
   const sideOverlay = (side: "before" | "after"): ReactNode => {
@@ -567,8 +571,7 @@ export function CompareStage(props: StageProps) {
       <>
         <ChangeOutlines changes={props.areas} activeIndex={props.activeArea} hoverIndex={hoverIndex}
           reveal={side === "after" ? "linked" : "ghost"} onHover={side === "after" ? setHoverIndex : undefined} />
-        {props.statusBarIgnored ? <StatusBarBand /> : null}
-        {props.homeIndicatorIgnored ? <HomeIndicatorBand /> : null}
+        <SystemRegionBands regions={props.systemRegions} />
       </>
     );
   };

@@ -21,8 +21,9 @@ export function ChangeOutlines(props: {
   onHover?: ((index: number | undefined) => void) | undefined;
   /**
    * How Split pairs its two frames: `linked` outlines (on After) take the pointer and report hovers;
-   * `ghost` ones (on Before) sit at the same places unseen until one is hovered on After or selected.
-   * Without it every outline shows, as on a single frame.
+   * `ghost` ones (on Before) sit at the same places unseen until one is hovered on After or selected; a moved
+   * area's stays, where its content was, and a screen without hover shows them all. Without it every outline
+   * shows, as on a single frame.
    */
   reveal?: "all" | "ghost" | "linked";
 }) {
