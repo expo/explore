@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import ts from "typescript";
 
 /** The import aliases a tsconfig maps to project directories, such as `@/*` to `src/` and `@/assets/*` to `assets/`. */
@@ -46,7 +47,8 @@ export function readTsconfigAlias(configText: string | undefined): TsconfigAlias
 /** The project path an aliased specifier names, before extensions, or undefined when no alias matches it. */
 export function resolveTsconfigAlias(alias: TsconfigAlias, specifier: string): string | undefined {
   const entry = alias.prefixes.find(({ prefix }) => specifier.startsWith(prefix));
-  return entry ? `${entry.target}${specifier.slice(entry.prefix.length)}` : undefined;
+  // Normalized as Metro joins it: `@app/a/../b` is `src/b`, and a trailing slash still finds `index`.
+  return entry ? posix.normalize(`${entry.target}${specifier.slice(entry.prefix.length)}`).replace(/\/$/, "") : undefined;
 }
 
 /** The project path a bare specifier names under a root `baseUrl`, or undefined; a miss there is a package, not a gap. */

@@ -54,6 +54,8 @@ test("tsconfig aliases: single-directory prefix keys are followed; anything Type
   assert.equal(resolveTsconfigAlias(alias, "@/assets"), "src/assets");
   assert.equal(resolveTsconfigAlias(alias, "~/theme"), "theme");
   assert.equal(resolveTsconfigAlias(alias, "react"), undefined);
+  assert.equal(resolveTsconfigAlias(alias, "@/a/../b"), "src/b");
+  assert.equal(resolveTsconfigAlias(alias, "@/components/"), "src/components");
 });
 
 test("a platform file wins over a plain file of another extension, as Metro resolves it", () => {
