@@ -885,3 +885,51 @@ test("a screen's note is its first open gap of any kind, and an accepted gap onl
   assert.equal(indexMap({ ...current.map, gaps: [resolved, accepted] }).screenNotes.get("games-free"), accepted.message);
   assert.equal(indexMap({ ...current.map, gaps: [resolved] }).screenNotes.has("games-free"), false);
 });
+
+test("a public report's never-captured routes are not its screens anywhere; a captured screen and a local map keep theirs", async () => {
+  const { omittedScreenIds, reportScreens, withoutOmittedScreens } = await tsImport("../../viewer/src/utils/omitted-screens.ts", import.meta.url);
+  const { buildSearchItems } = await tsImport("../../viewer/src/utils/search.ts", import.meta.url);
+  const review = verifyImages(fixture());
+  // A new route named in exploration.exclude, and a route that was a redirect and is now a captured screen.
+  review.surfaces.push({ id: "channel", status: "added", excluded: true, base: null, head: entry("channel", "/c/[channel]") });
+  const nowCaptured = review.surfaces.find(surface => surface.id === "games-pro");
+  nowCaptured.status = "modified";
+  nowCaptured.base = entry("games-pro", "/games", "pro", { kind: "redirect", redirectTo: "/games" });
+  delete nowCaptured.baseImage; delete nowCaptured.baseOutcome;
+  const diff = diffFor(review);
+  const presentation = presentScreensByPath(diff.map);
+  const presented = presentBuildDiff(diff, presentation);
+  assert.equal(presented.screens.get("channel").status, "added", "the comparison alone would count it as a change");
+
+  const omitted = omittedScreenIds(presentation.map);
+  assert.deepEqual([...omitted].sort(), ["channel", "home"], "the excluded route and the redirect; the route captured now stays");
+  assert.deepEqual(reportScreens(presentation.map).map(screen => screen.id).sort(),
+    buildViewerGraph(presentation.map, presentation.index).screens.map(screen => screen.id).sort(), "Screens lists what the Map draws");
+  assert.deepEqual(buildSearchItems({ screens: reportScreens(presentation.map) }).filter(item => omitted.has(item.screenId)), []);
+
+  const shown = withoutOmittedScreens(presented);
+  assert.deepEqual([...shown.screens.keys()].filter(id => omitted.has(id)), []);
+  assert.equal(shown.counts.added, presented.counts.added - 1);
+  assert.equal(shown.counts["not-compared"], presented.counts["not-compared"] - 1);
+  assert.equal(Object.values(shown.counts).reduce((sum, count) => sum + count, 0), shown.screens.size);
+  assert.ok(shown.index.screens.has("channel"), "a link to it still opens it");
+  assert.equal(shown.index.screenNotes.get("channel"), "Excluded by exploration.exclude; never captured");
+
+  // A captured route whose excluded variant joins it on one card stays on the Map and in Screens.
+  const variants = navigationReview();
+  const pro = variants.surfaces.find(surface => surface.id === "games-pro");
+  pro.excluded = true;
+  for (const side of ["base", "head"]) { delete pro[`${side}Image`]; delete pro[`${side}Outcome`]; }
+  const { current } = workspaceSides(publicReviewToWorkspace(variants));
+  const family = presentScreensByPath(current.map);
+  const games = family.map.screens.find(screen => screen.route === "/games");
+  assert.equal(games.variantIds.length, 2);
+  assert.ok(reportScreens(family.map).includes(games));
+  assert.ok(buildViewerGraph(family.map, family.index).screens.includes(games));
+
+  // A local map with the same gaps lists every screen.
+  const local = { ...presentation.map, run: { ...presentation.map.run, id: "local-run" } };
+  assert.equal(omittedScreenIds(local).size, 0);
+  assert.equal(reportScreens(local), local.screens);
+  assert.equal(withoutOmittedScreens({ ...presented, map: local }).screens.size, presented.screens.size);
+});

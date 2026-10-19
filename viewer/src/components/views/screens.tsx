@@ -12,7 +12,9 @@ import { shortcutsLive } from "../../utils/shortcuts";
 import { normalizeSearchText } from "../../utils/search";
 import { createKeyHold } from "../../utils/key-hold";
 import { placeholderScreen } from "../../utils/map-frame";
+import { reportScreens } from "../../utils/omitted-screens";
 import { ScreenScreenshotCard } from "../canvas/screen-screenshot-card";
+import { NoScreens } from "../shared/no-screens";
 import { useCanvasVisibleFrame } from "../canvas/visible-frame-provider";
 import { PhoneSheet } from "../phone/phone-chrome";
 import { PanelSearch } from "../shared/panel-search";
@@ -269,19 +271,21 @@ function Legend(props: { others: Appearance[] }) {
  * phone, a section per route folder (or per tab, when there are no route files), with the tree behind a Tree button.
  */
 export function ScreensView(props: ScreensViewProps) {
+  // The report's screens, as the Map draws them: a public report's routes it never captured are not among them.
+  const screens = useMemo(() => reportScreens(props.map), [props.map]);
   const tree: ScreenTree = useMemo(
-    () => screenTree(props.map.screens, props.index, props.routeFiles),
-    [props.index, props.map.screens, props.routeFiles],
+    () => screenTree(screens, props.index, props.routeFiles),
+    [props.index, screens, props.routeFiles],
   );
   const typicalSize = useMemo(
-    () => typicalScreenshotSize(props.map.screens.map(screen => screenshotSize(primaryScreenshotForScreen(screen, props.index)))),
-    [props.index, props.map.screens],
+    () => typicalScreenshotSize(screens.map(screen => screenshotSize(primaryScreenshotForScreen(screen, props.index)))),
+    [props.index, screens],
   );
   const changedIds = useMemo(
-    () => new Set(props.map.screens
+    () => new Set(screens
       .filter(screen => isChanged(props.diff, screen.id) || (props.changedElsewhere?.get(screen.id)?.length ?? 0) > 0)
       .map(screen => screen.id)),
-    [props.changedElsewhere, props.diff, props.map.screens],
+    [props.changedElsewhere, props.diff, screens],
   );
   const [filter, setFilter] = useState<Filter>(props.phone && changedIds.size > 0 ? "changed" : "all");
   const [treeOpen, setTreeOpen] = useState(false);
@@ -290,9 +294,9 @@ export function ScreensView(props: ScreensViewProps) {
   const [query, setQuery] = useState("");
   // The phone layout has no field to show or clear a query, so a query typed on desktop does not narrow it.
   const findQuery = findOpen && !props.phone ? query : "";
-  const matches = useMemo(() => findMatches(props.map.screens, props.index, findQuery), [props.index, props.map.screens, findQuery]);
+  const matches = useMemo(() => findMatches(screens, props.index, findQuery), [props.index, screens, findQuery]);
   const inChanged = filter === "changed" && changedIds.size > 0;
-  const inFilter = inChanged ? changedIds : new Set(props.map.screens.map(screen => screen.id));
+  const inFilter = inChanged ? changedIds : new Set(screens.map(screen => screen.id));
   const shown = matches ? new Set([...inFilter].filter(id => matches.has(id))) : inFilter;
   const sections = tree.sections
     .map(section => ({ ...section, screenIds: section.screenIds.filter(id => shown.has(id)) }))
@@ -406,7 +410,7 @@ export function ScreensView(props: ScreensViewProps) {
             setFilter(value);
           }}>
           {value === "changed" ? "Changed" : "All"}
-          <span className="screens-chip-count">{value === "changed" ? changedIds.size : props.map.screens.length}</span>
+          <span className="screens-chip-count">{value === "changed" ? changedIds.size : screens.length}</span>
         </button>
       ))}
     </div>
@@ -562,6 +566,8 @@ export function ScreensView(props: ScreensViewProps) {
   const style = !props.phone && visibleFrame
     ? ({ "--screens-right-inset": `calc(100% - ${visibleFrame.x + visibleFrame.width}px)` } as CSSProperties)
     : undefined;
+
+  if (screens.length === 0) return <NoScreens map={props.map} />;
 
   const cell = (id: string) => {
     const screen = props.index.screens.get(id);

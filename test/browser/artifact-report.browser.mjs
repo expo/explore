@@ -1346,7 +1346,7 @@ test("transition thumbnails without a readable screenshot show the variant thumb
   assert.deepEqual(errors, []);
 });
 
-test("a docs-only report with zero images and no EAS build opens Screens without a visual verdict", async t => {
+test("a docs-only report with zero images and no EAS build has no screens to show, and its link to a route says why", async t => {
   const report = reportFixture();
   report.review.mode = "changes";
   report.review.runtime.projectId = "";
@@ -1359,12 +1359,11 @@ test("a docs-only report with zero images and no EAS build opens Screens without
   report.assets = [];
   const { page, errors } = await harness(t, await archive(report), { app: true });
   await expect(page.locator(".app-shell")).toBeVisible();
-  await page.getByRole("button", { name: "Screens", exact: true }).click();
-  await expect(page.locator(".screens-page .screens-cell")).toHaveCount(1);
-  await expect(page.locator(".screens-page .diff-frame.diff-not-compared")).toHaveCount(1);
-  // The Inspector's missing screenshot matches the canvas node: the icon above a short label and
-  // the report's reason for the gap, centred in a phone-shaped preview frame.
-  await page.locator(".screens-page .screen-screenshot-target").click();
+  // The change reaches no screen, so the one route was never captured: the Map and Screens say so instead of an empty page.
+  const empty = page.locator(".map-empty");
+  await expect(empty.getByRole("heading")).toHaveText("No screens were captured");
+  // The link names /home, and the Inspector says why it has no screenshot: the icon above a short label and the report's
+  // reason for the gap, centred in a phone-shaped preview frame.
   const placeholder = page.locator(".inspector .inspector-preview .screenshot-placeholder");
   await expect(placeholder.locator("span")).toHaveText("No screenshot");
   await expect(placeholder.locator(".screenshot-placeholder-detail")).toHaveText("Not compared; no capture was recorded");
@@ -1390,7 +1389,95 @@ test("a docs-only report with zero images and no EAS build opens Screens without
   await expect(page.locator(".collapsed-change-count")).toHaveCount(0);
   await expect(page.locator(".changes-screen-row")).toHaveCount(0);
   await expect(page.locator(".diff-frame.diff-modified, .diff-frame.diff-unchanged")).toHaveCount(0);
+  await page.getByRole("button", { name: "Screens", exact: true }).click();
+  await expect(empty.getByRole("heading")).toHaveText("No screens were captured");
+  await expect(page.locator(".screens-cell, .screens-tree-row")).toHaveCount(0);
   assert.equal(await page.evaluate(() => window.createdUrls.length), 0);
+  assert.deepEqual(errors, []);
+});
+
+/** A report with Home (modified) and Profile (not compared) captured, a new route named in exploration.exclude, and a redirect. */
+function omittedRoutesReport() {
+  const report = reportFixture();
+  const home = report.review.surfaces[0];
+  const route = (id, path, extra = {}) => ({ ...home.head, id, route: path, path, routeFile: `app/${id}.tsx`, logicalPath: `app/${id}.tsx`, ...extra });
+  const redirect = route("start", "/start", { kind: "redirect", redirectTo: "/home" });
+  report.review.surfaces.push(
+    { id: "profile", status: "unchanged", base: route("profile", "/profile"), head: route("profile", "/profile"),
+      baseImage: { ...home.baseImage }, headImage: { ...home.headImage }, baseOutcome: { ...home.baseOutcome }, headOutcome: { ...home.headOutcome } },
+    { id: "channel", status: "added", excluded: true, base: null, head: route("channel", "/c/[channel]") },
+    { id: "start", status: "unchanged", base: { ...redirect }, head: redirect });
+  return report;
+}
+
+test("a public report's excluded route and redirect are not among its screens: Screens, its counts, find, search and the changes leave them out", { timeout: 60_000 }, async t => {
+  const { page, errors } = await harness(t, await archive(omittedRoutesReport()), { app: true, query: "&screen=home" });
+  await expect(page.locator(".map-canvas .react-flow__node")).toHaveCount(2);
+  // The excluded route is new in this change, but it was never captured: it is not a change to review.
+  const menu = await openChangesMenu(page);
+  await expect(menu.getByRole("group", { name: "Filter changes" }).getByRole("button")).toHaveText(["Modified 1"]);
+  await expect(menu.getByText("/c/[channel]")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: "Screens", exact: true }).click();
+  const cells = page.locator(".screens-page .screens-cell");
+  await expect(cells).toHaveCount(2);
+  await expect(page.locator(".screens-tree-row[data-screen-id]")).toHaveCount(2);
+  for (const id of ["channel", "start"]) await expect(page.locator(`[data-screen-id="${id}"]`)).toHaveCount(0);
+  await expect(page.locator(".screens-filter .screens-chip")).toHaveText(["Changed1", "All2"]);
+  // ← and → step through the two screens and no others.
+  await page.locator(".screens-page").click({ position: { x: 4, y: 4 } });
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator(".screens-cell .screen-screenshot-card.selected")).toHaveCount(1);
+  const picked = async () => page.locator(".screens-cell:has(.screen-screenshot-card.selected)").getAttribute("data-screen-id");
+  const first = await picked();
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(picked).not.toBe(first);
+  const second = await picked();
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(picked).toBe(second);
+  assert.deepEqual([first, second].sort(), ["home", "profile"]);
+
+  // `/` finds the report's screens only.
+  await page.keyboard.press("/");
+  const find = page.getByRole("searchbox", { name: "Find screens" });
+  await expect(find).toBeFocused();
+  for (const query of ["channel", "start"]) {
+    await find.fill(query);
+    await expect(page.locator(".screens-find-empty")).toHaveText(`No screens match “${query}”`);
+    await expect(cells).toHaveCount(0);
+  }
+  await find.fill("profile");
+  await expect(cells).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+
+  // So does the command palette's screen search.
+  await page.keyboard.press("ControlOrMeta+KeyK");
+  const palette = page.getByRole("dialog", { name: "Search Explore" });
+  const box = palette.getByRole("combobox", { name: "Search screens and commands" });
+  await expect(box).toBeFocused();
+  await box.fill("/c/");
+  await expect(palette.getByRole("option")).toHaveCount(0);
+  await box.fill("/st");
+  await expect(palette.getByRole("option")).toHaveCount(0);
+  await box.fill("/pro");
+  await expect(palette.getByRole("option")).toHaveText([/\/profile/]);
+  assert.deepEqual(errors, []);
+});
+
+test("a link to an excluded route opens it in the Inspector, which says why it has no screenshot, on the Map and on Screens", { timeout: 60_000 }, async t => {
+  const { page, errors } = await harness(t, await archive(omittedRoutesReport()), { app: true, query: "&screen=channel" });
+  const detail = page.locator(".inspector .inspector-preview .screenshot-placeholder-detail");
+  await expect(detail).toHaveText("Excluded by exploration.exclude; never captured");
+  await expect(page.locator(".map-canvas .react-flow__node")).toHaveCount(2);
+  await expect(page.locator(".map-canvas .react-flow__node.selected")).toHaveCount(0);
+  // The same link on Screens, opened afresh: no card is picked, and the Inspector explains the route.
+  await page.goto(page.url().replace("#/map/", "#/screens/"));
+  await page.reload();
+  await expect(page.locator(".screens-page .screens-cell")).toHaveCount(2);
+  await expect(page.locator(".screens-cell .screen-screenshot-card.selected")).toHaveCount(0);
+  await expect(detail).toHaveText("Excluded by exploration.exclude; never captured");
   assert.deepEqual(errors, []);
 });
 
@@ -1507,10 +1594,11 @@ test("a recorded pull-request artifact opens its verified verdicts and every scr
     await expect(menu.getByText(route, { exact: true })).toBeVisible();
   }
 
+  // Its two redirect declarations (/ and /scan/select-photo) were never captured: they are not among its screens.
   await page.getByRole("button", { name: "Screens", exact: true }).click();
   const frames = page.locator(".screens-page .diff-frame");
-  await expect(frames).toHaveCount(35);
-  for (const [status, count] of [["modified", 3], ["added", 1], ["removed", 1], ["unchanged", 28], ["not-compared", 2]]) {
+  await expect(frames).toHaveCount(33);
+  for (const [status, count] of [["modified", 3], ["added", 1], ["removed", 1], ["unchanged", 28], ["not-compared", 0]]) {
     await expect(page.locator(`.screens-page .diff-frame.diff-${status}`)).toHaveCount(count);
   }
   const screenshots = page.locator(".screens-page img[data-screenshot-src]");

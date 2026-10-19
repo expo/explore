@@ -114,6 +114,11 @@ function plural(count: number, noun: string): string {
 
 type Surface = PublicReview["surfaces"][number];
 
+/** A redirect declaration or a route named in `exploration.exclude`: never captured, so never one of the report's screens. */
+function neverCaptured(surface: Surface): boolean {
+  return surface.excluded === true || (surface.head ?? surface.base)?.kind === "redirect";
+}
+
 /**
  * The group a surface is listed under, from the run's verdicts. A screen without one (its source changed but no
  * screenshots were compared) is not listed: Explore reports what the captures show. A capture that failed is counted as
@@ -136,7 +141,7 @@ function groupOf(surface: Surface, evidenceBased: boolean): ReviewGroup | "unlis
  * not run or failed. Not a change, but not a screen that looks the same either, so the result says how many.
  */
 function notComparedChange(surface: Surface): boolean {
-  if (surface.status !== "modified" || (surface.head ?? surface.base)?.kind === "redirect") return false;
+  if (surface.status !== "modified" || neverCaptured(surface)) return false;
   const verified = (["base", "head"] as const).every(side => surface[`${side}Image`]
     && surface[`${side}Outcome`]?.status === "captured" && surface[`${side}Outcome`]?.landing === "verified");
   return verified && (!surface.review || surface.visual?.reason === "diff-failed");
@@ -295,7 +300,7 @@ export function platformRecordOf(state: PublicCommentState, target?: CommentTarg
     const evidenceBased = state.review.surfaces.some(surface => surface.review);
     record.changes = [];
     for (const surface of state.review.surfaces) {
-      if ((surface.head ?? surface.base)?.kind === "redirect") continue;
+      if (neverCaptured(surface)) continue;
       const group = groupOf(surface, evidenceBased);
       if (group === "unlisted") continue;
       const scheme = schemeOf(surface.id);
@@ -350,7 +355,7 @@ function navigationOf(review: PublicReview, groups: Map<string, ChangeGroup>): C
   const groupOf = new Map<string, NavigationGroup>();
   for (const surface of review.surfaces) {
     const route = surface.head ?? surface.base;
-    if (!route || route.kind === "redirect") continue;
+    if (!route || neverCaptured(surface)) continue;
     const key = routePattern(route);
     keyOf.set(surface.id.replace(/@(light|dark)$/, ""), key);
     const group = groups.get(surface.id);
@@ -719,7 +724,7 @@ export function reviewChanges(review: PublicReview): Map<string, ChangeGroup> {
   const evidenceBased = review.surfaces.some(surface => surface.review);
   const changes = new Map<string, ChangeGroup>();
   for (const surface of review.surfaces) {
-    if ((surface.head ?? surface.base)?.kind === "redirect") continue;
+    if (neverCaptured(surface)) continue;
     const group = groupOf(surface, evidenceBased);
     if (group !== "unlisted") changes.set(surface.id, group);
   }

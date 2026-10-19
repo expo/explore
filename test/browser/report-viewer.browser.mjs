@@ -318,7 +318,7 @@ test("Compare steps through changed screens and their changed areas", { timeout:
 /** The Inspector's one frame for a screen outside the review, and its Swipe frame for a changed one, in this viewport. */
 async function inspectorFrames(page, url) {
   const games = "expo-tabs-games-index-2c6605360b11";
-  const index = "expo-index-02872ff9f2ca";
+  const unchanged = "expo-tabs-scan-index-2bbf42237cc6";
   const open = async id => {
     await page.goto(`${url}#/screens`);
     const all = page.getByRole("button", { name: /^All/ }).first();
@@ -333,14 +333,14 @@ async function inspectorFrames(page, url) {
   const swipeImage = page.locator(".sidebar-review-stage img").first();
   await expect(swipeImage).toBeVisible();
   const changed = await swipeImage.boundingBox();
-  await open(index);
+  await open(unchanged);
   const single = page.locator(".sidebar-review-off .variant-preview");
   await expect(single).toBeVisible();
   return { changed, single: await single.boundingBox() };
 }
 
 test("the Inspector frames an unchanged screen at the size of a changed screen's Swipe frame", { timeout: 90_000 }, async t => {
-  // / is unchanged (not compared); /games is modified. The single frame used to take at most half the panel, the
+  // /scan is unchanged; /games is modified. The single frame used to take at most half the panel, the
   // width of one frame of a Before/After pair, while Swipe and Flip fill the panel up to 70 % (phone: 52 %) of the window.
   for (const viewport of [{ width: 1024, height: 820 }, { width: 390, height: 844 }]) {
     const { page, url, errors } = await openReport(t, viewport);

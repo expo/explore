@@ -796,3 +796,16 @@ test('an excluded route is neither listed nor counted as an app-wide screen', ()
   const body = renderPublicComment(state({ review: review([...evidenceReview().surfaces, excluded]) }));
   assert.doesNotMatch(body, /\/channel|App-wide source changes|not compared/);
 });
+
+test('an excluded route that is new is not one of the changed screens, nor of the ones the list links to', () => {
+  const screens = Array.from({ length: 11 }, (_, index) => surface(`screen-${index}`, 'modified', { extra: {
+    review: { status: 'modified', description: `Changed ${index}` },
+    visual: { verdict: 'modified', reason: 'repeated-cross-build-delta', mismatchPercentage: 1, threshold: 0.1, tool: 'agent-device@0.20.2' },
+  } }));
+  const excluded = surface('channel', 'added', { route: '/c/[channel]', extra: { excluded: true } });
+  for (const key of ['baseImage', 'headImage', 'baseOutcome', 'headOutcome']) delete excluded[key];
+  const body = renderPublicComment(state({ review: review([...screens, excluded]) }));
+  assert.equal(titleOf(body), `### 11 screens changed · [Review in Explore](<${reportUrl}>)`);
+  assert.equal(listOf(body).at(-1), `- [1 more screen in the report](<${reportUrl}>)`);
+  assert.doesNotMatch(body, /\/c\/\[channel\]/);
+});

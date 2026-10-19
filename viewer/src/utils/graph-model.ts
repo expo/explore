@@ -2,6 +2,7 @@ import type { ExploreMap, MapIndex, Screen } from "./model";
 import { isLaunchScreen, transitionLabel } from "./model";
 import type { NavigationEdge } from "../../../src/contracts/navigation-graph";
 import { navigationEdgeKey } from "./source-navigation";
+import { omittedScreenIds } from "./omitted-screens";
 
 export type ConnectionGroup = {
   key: string;
@@ -126,12 +127,10 @@ export function buildObservedGraph(map: ExploreMap, index: MapIndex): ObservedGr
 /** The Viewer can overlay declarations; the observed graph and event indexes stay intact. */
 export function buildViewerGraph(map: ExploreMap, index: MapIndex): ObservedGraph {
   const observed = buildObservedGraph(map, index);
-  // A public report preserves its complete source inventory, but an accepted capture gap
-  // marks a redirect or a route outside changes-mode selection. Neither is a screen image. The app
-  // launch is not a route, so its accepted "no splash observed" gap keeps it on the map: it is where
-  // the app starts, drawn above the start screens with a synthetic edge into each of them.
-  const omitted = new Set<string>();
-  if (map.run.id.startsWith("public:")) for (const gap of map.gaps) if (gap.status === "accepted" && gap.screenId && !isLaunchScreen({ id: gap.screenId })) omitted.add(gap.screenId);
+  // A public report preserves its complete source inventory, but the routes it never captured are not its screens
+  // (omitted-screens.ts). The launch stays: it is where the app starts, drawn above the start screens with a synthetic
+  // edge into each of them.
+  const omitted = omittedScreenIds(map);
   const screens = observed.screens.filter(screen => !omitted.has(screen.id));
   const visibleIds = new Set(screens.map(screen => screen.id));
   const launchEdges = launchGroups(screens);

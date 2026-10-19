@@ -73,6 +73,7 @@ import {
   isBlackBoxMap,
 } from "./utils/graph-model";
 import { buildSearchItems, suggestedSearchItems } from "./utils/search";
+import { reportScreens, withoutOmittedScreens } from "./utils/omitted-screens";
 import {
   presentBuildDiff,
   presentScreensByPath,
@@ -1198,9 +1199,10 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
     () => (reviewedMap ? presentScreensByPath(reviewedMap) : undefined),
     [reviewedMap],
   );
+  // A route the report never captured is not one of its screens, so the comparison names it nowhere (omitted-screens.ts).
   const diff = useMemo(
     () => (sourceDiff && screenPresentation
-      ? presentBuildDiff(sourceDiff, screenPresentation)
+      ? withoutOmittedScreens(presentBuildDiff(sourceDiff, screenPresentation))
       : undefined),
     [screenPresentation, sourceDiff],
   );
@@ -1222,7 +1224,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
         comparison: filterComparisonAppearance(wholeComparison, otherScope),
         ...(wholeReview ? { review: filterReviewAppearance(wholeReview, otherScope) } : {}),
       });
-      const presented = presentBuildDiff(otherDiff, presentScreensByPath(otherDiff.map));
+      const presented = withoutOmittedScreens(presentBuildDiff(otherDiff, presentScreensByPath(otherDiff.map)));
       for (const [id, entry] of presented.screens) {
         if (["modified", "added", "removed"].includes(entry.status)) changed.set(id, [...(changed.get(id) ?? []), option]);
       }
@@ -1260,8 +1262,9 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
     : !baseline ? "This report has no baseline build to compare against."
     : !diff ? "The baseline is still loading."
     : "No screen looks different from the baseline.";
+  // Search finds the report's screens, as Screens lists them; a link to one it never captured still opens it.
   const searchIndex = useMemo(
-    () => map ? buildSearchItems({ screens: map.screens }) : [],
+    () => map ? buildSearchItems({ screens: reportScreens(map) }) : [],
     [map],
   );
   const openChangedScreen = useCallback((screenId: string) => {
