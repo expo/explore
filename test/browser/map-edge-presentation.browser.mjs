@@ -188,12 +188,11 @@ test("Map keeps selected elevated arrows behind screenshots without rendering na
   await expect(sourceHitArea.locator("title")).toHaveText("Source navigation\npush · app/home.tsx");
   await page.mouse.move(1320, 30);
   const dimmedComparisons = [];
-  for (const presentation of ["muted", "selection"]) {
+  // Only the Changes filter dims a screen; a selection fades nothing.
+  for (const presentation of ["muted"]) {
     await page.evaluate(mode => {
       const profile = document.querySelector('.react-flow__node[data-id="profile"]');
-      const canvas = document.querySelector(".map-canvas");
       profile.classList.toggle("graph-node-muted", mode === "muted");
-      canvas.classList.toggle("screen-selection-active", mode === "selection");
     }, presentation);
     const dimmedWithArrows = await profileImage.screenshot({ animations: "disabled" });
     await page.locator(".map-surface .react-flow__edges").evaluate(node => { node.style.visibility = "hidden"; });
@@ -216,7 +215,6 @@ test("Map keeps selected elevated arrows behind screenshots without rendering na
   }
   await page.evaluate(() => {
     document.querySelector('.react-flow__node[data-id="profile"]').classList.remove("graph-node-muted");
-    document.querySelector(".map-canvas").classList.remove("screen-selection-active");
   });
   await page.getByRole("button", { name: "Open Profile", exact: true }).click();
   assert.equal(await page.evaluate(() => window.selectedScreen), "profile");

@@ -107,6 +107,13 @@ export function ZoomBridge(props: {
     publishZoom(Math.round(zoom * 100) / 100);
   }, [props.cameraReady, zoom]);
 
+  // What a stroke that must stay legible at any zoom divides by (the Map's selection ring). It
+  // moves in quarter-octave steps, so a pinch restyles the canvas a few times, not every frame.
+  const strokeZoom = 2 ** (Math.round(Math.log2(zoom) * 4) / 4);
+  useEffect(() => {
+    canvas?.style.setProperty("--canvas-zoom", String(strokeZoom));
+  }, [canvas, strokeZoom]);
+
   useEffect(() => {
     // Re-registering after selection changes publishes the new capability to the zoom menu.
     // Reading through getNodes keeps the commands themselves on the latest canvas snapshot.

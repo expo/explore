@@ -80,136 +80,121 @@ async function expectAutoHideScrollbar(
   await expect(scrollbar).toHaveCSS("opacity", "0");
 }
 
-async function expectMapScreenSelectionDimming(
-  page: Page,
-  options: { hoverTargetCount?: number } = {},
-) {
-  const screens = page.locator(
-    ".map-canvas .react-flow__node-screen:not(.canvas-node-exit)",
-  );
-  const selected = page.locator(
-    ".map-canvas .react-flow__node-screen.selected:not(.canvas-node-exit)",
-  );
-  const dimmed = page.locator(
-    ".map-canvas .react-flow__node-screen:not(.selected):not(.canvas-node-exit)",
-  );
-  await expect(page.locator(".map-canvas")).toHaveClass(/screen-selection-active/);
-  await expect(selected).toHaveCount(1);
-  await expect.poll(async () => dimmed.count()).toBe((await screens.count()) - 1);
-  expect(await screens.evaluateAll(nodes => nodes.every(node => getComputedStyle(node).opacity === "1"))).toBe(true);
+/** The Map's canvas tokens as computed colours, to compare with what a ring or an edge draws. */
+async function mapCanvasColors(page: Page) {
+  return page.locator(".map-canvas").evaluate((canvas) => {
+    const resolve = (token: string) => {
+      const probe = document.createElement("span");
+      probe.style.color = `var(${token})`;
+      canvas.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    return {
+      accent: resolve("--accent"),
+      accentStrong: resolve("--accent-strong"),
+      hoverRing: resolve("--hover-ring"),
+      quiet: resolve("--border-subtle"),
+      hoverEdge: resolve("--tertiary"),
+    };
+  });
+}
 
-  await expect.poll(async () => {
-    const [selectedOpacity, dimmedOpacity] = await Promise.all([
-      selected.locator(":scope > .canvas-active-frame").evaluate((node) => Number.parseFloat(getComputedStyle(node).opacity)),
-      dimmed.first().locator(":scope > .canvas-active-frame").evaluate((node) => Number.parseFloat(getComputedStyle(node).opacity)),
-    ]);
-    return dimmedOpacity < selectedOpacity;
-  }).toBe(true);
+/** The screenshot frame's box shadow on a Map card: where its ring is drawn. */
+function mapCardRing(node: Locator) {
+  return node.locator(".screen-node-image :is(img, .image-placeholder)").first()
+    .evaluate((frame) => getComputedStyle(frame).boxShadow);
+}
 
-  // Selection focus moves the canvas before hover affordances are exercised. Choose hover
-  // targets only after that flight settles so a node cannot move underneath the minimap between
-  // the hit-test below and Playwright's pointer action.
-  await expect(page.locator(".map-canvas.canvas-focus-animating")).toHaveCount(0);
-
-  const hoverableDimmedIndexes = await dimmed.evaluateAll((nodes) => nodes.flatMap((node, index) => {
-    const bounds = node.getBoundingClientRect();
-    const centerTarget = document.elementFromPoint(
-      bounds.left + bounds.width / 2,
-      bounds.top + bounds.height / 2,
-    );
-    const nodeId = node.getAttribute("data-id");
-    const hasDirectEdge = nodeId !== null && [...document.querySelectorAll(".react-flow__edge")]
-      .some((edge) => {
-        const label = edge.getAttribute("aria-label") ?? "";
-        return label.startsWith(`Edge from ${nodeId} to `) || label.endsWith(` to ${nodeId}`);
-      });
-    return centerTarget !== null && node.contains(centerTarget) && hasDirectEdge ? [index] : [];
+/** Each Map edge's id, ends and drawn stroke. */
+function mapEdgeStrokes(page: Page) {
+  return page.locator(".map-canvas .react-flow__edge").evaluateAll((edges) => edges.map((edge) => {
+    const match = /^Edge from (.+) to (.+)$/.exec(edge.getAttribute("aria-label") ?? "");
+    const path = getComputedStyle(edge.querySelector(".transition-edge-path")!);
+    return {
+      id: edge.getAttribute("data-id") ?? "",
+      from: match?.[1] ?? "",
+      to: match?.[2] ?? "",
+      stroke: path.stroke,
+      strokeWidth: Number.parseFloat(path.strokeWidth),
+    };
   }));
-  const hoverTargetCount = options.hoverTargetCount ?? 1;
-  expect(hoverableDimmedIndexes.length).toBeGreaterThanOrEqual(hoverTargetCount);
-  // A card fades through its frame's --map-card-opacity (the node itself stays opaque over the
-  // connectors). The property is not animated, so it reads what hover asks for at once.
-  const cardOpacities = () => screens.evaluateAll((nodes) => Object.fromEntries(nodes.map((node) => [
-    node.getAttribute("data-id") ?? "",
-    getComputedStyle(node.querySelector(":scope > .canvas-active-frame")!).getPropertyValue("--map-card-opacity").trim(),
-  ])));
-  const restingOpacities = await cardOpacities();
-  let lastHoverTarget = dimmed.nth(hoverableDimmedIndexes[0]!);
+}
 
-  for (const index of hoverableDimmedIndexes.slice(0, hoverTargetCount)) {
-    const hoverTarget = dimmed.nth(index);
-    const hoverTargetId = await hoverTarget.getAttribute("data-id");
-    expect(hoverTargetId).not.toBeNull();
-    await hoverTarget.hover();
-    await expect.poll(() => hoverTarget.locator(":scope > .canvas-active-frame").evaluate(
-      (node) => Number.parseFloat(getComputedStyle(node).opacity),
-    )).toBe(1);
-    await expect(hoverTarget).toHaveCSS("filter", "none");
-    const hoverSubject = page.locator(
-      ".map-canvas .react-flow__node-screen.graph-node-hover-subject",
-    );
-    await expect(hoverSubject).toHaveCount(1);
-    await expect(hoverSubject).toHaveAttribute("data-id", hoverTargetId!);
-    const allEdges = page.locator(".map-canvas .react-flow__edge");
-    const directEdgeCount = await allEdges.evaluateAll((edges, nodeId) => edges.filter((edge) => {
-      const label = edge.getAttribute("aria-label") ?? "";
-      return label.startsWith(`Edge from ${nodeId} to `) || label.endsWith(` to ${nodeId}`);
-    }).length, hoverTargetId!);
-    expect(directEdgeCount).toBeGreaterThan(0);
-    // The hovered screen and every screen it shares an edge with are marked related; nothing on
-    // the map recedes while hovering, so the only changes are the subject ring, the incident
-    // edges and the neighbours' frames.
-    const neighbourIds = await allEdges.evaluateAll((edges, nodeId) => {
-      const ids = new Set<string>([nodeId]);
-      for (const edge of edges) {
-        const match = /^Edge from (.+) to (.+)$/.exec(edge.getAttribute("aria-label") ?? "");
-        if (!match) continue;
-        if (match[1] === nodeId) ids.add(match[2]!);
-        if (match[2] === nodeId) ids.add(match[1]!);
-      }
-      return [...ids].sort();
-    }, hoverTargetId!);
-    const brightNodes = page.locator(
-      ".map-canvas .react-flow__node-screen.graph-node-hover-related",
-    );
-    await expect.poll(() => brightNodes.evaluateAll((nodes) => (
-      nodes.map((node) => node.getAttribute("data-id") ?? "").sort()
-    ))).toEqual(neighbourIds);
-    const unrelated = page.locator(
-      ".map-canvas .react-flow__node-screen:not(.graph-node-hover-related):not(.canvas-node-exit)",
-    );
-    const unrelatedIds = await unrelated.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-id") ?? ""));
-    expect(unrelatedIds.length).toBeGreaterThan(0);
-    const hoverOpacities = await cardOpacities();
-    expect(unrelatedIds.map((id) => hoverOpacities[id])).toEqual(unrelatedIds.map((id) => restingOpacities[id]));
-    expect(await unrelated.evaluateAll((nodes) => nodes.every((node) => getComputedStyle(node).filter === "none"))).toBe(true);
-    await expect(page.locator(".map-canvas .screen-open-hint:visible")).toHaveCount(0);
-    const activeEdges = page.locator(
-      ".map-canvas .react-flow__edge.graph-edge-hover-related",
-    );
-    await expect(activeEdges).toHaveCount(directEdgeCount);
-    const activeEdgeLabels = await activeEdges.evaluateAll((edges) => (
-      edges.map((edge) => edge.getAttribute("aria-label") ?? "")
+/**
+ * A selected Map screen is ringed in the accent, its route turns accent and its transitions stay
+ * accent while every other transition quiets to a hairline. No card fades. Hovering another card
+ * rings it in grey beside the selection, with no tooltip, and darkens its own transitions;
+ * hovering the selected card keeps its accent ring.
+ */
+async function expectMapSelectionRing(page: Page) {
+  const screens = page.locator(".map-canvas .react-flow__node-screen:not(.canvas-node-exit)");
+  const selected = page.locator(".map-canvas .react-flow__node-screen.selected:not(.canvas-node-exit)");
+  await expect(selected).toHaveCount(1);
+  const selectedId = (await selected.getAttribute("data-id"))!;
+  const colors = await mapCanvasColors(page);
+  await expect.poll(() => mapCardRing(selected)).toContain(colors.accent);
+  await expect(selected.locator(".screen-node-title")).toHaveCSS("color", colors.accentStrong);
+  // Nothing fades: every card and its frame stay at full strength.
+  await expect.poll(() => screens.evaluateAll((nodes) => nodes.every((node) => (
+    getComputedStyle(node).opacity === "1"
+    && getComputedStyle(node.querySelector(":scope > .canvas-active-frame")!).opacity === "1"
+    && ["", "1"].includes(getComputedStyle(node.querySelector(":scope > .canvas-active-frame")!).getPropertyValue("--map-card-opacity").trim())
+  )))).toBe(true);
+  const unselected = page.locator(".map-canvas .react-flow__node-screen:not(.selected):not(.canvas-node-exit)");
+  expect(await unselected.evaluateAll((nodes, accent) => nodes.every((node) => (
+    !getComputedStyle(node.querySelector(".screen-node-image :is(img, .image-placeholder)")!).boxShadow.includes(accent)
+  )), colors.accent)).toBe(true);
+  // The selection's transitions are accent and a little heavier; every other one is a hairline.
+  const edges = await mapEdgeStrokes(page);
+  const incident = edges.filter((edge) => edge.from === selectedId || edge.to === selectedId);
+  const others = edges.filter((edge) => edge.from !== selectedId && edge.to !== selectedId);
+  expect(incident.length).toBeGreaterThan(0);
+  expect(others.length).toBeGreaterThan(0);
+  expect(incident.every((edge) => edge.stroke === colors.accent && edge.strokeWidth === 2.5)).toBe(true);
+  expect(others.every((edge) => edge.stroke === colors.quiet && edge.strokeWidth === 1)).toBe(true);
+  await expect(page.locator(".map-canvas .react-flow__edge.graph-edge-quiet")).toHaveCount(others.length);
+
+  // Hover a card that shares no edge with the selection but has edges of its own.
+  await expect(page.locator(".map-canvas.canvas-focus-animating")).toHaveCount(0);
+  const neighbours = new Set(incident.flatMap((edge) => [edge.from, edge.to]));
+  const hoverId = await unselected.evaluateAll((nodes, excluded) => nodes.find((node) => {
+    const id = node.getAttribute("data-id") ?? "";
+    const target = node.querySelector(".screen-screenshot-target")!.getBoundingClientRect();
+    const hit = document.elementFromPoint(target.left + target.width / 2, target.top + target.height / 3);
+    const linked = [...document.querySelectorAll(".map-canvas .react-flow__edge")].some((edge) => (
+      (edge.getAttribute("aria-label") ?? "").split(/ (?:from|to) /).slice(1).includes(id)
     ));
-    expect(activeEdgeLabels.every((label) => (
-      label.startsWith(`Edge from ${hoverTargetId} to `)
-      || label.endsWith(` to ${hoverTargetId}`)
-    ))).toBe(true);
-    lastHoverTarget = hoverTarget;
-    if (index !== hoverableDimmedIndexes.slice(0, hoverTargetCount).at(-1)) {
-      await page.mouse.move(1, 1);
-      await page.waitForTimeout(160);
-    }
+    return !excluded.includes(id) && linked && hit !== null && node.contains(hit);
+  })?.getAttribute("data-id"), [...neighbours]);
+  expect(hoverId).toBeTruthy();
+  const hovered = page.locator(`.map-canvas .react-flow__node-screen[data-id="${hoverId}"]`);
+  const target = hovered.locator(".screen-screenshot-target");
+  const box = (await target.boundingBox())!;
+  await target.hover({ position: { x: box.width / 2, y: box.height / 3 } });
+  await expect(hovered).toHaveClass(/graph-node-hover-subject/);
+  await expect.poll(() => mapCardRing(hovered)).toContain(colors.hoverRing);
+  await expect.poll(() => mapCardRing(selected)).toContain(colors.accent);
+  // Past the tooltip delay, nothing says Open in Inspector.
+  await page.waitForTimeout(600);
+  await expect(page.locator(".tooltip")).toHaveCount(0);
+  // The hovered card's transitions darken to grey; the selection's stay accent; the rest stay quiet.
+  const hovering = await mapEdgeStrokes(page);
+  for (const edge of hovering) {
+    if (edge.from === selectedId || edge.to === selectedId) expect(edge.stroke, edge.id).toBe(colors.accent);
+    else if (edge.from === hoverId || edge.to === hoverId) expect(edge.stroke, edge.id).toBe(colors.hoverEdge);
+    else expect(edge.stroke, edge.id).toBe(colors.quiet);
   }
-
+  // Hovering the selected card keeps its accent ring.
+  const selectedTarget = selected.locator(".screen-screenshot-target");
+  const selectedBox = (await selectedTarget.boundingBox())!;
+  await selectedTarget.hover({ position: { x: selectedBox.width / 2, y: selectedBox.height / 3 } });
+  await expect(selected).toHaveClass(/graph-node-hover-subject/);
+  await expect.poll(() => mapCardRing(selected)).toContain(colors.accent);
+  expect(await mapCardRing(selected)).not.toContain(colors.hoverRing);
+  await expect.poll(() => mapCardRing(hovered)).not.toContain(colors.hoverRing);
   await page.mouse.move(1, 1);
-  await expect.poll(async () => {
-    const [selectedOpacity, dimmedOpacity] = await Promise.all([
-      selected.locator(":scope > .canvas-active-frame").evaluate((node) => Number.parseFloat(getComputedStyle(node).opacity)),
-      lastHoverTarget.locator(":scope > .canvas-active-frame").evaluate((node) => Number.parseFloat(getComputedStyle(node).opacity)),
-    ]);
-    return dimmedOpacity < selectedOpacity;
-  }).toBe(true);
 }
 
 /** The camera chrome's theme button steps Auto → Dark → Light; press it until the page shows the option. */
@@ -1955,7 +1940,7 @@ test("fits the visible Map screenshot frame to the capture's intrinsic ratio", a
   const selected = page.locator(".map-canvas .react-flow__node-screen.selected");
   const image = selected.locator(".screen-node-image img");
   await expect(image).toBeVisible();
-  await expectMapScreenSelectionDimming(page);
+  await expectMapSelectionRing(page);
   const pathStyle = await selected.locator(".screen-node-title").evaluate((element) => {
     const style = getComputedStyle(element);
     const bounds = element.getBoundingClientRect();
@@ -2042,13 +2027,18 @@ async function hoverableMapScreen(candidates: Locator, room = 80) {
   return candidates.nth(index);
 }
 
-test("hovering a Map screen fades nothing and says Open in Inspector in a tooltip below the card that keeps to it", async ({ page }) => {
+test("hovering a Map screen fades nothing, rings it in grey, darkens its transitions and shows no tooltip", async ({ page }) => {
   await serveSyntheticWorkspace(page);
   await page.goto("/map");
   const screens = page.locator(".map-canvas .react-flow__node-screen:not(.canvas-node-exit)");
   await expect(screens.first()).toBeVisible();
   await expectMapCameraAtRest(page);
+  const colors = await mapCanvasColors(page);
   const resting = await mapCardOpacities(page);
+  // With nothing selected no transition is quiet: they keep their own colours.
+  await expect(page.locator(".map-canvas .react-flow__edge.graph-edge-quiet")).toHaveCount(0);
+  const restingEdges = await mapEdgeStrokes(page);
+  expect(restingEdges.some((edge) => edge.stroke === colors.quiet)).toBe(false);
   // A screen at one end of a secondary transition, which rests a little faded.
   const secondaryEnds = await page.locator(".map-canvas .react-flow__edge.graph-edge-secondary").evaluateAll((edges) => (
     [...new Set(edges.flatMap((edge) => /^Edge from (.+) to (.+)$/.exec(edge.getAttribute("aria-label") ?? "")?.slice(1) ?? []))]
@@ -2057,42 +2047,34 @@ test("hovering a Map screen fades nothing and says Open in Inspector in a toolti
   const node = await hoverableMapScreen(page.locator(
     secondaryEnds.map((id) => `.map-canvas .react-flow__node-screen[data-id="${id}"]`).join(", "),
   ));
+  const id = (await node.getAttribute("data-id"))!;
   const target = node.locator(".screen-screenshot-target");
-  const heading = node.locator(".screen-node-heading");
-  // The tooltip says what a click does; no native title tooltip joins it.
+  // No native title tooltip either; the heading names the screen.
   await expect(target).not.toHaveAttribute("title");
-  // Near the card's top, so the pan below keeps the pointer on it.
   const box = (await target.boundingBox())!;
   await target.hover({ position: { x: box.width / 2, y: box.height / 4 } });
   await expect(page.locator(".connection-canvas-surface.canvas-hovering")).toHaveCount(1);
-  const tooltip = page.locator(".tooltip", { hasText: "Open in Inspector" });
-  await expect(tooltip).toBeVisible();
+  await expect.poll(() => mapCardRing(node)).toContain(colors.hoverRing);
+  expect(await mapCardRing(node)).not.toContain(colors.accent);
+  // Past the tooltip delay, nothing covers or labels the card.
+  await page.waitForTimeout(600);
+  await expect(page.locator(".tooltip")).toHaveCount(0);
+  await expect(page.locator(".map-canvas .screen-open-hint:visible")).toHaveCount(0);
   const related = await page.locator(".map-canvas .react-flow__node-screen.graph-node-hover-related")
     .evaluateAll((nodes) => nodes.map((element) => element.getAttribute("data-id") ?? ""));
-  const unrelated = Object.keys(resting).filter((id) => !related.includes(id));
+  const unrelated = Object.keys(resting).filter((other) => !related.includes(other));
   expect(unrelated.length).toBeGreaterThan(0);
   const hovering = await mapCardOpacities(page);
-  expect(unrelated.map((id) => hovering[id])).toEqual(unrelated.map((id) => resting[id]));
-  await expect(page.locator(".map-canvas .screen-open-hint:visible")).toHaveCount(0);
-  // The transitions into and out of it come fully up, the secondary one too.
+  expect(unrelated.map((other) => hovering[other])).toEqual(unrelated.map((other) => resting[other]));
+  // The transitions into and out of it come fully up in a darker grey, the secondary one too; the rest stay as they were.
   const incident = page.locator(".map-canvas .react-flow__edge.graph-edge-hover-related");
   await expect(incident.and(page.locator(".graph-edge-secondary"))).not.toHaveCount(0);
   await expect.poll(() => incident.evaluateAll((edges) => edges.every((edge) => getComputedStyle(edge).opacity === "1"))).toBe(true);
-  // The route heads a Map card, so the bubble sits below the screenshot, clear of both.
-  const clearance = async () => {
-    const [bubble, card, title] = await Promise.all([tooltip.boundingBox(), target.boundingBox(), heading.boundingBox()]);
-    if (!bubble || !card || !title) return Number.NaN;
-    const headingOverlap = bubble.y < title.y + title.height && title.y < bubble.y + bubble.height
-      && bubble.x < title.x + title.width && title.x < bubble.x + bubble.width;
-    return headingOverlap ? -1 : bubble.y - (card.y + card.height);
-  };
-  expect(await clearance()).toBeGreaterThan(0);
-  // Panning with the pointer still on the card moves the card by transform; the bubble follows it
-  // rather than staying behind over the screenshot.
-  const before = await target.boundingBox();
-  await page.mouse.wheel(0, 40);
-  await expect.poll(async () => (await target.boundingBox())!.y).toBeLessThan(before!.y - 10);
-  await expect.poll(clearance).toBeGreaterThan(0);
+  const hoverEdges = await mapEdgeStrokes(page);
+  for (const edge of hoverEdges) {
+    if (edge.from === id || edge.to === id) expect(edge.stroke, edge.id).toBe(colors.hoverEdge);
+    else expect(edge.stroke, edge.id).toBe(restingEdges.find((resting) => resting.id === edge.id)!.stroke);
+  }
 });
 
 test("hovering a Map screen the Changes filter muted brings it and its neighbours back up, and nothing else", async ({ page }) => {

@@ -31,8 +31,8 @@ export type ScreenScreenshotCardProps = {
   loading?: "eager" | "lazy";
   leading?: ReactNode;
   trailing?: ReactNode;
-  /** Where the "Open in Inspector" tooltip sits: away from the route heading, which is above the screenshot on the Map. */
-  tooltipPlacement?: "top" | "bottom";
+  /** Say "Open in Inspector" in a tooltip over the screenshot (Screens). The Map's cards go without. */
+  inspectorTooltip?: boolean;
   /** Short lines about the screen, inside the card after its screenshot (Screens: how it was reached, where else it changed). */
   note?: ReactNode;
   onClick: MouseEventHandler<HTMLButtonElement>;
@@ -92,10 +92,10 @@ export function ScreenScreenshotCard(props: ScreenScreenshotCardProps) {
             free of block children. */}
         <span className="screen-screenshot-slot">
           {props.leading}
-          {/* With a pointer, what a click does is said once, zoom-independent, in the shared tooltip
-              after its usual delay; the selected screen is already in the Inspector. The button has
-              no title of its own, so no native tooltip joins it; the heading names the screen. */}
-          <Tooltip label="Open in Inspector" placement={props.tooltipPlacement ?? "top"} disabled={Boolean(props.selected)}>
+          {/* On Screens, with a pointer, what a click does is said once in the shared tooltip after
+              its usual delay; the selected screen is already in the Inspector. The button has no
+              title of its own, so no native tooltip joins it; the heading names the screen. */}
+          <Tooltip label="Open in Inspector" placement="top" disabled={props.inspectorTooltip === false || Boolean(props.selected)}>
           <button
             type="button"
             className="screen-screenshot-target"
