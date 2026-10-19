@@ -33,7 +33,7 @@ node scripts/readme-screenshots.mjs --report ~/euxy-report/iphone.zip --select /
 
 - `--select` is the route the hero's pointer clicks on the Map (the Inspector opens on it): choose an added or clearly modified screen. The script zooms in around it, so it must be a screen the Map shows.
 - `--compare` is the key in the Viewer's `#/compare/<key>` URL for a **modified** screen with outlined regions (open the report, click the screen in Compare, copy the key): the route without its slash. The script fails if the report has no visually modified screen at that route.
-- `--pr` screenshots the Explore comment on that PR: the fixtures' `source`. Headless Chromium needs a colour emoji font for the result glyphs (`sudo apt-get install fonts-noto-color-emoji` on Debian/Ubuntu); a comment with hollow boxes where 🟩 should be is not acceptable.
+- `--pr` screenshots the Explore comment on that PR: the fixtures' `source`, or a newer euxy PR when that comment predates the current layout. `--only pr-comment --pr <url>` rewrites only the comment pictures (it needs no `--report`); `--only` takes any of `hero`, `compare`, `screens` and `pr-comment`. Headless Chromium needs a colour emoji font for the result glyphs (`sudo apt-get install fonts-noto-color-emoji` on Debian/Ubuntu); a comment with hollow boxes where 🟩 should be is not acceptable.
 - The script serves the report through the Viewer's Vite dev server, so no build is needed. It writes a `-light` and a `-dark` file for every picture (the PR comment too: signed-out github.com follows `prefers-color-scheme`). The README shows each pair with `<picture>`: a `<source media="(prefers-color-scheme: dark)">` for the dark file and an `<img>` with the alt text and the light file, which is what GitHub Mobile shows (it ignores the dark source), so the light file is the one that must always be right.
 
 Two of the pictures are animated SVGs, built by `scripts/readme-animations.mjs` in the same run; there is nothing else to run when the screenshots change:
@@ -61,7 +61,7 @@ cd - && npm run build:cli && node scripts/readme-reports-rows.mjs > /tmp/reports
 - The script renders the picker as the CLI draws it (96 columns, the newest run selected) and writes the terminal body as HTML: each coloured piece is exactly its characters wide, so columns line up, and the wordmark is drawn as cell rectangles, since a design tool's font does not draw `█▀▄` cell for cell.
 - In Paper, replace the frame named "Terminal" inside each artboard's window with that HTML, check both artboards in a screenshot (crisp wordmark, aligned columns, the selected row highlighted to the end, coloured counts), and export both at 2x as `readme-reports-light.png` and `readme-reports-dark.png`. The window's title bar reads `npx @expo/explore reports`, as people run it.
 
-Look at every PNG you produced before committing, light and dark: the Screens grid must show the added, removed and modified status dots, the PR comment must show the heading links and result glyphs. Describe each in its Markdown alt text as what the picture shows, not what the feature is.
+Look at every PNG you produced before committing, light and dark: the Screens grid must show the added, removed and modified status dots, the PR comment must show the heading links, the line of device links and the list of changed screens. Describe each in its Markdown alt text as what the picture shows, not what the feature is.
 
 ## 3. Pass over the content as a first-time user
 

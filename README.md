@@ -28,7 +28,7 @@ Explore maps your app: a screenshot of every screen, connected by the taps betwe
 <td width="50%" valign="top">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-pr-comment-dark.png">
-  <img width="100%" alt="Explore's GitHub PR comment on a euxy PR: a heading with how many screens changed and a Review in Explore link, a line naming each device with a link to its report, and the changed screens as a short list, fading out below them" src="docs/screenshots/readme-pr-comment-light.png">
+  <img width="100%" alt="Explore's GitHub PR comment on a euxy PR: the heading 2 screens changed with a Review in Explore link; a line of links to each device's report (iPhone 17, three iPhone Duo poses and Android) and to the two commits compared; then the changed screens as a list, /tempo with the text it added and the devices it is on, fading out below" src="docs/screenshots/readme-pr-comment-light.png">
 </picture>
 <strong>A comment on every PR</strong>: with <a href="#set-up-ci">CI</a>, the report links and the added, removed and modified screens.
 </td>
@@ -300,7 +300,7 @@ platforms:
     easProfile: explore-android   # android.buildType: apk in eas.json
 ```
 
-- The workflows run one capture job per platform, and the PR gets one comment with a section per platform.
+- The workflows run one capture job per platform, and the PR gets one comment that links each platform's report and lists the changed screens of both.
 - A failed platform fails the check; the other platform's report still publishes.
 - An Android-only app sets `app.platform: android` with no `platforms` map.
 
@@ -321,7 +321,7 @@ targets:
 
 - A target takes the `app` fields it does not set, and `device.name` when it is of `app.platform`; a target of another platform sets its own `bundleId` and `easProfile` (an Android one's device defaults to `pixel_7`). `pose` is `closed`, `half-open` or `open`. `label` names it in reports (by default its device and pose).
 - Ids are up to 32 lowercase letters, digits and dashes, start with a letter, and are not `base`, `head` or `report`. A config names at most 8 targets. A config with `platforms` has one target per platform, named `ios` and `android`.
-- The workflows run one capture job per target, the PR comment has a section per target, and each report links its sibling targets' reports.
+- The workflows run one capture job per target. The PR comment links each target's report and says which targets a change is on, and each report links its sibling targets' reports.
 - A review runs at most `capture.maxSessions` EAS Simulator sessions at once across its targets (default 5, a typical plan's limit); see the [config reference](docs/quickstart-ci.md#config-reference).
 - A target can also set its own `controller` and `simulator` over `capture`'s, such as Android on agent-device beside iOS targets on Argent. `--controller` and `--simulator` override every target's for one run.
 - `capture --target duo-open` reviews one target on this machine; `--platform ios` the iOS ones. On your machine a review's targets run at once (at most `--parallel N`), and targets of one platform and EAS profile share each commit's build; in CI each target is its own job. A target that fails outright costs only its own report.

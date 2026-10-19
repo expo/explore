@@ -13,6 +13,8 @@
 //              It becomes readme-compare-*.svg, its before capture wiping to its after capture
 //   --pr       a GitHub PR URL whose Explore comment becomes readme-pr-comment-light.png (public repository): the comment
 //              at its own size on a soft stage, cut off with a fade after the list of changed screens
+//   --only     the pictures to write, comma-separated, of hero, compare, screens and pr-comment; default all of them (the
+//              PR comment only with --pr). --only pr-comment needs no --report
 import { chromium } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
@@ -27,26 +29,36 @@ const { values: args } = parseArgs({
     compare: { type: "string", default: "patterns" },
     pr: { type: "string" },
     zoom: { type: "string", default: "73" },
+    only: { type: "string" },
   },
 });
-if (!args.report) {
+const PICTURES = ["hero", "compare", "screens", "pr-comment"];
+const only = args.only?.split(",").map(name => name.trim()).filter(Boolean);
+const unknown = only?.filter(name => !PICTURES.includes(name)) ?? [];
+if (unknown.length) {
+  console.error(`Unknown --only ${unknown.join(", ")}; pass some of ${PICTURES.join(", ")}.`);
+  process.exit(2);
+}
+const wanted = name => !only || only.includes(name);
+const fromReport = PICTURES.filter(name => name !== "pr-comment").some(wanted);
+if (fromReport && !args.report) {
   console.error("Pass --report <review report zip>. See skills/readme-refresh/SKILL.md for where the euxy report comes from.");
   process.exit(2);
 }
 
 const out = fileURLToPath(new URL("../docs/screenshots/", import.meta.url));
 const SHOTS = [
-  { file: "readme-hero", hash: "#/map", viewport: { width: 1376, height: 774 }, click: page => page.getByRole("button", { name: "Fit canvas" }), select: args.select, zoom: Number(args.zoom), animated: true },
+  { name: "hero", file: "readme-hero", hash: "#/map", viewport: { width: 1376, height: 774 }, click: page => page.getByRole("button", { name: "Fit canvas" }), select: args.select, zoom: Number(args.zoom), animated: true },
   // Screens shows its Changed filter, so the added, removed and modified dots are all in view wherever the tree sorts them.
-  { file: "readme-screens", hash: "#/screens", viewport: { width: 1760, height: 1000 }, click: page => page.locator(".screens-chip", { hasText: "Changed" }) },
-];
+  { name: "screens", file: "readme-screens", hash: "#/screens", viewport: { width: 1760, height: 1000 }, click: page => page.locator(".screens-chip", { hasText: "Changed" }) },
+].filter(shot => wanted(shot.name));
 
-const bytes = await readFile(args.report);
-const report = await openReport(bytes);
-const { server, url } = await startReportViewer({ bytes, watch: false });
+const bytes = fromReport ? await readFile(args.report) : undefined;
+const report = bytes && await openReport(bytes);
+const { server, url } = bytes ? await startReportViewer({ bytes, watch: false }) : {};
 const browser = await chromium.launch();
 try {
-  for (const theme of ["light", "dark"]) {
+  for (const theme of wanted("compare") ? ["light", "dark"] : []) {
     const surface = compareSurface(report.review, args.compare, theme);
     const path = `${out}readme-compare-${theme}.svg`;
     await writeFile(path, await compareSvg(browser, report, surface, theme,
@@ -96,7 +108,7 @@ try {
     console.log(path);
     await context.close();
   }
-  for (const theme of args.pr ? ["light", "dark"] : []) {
+  for (const theme of args.pr && wanted("pr-comment") ? ["light", "dark"] : []) {
     // Signed-out github.com follows prefers-color-scheme.
     const context = await browser.newContext({ viewport: { width: 1000, height: 1400 }, deviceScaleFactor: 2, colorScheme: theme });
     const page = await context.newPage();
@@ -123,7 +135,7 @@ try {
   }
 } finally {
   await browser.close();
-  await server.close?.();
+  await server?.close?.();
 }
 
 /**
