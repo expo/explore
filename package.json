@@ -50,7 +50,7 @@
     "test:node": "node --test test/node/*.test.mjs",
     "test:hosting": "npm --prefix viewer-host run typecheck && npm --prefix viewer-host test",
     "test:viewer:artifacts": "node --test test/browser/artifact-report.browser.mjs test/browser/artifact-cache.browser.mjs",
-    "test:viewer:browser": "node --test test/browser/screenshot-image.browser.mjs test/browser/inspector-notes.browser.mjs test/browser/inspector-variants.browser.mjs test/browser/inspector-source-navigation.browser.mjs test/browser/map-edge-presentation.browser.mjs test/browser/local-ci-view.browser.mjs test/browser/report-viewer.browser.mjs",
+    "test:viewer:browser": "node --test test/browser/screenshot-image.browser.mjs test/browser/swipe-outlines.browser.mjs test/browser/inspector-notes.browser.mjs test/browser/inspector-variants.browser.mjs test/browser/inspector-source-navigation.browser.mjs test/browser/map-edge-presentation.browser.mjs test/browser/local-ci-view.browser.mjs test/browser/report-viewer.browser.mjs",
     "test:viewer:e2e": "npm run test:viewer:browser && playwright test",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p viewer/tsconfig.json --noEmit",
     "lint": "eslint .",

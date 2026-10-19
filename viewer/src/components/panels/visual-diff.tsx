@@ -181,7 +181,13 @@ export function SwipeCompare(props: {
         }} />
       <ScreenshotImage className="visual-swipe-before" src={props.before} alt={`${props.title}, before`}
         loading="eager" draggable={false} />
-      {props.showOutlines === false ? null : <ChangeOutlines changes={props.changes} activeIndex={props.activeIndex} />}
+      {props.showOutlines === false ? null : props.changes.some(change => change.move) ? (
+        // A moved area sits where its content is on each side: Before's outlines left of the divider, After's right.
+        <>
+          <span className="visual-swipe-outlines before"><ChangeOutlines changes={props.changes} activeIndex={props.activeIndex} /></span>
+          <span className="visual-swipe-outlines after"><ChangeOutlines changes={props.changes} activeIndex={props.activeIndex} /></span>
+        </>
+      ) : <ChangeOutlines changes={props.changes} activeIndex={props.activeIndex} />}
       {props.systemRegions && props.showOutlines !== false ? <SystemRegionBands regions={props.systemRegions} /> : null}
       {props.labels === false ? null : (
         <>

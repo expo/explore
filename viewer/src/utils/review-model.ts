@@ -288,11 +288,17 @@ function visualDiffRegion(value: unknown): VisualDiffRegion | undefined {
   return { x, y, width, height, share, ...(move ? { move } : {}) };
 }
 
+/** The farthest a published move may go, in screenshot pixels (the review contract's own limit). */
+const MAX_MOVE_AMOUNT = 8192;
+
 function regionMove(value: unknown): RegionMove | undefined {
   const candidate = record(value);
   const amount = record(candidate?.amount);
-  const finite = (entry: unknown): entry is number => typeof entry === "number" && Number.isFinite(entry) && Math.abs(entry) <= 100;
-  if (!candidate || !amount || !finite(candidate.x) || !finite(candidate.y) || !finite(amount.x) || !finite(amount.y)
+  // x and y place the outline in percent of the image; the amount is how far, in pixels or points, and a card
+  // recentred on a wide screen moves hundreds.
+  const within = (limit: number) => (entry: unknown): entry is number => typeof entry === "number" && Number.isFinite(entry) && Math.abs(entry) <= limit;
+  const offset = within(100), distance = within(MAX_MOVE_AMOUNT);
+  if (!candidate || !amount || !offset(candidate.x) || !offset(candidate.y) || !distance(amount.x) || !distance(amount.y)
     || (candidate.unit !== "pt" && candidate.unit !== "px")) return undefined;
   return { x: candidate.x, y: candidate.y, amount: { x: amount.x, y: amount.y }, unit: candidate.unit };
 }

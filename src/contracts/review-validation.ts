@@ -75,11 +75,17 @@ function assertReviewFields(surface: Surface, enforceComparisonEvidence: boolean
   }
 }
 
-/** A region's move between the screenshots: finite, and small enough to be layout drift rather than another screen. */
+/**
+ * The farthest a region may move between the screenshots, in screenshot pixels: within the largest screenshot a
+ * device takes (an element recentred on a wide display moves hundreds of pixels), not an unbounded number.
+ */
+const MAX_SHIFT = 8192;
+
+/** A region's move between the screenshots: finite, and within a screenshot. */
 function validShift(shift: unknown): boolean {
   if (!shift || typeof shift !== "object") return false;
   const { x, y } = shift as { x?: unknown; y?: unknown };
-  return typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y) && Math.abs(x) <= 64 && Math.abs(y) <= 64;
+  return typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y) && Math.abs(x) <= MAX_SHIFT && Math.abs(y) <= MAX_SHIFT;
 }
 
 function assertVisualVerdict(visual: PublicVisualVerdict, enforceComparisonEvidence: boolean, paired: boolean): void {

@@ -27,7 +27,7 @@ import {
 } from "./visual-evidence.js";
 import { AGENT_DEVICE_VERSION } from "../shared/agent-device-version.js";
 import { STATUS_BAR_BAND_PERCENT, decodePng, differentPixelsInRect, maxColorDistance, type DecodedFrame } from "../shared/png-evidence.js";
-import { measureRegionShifts } from "./region-shift.js";
+import { measureRegionMoves, type RegionMove, type RegionShift } from "./region-shift.js";
 
 export const DEFAULT_VISUAL_THRESHOLD = 0.1;
 export const DEFAULT_EVIDENCE_TIME_BUDGET_MS = 10 * 60_000;
@@ -142,16 +142,61 @@ function visualVerdict(assessment: VisualEvidenceAssessment, threshold: number):
   };
 }
 
+type PublishedRegion = NonNullable<PublicVisualVerdict["regions"]>[number];
+
+/** A region as published: the fields a review carries, without the comparison's own bookkeeping. */
+function publishedRegion(region: VisualDiffRegion): PublishedRegion {
+  return { rect: region.rect, normalizedRect: region.normalizedRect, differentPixels: region.differentPixels,
+    shareOfDiffPercentage: region.shareOfDiffPercentage, dominantChange: region.dominantChange, location: region.location };
+}
+
+/**
+ * The regions to publish from every region the comparison found, given what moved: each region with its small
+ * shift, if one explains it, and each large move as one region in place of the regions it explains (where the
+ * content is now, their pixels and share, its location the region the content arrived in), largest share first.
+ * `allRegionsMoved` when every region, before any are left out, moved.
+ */
+export function publishMeasuredRegions(all: readonly VisualDiffRegion[], shifts: ReadonlyArray<RegionShift | undefined>,
+  moves: readonly RegionMove[], width: number, height: number): Pick<PublicVisualVerdict, "regions" | "allRegionsMoved"> {
+  const merged = new Set(moves.flatMap(move => move.members));
+  const percent = (value: number, total: number) => Math.round((value / total) * 10_000) / 100;
+  const regions: PublishedRegion[] = [
+    ...all.flatMap((region, index) => {
+      if (merged.has(index)) return [];
+      const shift = shifts[index];
+      return [{ ...publishedRegion(region), ...(shift ? { shift } : {}) }];
+    }),
+    ...moves.map(move => {
+      const members = move.members.map(index => all[index]!);
+      return {
+        rect: move.rect,
+        normalizedRect: { x: percent(move.rect.x, width), y: percent(move.rect.y, height), width: percent(move.rect.width, width), height: percent(move.rect.height, height) },
+        differentPixels: members.reduce((sum, region) => sum + region.differentPixels, 0),
+        // Each member's share is rounded, so their sum can pass 100; a share is at most the whole difference.
+        shareOfDiffPercentage: Math.min(100, Math.round(members.reduce((sum, region) => sum + region.shareOfDiffPercentage, 0) * 100) / 100),
+        dominantChange: "mixed", location: members[0]!.location, shift: move.shift,
+      };
+    }),
+  ];
+  return {
+    regions: regions.sort((left, right) => right.shareOfDiffPercentage - left.shareOfDiffPercentage).slice(0, MAX_REGIONS),
+    ...(regions.length > 0 && regions.every(region => region.shift) ? { allRegionsMoved: true as const } : {}),
+  };
+}
+
 /**
  * The published regions with how far their content moved, where a move explains it: a layout that shifted by a
- * device pixel reads as moved, not as changed. Every region the comparison found is measured, not only the ones
- * published, so `allRegionsMoved` can say nothing else on the screen changed. A measurement that fails leaves the
- * regions as they were.
+ * device pixel reads as moved, not as changed, and an element that moved further (a card recentred on a wider
+ * screen) reads as one moved region instead of the fragments the comparison split it into. Every region the
+ * comparison found is measured, not only the ones published, so `allRegionsMoved` can say nothing else on the
+ * screen changed. A measurement that fails leaves the regions as they were.
  */
 async function withRegionShifts(basePath: string, headPath: string, all: readonly VisualDiffRegion[], published: NonNullable<PublicVisualVerdict["regions"]>):
   Promise<Pick<PublicVisualVerdict, "regions" | "allRegionsMoved">> {
   try {
-    const shifts = await measureRegionShifts(basePath, headPath, all.map(region => region.rect));
+    const { shifts, moves, width, height } = await measureRegionMoves(basePath, headPath,
+      all.map(region => ({ ...region.rect, dominantChange: region.dominantChange })));
+    if (moves.length) return publishMeasuredRegions(all, shifts, moves, width, height);
     const shiftOf = new Map(all.map((region, index) => [region.rect, shifts[index]] as const));
     return {
       regions: published.map(region => {
