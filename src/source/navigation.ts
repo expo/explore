@@ -1,7 +1,7 @@
 import { posix } from "node:path";
 import ts from "typescript";
 import type { SourceSnapshot } from "./dependency-graph.js";
-import { readTsconfigAlias } from "../shared/tsconfig-alias.js";
+import { readTsconfigAlias, resolveTsconfigAlias, resolveTsconfigBaseUrl } from "../shared/tsconfig-alias.js";
 import { detectAppDir, routeGroupOf } from "./route-providers/expo-router.js";
 import { validateSourceRoutes, type SourceRoute } from "../contracts/source-route.js";
 import { validateNavigationGraph, type NavigationEdge, type NavigationGraph } from "../contracts/navigation-graph.js";
@@ -54,7 +54,7 @@ export function extractSourceNavigation(routes: readonly SourceRoute[], files: S
   if (routes.length > 5_000 || files.size > 50_000) throw new Error("Source navigation inventory exceeds its analysis limit");
   const appDir = detectAppDir(files, analysis.entry);
   const platform = analysis.platform ?? "ios";
-  const extensions = ["tsx", "ts", "jsx", "js"].flatMap(extension => [`.${platform}.${extension}`, ...(platform === "web" ? [] : [`.native.${extension}`]), `.${extension}`]).concat([".mjs", ".cjs"]);
+  const extensions = [`.${platform}`, ...(platform === "web" ? [] : [".native"]), ""].flatMap(suffix => ["tsx", "ts", "jsx", "js"].map(ext => `${suffix}.${ext}`)).concat([".mjs", ".cjs"]);
   const unresolved = new Set<string>();
   const edges = new Map<string, NavigationEdge>();
   const modalSurfaceIds = new Set<string>();
@@ -65,8 +65,8 @@ export function extractSourceNavigation(routes: readonly SourceRoute[], files: S
   const alias = readTsconfigAlias(files.get("tsconfig.json"));
   if (alias.unsupported) unresolved.add(`Unresolved navigation: tsconfig.json: ${alias.unsupported}`);
   const resolveModule = (specifier: string, importer: string): string | undefined => {
-    const base = specifier.startsWith("@/") ? `${alias.target}${specifier.slice(2)}`
-      : specifier.startsWith(".") ? posix.normalize(posix.join(posix.dirname(importer.replace(/^\//, "")), specifier)) : undefined;
+    const base = resolveTsconfigAlias(alias, specifier)
+      ?? (specifier.startsWith(".") ? posix.normalize(posix.join(posix.dirname(importer.replace(/^\//, "")), specifier)) : resolveTsconfigBaseUrl(alias, specifier));
     if (!base || base.startsWith("../")) return undefined;
     const withoutJs = /\.[cm]?jsx?$/.test(base) ? base.replace(/\.[cm]?jsx?$/, "") : base;
     return [...extensions.map((ext) => base + ext), base,
@@ -542,7 +542,7 @@ export function extractSourceNavigation(routes: readonly SourceRoute[], files: S
                 let parent: ts.Node = declaration;
                 while (!ts.isImportDeclaration(parent) && !ts.isSourceFile(parent)) parent = parent.parent;
                 if (ts.isImportDeclaration(parent) && ts.isStringLiteral(parent.moduleSpecifier)
-                  && /^(?:\.|@\/|~)/.test(parent.moduleSpecifier.text)
+                  && (/^(?:\.|@\/|~)/.test(parent.moduleSpecifier.text) || resolveTsconfigAlias(alias, parent.moduleSpecifier.text) !== undefined)
                   && !assetFile.test(parent.moduleSpecifier.text)
                   && !resolveModule(parent.moduleSpecifier.text, parent.getSourceFile().fileName)) issue(parent, "local imported code could not be resolved");
               }

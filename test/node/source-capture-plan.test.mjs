@@ -21,6 +21,60 @@ test("import closure attributes component and platform-source changes to depende
   assert.deepEqual(selectedPaths(plan({base:files,platform:"android",changes:[{status:"modified",path:"src/theme.ios.ts"}]})), []);
 });
 
+test("tsconfig paths with several single-directory aliases resolve by their longest prefix, as TypeScript does", () => {
+  const tsconfig = JSON.stringify({ extends: "expo/tsconfig.base", compilerOptions: { paths: { "@/*": ["./src/*"], "@/assets/*": ["./assets/*"] } } });
+  const files = [["tsconfig.json", tsconfig], ["src/app/one.tsx", 'import { tint } from "@/theme"; import icon from "@/assets/icon"; export default () => [tint, icon];'],
+    ["src/app/two.tsx", page], ["src/theme.ts", "export const tint = 'blue';"], ["assets/icon.ts", "export default 'icon';"], ["src/assets/icon.ts", "export default 'other';"]];
+  const result = plan({ base: files, changes: [{ status: "modified", path: "assets/icon.ts" }] });
+  assert.deepEqual(selectedPaths(result), ["/one"]);
+  assert.equal(result.surfaces.flatMap(row => row.reasons ?? []).some(reason => /module resolution/.test(reason)), false);
+  // `@/assets/icon` is `assets/icon.ts`, not `src/assets/icon.ts`, so an edit to the latter changes nothing.
+  assert.deepEqual(selectedPaths(plan({ base: files, changes: [{ status: "modified", path: "src/assets/icon.ts" }] })), []);
+  assert.deepEqual(selectedPaths(plan({ base: files, changes: [{ status: "modified", path: "src/theme.ts" }] })), ["/one"]);
+});
+
+test("an alias import that finds no file is local code the plan cannot follow, not a package", () => {
+  const tsconfig = JSON.stringify({ compilerOptions: { paths: { "@/*": ["./src/*"], "@icons/*": ["./src/icons/*"] } } });
+  const files = [["tsconfig.json", tsconfig], ["src/app/one.tsx", 'import Logo from "@icons/logo"; export default () => Logo;'], ["src/app/two.tsx", page], ["src/icons/logo.svg", "<svg/>"]];
+  const result = plan({ base: files, changes: [{ status: "modified", path: "src/icons/logo.svg" }] });
+  assert.ok(result.unresolved.some(message => message.includes("@icons/logo")), JSON.stringify(result.unresolved));
+  assert.ok(selectedPaths(result).includes("/one"));
+});
+
+test("tsconfig aliases: single-directory prefix keys are followed; anything TypeScript would read differently is not", async () => {
+  const { readTsconfigAlias, resolveTsconfigAlias } = await tsImport("../../src/shared/tsconfig-alias.ts", import.meta.url);
+  const read = paths => readTsconfigAlias(JSON.stringify({ compilerOptions: { paths } }));
+  for (const paths of [{ "*": ["src/*"] }, { "@*": ["src/*"] }, { "@/x": ["src/x"] }, { "@/*/x": ["src/*"] }, { "./*": ["src/*"] }, { "/*": ["src/*"] },
+    { "@/*": ["src/*", "lib/*"] }, { "@/*": ["../src/*"] }, { "@/*": ["./src/./lib/*"] }, { "@/*": ["src/*.ts"] }]) {
+    assert.ok(read(paths).unsupported, JSON.stringify(paths));
+  }
+  const alias = read({ "@/*": ["./src/*"], "@/assets/*": ["./assets/*"], "~/*": ["./*"] });
+  assert.equal(alias.unsupported, undefined);
+  assert.equal(resolveTsconfigAlias(alias, "@/assets/icon"), "assets/icon");
+  assert.equal(resolveTsconfigAlias(alias, "@/assets"), "src/assets");
+  assert.equal(resolveTsconfigAlias(alias, "~/theme"), "theme");
+  assert.equal(resolveTsconfigAlias(alias, "react"), undefined);
+  assert.equal(resolveTsconfigAlias(alias, "@/a/../b"), "src/b");
+  assert.equal(resolveTsconfigAlias(alias, "@/components/"), "src/components");
+});
+
+test("a platform file wins over a plain file of another extension, as Metro resolves it", () => {
+  const files = [["app/one.tsx", 'import Card from "../src/card"; export default () => Card;'], ["app/two.tsx", page],
+    ["src/card.tsx", "export default 1;"], ["src/card.ios.ts", "export default 2;"]];
+  assert.deepEqual(selectedPaths(plan({ base: files, changes: [{ status: "modified", path: "src/card.ios.ts" }] })), ["/one"]);
+  assert.deepEqual(selectedPaths(plan({ base: files, changes: [{ status: "modified", path: "src/card.tsx" }] })), []);
+  assert.deepEqual(selectedPaths(plan({ base: files, platform: "android", changes: [{ status: "modified", path: "src/card.tsx" }] })), ["/one"]);
+});
+
+test("with a root baseUrl, a bare specifier that names a project file is a dependency; one that does not is a package", () => {
+  const tsconfig = JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "components/*": ["./src/components/*"] } } });
+  const files = [["tsconfig.json", tsconfig], ["app/one.tsx", 'import theme from "theme"; import { View } from "react-native"; export default () => [theme, View];'],
+    ["app/two.tsx", page], ["theme.ts", "export default 1;"]];
+  const result = plan({ base: files, changes: [{ status: "modified", path: "theme.ts" }] });
+  assert.deepEqual(selectedPaths(result), ["/one"]);
+  assert.deepEqual(result.unresolved, []);
+});
+
 test("route additions and removals are independently inventoried at each commit", () => {
   const result = plan({base:[["app/removed.tsx",page]],head:[["app/added.tsx",page]]});
   assert.deepEqual(selectedPaths(result,"base"), ["/removed"]);

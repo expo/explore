@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import ts from "typescript";
 import type { SourceChange } from "./git-diff.js";
 import { validateSourceRoutes, type SourceRoute } from "../contracts/source-route.js";
-import { readTsconfigAlias } from "../shared/tsconfig-alias.js";
+import { readTsconfigAlias, resolveTsconfigAlias, resolveTsconfigBaseUrl } from "../shared/tsconfig-alias.js";
 
 /** Repository path → file text at one exact commit. Non-source files carry an empty string. */
 export type SourceSnapshot = ReadonlyMap<string, string>;
@@ -50,11 +50,12 @@ export function surfaceDependencies(routes: readonly SourceRoute[], files: Sourc
   if (alias.unsupported) unresolved.add("Custom TypeScript module resolution requires conservative capture");
   const cache = new Map<string, string[]>();
   const resolveModule = (importer: string, specifier: string): string | undefined => {
-    const base = specifier.startsWith("@/") ? `${alias.target}${specifier.slice(2)}`
-      : specifier.startsWith(".") ? posix.normalize(posix.join(posix.dirname(importer), specifier))
-        : undefined;
+    const base = resolveTsconfigAlias(alias, specifier)
+      ?? (specifier.startsWith(".") ? posix.normalize(posix.join(posix.dirname(importer), specifier))
+        : resolveTsconfigBaseUrl(alias, specifier));
     if (!base) return undefined;
-    const extensions = ["tsx", "ts", "jsx", "js"].flatMap(ext => [`.${platform}.${ext}`, ...(platform === "web" ? [] : [`.native.${ext}`]), `.${ext}`]).concat([".mjs", ".cjs", ".json"]);
+    // Metro tries a platform suffix with every extension before the next suffix, so `Foo.ios.ts` beats `Foo.tsx`.
+    const extensions = [`.${platform}`, ...(platform === "web" ? [] : [".native"]), ""].flatMap(suffix => ["tsx", "ts", "jsx", "js"].map(ext => `${suffix}.${ext}`)).concat([".mjs", ".cjs", ".json"]);
     return [...extensions.map((ext) => base + ext), base,
       ...extensions.map((ext) => `${base}/index${ext}`)].find((candidate) => !/(?:^|\/)surfaces?\.json$/.test(candidate) && files.has(candidate));
   };
@@ -78,7 +79,8 @@ export function surfaceDependencies(routes: readonly SourceRoute[], files: Sourc
       const specifier = node.text;
       const resolved = resolveModule(path, specifier);
       if (resolved) dependencies.push(resolved);
-      else if (specifier.startsWith(".") || specifier.startsWith("@/") || specifier.startsWith("~")) {
+      // An alias that matches but finds no file (an .svg, a scale variant) is local code this analysis cannot follow, not a package.
+      else if (specifier.startsWith(".") || resolveTsconfigAlias(alias, specifier) !== undefined || specifier.startsWith("@/") || specifier.startsWith("~")) {
         unresolved.add(`Unresolved runtime import: ${path} -> ${specifier}`);
       }
       // Bare npm packages are covered by lockfile/package changes.
@@ -103,7 +105,7 @@ export function surfaceDependencies(routes: readonly SourceRoute[], files: Sourc
         const pending = [surface.routeFile, ...surface.sourceFiles];
         let directory = posix.dirname(surface.routeFile);
         while (directory !== "." && directory !== "/") {
-          const suffixes = ["tsx", "ts", "jsx", "js"].flatMap(extension => [`.${platform}.${extension}`, ...(platform === "web" ? [] : [`.native.${extension}`]), `.${extension}`]);
+          const suffixes = [`.${platform}`, ...(platform === "web" ? [] : [".native"]), ""].flatMap(suffix => ["tsx", "ts", "jsx", "js"].map(ext => `${suffix}.${ext}`));
           const layout = suffixes.map(suffix => `${directory}/_layout${suffix}`).find(path => files.has(path));
           if (layout) pending.push(layout);
           directory = posix.dirname(directory);

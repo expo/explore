@@ -1,6 +1,6 @@
 import { posix } from "node:path";
 import ts from "typescript";
-import { readTsconfigAlias } from "../../shared/tsconfig-alias.js";
+import { readTsconfigAlias, resolveTsconfigAlias, resolveTsconfigBaseUrl } from "../../shared/tsconfig-alias.js";
 
 const UNKNOWN = "\u0000";
 const MAX_VALUES = 64;
@@ -15,7 +15,7 @@ function unwrap(node: ts.Node): ts.Node {
 
 /** Prove that every render path forwards elsewhere; unknown behavior remains capturable. */
 export function expoRedirectTargets(files: ReadonlyMap<string, string>, routeFiles: readonly string[], platform = "ios"): Map<string, string[]> {
-  const extensions = ["tsx", "ts", "jsx", "js"].flatMap(ext => [`.${platform}.${ext}`, ...(platform === "web" ? [] : [`.native.${ext}`]), `.${ext}`]).concat([".mjs", ".cjs"]);
+  const extensions = [`.${platform}`, ...(platform === "web" ? [] : [".native"]), ""].flatMap(suffix => ["tsx", "ts", "jsx", "js"].map(ext => `${suffix}.${ext}`)).concat([".mjs", ".cjs"]);
   const sources = new Map<string, ts.SourceFile | undefined>();
   let sourceBytes = 0;
   const sourceFile = (name: string): ts.SourceFile | undefined => {
@@ -34,8 +34,8 @@ export function expoRedirectTargets(files: ReadonlyMap<string, string>, routeFil
   };
   const alias = readTsconfigAlias(files.get("tsconfig.json"));
   const resolveModule = (specifier: string, importer: string): string | undefined => {
-    const base = specifier.startsWith("@/") && !alias.unsupported ? `${alias.target}${specifier.slice(2)}`
-      : specifier.startsWith(".") ? posix.normalize(posix.join(posix.dirname(importer.replace(/^\//, "")), specifier)) : undefined;
+    const base = (alias.unsupported ? undefined : resolveTsconfigAlias(alias, specifier))
+      ?? (specifier.startsWith(".") ? posix.normalize(posix.join(posix.dirname(importer.replace(/^\//, "")), specifier)) : alias.unsupported ? undefined : resolveTsconfigBaseUrl(alias, specifier));
     if (!base || base.startsWith("../")) return undefined;
     const withoutJs = base.replace(/\.[cm]?jsx?$/, "");
     return [...extensions.map(ext => base + ext), base, ...extensions.map(ext => `${base}/index${ext}`),

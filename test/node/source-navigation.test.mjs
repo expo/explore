@@ -168,7 +168,7 @@ test("follows the create-expo-app alias @/* -> ./* without a diagnostic", () => 
 
 test("unresolved object hrefs and unsupported custom aliases remain explicit diagnostics", () => {
   const result = graph([surface("one"),surface("two")], {
-    "tsconfig.json": JSON.stringify({compilerOptions:{paths:{"~/*":["src/*"]}}}),
+    "tsconfig.json": JSON.stringify({compilerOptions:{paths:{"~/*":["src/*","lib/*"]}}}),
     "src/app/one.tsx": "import {router} from 'expo-router';import {Screen} from '~/screen';export default function One(){router.push({pathname:getPath()});return <Screen/>;}",
   });
   assert.deepEqual(result.edges, []);

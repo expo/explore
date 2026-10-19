@@ -45,6 +45,8 @@ export function discoverReactNavigation(files: Record<string, string>, options: 
       }
     }
   }
+  // TypeScript uses the pattern with the longest prefix and no other, so `@/assets/x` never falls back to `@/*`.
+  aliases.sort((a, b) => b.pattern.split("*")[0]!.length - a.pattern.split("*")[0]!.length);
   const resolveModule = (file: string, specifier: string): string | undefined => {
     const bases: string[] = [];
     if (specifier.startsWith(".")) bases.push(posix.normalize(posix.join(posix.dirname(file), specifier)));
@@ -54,6 +56,7 @@ export function discoverReactNavigation(files: Record<string, string>, options: 
         if (suffix === undefined ? specifier === prefix : specifier.startsWith(prefix!) && specifier.endsWith(suffix)) {
           const replacement = suffix === undefined ? "" : specifier.slice(prefix!.length, specifier.length - suffix.length);
           bases.push(...alias.targets.map((target) => posix.normalize(posix.join(alias.base, target.replace("*", replacement)))));
+          break;
         }
       }
     }
