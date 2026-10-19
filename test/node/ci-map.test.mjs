@@ -3406,10 +3406,12 @@ test('flows mode runs the app\'s e2e files after the routes, hands the device ov
 
 test('a flows worker that cannot start leaves a flows failure in the bundle instead of failing the capture', async t => {
   const f = await fixture(t, { flows: { tests: ['e2e/*.e2e.ts'], only: true }, flowFiles: { 'home.e2e.ts': FLOW_FILE }, environment: { EXPLORE_FLOWS_ENGINE_MODULE: join(tmpdir(), 'missing-engine.mjs') } });
-  await runCiMap(f.options);
+  const lines = [];
+  await runCiMap({ ...f.options, progress: line => lines.push(line) });
   const bundle = JSON.parse(await readFile(join(f.options.outputDirectory, 'bundle.json'), 'utf8'));
   assert.equal(bundle.flows, undefined);
   assert.equal(bundle.flowsFailure.code, 'FLOWS_NOT_RUN');
   assert.match(bundle.flowsFailure.message, /missing-engine/);
+  assert.ok(lines.some(line => /the flows did not run: .*missing-engine/.test(line)), 'the capture log names the reason the flows did not run');
   assert.deepEqual((await readdir(f.options.project)).filter(name => name.startsWith('.expo-explore')), []);
 });
