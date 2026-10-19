@@ -841,6 +841,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       const result = await runFlows({ ...flowRunOptions, outputDirectory: flowsWorkDirectory, timeoutMs: remainingMs });
       flowRecords = result.flows;
       flowsFailure = result.failure;
+      if (result.failure) say(`the flows did not run: ${result.failure.message}`);
       // The other appearances run the flows again; a frame the primary pass took joins its record as `<key>@<scheme>`
       // (the launch convention), so Compare pairs it by appearance. A pass that fails only leaves its frames missing.
       for (const colorScheme of colorSchemes.slice(1)) {
