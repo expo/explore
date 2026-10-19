@@ -3147,6 +3147,25 @@ test("Screens adds the screens a live map gains", async ({ page }) => {
   await expect(page.locator(".screens-page .screens-cell")).toHaveCount(30, { timeout: 7_000 });
 });
 
+test("a local map keeps a screen whose capture gap was accepted on its Map, in Screens and in find", async ({ page }) => {
+  // A public report leaves such a route out (omitted-screens.ts); a local run's screens are all its own.
+  const payload = await liveMapPayload(3, 100);
+  payload.map.gaps.push({ id: "accepted", screenId: "live-screen-2", kind: "coverage", status: "accepted",
+    message: "Redirect declaration; no screenshot selected", createdAt: payload.map.run.createdAt });
+  await serveMap(page, payload);
+  await page.goto("/map");
+  await expect(page.locator(".react-flow__node-screen")).toHaveCount(3);
+  await page.goto("/screens");
+  await expect(page.locator(".screens-page .screens-cell")).toHaveCount(3);
+  await expect(page.locator('.screens-page .screens-tree-row[data-screen-id="live-screen-2"]')).toHaveCount(1);
+  await page.keyboard.press("/");
+  const field = page.getByRole("main", { name: "Screens" }).getByRole("searchbox", { name: "Find screens" });
+  await expect(field).toBeFocused();
+  await field.fill("screen 2");
+  await expect(page.locator(".screens-page .screens-cell")).toHaveCount(1);
+  await expect(page.locator('.screens-page .screens-cell[data-screen-id="live-screen-2"]')).toHaveCount(1);
+});
+
 test("zooms Map inspection up to 25600% without exceeding the ceiling", async ({ page }) => {
   test.setTimeout(30_000);
   await page.goto("/map");

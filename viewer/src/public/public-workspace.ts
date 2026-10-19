@@ -24,7 +24,7 @@ export function reportContractGap(gap: ReviewContractGap): void {
   console.warn(`Explore report: ${where} failed the review contract (${gap.message}); ${gap.dropped} omitted.`);
 }
 import { sourceImpactSentences } from "../../../src/contracts/source-change";
-import { navigationCaptureContext } from "../../../src/contracts/navigation-graph";
+import { captureContext, captureGap, verifiedCapture } from "../../../src/contracts/surface-capture";
 import { projectSourceNavigation } from "../utils/source-navigation";
 
 type Side = "base" | "head";
@@ -87,12 +87,6 @@ function unattributedSummary(surface: Surface, side: Side): string {
   if (outcome?.observed?.reason === "landing-mismatch") return `expected ${expected}, the app showed ${outcome.observed.route ?? "another screen"}`;
   if (outcome?.observed?.reason === "observer-not-ready") return `expected ${expected}, the route observer reported nothing`;
   return "destination unverified";
-}
-
-function verifiedCapture(surface: Surface, side: Side): boolean {
-  const outcome = side === "base" ? surface.baseOutcome : surface.headOutcome;
-  return Boolean(surface[side]?.kind === "screen" && imageFor(surface, side)
-    && outcome?.status === "captured" && outcome.landing === "verified");
 }
 
 function comparisonReview(surface: Surface): Surface["review"] {
@@ -217,10 +211,7 @@ function sidePayload(review: PublicReview, side: Side): { map: ExploreMap; cover
     const id = routeOf(surface.id);
     if (!routes.has(id)) routes.set(id, { ...surface[side]!, id });
   }
-  const selectedRoutes = navigation ? new Set(review.mode === "all" ? [...routes.keys()] : navigationCaptureContext(navigation,
-    inventory.filter(surface => surface.status !== "unchanged").map(surface => routeOf(surface.id)),
-    [...routes.values()])) : undefined;
-  const selected = selectedRoutes ? new Set(inventory.filter(surface => selectedRoutes.has(routeOf(surface.id))).map(surface => surface.id)) : undefined;
+  const selected = captureContext(review, side);
   // Planned structural groups describe the full inventory, including routes outside the
   // capture budget. Keep their placeholders available in every canvas.
   const declared = inventory;
@@ -356,11 +347,11 @@ function sidePayload(review: PublicReview, side: Side): { map: ExploreMap; cover
         screenshotArtifactId: artifact.id,
       });
     }
-    if (!verifiedCapture(surface, side)) {
-      const outcome = side === "base" ? surface.baseOutcome : surface.headOutcome;
+    // The gap's status is the one the PR comment reads too (surface-capture.ts), so both leave out the same routes.
+    const gap = captureGap(review, surface, side, selected);
+    if (gap) {
       const outsideCaptureContext = review.mode === "changes" && selected !== undefined && !selected.has(surface.id);
-      const deliberatelyOmitted = !image && !outcome && (entry.kind === "redirect" || surface.excluded === true || outsideCaptureContext
-        || (!navigation && review.mode === "changes" && surface.status === "unchanged"));
+      const deliberatelyOmitted = gap === "accepted";
       map.gaps.push({
         id: `capture:${side}:${surface.id}`,
         screenId: surface.id,

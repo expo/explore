@@ -8,6 +8,7 @@ import {
 } from "../canvas/stage";
 import type { ProjectionMotionMetadata } from "../canvas/projection-motion";
 import { ScreenScreenshotCard } from "../canvas/screen-screenshot-card";
+import { NoScreens } from "../shared/no-screens";
 import { TransitionEdge, type TransitionGraphEdge } from "../canvas/transition-edge";
 import {
   buildViewerGraph,
@@ -480,7 +481,11 @@ type BaseCanvasProps = {
   onSelectScreen: (id: string, options?: { replace?: boolean }) => void;
   onClearSelection?: () => void;
 };
-export type MapViewProps = BaseCanvasProps & { projectionFitKey?: number };
+export type MapViewProps = BaseCanvasProps & {
+  projectionFitKey?: number;
+  /** The routes a public report never captured: not drawn (omitted-screens.ts). */
+  omittedScreenIds?: ReadonlySet<string> | undefined;
+};
 
 function ConnectionCanvas(props: MapViewProps) {
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -493,7 +498,10 @@ function ConnectionCanvas(props: MapViewProps) {
   });
   const previousLayout = useRef<{ nodes: CanvasGraphNode[]; edges: TransitionGraphEdge[] } | undefined>(undefined);
 
-  const observedGraph = useMemo(() => buildViewerGraph(props.map, props.index), [props.index, props.map]);
+  const observedGraph = useMemo(
+    () => buildViewerGraph(props.map, props.index, props.omittedScreenIds),
+    [props.index, props.map, props.omittedScreenIds],
+  );
   const projection = useMemo(() => projectFullGraph(observedGraph), [observedGraph]);
   const structure = useMemo(
     () => projectedStructure(projection, props.index, isBlackBoxMap(props.map)),
@@ -657,19 +665,7 @@ function ConnectionCanvas(props: MapViewProps) {
     .sort((left, right) => left.depth - right.depth || left.y - right.y || left.x - right.x || left.index - right.index)
     .map(({ id }) => id), [layout.nodes]);
   const phone = usePhoneLayout();
-  if (props.map.screens.length === 0) {
-    const blockers = props.map.gaps.filter((gap) => gap.status === "open" && !gap.screenId).map((gap) => gap.message);
-    return (
-      <div className="graph-canvas canvas-empty">
-        <div className="page-empty compact-empty map-empty">
-          <h2>No screens were recorded</h2>
-          {blockers.length > 0
-            ? blockers.map((message) => <p key={message}>{message}</p>)
-            : <p>The run ended before any screen of the app was observed.</p>}
-        </div>
-      </div>
-    );
-  }
+  if (observedGraph.screens.length === 0) return <NoScreens map={props.map} />;
   return (
     <div ref={surfaceRef} className="connection-canvas-surface map-surface">
       <CanvasStage
