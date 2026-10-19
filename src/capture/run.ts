@@ -202,8 +202,12 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const easEnvironment = { ...restrictedEnvironment, ...(options.expoToken ? { EXPO_TOKEN: options.expoToken } : {}) };
   const assertCheckout = () => {
     const call = (args: string[]) => runner({ command: "git", args, cwd: project, environment: restrictedEnvironment, timeoutMs: 30_000 }).stdout.trim();
-    if (call(["rev-parse", "HEAD"]) !== options.gitCommit || call(["status", "--porcelain", "--untracked-files=normal"])) {
-      throw new CiError({ code: "SOURCE_CHECKOUT_CHANGED", stage: "source", message: "The application checkout differs from its recorded commit.",
+    const head = call(["rev-parse", "HEAD"]);
+    const changes = call(["status", "--porcelain", "--untracked-files=normal"]);
+    if (head !== options.gitCommit || changes) {
+      const detail = head !== options.gitCommit ? `HEAD is ${head.slice(0, 12) || "unreadable"}, the plan recorded ${options.gitCommit.slice(0, 12)}`
+        : `changed: ${changes.split("\n").slice(0, 3).join(", ")}${changes.split("\n").length > 3 ? ", …" : ""}`;
+      throw new CiError({ code: "SOURCE_CHECKOUT_CHANGED", stage: "source", message: `The application checkout differs from its recorded commit (${detail}).`,
         nextAction: "Use a clean checkout at the exact plan commit. Capture output must stay outside the application." });
     }
   };
