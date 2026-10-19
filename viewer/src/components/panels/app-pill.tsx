@@ -118,13 +118,18 @@ function ChipLabel({ text }: { text: string }) {
   );
 }
 
-/** Each item's width with nothing squeezed or left out: what the row would take if it could. */
+/**
+ * Each item's width with nothing squeezed or left out: what the row would take if it could, so its own width plus
+ * whatever its clipped parts hide (a label's text and pose fade behind an overflow).
+ */
 function naturalWidth(item: HTMLElement): number {
-  const text = item.querySelector<HTMLElement>(".collapsed-platform-label-text");
-  if (text) return item.offsetWidth + text.scrollWidth - text.offsetWidth;
-  const range = document.createRange();
-  range.selectNodeContents(item);
-  return Math.max(item.offsetWidth, range.getBoundingClientRect().width);
+  let width = item.offsetWidth;
+  for (const part of [item, ...item.querySelectorAll("*")]) {
+    if (!(part instanceof HTMLElement)) continue;
+    const overflow = getComputedStyle(part).overflowX;
+    if (overflow === "hidden" || overflow === "clip") width += part.scrollWidth - part.offsetWidth;
+  }
+  return width;
 }
 
 type AppPillProps = {
@@ -199,9 +204,11 @@ export function AppPill(props: AppPillProps) {
   const targetLabel = currentTarget?.label ?? PLATFORM_NAMES[platform] ?? platform;
 
   // The phone's header is the window's width. When the row's natural width exceeds its room, it leaves items out in
-  // order: the app's name (its icon still names it), then the pull request link (Search keeps "Open pull request");
-  // only then does the target's label truncate. Measured from natural widths, so the result is a function of the
-  // row's width alone, never of the last result. The desktop's pill is sized by its content, so it leaves nothing out.
+  // order: the app's name (when its icon still names it), then the pull request link (Search keeps "Open pull
+  // request"); only then does the target's label fade: its device first, its pose only once the device is gone, so
+  // the label never runs out of its chip over the next. Measured from natural widths, so the result is a function
+  // of the row's width alone, never of the last result. The desktop's pill is sized by its content, so it leaves
+  // nothing out.
   const appearanceCurrent = props.appearance?.current;
   useLayoutEffect(() => {
     const row = identityRef.current;
@@ -215,7 +222,7 @@ export function AppPill(props: AppPillProps) {
       let deficit = items.reduce((sum, item) => sum + naturalWidth(item), 0) + gap * (items.length - 1) - row.getBoundingClientRect().width;
       const drops: string[] = [];
       const optional: [string, HTMLElement | undefined][] = [
-        ["name", items.find(item => item.tagName === "STRONG")],
+        ["name", appIcon ? items.find(item => item.tagName === "STRONG") : undefined],
         ["pr", items.find(item => item.querySelector(".collapsed-pr"))],
       ];
       for (const [name, item] of optional) {
@@ -223,7 +230,12 @@ export function AppPill(props: AppPillProps) {
         drops.push(name);
         deficit -= naturalWidth(item) + gap;
       }
-      if (deficit > 0.5) drops.push("squeeze");
+      // scrollWidth is an integer: a sub-pixel "squeeze" would fade a label that shows whole.
+      if (deficit > 1) {
+        drops.push("squeeze");
+        const device = row.querySelector<HTMLElement>(".collapsed-target .collapsed-platform-label-text");
+        if (device && deficit > device.scrollWidth) drops.push("pose");
+      }
       setDrop(drops.join(" "));
     };
     fit();
@@ -232,7 +244,7 @@ export function AppPill(props: AppPillProps) {
     for (const node of [row, ...row.children]) observer.observe(node);
     void document.fonts.ready.then(fit);
     return () => observer.disconnect();
-  }, [targetLabel, appearanceCurrent, pullRequest, phone]);
+  }, [targetLabel, appearanceCurrent, pullRequest, phone, appIcon]);
   // Platform-named targets (every report from before targets) switch platforms; named targets switch devices.
   const noun = run.targets.every(target => target.id === target.platform) ? "platform" : "device";
   const siblings = run.targets

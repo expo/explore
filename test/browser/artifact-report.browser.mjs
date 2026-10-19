@@ -648,11 +648,20 @@ test("a switch to a target whose screenshots have another shape lays the map out
 });
 
 test("at a phone's width the header leaves out the app's name, then the pull request link, then fades the target's device; nothing overlaps", { timeout: 60_000 }, async t => {
-  const targets = [{ id: "iphone", platform: "ios", label: "iPhone 17" }, { id: "duo-half", platform: "ios", label: "iPhone 17 Pro Max Duo (half-open)" }];
+  const targets = [{ id: "iphone", platform: "ios", label: "iPhone 17" }, { id: "duo-half", platform: "ios", label: "iPhone 17 Pro Max Duo (half-open, outer)" }];
+  const icon = new PNG({ width: 4, height: 4 });
+  icon.data.fill(180);
+  const iconBytes = PNG.sync.write(icon);
+  const iconSha = createHash("sha256").update(iconBytes).digest("hex");
   const report = reportFixture();
-  report.review.runtime = { ...report.review.runtime, platform: "ios", platforms: ["ios"], target: targets[1], targets };
+  // An icon to name the app once its name is left out; two appearances for the second chip; the longest target.
+  report.review.runtime = {
+    ...report.review.runtime, platform: "ios", platforms: ["ios"], target: targets[1], targets, colorSchemes: ["light", "dark"],
+    appIcon: { url: `https://artifact.expo-explore.invalid/${iconSha}.png`, sha256: iconSha, width: 4, height: 4 },
+  };
+  report.assets.push({ sha256: iconSha, path: `assets/${iconSha}.png` });
   report.review.pullRequest.number = 1234;
-  const { page, errors } = await harness(t, await archive(report), { app: true });
+  const { page, errors } = await harness(t, await archive(report, [{ name: `assets/${iconSha}.png`, bytes: iconBytes }]), { app: true });
   const pill = page.locator(".left-panel-collapsed-pill");
   const name = pill.locator(".collapsed-app-identity > strong");
   const target = pill.locator(".collapsed-target");
@@ -666,7 +675,9 @@ test("at a phone's width the header leaves out the app's name, then the pull req
     const boxes = shown.map(node => node.getBoundingClientRect());
     let overlaps = 0;
     for (const [index, a] of boxes.entries()) for (const b of boxes.slice(index + 1)) if (a.left < b.right - 1 && b.left < a.right - 1) overlaps += 1;
-    return { overlaps, past: Math.max(0, ...boxes.map(box => Math.ceil(box.right - innerWidth))), overflow: document.documentElement.scrollWidth - innerWidth };
+    const chip = element.querySelector(".collapsed-target").getBoundingClientRect();
+    const label = element.querySelector(".collapsed-target .collapsed-platform-label").getBoundingClientRect();
+    return { overlaps, bleed: Math.max(0, Math.ceil(label.right - chip.right)), past: Math.max(0, ...boxes.map(box => Math.ceil(box.right - innerWidth))), overflow: document.documentElement.scrollWidth - innerWidth };
   });
   const clipped = locator => locator.evaluate(node => node.scrollWidth - node.offsetWidth > 1);
   const whole = async () => ({ device: !await clipped(device), pose: !await clipped(pose) });
@@ -677,42 +688,57 @@ test("at a phone's width the header leaves out the app's name, then the pull req
   // A desktop window's pill is sized by its content and shows the whole row.
   await page.setViewportSize({ width: 1180, height: 820 });
   await expect(name).toBeVisible();
-  await expect(target).toHaveText("iPhone 17 Pro Max Duo (half-open)");
+  await expect(target).toHaveText("iPhone 17 Pro Max Duo (half-open, outer)");
   await expect(pr).toHaveText("PR #1234");
   await expect(pr).toBeVisible();
   expect(await whole()).toEqual({ device: true, pose: true });
   expect(await dropped()).toBe("");
-  await expect.poll(layout).toEqual({ overlaps: 0, past: 0, overflow: 0 });
+  await expect.poll(layout).toEqual({ overlaps: 0, bleed: 0, past: 0, overflow: 0 });
 
-  // A large phone has no room for the name beside Search: the row leaves it out (the icon still names the app) and
+  // A small tablet has no room for the name beside Search: the row leaves it out (the icon still names the app) and
   // keeps the whole target and a shorter link.
-  await page.setViewportSize({ width: 430, height: 932 });
+  await page.setViewportSize({ width: 560, height: 932 });
   await expect(name).toBeHidden();
   await expect(pr).toHaveText("#1234");
   await expect(pr).toBeVisible();
-  await expect(target).toHaveText("iPhone 17 Pro Max Duo (half-open)");
+  await expect(target).toHaveText("iPhone 17 Pro Max Duo (half-open, outer)");
   expect(await whole()).toEqual({ device: true, pose: true });
-  await expect.poll(layout).toEqual({ overlaps: 0, past: 0, overflow: 0 });
+  await expect.poll(layout).toEqual({ overlaps: 0, bleed: 0, past: 0, overflow: 0 });
   const search = pill.getByRole("button", { name: "Search", exact: true });
   const finger = await search.boundingBox();
   assert.ok(finger.width >= 44 && finger.height >= 44, `Search is ${finger.width}×${finger.height}`);
 
-  // An iPhone's width leaves out the link too (Search keeps "Open pull request") before it touches the target.
-  await page.setViewportSize({ width: 390, height: 844 });
+  // A large phone's width leaves out the link too (Search keeps "Open pull request") before it touches the target.
+  await page.setViewportSize({ width: 500, height: 844 });
   await expect(pr).toBeHidden();
-  await expect(target).toHaveText("iPhone 17 Pro Max Duo (half-open)");
+  await expect(target).toHaveText("iPhone 17 Pro Max Duo (half-open, outer)");
   expect(await whole()).toEqual({ device: true, pose: true });
-  await expect.poll(layout).toEqual({ overlaps: 0, past: 0, overflow: 0 });
+  await expect.poll(layout).toEqual({ overlaps: 0, bleed: 0, past: 0, overflow: 0 });
+  await page.keyboard.press("ControlOrMeta+KeyK");
+  const palette = page.getByRole("dialog", { name: "Search Explore" });
+  await palette.getByRole("combobox", { name: "Search screens and commands" }).fill("pull request");
+  await expect(palette.getByRole("option", { name: /^Open pull request #1234 on GitHub/ })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(palette).toBeHidden();
 
-  // The narrowest phones fade the device's name; the pose stays whole and nothing overlaps.
-  await page.setViewportSize({ width: 320, height: 568 });
+  // An iPhone's width fades the device's name; the pose stays whole and nothing overlaps.
+  await page.setViewportSize({ width: 390, height: 844 });
   await expect(pill.locator(".collapsed-app-identity")).toHaveAttribute("data-drop", /squeeze/);
+  await expect(pill.locator(".collapsed-app-identity")).not.toHaveAttribute("data-drop", /pose/);
   expect(await whole()).toEqual({ device: false, pose: true });
-  await expect.poll(layout).toEqual({ overlaps: 0, past: 0, overflow: 0 });
+  await expect.poll(layout).toEqual({ overlaps: 0, bleed: 0, past: 0, overflow: 0 });
 
-  // Widened again, the row takes everything back.
+  // Narrower than the pose beside two chips: the pose fades too, inside its chip, never over the appearance chip.
+  await page.setViewportSize({ width: 320, height: 568 });
+  await expect(pill.locator(".collapsed-app-identity")).toHaveAttribute("data-drop", /pose/);
+  await expect(pill.locator(".collapsed-platform").nth(1)).toHaveText("Light");
+  await expect.poll(layout).toEqual({ overlaps: 0, bleed: 0, past: 0, overflow: 0 });
+
+  // Widened again, the row takes everything back: the desktop's pill is sized by its content and leaves nothing out
+  // (its own width rule ellipsizes the name beside so long a target; the fit does not touch it).
   await page.setViewportSize({ width: 1180, height: 820 });
-  await expect(name).toBeVisible();
+  await expect(name).toHaveCSS("visibility", "visible");
+  await expect(name).toHaveCSS("position", "static");
   await expect(pr).toHaveText("PR #1234");
   await expect(pr).toBeVisible();
   expect(await whole()).toEqual({ device: true, pose: true });
