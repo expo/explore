@@ -40,6 +40,8 @@ export type FlowsResult = {
   errors: Array<{ code: string; message: string }>;
   artifactsRoot: string;
   tests: ReturnType<typeof summarizeFlowReport>;
+  /** Per-step frames (`frames: steps`): how many were taken, how many failed and the first failure. */
+  stepFrames?: { taken: number; failed: number; firstError?: string };
 };
 
 /** Hands e2e the device Explore holds instead of leasing one: same daemon, same simulator, another session name. */
@@ -88,11 +90,14 @@ export async function runFlowsWorker(requestPath: string, environment: NodeJS.Pr
   const stepFrames = request.frames === "steps" && !request.engineModule ? stepFrameRecorder(request, token) : undefined;
   try {
     const result = await run({ cwd: request.projectRoot, config, interruptSignal: controller.signal, ...(stepFrames ? { onEvent: stepFrames.onEvent } : {}) });
-    const frames = stepFrames ? await stepFrames.finish() : undefined;
+    const stepResult = stepFrames ? await stepFrames.finish() : undefined;
+    const frames = stepResult?.frames;
     const report = result.report as unknown as { run: { errors?: unknown[] } };
     const output: FlowsResult = { status: result.status, exitCode: result.exitCode,
       errors: (report.run.errors ?? []).flatMap(error => error && typeof error === "object" ? [{ code: String((error as { code?: unknown }).code ?? "ERROR"), message: String((error as { message?: unknown }).message ?? "") }] : []),
-      artifactsRoot: join(request.output, "results"), tests: summarizeFlowReport(result.report, frames) };
+      artifactsRoot: join(request.output, "results"), tests: summarizeFlowReport(result.report, frames),
+      ...(stepResult ? { stepFrames: { taken: [...stepResult.frames.values()].reduce((n, files) => n + files.length, 0), failed: stepResult.failures.length,
+        ...(stepResult.failures[0] ? { firstError: stepResult.failures[0] } : {}) } } : {}) };
     await writeFile(join(request.output, "explore-flows.json"), JSON.stringify(output), { mode: 0o600 });
   } finally { clearTimeout(expiry); }
 }
@@ -101,15 +106,17 @@ export async function runFlowsWorker(requestPath: string, environment: NodeJS.Pr
  * Takes a frame of the flows' session after every step ends, through the same daemon e2e drives it on. e2e does not wait
  * for a reporter, so the frame shows the device as the next step begins; a frame that fails is skipped, not fatal.
  */
-export function stepFrameRecorder(request: FlowsRequest, token: string | undefined): { onEvent: RunEventSink; finish: () => Promise<Map<string, StepFrameFile[]>> } {
+export function stepFrameRecorder(request: FlowsRequest, token: string | undefined): { onEvent: RunEventSink; finish: () => Promise<{ frames: Map<string, StepFrameFile[]>; failures: string[] }> } {
   const root = join(request.output, "results");
   const directory = join(root, "explore-step-frames");
+  // @e2e-dev/mobile drives the device as `<session>-<slot>` and Explore runs one worker, so the flows' session is `<session>-0`.
   const client = createAgentDeviceClient({
-    session: request.session,
+    session: `${request.session}-0`,
     ...(request.daemon ? { daemonBaseUrl: request.daemon.baseUrl, daemonAuthToken: token } : { stateDir: request.stateDir, daemonBaseUrl: "", daemonAuthToken: "", daemonTransport: "auto" }),
   } as Parameters<typeof createAgentDeviceClient>[0]);
   const frames = new Map<string, StepFrameFile[]>();
   const pending: Promise<void>[] = [];
+  const failures: string[] = [];
   let ready: Promise<void> | undefined;
   return {
     onEvent(event) {
@@ -122,8 +129,11 @@ export function stepFrameRecorder(request: FlowsRequest, token: string | undefin
       pending.push(ready
         .then(() => client.capture.screenshot({ path: file }))
         .then(() => { (frames.get(testId) ?? frames.set(testId, []).get(testId)!).push({ stepIndex, path: relative(root, file), capturedAt: new Date().toISOString() }); })
-        .catch(error => { process.stderr.write(`explore: step frame ${stepIndex + 1} of ${testId} was not taken: ${(error as Error).message}\n`); }));
+        .catch(error => {
+          const message = `step frame ${stepIndex + 1} of ${testId} was not taken: ${(error as Error).message}`;
+          failures.push(message); process.stderr.write(`explore: ${message}\n`);
+        }));
     },
-    async finish() { await Promise.all(pending); return frames; },
+    async finish() { await Promise.all(pending); return { frames, failures }; },
   };
 }

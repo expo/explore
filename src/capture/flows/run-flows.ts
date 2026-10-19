@@ -127,6 +127,10 @@ async function executeFlows(options: RunFlowsOptions, work: string, output: stri
     const taken = Object.keys(frames).length;
     say(`flow ${test.title}: ${test.status}${taken ? `, ${taken} ${taken === 1 ? "frame" : "frames"}` : ""}${test.error ? ` (${test.error.code}: ${test.error.message.split("\n")[0]})` : ""}`);
   }
+  if (summary.stepFrames) {
+    const { taken, failed, firstError } = summary.stepFrames;
+    say(`${taken} step ${taken === 1 ? "frame" : "frames"} taken${failed ? `, ${failed} not taken (${firstError})` : ""}`);
+  }
   const failure = summary.errors[0];
   return { flows, ...(failure && !summary.tests.length ? { failure: { code: failure.code, message: failure.message } } : {}) };
 }
