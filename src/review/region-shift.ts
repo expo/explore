@@ -4,7 +4,7 @@ import type { DecodedFrame } from "../shared/png-evidence.js";
 
 /** How far a region's content moved from Before to After, in screenshot pixels (right and down are positive). */
 export type RegionShift = { x: number; y: number };
-type Rect = { x: number; y: number; width: number; height: number };
+export type Rect = { x: number; y: number; width: number; height: number };
 
 /**
  * The farthest a region is searched for, in screenshot pixels: layout drift, not a different screen. Drift adds up
@@ -63,16 +63,38 @@ function at(source: Image, x: number, y: number, channel?: number): number {
   return value(x0, y0) * (1 - fx) * (1 - fy) + value(x1, y0) * fx * (1 - fy) + value(x0, y1) * (1 - fx) * fy + value(x1, y1) * fx * fy;
 }
 
-/** How badly After's region matches Before shifted by (sx, sy). A whole-pixel shift reads Before's pixels directly. */
-function mismatch(base: Image, head: Image, rect: Rect, sx: number, sy: number): number {
+/**
+ * How badly After's region matches Before shifted by (sx, sy): the summed luminance difference, row by row. A sum
+ * that passes `limit` stops early and returns a value above it: such a fit is neither the best, nor a tie, nor an
+ * ambiguity, so its exact error is never read. Whole-pixel shifts read the pixel directly (the bilinear weights are
+ * exactly 1 and 0 there); fractional ones interpolate like `at`.
+ */
+function mismatch(base: Image, head: Image, rect: Rect, sx: number, sy: number, limit = Infinity): number {
+  const { width, height, luminance } = base;
+  const maxX = width - 1, maxY = height - 1;
+  const headLuminance = head.luminance, headWidth = head.width;
   const whole = Number.isInteger(sx) && Number.isInteger(sy);
   let error = 0;
   for (let y = rect.y; y < rect.y + rect.height; y += 1) {
-    const by = Math.min(base.height - 1, Math.max(0, y - sy));
-    for (let x = rect.x; x < rect.x + rect.width; x += 1) {
-      const before = whole ? base.luminance[by * base.width + Math.min(base.width - 1, Math.max(0, x - sx))]! : at(base, x - sx, y - sy);
-      error += Math.abs(before - head.luminance[y * head.width + x]!);
+    const headRow = y * headWidth;
+    if (whole) {
+      const row = Math.min(maxY, Math.max(0, y - sy)) * width;
+      for (let x = rect.x; x < rect.x + rect.width; x += 1) {
+        error += Math.abs(luminance[row + Math.min(maxX, Math.max(0, x - sx))]! - headLuminance[headRow + x]!);
+      }
+    } else {
+      const cy = Math.min(maxY, Math.max(0, y - sy));
+      const y0 = Math.floor(cy), y1 = Math.min(maxY, y0 + 1), fy = cy - y0;
+      const row0 = y0 * width, row1 = y1 * width;
+      for (let x = rect.x; x < rect.x + rect.width; x += 1) {
+        const cx = Math.min(maxX, Math.max(0, x - sx));
+        const x0 = Math.floor(cx), x1 = Math.min(maxX, x0 + 1), fx = cx - x0;
+        const sample = luminance[row0 + x0]! * (1 - fx) * (1 - fy) + luminance[row0 + x1]! * fx * (1 - fy)
+          + luminance[row1 + x0]! * (1 - fx) * fy + luminance[row1 + x1]! * fx * fy;
+        error += Math.abs(sample - headLuminance[headRow + x]!);
+      }
     }
+    if (error > limit) return error;
   }
   return error;
 }
@@ -113,18 +135,29 @@ function regionShift(base: Image, head: Image, region: Rect): RegionShift | unde
   const unshifted = mismatch(base, head, rect, 0, 0);
   if (unshifted === 0) return undefined;
   // Whole pixels first, every pixel counting: sampling every other row aliases on thin shapes (text, hairlines).
+  // A fit worse than the best so far by more than the ambiguity margin cannot become the best, tie with it, or make
+  // it ambiguous; its measurement stops as soon as that is known. The margin is taken from the worst fit the tie
+  // could choose, since a tie goes to the smallest move, not the least error.
   const whole: Fit[] = [];
+  let least = unshifted;
   for (let sy = -MAX_SHIFT_Y; sy <= MAX_SHIFT_Y; sy += 1) {
-    for (let sx = -MAX_SHIFT_X; sx <= MAX_SHIFT_X; sx += 1) whole.push({ sx, sy, error: mismatch(base, head, rect, sx, sy) });
+    for (let sx = -MAX_SHIFT_X; sx <= MAX_SHIFT_X; sx += 1) {
+      const error = sx === 0 && sy === 0 ? unshifted : mismatch(base, head, rect, sx, sy, (least * TIE + 1e-6) * AMBIGUOUS + 1e-6);
+      least = Math.min(least, error);
+      whole.push({ sx, sy, error });
+    }
   }
   const coarse = bestOf(whole);
   if (whole.some(fit => Math.abs(fit.sy - coarse.sy) >= 2 && fit.error <= coarse.error * AMBIGUOUS + 1e-6)) return undefined;
   // Then sixths of a pixel around it, from whole-number steps so a move up and a move down round alike.
   const fine: Fit[] = [];
+  least = coarse.error;
   for (let iy = -STEPS_PER_PIXEL; iy <= STEPS_PER_PIXEL; iy += 1) {
     for (let ix = -STEPS_PER_PIXEL; ix <= STEPS_PER_PIXEL; ix += 1) {
       const sx = coarse.sx + ix / STEPS_PER_PIXEL, sy = coarse.sy + iy / STEPS_PER_PIXEL;
-      fine.push({ sx, sy, error: ix === 0 && iy === 0 ? coarse.error : mismatch(base, head, rect, sx, sy) });
+      const error = ix === 0 && iy === 0 ? coarse.error : mismatch(base, head, rect, sx, sy, least * TIE + 1e-6);
+      least = Math.min(least, error);
+      fine.push({ sx, sy, error });
     }
   }
   const best = bestOf(fine);

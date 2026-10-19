@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
@@ -133,30 +133,34 @@ export async function diffScreenshots(options: {
     || !isAbsolute(options.command)
     || /[\u0000-\u001f\u007f]/.test(options.command)
   ) throw new Error("agent-device command must be an absolute path");
-  const result = spawnSync(
-    options.command,
-    [
-      "--json",
-      "diff",
-      "screenshot",
-      "--baseline",
-      baselinePath,
-      currentPath,
-      "--threshold",
-      String(threshold),
-    ],
-    {
-      encoding: "utf8",
-      shell: false,
-      timeout: options.timeoutMs ?? 60_000,
-      env: {
-        PATH: process.env.PATH,
+  const result = await new Promise<{ error: (Error & { code?: unknown }) | null; stdout: string; stderr: string }>(resolve => {
+    execFile(
+      options.command,
+      [
+        "--json",
+        "diff",
+        "screenshot",
+        "--baseline",
+        baselinePath,
+        currentPath,
+        "--threshold",
+        String(threshold),
+      ],
+      {
+        encoding: "utf8",
+        shell: false,
+        timeout: options.timeoutMs ?? 60_000,
+        env: {
+          PATH: process.env.PATH,
+        },
+        maxBuffer: 4 * 1024 * 1024,
       },
-      maxBuffer: 4 * 1024 * 1024,
-    },
-  );
-  if (result.error) throw new Error(`Could not run screenshot diff: ${result.error.message}`);
-  if (result.status !== 0) {
+      (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+    );
+  });
+  // execFile reports a non-zero exit as an error carrying the exit status; a spawn failure or timeout carries none.
+  if (result.error && typeof result.error.code !== "number") throw new Error(`Could not run screenshot diff: ${result.error.message}`);
+  if (result.error) {
     const detail = (result.stderr || result.stdout || "unknown error").trim().slice(0, 500);
     throw new Error(`Screenshot diff failed: ${detail}`);
   }

@@ -24,6 +24,7 @@ import { silentProgress, type Progress } from "../shared/progress.js";
 import { assertCaptureEasProfile, assertSimulatorAvailable, fingerprintFrom, hasEasEnvironmentFetchFailure, nativeBuildFrom, existingBuild, repackProfileFrom, prepareExactSourceBuild, type RepackMode } from "./eas-build.js";
 import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, endedOwnSimulatorSession, liveSimulatorSessionsNamed, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, controllerVersion, simulatorOsVersion, type ActiveSimulatorRuntime, type SimulatorConnection } from "./simulator.js";
 import { argentControllerInvocation } from "./controller-invocation.js";
+import { startArgentBridgeRunner, type ArgentBridgeRunner } from "./argent-bridge-host.js";
 import { sharedBuild } from "./shared-build.js";
 import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, agentDeviceClaims, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
   deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, approveLinkScheme, localPoseShown,
@@ -218,7 +219,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   });
   const routes = inventory.filter(route => selected.has(route.id));
   const setup = revisionSetup(options.setup ?? [], plan, side);
-  const runner = options.runner ?? defaultRunner;
+  let runner = options.runner ?? defaultRunner;
   const sourceEnvironment = options.environment ?? process.env;
   const controller = options.controller ?? "agent-device";
   const local = options.simulator === "local";
@@ -481,6 +482,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   let localOsVersion: string | undefined;
   // Argent's tool-server on this machine, when Argent drives a local device.
   let localArgent: LocalArgentServer | undefined;
+  let argentBridge: ArgentBridgeRunner | undefined;
   const localDevice = () => localSimulator ?? localEmulator;
   // A local device starts booting now and finishes while the app is built and repacked; the session waits for it.
   let localEmulatorStart: Awaited<ReturnType<typeof startLocalEmulator>> | undefined;
@@ -756,6 +758,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       AGENT_DEVICE_SESSION: CONTROLLER_SESSION, AGENT_DEVICE_SESSION_LOCK: "reject", AGENT_DEVICE_PLATFORM: options.platform };
     // Every controller call below goes to the session's controller; for Argent that is the bridge.
     const controllerCommand = argent?.command ?? options.agentDeviceCommand;
+    // The capture's commands keep one bridge on a worker thread (EXPLORE_ARGENT_BRIDGE=process: one process per command, as before).
+    if (argent && !options.runner && sourceEnvironment.EXPLORE_ARGENT_BRIDGE !== "process") {
+      argentBridge = startArgentBridgeRunner({ command: argent.command, environment: argent.environment, fallback: defaultRunner, progress: say });
+      runner = argentBridge.runner;
+    }
     if (!local && localApp) {
       // The session started empty while the app was repacked; the controller installs it now.
       say(`installing the app on session ${sessionId}`);
@@ -944,7 +951,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         ...deviceArgs(runtime), "--platform", options.platform, "--level", "full", "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
       runtime.colorScheme = colorScheme;
       if (colorSchemes.length > 1) say(`appearance ${colorScheme} (${index + 1}/${colorSchemes.length})`);
-      passes.push(await capturePlannedRoutes({ capture: { ...options, agentDeviceCommand: controllerCommand, setup, progress: say }, routes: missingRoutes, inventory, scheme, appName: app.name, runtime,
+      passes.push(await capturePlannedRoutes({ capture: { ...options, ...(argentBridge && !options.agent ? { runner: argentBridge.runner } : {}), agentDeviceCommand: controllerCommand, setup, progress: say }, routes: missingRoutes, inventory, scheme, appName: app.name, runtime,
         connection, environment: controllerEnvironment, store, map, acceptedFrames, outcomes: index === 0 ? outcomes : {},
         ...(colorSchemes.length > 1 ? { appearance: { scheme: colorScheme, primary: index === 0 } } : {}) }));
     }
@@ -954,6 +961,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     nextAction: "Inspect the capture diagnostic, correct the failing prerequisite, and rerun Explore." }); }
   finally {
     if (appDirectory) await rm(appDirectory, { recursive: true, force: true });
+    argentBridge?.close();
     if (localArgent) stopLocalArgentServer(localArgent);
     if (localEmulator) {
       try {
