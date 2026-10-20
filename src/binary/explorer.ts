@@ -27,7 +27,7 @@ export type BlackBoxAction = CaptureSetupAction | { action: "back" } | { action:
   | { action: "tap"; frameId: string; x: number; y: number };
 
 export type BlackBoxExplorerOptions = {
-  session: CiAgentSession;
+  session: Pick<CiAgentSession, "run">;
   store: ExploreStore;
   map: ExploreMap;
   app: { name: string; bundleId: string; platform: "ios" | "android"; version?: string };
@@ -49,6 +49,8 @@ export type BlackBoxExplorerOptions = {
   appIcon?: Buffer;
   /** App-test inputs the operator hints reference as {{secret:NAME}}: the model and the map only ever hold the reference. */
   inputs?: ReturnType<typeof createExplorationInputs>;
+  /** A sentence a budget stop's gap adds to its own, read once the session has stopped: a replay names the planned screens it did not reach. */
+  budgetNote?: () => string | undefined;
 };
 
 export type BlackBoxExplorerResult = {
@@ -67,6 +69,12 @@ const EXTERNAL = /\b(open in|safari|chrome|browser|app store|play store|share|ma
 const VOLATILE = /\d|[:%$€£]|\b(am|pm)\b/gi;
 const INTERACTIVE = new Set(["button", "link", "cell", "switch", "tab", "menuitem", "textfield", "securetextfield", "searchfield", "textview", "edittext", "slider", "checkbox", "radiobutton", "segmentedcontrol", "toggle"]);
 
+/** What the tools accept: their schemas, the checks on each call, and a replay plan checked before any device starts share these. */
+export const TOOL_LIMITS = { selector: 512, text: 2000, url: 2000, waitMs: 15_000, title: 80, state: 80, description: 500, summary: 4000, reason: 1000 } as const;
+
+/** A screen seen after an action but never named keeps this title until the run ends and names it after the path to it. */
+export const isPlaceholderTitle = (title: string): boolean => /^Screen \d+$/.test(title);
+
 const selectorProperties = {
   label: { type: "string", description: "Exact visible label of the target node, copied from the latest observation." },
   identifier: { type: "string", description: "Exact accessibility identifier of the target node, when it has one." },
@@ -81,22 +89,22 @@ const tools: CiAgentTool[] = [
     inputSchema: { type: "object", properties: {
       action: { type: "string", enum: ["tap", "fill", "type", "scroll", "wait", "back", "dismiss-keyboard", "open"] },
       ...selectorProperties,
-      text: { type: "string", maxLength: 2000 }, url: { type: "string", maxLength: 2000 },
+      text: { type: "string", maxLength: TOOL_LIMITS.text }, url: { type: "string", maxLength: TOOL_LIMITS.url },
       direction: { type: "string", enum: ["up", "down", "left", "right", "top", "bottom"] },
-      milliseconds: { type: "integer", minimum: 1, maximum: 15_000 },
+      milliseconds: { type: "integer", minimum: 1, maximum: TOOL_LIMITS.waitMs },
       frameId: { type: "string", description: "For a coordinate tap only: the latest observed frame." },
       x: { type: "number", minimum: 0, exclusiveMaximum: 1 }, y: { type: "number", minimum: 0, exclusiveMaximum: 1 },
       target: { type: "string", minLength: 1, maxLength: 80, description: "For a coordinate tap: what is being tapped, as a user would name it (\"search icon in the header\", \"first manga cover\")." },
     }, required: ["action"], additionalProperties: false } },
   { name: "capture", description: "Name the latest observed frame (observe with includeImage) as a screen of the map, with a short human title. A screen is photographed the moment it first appears; capture gives it its title, and with state records another notable state of it.",
     inputSchema: { type: "object", properties: {
-      frameId: { type: "string" }, title: { type: "string", minLength: 1, maxLength: 80 },
-      description: { type: "string", maxLength: 500 }, state: { type: "string", maxLength: 80, description: "A variant of an already captured screen, such as 'empty' or 'menu open'." },
+      frameId: { type: "string" }, title: { type: "string", minLength: 1, maxLength: TOOL_LIMITS.title },
+      description: { type: "string", maxLength: TOOL_LIMITS.description }, state: { type: "string", maxLength: TOOL_LIMITS.state, description: "A variant of an already captured screen, such as 'empty' or 'menu open'." },
     }, required: ["frameId", "title"], additionalProperties: false } },
   { name: "finish", description: "End the exploration when every reachable screen has been captured or the budget is nearly used. Include a summary of what the app does and what was not reached.",
-    inputSchema: { type: "object", properties: { summary: { type: "string", minLength: 1, maxLength: 4000 } }, required: ["summary"], additionalProperties: false } },
+    inputSchema: { type: "object", properties: { summary: { type: "string", minLength: 1, maxLength: TOOL_LIMITS.summary } }, required: ["summary"], additionalProperties: false } },
   { name: "stop_blocked", description: "Stop because the app cannot be explored further (login wall without credentials, crash loop, permission prompt that cannot be dismissed). Keeps the evidence so far.",
-    inputSchema: { type: "object", properties: { reason: { type: "string", minLength: 1, maxLength: 1000 } }, required: ["reason"], additionalProperties: false } },
+    inputSchema: { type: "object", properties: { reason: { type: "string", minLength: 1, maxLength: TOOL_LIMITS.reason } }, required: ["reason"], additionalProperties: false } },
 ];
 
 const INSTRUCTIONS = `You are exploring a prebuilt mobile app on a remote simulator through accessibility and screenshots. Nobody gave you its source. Your job is to produce a map of its screens: visit every reachable screen, capture each one once with a clear title, and try each distinct kind of control so transitions are recorded.
@@ -412,7 +420,7 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
   }
 
   /** Seen after an action but never named by the model (its screenshot was taken on arrival). */
-  const isPlaceholder = (screen: Screen): boolean => /^Screen \d+$/.test(screen.title);
+  const isPlaceholder = (screen: Screen): boolean => isPlaceholderTitle(screen.title);
   /** Fold an uncaptured placeholder into the screen the model says it is. */
   const mergeScreens = (from: Screen, into: Screen): void => {
     for (const item of map.actionAttempts) {
@@ -491,7 +499,7 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
       screen = { id: `scr_${key.slice(0, 16)}`, title: title ?? systemDialogTitle(frame.nodes) ?? `Screen ${map.screens.length + 1}`, start: map.screens.length === 0, terminal: false,
         depth, firstSeenAt: frame.capturedAt, lastSeenAt: frame.capturedAt, visits: 0, variantIds: [], observationIds: [], elementIds: [] };
       map.screens.push(screen); screensByKey.set(key, screen);
-    } else if (title && /^Screen \d+$/.test(screen.title)) screen.title = title;
+    } else if (title && isPlaceholderTitle(screen.title)) screen.title = title;
     screen.visits += 1; screen.lastSeenAt = frame.capturedAt;
     const seen = evidence.get(screen.id) ?? { parts: new Set<string>(), loadingOnly: true };
     for (const part of loose) seen.parts.add(part);
@@ -625,7 +633,7 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
 
   const actionFor = (input: Record<string, unknown>): { action: BlackBoxAction; kind: ActionKind; label: string; risk: ActionRisk } => {
     const action = String(input.action);
-    const selector = input.identifier !== undefined ? { identifier: text(input.identifier, "identifier", 512) } : input.label !== undefined ? { label: text(input.label, "label", 512) } : undefined;
+    const selector = input.identifier !== undefined ? { identifier: text(input.identifier, "identifier", TOOL_LIMITS.selector) } : input.label !== undefined ? { label: text(input.label, "label", TOOL_LIMITS.selector) } : undefined;
     const label = selector ? ("identifier" in selector ? selector.identifier : selector.label) : action;
     const risk = selector ? riskOf(label, allow) : "safe";
     switch (action) {
@@ -637,13 +645,13 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
         }
         if (!selector) throw failure("AGENT_ACTION_INVALID", "tap needs a label, an identifier, or frame coordinates.");
         return { action: { action: "tap", ...selector } as BlackBoxAction, kind: "press", label, risk };
-      case "fill": if (!selector) throw failure("AGENT_ACTION_INVALID", "fill needs a label or identifier."); return { action: { action: "fill", text: text(input.text, "text", 2000), ...selector } as BlackBoxAction, kind: "fill", label, risk };
-      case "type": return { action: { action: "type", text: text(input.text, "text", 2000) }, kind: "fill", label: "type", risk: "safe" };
+      case "fill": if (!selector) throw failure("AGENT_ACTION_INVALID", "fill needs a label or identifier."); return { action: { action: "fill", text: text(input.text, "text", TOOL_LIMITS.text), ...selector } as BlackBoxAction, kind: "fill", label, risk };
+      case "type": return { action: { action: "type", text: text(input.text, "text", TOOL_LIMITS.text) }, kind: "fill", label: "type", risk: "safe" };
       case "scroll": return { action: { action: "scroll", direction: input.direction as "up" }, kind: "swipe", label: `scroll ${String(input.direction)}`, risk: "safe" };
       case "wait": return { action: { action: "wait", milliseconds: Number(input.milliseconds) || 1000 }, kind: "other", label: "wait", risk: "safe" };
       case "back": return { action: { action: "back" }, kind: "back", label: "back", risk: "safe" };
       case "dismiss-keyboard": return { action: { action: "dismiss-keyboard" }, kind: "dismiss", label: "dismiss keyboard", risk: "safe" };
-      case "open": return { action: { action: "open", url: text(input.url, "url", 2000) }, kind: "deep-link", label: text(input.url, "url", 2000), risk: "unknown" };
+      case "open": return { action: { action: "open", url: text(input.url, "url", TOOL_LIMITS.url) }, kind: "deep-link", label: text(input.url, "url", TOOL_LIMITS.url), risk: "unknown" };
       default: throw failure("AGENT_ACTION_INVALID", `Unknown action ${action}.`);
     }
   };
@@ -749,10 +757,10 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
               const frameId = text(input.frameId, "frameId", 256);
               if (!latest?.png && latest?.imageUnavailable?.code === "CAPTURE_SENSITIVE_INPUT") throw failure("CAPTURE_SENSITIVE_INPUT", latest.imageUnavailable.message, true);
               if (!latest?.png || latest.frameId !== frameId) throw failure("AGENT_FRAME_STALE", "Observe with an image first; capture must name the latest frame.", true);
-              const title = text(input.title, "title", 80).trim();
+              const title = text(input.title, "title", TOOL_LIMITS.title).trim();
               if (captures >= options.maxScreens) { stop("budget-screens"); abort.abort(failure("EXPLORATION_BUDGET_EXHAUSTED", "Screen budget exhausted.")); throw abort.signal.reason; }
               const { screen } = locate(latest, title);
-              const state = str(input.state, 80);
+              const state = str(input.state, TOOL_LIMITS.state);
               if (!state && map.observations.some(item => item.screenId === screen.id && item.screenshotArtifactId)) {
                 if (title) screen.title = title;
                 return toolResult({ ok: true, duplicate: true, screenId: screen.id, title: screen.title, message: "This screen is already captured (its title is updated); pass state to record a variant." });
@@ -832,9 +840,9 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
               await persist();
               return toolResult({ ok: !error, outcome, ...(error ? { error } : {}), ...view, ...progress().budget });
             }
-            if (name === "finish") { stop("finished", text(input.summary, "summary", 4000)); abort.abort(new Error("finished")); return toolResult({ ok: true }); }
+            if (name === "finish") { stop("finished", text(input.summary, "summary", TOOL_LIMITS.summary)); abort.abort(new Error("finished")); return toolResult({ ok: true }); }
             if (name === "stop_blocked") {
-              const reason = text(input.reason, "reason", 1000);
+              const reason = text(input.reason, "reason", TOOL_LIMITS.reason);
               map.gaps.push({ id: `gap_${randomUUID().slice(0, 8)}`, kind: "coverage", status: "open", message: reason, ...(currentScreenId ? { screenId: currentScreenId } : {}), createdAt: timestamp() });
               await persist();
               stop("blocked", reason); abort.abort(new Error("blocked")); return toolResult({ ok: true });
@@ -856,8 +864,9 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
     if (!result) stop(budget ? "budget-time" : "model-error", undefined, budget ? undefined : fatal ?? error);
   }
   if (result!.stopReason !== "finished" && result!.stopReason !== "blocked") {
+    const note = result!.stopReason === "model-error" ? undefined : options.budgetNote?.();
     map.gaps.push({ id: `gap_${randomUUID().slice(0, 8)}`, kind: result!.stopReason === "model-error" ? "other" : "coverage", status: "open",
-      message: result!.stopReason === "model-error" ? `The exploration stopped on an error: ${result!.error instanceof Error ? result!.error.message.slice(0, 300) : "unknown"}` : `The exploration stopped at its ${result!.stopReason.replace("budget-", "")} budget with ${map.frontier.filter(item => item.status === "pending").length} controls unexplored.`,
+      message: result!.stopReason === "model-error" ? `The exploration stopped on an error: ${result!.error instanceof Error ? result!.error.message.slice(0, 300) : "unknown"}` : `The exploration stopped at its ${result!.stopReason.replace("budget-", "")} budget with ${map.frontier.filter(item => item.status === "pending").length} controls unexplored.${note ? ` ${note}` : ""}`,
       createdAt: timestamp() });
   }
   for (const item of map.frontier) if (item.status === "claimed") item.status = "pending";
@@ -870,10 +879,10 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
 function nameUncapturedScreens(map: ExploreMap): void {
   const titles = new Map(map.screens.map(screen => [screen.id, screen.title]));
   for (const screen of map.screens) {
-    if (!/^Screen \d+$/.test(screen.title)) continue;
+    if (!isPlaceholderTitle(screen.title)) continue;
     const arrival = map.actionAttempts.find(attempt => attempt.targetScreenId === screen.id && attempt.outcome === "transition" && attempt.sourceScreenId !== screen.id);
     const from = arrival ? titles.get(arrival.sourceScreenId) : undefined;
-    if (!arrival || !from || /^Screen \d+$/.test(from)) continue;
+    if (!arrival || !from || isPlaceholderTitle(from)) continue;
     const step = arrival.action.input ? "typing" : arrival.action.label;
     screen.title = `${from} → ${step}`.slice(0, 80);
     titles.set(screen.id, screen.title);

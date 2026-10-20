@@ -7,6 +7,7 @@ import { assertHostingExport, deployExplorationReport, zipReportDirectory } from
 import { keepReports } from "./report-commands.js";
 import { warnIgnoredExpiry } from "../config/explore-config.js";
 import { argumentError, flag, flags, has, nonNegativeInteger, oneOf, output, positional, positiveInteger } from "./args.js";
+import { readReplayPlan } from "../binary/replay.js";
 
 
 /** `--alias NAME` plus a fixed token from EXPLORE_PREVIEW_TOKEN: the hosted link stays the same from one run to the next (validated by the deploy). */
@@ -49,6 +50,7 @@ export async function exploreBinary(): Promise<void> {
     ...(flag("max-duration-minutes") ? { maxDurationMinutes: positiveInteger("max-duration-minutes") } : {}),
     ...(flag("max-screens") ? { maxScreens: positiveInteger("max-screens") } : {}),
     ...(flag("max-actions") ? { maxActions: positiveInteger("max-actions") } : {}),
+    ...(flag("replay") ? { replay: await readReplayPlan(resolve(process.cwd(), flag("replay")!)) } : {}),
   });
   say(`exploration ${result.exploration.stopReason}: ${result.exploration.screens} screens, ${result.exploration.observations} captures, ${result.exploration.actions} actions`);
   const report = await writeExplorationReport(result, join(outputDirectory, "report"));
@@ -113,6 +115,7 @@ export async function exploreSession(): Promise<void> {
     ...(flag("max-duration-minutes") ? { maxDurationMinutes: positiveInteger("max-duration-minutes") } : {}),
     ...(flag("max-screens") ? { maxScreens: positiveInteger("max-screens") } : {}),
     ...(flag("max-actions") ? { maxActions: positiveInteger("max-actions") } : {}),
+    ...(flag("replay") ? { replay: await readReplayPlan(resolve(process.cwd(), flag("replay")!)) } : {}),
   });
   say(`exploration ${result.exploration.stopReason}: ${result.exploration.screens} screens, ${result.exploration.observations} captures, ${result.exploration.actions} actions`);
   const report = await writeExplorationReport(result, join(outputDirectory, "report"));

@@ -881,3 +881,201 @@ test("when nothing passes preflight, the first failure is reported", async () =>
   const createSession = (config, { auth }) => ({ async preflight() { throw new Error(`${config.provider} ${auth} refused`); } });
   await assert.rejects(preflightModelSession({ createSession }, {}, () => {}), /anthropic local-login refused/);
 });
+
+const { assertReplayFits, createReplaySession, parseReplayPlan, replaySetup } = await tsImport("../../src/binary/replay.ts", import.meta.url);
+
+function replayDevice(screens = SCREENS) {
+  let screen = "home", frames = 0;
+  const acted = [];
+  return { acted, options: {
+    observe: async includeImage => ({ nodes: screens[screen], capturedAt: new Date().toISOString(),
+      ...(includeImage ? { frameId: `replay-${++frames}`, png: PNG, imageSha256: `${frames}`.padStart(64, "b") } : {}) }),
+    act: async action => {
+      acted.push(action);
+      if (action.label === "Missing" || action.label === "Nowhere") throw new Error(`No element labelled ${action.label}`);
+      if (action.action === "tap" && action.label === "Settings") screen = "settings";
+      if (action.action === "tap" && action.label === "Dark mode" && screens.settingsDark) screen = "settingsDark";
+      if (action.action === "back") screen = "home";
+    },
+  } };
+}
+
+test("a replay plan takes the same steps on each run: platform-only steps are skipped, optional failures are passed over and listed", async () => {
+  const plan = parseReplayPlan({ steps: [
+    { capture: "Home" },
+    { action: "tap", label: "Missing", optional: true },
+    { action: "tap", label: "Android only", platforms: ["android"] },
+    { action: "tap", label: "Settings" }, { capture: "Settings" },
+    { action: "tap", label: "Dark mode" }, { capture: "Settings", state: "dark" },
+    { action: "back" },
+  ] });
+  const device = replayDevice();
+  const { result, map } = await harness([], { session: createReplaySession(plan, "ios"), ...device.options });
+  assert.equal(result.stopReason, "finished");
+  assert.match(result.summary, /Every planned screen was captured\. Optional steps skipped because they failed: step 2 \(tap "Missing"\)\.$/);
+  assert.deepEqual(map.screens.map(screen => screen.title), ["Home", "Settings"]);
+  assert.ok(!device.acted.some(action => action.label === "Android only"));
+  assert.ok(map.variants.some(variant => variant.name === "dark"), "the dark state is recorded as a variant");
+});
+
+test("a failed replay step stops the run, keeps what was captured, and names the screens it did not reach", async () => {
+  const plan = parseReplayPlan({ steps: [
+    { capture: "Home" }, { action: "tap", label: "Settings" }, { capture: "Settings" }, { action: "back" },
+    { action: "tap", label: "Nowhere" }, { capture: "Never" }, { capture: "Android screen", platforms: ["android"] },
+  ] });
+  const device = replayDevice();
+  const { result, map } = await harness([], { session: createReplaySession(plan, "ios"), ...device.options });
+  assert.equal(result.stopReason, "blocked");
+  assert.deepEqual(map.screens.map(screen => screen.title), ["Home", "Settings"]);
+  assert.match(result.summary, /Replay step 5 \(tap "Nowhere"\) failed: .*No element labelled Nowhere.*Not captured: Never$/);
+});
+
+test("a blocked step names the screens still ahead before earlier misses, within stop_blocked's limit", async () => {
+  const plan = parseReplayPlan({ steps: [
+    { capture: "Home" },
+    ...Array.from({ length: 20 }, (_, index) => ({ capture: `Earlier miss ${index} ${"x".repeat(60)}` })),
+    { action: "tap", label: "Nowhere" },
+    { capture: "Ahead" },
+  ] });
+  const device = replayDevice();
+  const { result } = await harness([], { session: createReplaySession(plan, "ios"), ...device.options, maxTurns: 100 });
+  assert.equal(result.stopReason, "blocked");
+  assert.ok(result.summary.length <= 1000, `${result.summary.length} characters`);
+  assert.match(result.summary, /Not captured: Ahead, Earlier miss 0 .* and \d+ more$/);
+});
+
+test("a destructive or app-leaving tap in a replay plan is refused, as a model's would be", async () => {
+  const plan = parseReplayPlan({ steps: [
+    { capture: "Home" }, { action: "tap", label: "Share", optional: true }, { action: "tap", label: "Delete account" }, { capture: "Gone" },
+  ] });
+  const device = replayDevice();
+  const { result, map } = await harness([], { session: createReplaySession(plan, "ios"), ...device.options });
+  assert.equal(result.stopReason, "blocked");
+  assert.match(result.summary, /^Replay step 3 \(tap "Delete account"\) failed: "Delete account" looks destructive.*Not captured: Gone$/);
+  assert.deepEqual(device.acted, [], "neither tap reaches the device");
+  assert.deepEqual(map.actionAttempts.map(attempt => [attempt.action.label, attempt.outcome]), [["Share", "blocked"], ["Delete account", "blocked"]]);
+});
+
+test("a replay plan is checked before any device starts: unknown, hostile and malformed fields are refused", () => {
+  const refused = (step, pattern) => assert.throws(() => parseReplayPlan({ steps: [step] }), error => error.code === "REPLAY_PLAN_INVALID" && pattern.test(error.message), JSON.stringify(step));
+  assert.throws(() => parseReplayPlan({ steps: [] }), /no steps/);
+  assert.throws(() => parseReplayPlan({ steps: [{ capture: "Home" }], step: [] }), /field "step" it does not take/);
+  refused({ action: "tap" }, /exactly one of label or identifier/);
+  refused({ action: "swipe" }, /needs a capture title or an action/);
+  refused({ action: "constructor" }, /needs a capture title or an action/);
+  refused({ capture: "Home", platforms: ["web"] }, /platforms must list ios and\/or android/);
+  // A coordinate tap's fields would turn a label tap into a tap whose risk comes from `target`.
+  refused({ action: "tap", label: "Delete account", frameId: "frame-1", x: 0.2, y: 0.15, target: "Next" }, /^Step 1 \(tap\) has a field "frameId" it does not take; a tap step takes action, label, identifier, platforms, optional\.$/);
+  refused({ action: "tap", label: "Next", platform: ["ios"] }, /field "platform"/);
+  refused({ action: "tap", label: "Next", optinal: true }, /field "optinal"/);
+  refused({ capture: "Home", optional: true }, /\(capture\) has a field "optional"/);
+  refused({ capture: "Home", action: "tap", label: "Next" }, /\(capture\) has a field "action"/);
+  refused({ action: "back", label: "Back" }, /\(back\) has a field "label"/);
+  refused({ action: "scroll", direction: ["up"] }, /scroll needs a direction/);
+  refused({ action: "scroll", direction: "sideways" }, /scroll needs a direction/);
+  refused({ action: "tap", label: "x".repeat(257) }, /label must be 1–256 characters without control characters/);
+  refused({ action: "tap", identifier: "row\nnext" }, /identifier must be 1–256 characters/);
+  refused({ action: "fill", label: "Name", text: "two\nlines" }, /fill needs text: one line/);
+  refused({ action: "type", text: "x".repeat(2001) }, /type needs text/);
+  refused({ action: "type", text: "{{secret:lowercase}}" }, /invalid secret reference/);
+  refused({ action: "type", text: "{{secret:OPENAI_API_KEY}}" }, /cannot reference provider/);
+  refused({ action: "wait", milliseconds: 15_001 }, /between 1 and 15000/);
+  assert.deepEqual(parseReplayPlan({ steps: [{ capture: "Home" }] }).steps, [{ capture: "Home" }]);
+  assert.deepEqual(parseReplayPlan({ steps: [{ action: "scroll", direction: "down", optional: true, platforms: ["ios"] }] }).steps,
+    [{ action: "scroll", direction: "down", platforms: ["ios"], optional: true }]);
+});
+
+test("a replay plan with no steps for the platform, or more than the budgets hold, is refused before any device starts", () => {
+  const limits = { maxScreens: 40, maxActions: 150, maxTurns: 400 };
+  assert.throws(() => assertReplayFits(parseReplayPlan({ steps: [{ capture: "Home", platforms: ["android"] }, { action: "back", platforms: ["android"] }] }), "ios", limits),
+    error => error.code === "REPLAY_PLAN_EMPTY" && /No step of the replay plan runs on ios/.test(error.message));
+  const plan = parseReplayPlan({ steps: [{ capture: "Home" }, { action: "tap", label: "Settings" }, { capture: "Settings" }, { action: "back" }, { action: "wait", milliseconds: 100 }] });
+  assert.doesNotThrow(() => assertReplayFits(plan, "ios", limits));
+  assert.throws(() => assertReplayFits(plan, "ios", { ...limits, maxScreens: 2, maxActions: 1 }),
+    error => error.code === "REPLAY_PLAN_OVER_BUDGET" && /2 captures, which need a screen budget of at least 3 \(it is 2\) and 2 actions, more than the action budget of 1/.test(error.message)
+      && /--max-screens 3 --max-actions 2/.test(error.nextAction));
+  assert.throws(() => assertReplayFits(plan, "ios", { ...limits, maxTurns: 8 }), /takes 9 tool calls, more than the 8/);
+});
+
+test("a replay that runs out of budget names the planned screens it did not reach in the gap", async () => {
+  const plan = parseReplayPlan({ steps: [{ capture: "Home" }, { action: "tap", label: "Settings" }, { capture: "Settings" }, { action: "back" }, { capture: "Later" }] });
+  const device = replayDevice();
+  const session = createReplaySession(plan, "ios");
+  const { result, map } = await harness([], { session, budgetNote: session.budgetNote, ...device.options, maxScreens: 2 });
+  assert.equal(result.stopReason, "budget-screens");
+  assert.match(map.gaps.at(-1).message, /^The exploration stopped at its screens budget with \d+ controls unexplored\. Not captured: Settings, Later\.$/);
+});
+
+test("a capture of a screen the plan already captured under another title is reported and does not rename it", async () => {
+  const plan = parseReplayPlan({ steps: [
+    { capture: "Home" }, { capture: "Start" }, { capture: "home" }, { action: "tap", label: "Settings" }, { action: "back" },
+  ] });
+  const device = replayDevice();
+  const { result, map } = await harness([], { session: createReplaySession(plan, "ios"), ...device.options });
+  assert.equal(result.stopReason, "finished");
+  assert.deepEqual(map.screens.map(screen => screen.title), ["Home", "Home → Settings"]);
+  assert.match(result.summary, /Not captured: Start \(looked the same as Home\)\. Also reached, not in the plan: 1 unnamed screen\.$/);
+});
+
+test("a planned state that the explorer merges into an earlier screen is neither reported as unplanned nor left in the map", async () => {
+  // The README's own example: Dark mode changes the tree, and the capture titled Settings folds that new screen into Settings.
+  const screens = { ...SCREENS, settingsDark: [...SCREENS.settings, { type: "Button", label: "Theme options" }] };
+  const plan = parseReplayPlan({ steps: [
+    { capture: "Home" }, { action: "tap", label: "Settings" }, { capture: "Settings" },
+    { action: "tap", label: "Dark mode" }, { capture: "Settings", state: "dark" },
+  ] });
+  const device = replayDevice(screens);
+  const { result, map } = await harness([], { session: createReplaySession(plan, "ios"), ...device.options });
+  assert.equal(result.stopReason, "finished");
+  assert.deepEqual(map.screens.map(screen => screen.title), ["Home", "Settings"]);
+  const settings = map.screens.find(screen => screen.title === "Settings");
+  assert.ok(map.variants.some(variant => variant.screenId === settings.id && variant.name === "dark"));
+  assert.equal(result.summary, "Replayed 5 planned steps on ios. Every planned screen was captured.");
+});
+
+test("a long replay summary is kept within finish's limit, the most useful names first", async () => {
+  const titles = Array.from({ length: 60 }, (_, index) => `Planned screen ${String(index).padStart(2, "0")} ${"y".repeat(60)}`);
+  const plan = parseReplayPlan({ steps: [{ capture: "Home" }, ...titles.map(title => ({ capture: title }))] });
+  const device = replayDevice();
+  const { result } = await harness([], { session: createReplaySession(plan, "ios"), ...device.options, maxTurns: 200 });
+  assert.equal(result.stopReason, "finished");
+  assert.ok(result.summary.length <= 4000, `${result.summary.length} characters`);
+  assert.match(result.summary, /^Replayed 61 planned steps on ios\. Not captured: Planned screen 00 y+ \(looked the same as Home\), .* and \d+ more\.$/);
+});
+
+test("a refused finish ends the replay with stop_blocked instead of a turn budget, and a refused stop is an error", async () => {
+  const plan = parseReplayPlan({ steps: [{ action: "back" }] });
+  const calls = [];
+  const request = refuse => ({ signal: new AbortController().signal, callTool: async (name, input) => {
+    calls.push({ name, input });
+    const value = name === "get_progress" ? { captured: [] } : refuse.includes(name) ? { ok: false, code: "AGENT_ACTION_INVALID", message: `${name} refused` } : { ok: true };
+    return { content: [{ type: "text", text: JSON.stringify(value) }], ...(refuse.includes(name) ? { isError: true } : {}) };
+  } });
+  await createReplaySession(plan, "ios").run(request(["finish"]));
+  assert.deepEqual(calls.map(call => call.name), ["act", "get_progress", "finish", "stop_blocked"]);
+  assert.match(calls.at(-1).input.reason, /^The replay could not finish \(finish refused\)\. Replayed 1 planned steps on ios\./);
+  await assert.rejects(createReplaySession(plan, "ios").run(request(["finish", "stop_blocked"])), { code: "REPLAY_STOP_REFUSED" });
+});
+
+test("a replay plan's {{secret:NAME}} inputs are read before any device starts and typed for the plan", async () => {
+  const { runBinaryExploration, runSessionExploration } = await tsImport("../../src/binary/run.ts", import.meta.url);
+  const { createExplorationInputs } = await tsImport("../../src/config/exploration-inputs.ts", import.meta.url);
+  const plan = parseReplayPlan({ steps: [{ capture: "Home" }, { action: "fill", label: "Password", text: "{{secret:APP_TEST_PASSWORD}}" }] });
+  const output = await mkdtemp(join(tmpdir(), "explore-replay-"));
+  for (const run of [runBinaryExploration, runSessionExploration]) {
+    await assert.rejects(run({ archive: join(output, "missing.apk"), output, replay: plan, environment: {} }),
+      error => error.code === "EXPLORATION_SECRET_MISSING" && /APP_TEST_PASSWORD/.test(error.message));
+    await assert.rejects(run({ archive: join(output, "missing.apk"), output, replay: plan, environment: {}, provider: "openai", hints: "Look around" }),
+      error => error.code === "REPLAY_OPTIONS_IGNORED" && /--provider and --hints would do nothing/.test(error.message));
+    await assert.rejects(run({ archive: join(output, "missing.apk"), output, replay: { steps: [{ action: "tap", label: "Next", optinal: true }] }, environment: {} }), { code: "REPLAY_PLAN_INVALID" });
+    await assert.rejects(run({ archive: join(output, "missing.apk"), output, replay: parseReplayPlan({ steps: [{ action: "open", url: "https://example.com" }] }), environment: {} }),
+      error => error.code === "REPLAY_PLAN_INVALID" && /^Step 1: https: URLs leave the app/.test(error.message));
+  }
+  const device = replayDevice();
+  const inputs = createExplorationInputs({ setup: replaySetup(plan), environment: { APP_TEST_PASSWORD: "hunter2-test" } });
+  const { result, map } = await harness([], { session: createReplaySession(plan, "ios"), inputs, ...device.options });
+  assert.equal(result.stopReason, "finished");
+  assert.deepEqual(device.acted, [{ action: "fill", label: "Password", text: "hunter2-test" }]);
+  assert.equal(map.actionAttempts[0].action.input.value, "{{secret:APP_TEST_PASSWORD}}");
+  assert.ok(!JSON.stringify(map).includes("hunter2-test"));
+});
