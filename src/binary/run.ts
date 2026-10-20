@@ -18,6 +18,7 @@ import { agentDeviceClaims, approveLinkScheme, createLocalSimulator, deleteLocal
 import { openLocalCaptureRecord, sweepLocalCaptures } from "../capture/local-registry.js";
 import { approveSessionUrlSchemes, simulatorControlActions, type EasCommand } from "../capture/simulator-control.js";
 import { DEFAULT_ANDROID_DEVICE } from "../config/explore-config.js";
+import { DUO_PANELS } from "../contracts/capture.js";
 import { createExplorationInputs } from "../config/exploration-inputs.js";
 import { ExploreStore, getCoverage } from "../map/store.js";
 import { whoamiAccounts } from "../report/preview-deploy.js";
@@ -374,6 +375,12 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
     catch { return undefined; }
   };
   const foregroundElsewhere = (): boolean => { const state = foregroundState(); return state ? leftForeground(state, bundleId) : false; };
+  // An opened iPhone Duo's tree and taps stay on its inner panel's portrait axes, and so does agent-device's screenshot.
+  const landscapeOnPortrait = (nodes: readonly Record<string, unknown>[], png: Buffer): boolean => {
+    const root = nodes[0]?.rect && typeof nodes[0].rect === "object" ? nodes[0].rect as Record<string, unknown> : undefined;
+    return platform === "ios" && /\bduo\b/i.test(runtime.deviceModel) && root?.width === DUO_PANELS.inner.height && root?.height === DUO_PANELS.inner.width
+      && png.readUInt32BE(16) < png.readUInt32BE(20);
+  };
   const observe = async (includeImage: boolean): Promise<BlackBoxFrame> => {
     let nodes: Record<string, unknown>[];
     let leftApp = false;
@@ -411,7 +418,7 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
       assertDecodedPng(png, "Exploration screenshot");
       if (png.length > 10 * 1024 * 1024) return { nodes, capturedAt, imageUnavailable: { code: "SCREENSHOT_TOO_LARGE", message: "The screenshot exceeded 10 MB." } };
       if (solidColour(png)) return { nodes, capturedAt, imageUnavailable: { code: "SCREENSHOT_BLANK", message: BLANK_SCREENSHOT_MESSAGE }, ...(leftApp ? { leftApp } : {}) };
-      return { nodes, capturedAt, frameId: randomUUID(), png, imageSha256: createHash("sha256").update(png).digest("hex"), width: png.readUInt32BE(16), height: png.readUInt32BE(20), ...(leftApp ? { leftApp } : {}) };
+      return { nodes, capturedAt, frameId: randomUUID(), png, imageSha256: createHash("sha256").update(png).digest("hex"), width: png.readUInt32BE(16), height: png.readUInt32BE(20), ...(landscapeOnPortrait(nodes, png) ? { landscape: true } : {}), ...(leftApp ? { leftApp } : {}) };
     } finally { await rm(path, { force: true }); }
   };
   const setupOptions = { command: async (args: string[]) => { const result = controller(guardPositionals([...args, "--json"]), 120_000); return controllerData(result.stdout, args[0] ?? "command"); },

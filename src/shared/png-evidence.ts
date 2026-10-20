@@ -144,3 +144,22 @@ export function assertDecodedPng(contents: Buffer, label: string): void {
     if (decoded[row * (rowBytes + 1)]! > 4) throw new Error(`${label} has an invalid PNG row filter`);
   }
 }
+
+/**
+ * The image turned a quarter clockwise. An opened iPhone Duo shows a landscape UI on a panel whose native axes are
+ * portrait, and its screenshot comes back on those axes; turned, it is what a person sees.
+ */
+export function turnedClockwise(png: Buffer): Buffer {
+  const { PNG } = createRequire(import.meta.url.replace(/\?.*$/, ""))("pngjs") as { PNG: { new(size: { width: number; height: number }): DecodedFrame; sync: {
+    read(bytes: Buffer, options: { checkCRC: boolean }): DecodedFrame; write(frame: DecodedFrame): Buffer } } };
+  const source = PNG.sync.read(png, { checkCRC: false });
+  const { width, height } = source;
+  const turned = new PNG({ width: height, height: width });
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const from = (y * width + x) * 4;
+      source.data.copy(turned.data, (x * height + (height - 1 - y)) * 4, from, from + 4);
+    }
+  }
+  return PNG.sync.write(turned);
+}

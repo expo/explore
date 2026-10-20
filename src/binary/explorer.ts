@@ -7,6 +7,7 @@ import type { CaptureSetupAction } from "../config/explore-config.js";
 import { createExplorationInputs, explorationSecretNames } from "../config/exploration-inputs.js";
 import type { ExploreStore, PreparedArtifact } from "../map/store.js";
 import { CiError } from "../shared/ci-errors.js";
+import { turnedClockwise } from "../shared/png-evidence.js";
 import type { ActionKind, ActionRisk, Artifact, Controller, ElementRole, ExploreMap, ObservedElement, Observation, Screen } from "../types.js";
 
 /** One look at the device: accessibility always, a PNG when the host could take a safe one. */
@@ -21,6 +22,8 @@ export type BlackBoxFrame = {
   imageUnavailable?: { code: string; message: string };
   /** The foreground app differed from the explored one; the host already brought it back. */
   leftApp?: boolean;
+  /** The image is on a portrait panel's axes under a landscape UI (an opened iPhone Duo); the report turns it upright. */
+  landscape?: boolean;
 };
 
 export type BlackBoxAction = CaptureSetupAction | { action: "back" } | { action: "dismiss-keyboard" } | { action: "type"; text: string }
@@ -529,11 +532,11 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
     let screenshotArtifactId: string | undefined;
     if (withImage && frame.png) {
       // Hashed here rather than trusting the daemon's digest: the report validates artifacts against their bytes.
-      const png = frame.png, sha = createHash("sha256").update(png).digest("hex");
+      const png = frame.landscape ? turnedClockwise(frame.png) : frame.png, sha = createHash("sha256").update(png).digest("hex");
       let artifact = map.artifacts.find(item => item.kind === "screenshot" && item.sha256 === sha);
       if (!artifact) {
         artifact = { id: `art_${randomUUID().slice(0, 12)}`, kind: "screenshot" as const, path: `artifacts/screenshots/${sha}.png`, sha256: sha,
-          bytes: png.length, mimeType: "image/png", ...(frame.width ? { width: frame.width } : {}), ...(frame.height ? { height: frame.height } : {}), createdAt: frame.capturedAt };
+          bytes: png.length, mimeType: "image/png", ...(frame.width && frame.height ? frame.landscape ? { width: frame.height, height: frame.width } : { width: frame.width, height: frame.height } : {}), createdAt: frame.capturedAt };
         map.artifacts.push(artifact); prepared.push({ artifact, bytes: png, destination: join(store.root, artifact.path) });
       }
       screenshotArtifactId = artifact.id;

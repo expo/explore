@@ -881,3 +881,19 @@ test("when nothing passes preflight, the first failure is reported", async () =>
   const createSession = (config, { auth }) => ({ async preflight() { throw new Error(`${config.provider} ${auth} refused`); } });
   await assert.rejects(preflightModelSession({ createSession }, {}, () => {}), /anthropic local-login refused/);
 });
+
+test("a landscape frame on a portrait panel (an opened iPhone Duo) is stored upright", async () => {
+  const { createRequire } = await import("node:module");
+  const { PNG: Png } = createRequire(import.meta.url)("pngjs");
+  const raw = new Png({ width: 1, height: 2 });
+  raw.data.set([255, 0, 0, 255, 0, 0, 255, 255]);
+  const png = Png.sync.write(raw);
+  const { map, root } = await harness([["observe", { includeImage: true }], ["capture", { frameId: "frame-0", title: "Home" }], ["finish", { summary: "One." }]], {
+    observe: async includeImage => ({ nodes: SCREENS.home, capturedAt: new Date().toISOString(), ...(includeImage ? { frameId: "frame-0", png, width: 1, height: 2, landscape: true } : {}) }) });
+  const artifact = map.artifacts.find(item => item.kind === "screenshot");
+  assert.deepEqual([artifact.width, artifact.height], [2, 1]);
+  const { readFile } = await import("node:fs/promises");
+  const stored = Png.sync.read(await readFile(join(root, artifact.path)));
+  // The panel's top (red) is the UI's right-hand side once turned a quarter clockwise.
+  assert.deepEqual([...stored.data], [0, 0, 255, 255, 255, 0, 0, 255]);
+});
