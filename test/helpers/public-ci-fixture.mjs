@@ -169,6 +169,8 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
       }
       if (command === 'simulator:get') { const session = sessions.get(value(request, '--id')); return json({ id: session.id, name: session.name, type: 'agent-device', platform: platform.toUpperCase(), status: 'IN_PROGRESS', app: { id: PROJECT_ID, slug: 'example', ownerAccount: { name: 'acme' } }, remoteConfig: { agentDeviceRemoteSessionUrl: `https://controller.example/${session.id}`, agentDeviceRemoteSessionToken: 'controller-private-token' } }); }
       if (command === 'simulator:stop') return json({ id: value(request, '--id'), status: 'STOPPED' });
+      // The session's serve-sim offers no simulator:control actions, so the capture falls back to the controller's own.
+      if (command === 'simulator:control' && request.args.includes('--list')) return json({});
     }
     if (basename(request.command) === 'repack-app') {
       repackedSha = git(request.cwd, 'rev-parse', 'HEAD');
