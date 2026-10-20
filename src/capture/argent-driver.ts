@@ -183,15 +183,21 @@ export function snapshotFromTree(tree: ArgentTree, platform: ArgentPlatform, gen
 }
 
 /**
- * The windows iOS draws the software keyboard in. Argent lists each window as a child of its root, the app's first; the
- * keyboard's are later ones that hold the keyboard (a `Keyboard` element) or its input view placeholder and prediction
- * bar. A window is judged by what it holds, never by where its elements sit, and the app's own window never counts: an
- * element the app identifies as `inputView` there is the app's.
+ * The windows iOS draws the software keyboard in. Argent lists each window as a child of its root, the app's first. A
+ * later window is the keyboard's when it holds XCTest's `Keyboard` element, which no app can give itself; an identifier
+ * never decides it alone, since an app can set any identifier on its own views (a second window of the app's with a
+ * `testID="inputView"` stays the app's). While such a window is up, UIKit also hosts the keyboard's input view
+ * placeholder in a window of its own: a later window whose only named node is an `inputView` belongs to it too.
  */
 function keyboardWindows(roots: readonly ArgentNode[]): Set<ArgentNode> {
-  const holdsKeyboard = (node: ArgentNode): boolean => node.type === "Keyboard" || KEYBOARD_WINDOW_IDENTIFIERS.has(node.identifier ?? "")
-    || (node.children ?? []).some(holdsKeyboard);
-  return new Set(roots.flatMap(root => (root.children ?? []).slice(1).filter(holdsKeyboard)));
+  const holds = (node: ArgentNode, test: (node: ArgentNode) => boolean): boolean => test(node) || (node.children ?? []).some(child => holds(child, test));
+  const later = roots.flatMap(root => (root.children ?? []).slice(1));
+  const keyboard = later.filter(window => holds(window, node => node.type === "Keyboard"));
+  if (!keyboard.length) return new Set();
+  const named = (node: ArgentNode) => Boolean(node.label?.trim() || node.contentDescription?.trim() || node.value !== undefined
+    || (node.identifier && !KEYBOARD_WINDOW_IDENTIFIERS.has(node.identifier)));
+  const placeholders = later.filter(window => !keyboard.includes(window) && holds(window, node => node.identifier === "inputView") && !holds(window, named));
+  return new Set([...keyboard, ...placeholders]);
 }
 
 function intersect(a: Rect, b: Rect): Rect | undefined {

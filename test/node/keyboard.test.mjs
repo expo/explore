@@ -66,6 +66,24 @@ test("an element the app identifies as inputView in its own window is the app's"
   assert.ok(labelsOf(nodes).includes("inputView") && labelsOf(nodes).includes("Send"));
 });
 
+test("a second window of the app's own, its testID inputView included, is the app's; the keyboard's windows need a Keyboard", () => {
+  // The app's second UIWindow (a toast or a floating composer) with a view identified as inputView and a Save button.
+  const window = { role: "AXGroup", type: "Application", frame: rect(0, 0, 1, 1), children: [
+    { role: "AXGroup", type: "Other", identifier: "inputView", frame: rect(0, 0.8, 1, 0.1),
+      children: [{ role: "AXButton", type: "Button", label: "Save", frame: rect(0.8, 0.82, 0.15, 0.05), children: [] }] }] };
+  const [app, placeholder, keyboard] = RENAME_KEYBOARD_UP.roots[0].children;
+  const withWindows = windows => nodesOf({ ...RENAME_KEYBOARD_UP, roots: [{ ...RENAME_KEYBOARD_UP.roots[0], children: [app, ...windows] }] });
+  for (const windows of [[window], [window, keyboard], [window, placeholder, keyboard]]) {
+    const labels = labelsOf(withWindows(windows));
+    assert.ok(labels.includes("Save") && labels.includes("inputView"), `kept beside ${windows.length - 1} keyboard windows`);
+  }
+  // Without the keyboard's own window, an input view placeholder window proves nothing.
+  assert.ok(labelsOf(withWindows([placeholder])).includes("inputView"));
+  assert.equal(keyboardNodes(withWindows([placeholder])).size, 0);
+  // With it, the placeholder is the keyboard's too, as in the real tree.
+  assert.equal(labelsOf(withWindows([placeholder, keyboard])).includes("inputView"), false);
+});
+
 test("agent-device's keyboard is its Keyboard element and what is under it, and its host bridge's keyboard view classes", () => {
   // XCTest: the Keyboard directly under the Application, beside the app's own controls in the same band.
   const xctest = [
@@ -153,6 +171,19 @@ test("the wait reads until the keyboard is in one place twice, at least twice, a
   assert.equal(slow.more(2_500), true);
   slow.read({ nodes: [field] });
   assert.deepEqual([slow.outcome, slow.more(5_000)], ["absent", false], "no keyboard came: captured without one");
+  // A slow first read without a keyboard, then the keyboard first seen still moving: read on until it holds.
+  const late = keyboardSettle({ nodes: [field] });
+  late.read({ nodes: [field] });
+  late.read({ nodes: keyboardAt(700) });
+  assert.deepEqual([late.outcome, late.more(2_500)], ["moving", true], "a moving keyboard is not given up on after a second");
+  late.read({ nodes: keyboardAt(583) });
+  late.read({ nodes: keyboardAt(583) });
+  assert.deepEqual([late.outcome, late.reads], ["shown", 4]);
+  // But not past four seconds, however few reads that was.
+  const stalled = keyboardSettle({ nodes: [field] });
+  stalled.read({ nodes: [field] });
+  stalled.read({ nodes: keyboardAt(700) });
+  assert.equal(stalled.more(4_000), false);
   // Six reads at most, however fast they come.
   const busy = keyboardSettle({ nodes: [field] });
   for (let read = 0; busy.more(0); read++) busy.read({ nodes: keyboardAt(read % 2 ? 583 : 700) });

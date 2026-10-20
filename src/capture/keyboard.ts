@@ -103,12 +103,14 @@ function keyboardPosition(read: KeyboardRead): string | undefined {
 }
 
 /**
- * How capture waits for a focused field's keyboard. Reads are 250 ms apart at most; at least two follow the first, so a
- * controller whose snapshot takes a second or more still sees the keyboard rise, and the wait ends after a second unless
- * that minimum is still owed. Six reads cap it.
+ * How capture waits for a focused field's keyboard. Reads are 250 ms apart at most, and at least two follow the first,
+ * so a controller whose snapshot takes a second or more still sees the keyboard rise. Waiting for a keyboard that has not
+ * appeared ends after a second; one that has appeared but has not yet held still is read until it does, up to six reads
+ * or four seconds, so a slow controller cannot keep the capture waiting.
  */
 export const KEYBOARD_POLL_MS = 250;
 const KEYBOARD_WAIT_MS = 1_000;
+const KEYBOARD_CAP_MS = 4_000;
 const KEYBOARD_MIN_READS = 2;
 const KEYBOARD_MAX_READS = 6;
 
@@ -133,7 +135,7 @@ export function keyboardSettle(first: KeyboardRead): KeyboardSettle | undefined 
     get outcome() { return outcome; },
     get reads() { return reads; },
     more: elapsedMs => (outcome === "moving" || outcome === "absent") && reads < KEYBOARD_MAX_READS
-      && (reads < KEYBOARD_MIN_READS || elapsedMs < KEYBOARD_WAIT_MS),
+      && (reads < KEYBOARD_MIN_READS || (elapsedMs < KEYBOARD_CAP_MS && (outcome === "moving" || elapsedMs < KEYBOARD_WAIT_MS))),
     read: next => {
       reads += 1;
       const position = keyboardPosition(next);
