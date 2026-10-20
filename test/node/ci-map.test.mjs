@@ -129,6 +129,8 @@ async function fixture(t, settings = {}) {
   let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let deviceLost = false; let relaunchedAfterForeign = false; let serverStarts = 0; let unreadableLeft = settings.unreadableAfterFold ?? 0;
   // startsErrored / startsUnnamed: how many session starts EAS fails, after naming the session (it ERRORS) or before.
   let starts = 0; let currentSession = 'session-1'; const erroredSessions = new Set(); let foldUnverifiedLeft = settings.foldUnverified ?? 0;
+  // listFailures: the first so many `simulator:control --list` calls fail, as a host that drops the connection does.
+  let listFailuresLeft = settings.listFailures ?? 0;
   // focusedField: the screen at `path` focuses its text field, and the keyboard is up from the `keyboardFrom`th read of it.
   let focusedReads = 0;
   // blackAfterFold: the first so many folds of an EAS agent-device session light the panel but draw nothing.
@@ -207,7 +209,10 @@ async function fixture(t, settings = {}) {
       // controlActions: what the session's serve-sim offers through simulator:control (none unless a test names them).
       if (command === 'simulator:control') {
         assert.equal(value(request, '--id'), currentSession, 'simulator:control names the session');
-        if (request.args.includes('--list')) return json(Object.fromEntries((settings.controlActions ?? []).map(action => [action, { type: 'object' }])));
+        if (request.args.includes('--list')) {
+          if (listFailuresLeft > 0) { listFailuresLeft -= 1; return { stdout: '', stderr: 'The simulator preview server closed the connection before it answered.\nError: simulator:control command failed.\n' }; }
+          return json(Object.fromEntries((settings.controlActions ?? []).map(action => [action, { type: 'object' }])));
+        }
         assert.ok((settings.controlActions ?? []).includes(request.args[1]), `${request.args[1]} is offered by the session`);
         if (request.args[1] === 'appearance.set') appearance = request.args.at(-1);
         return json({ id: currentSession, action: request.args[1], output: '' });
@@ -590,6 +595,61 @@ test('when a fold on EAS leaves Argent reading the dark panel, the capture resta
     assert.equal(f.requests.filter(request => request.command.endsWith('/argent-controller') && request.args[0] === 'fold').length, 2);
     assert.equal(f.requests.filter(request => request.args[0] === 'simulator:control' && request.args[1] === 'springboard.restart').length, 1);
   }
+});
+
+// In brentvatne/euxy's main baseline run 39487618529, one failed --list made the dark session look as if it offered no
+// actions: it dropped dark, approved no link scheme, skipped the SpringBoard restart its fold needed, and failed the target.
+test('a --list that fails once still gives an Argent dark session its appearance, its link approval and its fold recovery', async t => {
+  const f = await fixture(t, { argent: true, userInterfaceStyle: 'automatic', devicePose: 'open', foldUnverified: 1, listFailures: 1,
+    controlActions: ['appearance.set', 'app.approveUrlScheme', 'springboard.restart'] });
+  const lines = [];
+  const result = await runCiMap({ ...f.options, progress: line => lines.push(line), appearancePass: { all: ['light', 'dark'], capture: ['dark'] } });
+  assert.equal(result.runStatus, 'complete');
+  const control = f.requests.filter(request => request.args[0] === 'simulator:control');
+  assert.equal(control.filter(request => request.args.includes('--list')).length, 2);
+  assert.equal(lines.some(line => /Argent cannot switch appearance/.test(line)), false, lines.join('\n'));
+  assert.deepEqual(control.filter(request => request.args[1] === 'appearance.set').map(request => request.args.at(-1)), ['dark']);
+  assert.equal(control.filter(request => request.args[1] === 'app.approveUrlScheme').length, 1);
+  assert.equal(control.filter(request => request.args[1] === 'springboard.restart').length, 1);
+  const bundle = JSON.parse(await readFile(join(f.options.outputDirectory, 'bundle.json'), 'utf8'));
+  assert.deepEqual(Object.keys(bundle.images).sort(), [`${f.ids.home}@dark`, `${f.ids.settings}@dark`]);
+});
+
+test('a --list that keeps failing fails the session with a retryable error before the app is installed, and stops the session', async t => {
+  const f = await fixture(t, { argent: true, devicePose: 'open', listFailures: Infinity, controlActions: ['springboard.restart'] });
+  await assert.rejects(runCiMap(f.options), error => error.code === 'SIMULATOR_CONTROL_UNAVAILABLE' && error.retryable === true);
+  assert.equal(f.requests.filter(request => request.args[0] === 'simulator:control' && request.args.includes('--list')).length, 3);
+  assert.equal(f.requests.some(request => request.command.endsWith('/argent-controller') && ['install', 'fold'].includes(request.args[0])), false);
+  assert.equal(f.operations().filter(operation => operation === 'simulator:stop').length, 1);
+});
+
+test('a session given only dark that cannot switch to it stops before installing or folding, and the merge keeps the light session\'s capture', async t => {
+  const dark = await fixture(t, { argent: true, userInterfaceStyle: 'automatic', devicePose: 'open' });
+  const lines = [];
+  await runCiMap({ ...dark.options, progress: line => lines.push(line), appearancePass: { all: ['light', 'dark'], capture: ['dark'] } });
+  assert.equal(dark.requests.some(request => request.command.endsWith('/argent-controller') && ['install', 'fold'].includes(request.args[0])), false);
+  assert.equal(dark.operations().filter(operation => operation === 'simulator:stop').length, 1);
+  assert.ok(lines.some(line => /session session-1 cannot switch to dark, the appearance it was given; it stops without capturing/.test(line)), lines.join('\n'));
+  const idle = JSON.parse(await readFile(join(dark.options.outputDirectory, 'bundle.json'), 'utf8'));
+  assert.deepEqual(Object.keys(idle.images), []);
+  assert.equal(idle.outcomes[`${dark.ids.home}@dark`].error.code, 'SESSION_APPEARANCE_UNAVAILABLE');
+  // A light session that switched appearance expects dark: each route's dark frame is reported as not captured.
+  // One that could not switch either captured light alone, as one session would have: the dark session adds nothing.
+  for (const [actions, expected] of [[['appearance.set'], 'failed'], [[], undefined]]) {
+    const light = await fixture(t, { argent: true, userInterfaceStyle: 'automatic', devicePose: 'open', controlActions: actions });
+    await runCiMap({ ...light.options, appearancePass: { all: ['light', 'dark'], capture: ['light'] } });
+    await mergeCaptureExports(light.options.outputDirectory, [{ directory: dark.options.outputDirectory, scheme: 'dark' }]);
+    const merged = JSON.parse(await readFile(join(light.options.outputDirectory, 'bundle.json'), 'utf8'));
+    for (const id of Object.values(light.ids)) {
+      assert.equal(merged.outcomes[id].status, 'captured', id);
+      assert.equal(merged.outcomes[`${id}@dark`]?.status, expected, `${id}@dark with ${actions.join(', ') || 'no actions'}`);
+    }
+  }
+  // A session that cannot take the side's primary appearance fails it: the merge has nothing to add the others to.
+  const primary = await fixture(t, { argent: true, devicePose: 'open' });
+  await assert.rejects(runCiMap({ ...primary.options, appearance: ['dark', 'light'], appearancePass: { all: ['dark', 'light'], capture: ['dark'] } }),
+    error => error.code === 'SESSION_APPEARANCE_UNAVAILABLE');
+  assert.equal(primary.requests.some(request => request.command.endsWith('/argent-controller') && request.args[0] === 'fold'), false);
 });
 
 test('a session EAS ends while starting is replaced by a new one, under a name of its own, up to five times with a growing wait', async t => {

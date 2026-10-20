@@ -360,9 +360,10 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   let captureFailure: unknown;
   const finish = async (): Promise<CiMapResult> => {
     if (!(await store.exists())) await store.initialize(map, false);
-    // A session making only secondary passes owns the `<id>@<scheme>` frames of those passes, not the primary ones.
+    // A session making only secondary passes owns the `<id>@<scheme>` frames of those passes, not the primary ones, even
+    // when it could not switch to them and so captured none.
     const ownFrameIds = options.appearancePass && !options.appearancePass.capture.includes(colorSchemes[0]!)
-      ? selectedIds.flatMap(id => colorSchemes.filter(scheme => options.appearancePass!.capture.includes(scheme)).map(scheme => schemeScreenId(id, scheme)))
+      ? selectedIds.flatMap(id => options.appearancePass!.capture.filter(scheme => scheme !== colorSchemes[0]).map(scheme => schemeScreenId(id, scheme)))
       : selectedIds;
     const incomplete = captureFailure !== undefined || ownFrameIds.some(id => outcomes[id]?.status !== "captured" || outcomes[id]?.landing !== "verified")
       || map.gaps.some(gap => gap.status === "open");
@@ -751,8 +752,28 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       if (!handoff.connection) throw new Error("Simulator handoff is missing its controller connection");
       connection = handoff.connection;
       await rm(dotenvPath, { force: true });
-      if (options.platform === "ios") controlActions = simulatorControlActions(sessionEas, sessionId);
+      if (options.platform === "ios") controlActions = simulatorControlActions(sessionEas, sessionId, controlOptions);
       if (!controlActions.has("appearance.set")) narrowToArgentScheme();
+      // A side split over sessions gives this one only some of its appearances (captureSideInSessions). One that cannot
+      // switch to any of them has nothing to capture, so it stops here, before the app is installed or the device folded:
+      // in brentvatne/euxy's main baseline run 39487618529, the dark session folded the device for frames it would never
+      // take, and its failed fold failed the target that the light session had captured.
+      const pass = options.appearancePass;
+      if (pass && !colorSchemes.some(scheme => pass.capture.includes(scheme))) {
+        const skipped = pass.capture.join(", ");
+        // The export merge needs the primary appearance's frames; a session that cannot take them fails the side.
+        if (pass.capture.includes(pass.all[0]!)) throw new CiError({ code: "SESSION_APPEARANCE_UNAVAILABLE", stage: "session", retryable: true,
+          message: `Simulator session ${sessionId} cannot switch to ${skipped}, the primary appearance it was given to capture.`,
+          nextAction: "Rerun the capture on a new session, or set capture.appearance to the appearance this controller renders." });
+        say(`session ${sessionId} cannot switch to ${skipped}, the appearance it was given; it stops without capturing, and the report has no ${skipped} frames`);
+        const error = { code: "SESSION_APPEARANCE_UNAVAILABLE", stage: "session", retryable: true,
+          message: `Simulator session ${sessionId} could not switch to ${skipped}.`, nextAction: "Rerun the capture on a new session." };
+        for (const id of selectedIds) for (const scheme of pass.capture) {
+          outcomes[schemeScreenId(id, scheme)] = { status: "failed", attempts: 0, landing: "unverified", reason: error.message, error };
+        }
+        // The finally block below stops the session after the export.
+        return await finish();
+      }
     }
     const controllerConfig = join(simulatorProject, "agent-device.json");
     await writeFile(controllerConfig, "{}\n", { flag: "wx", mode: 0o400 });
