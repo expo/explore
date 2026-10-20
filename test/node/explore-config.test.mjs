@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tsImport } from "tsx/esm/api";
 
-const { DEFAULT_EXPLORE_CONFIG_PATH, assertExecutionMode, parseExploreConfig, readExploreConfig, validateExploreConfig, configPlatforms, configTargets, resolvePlatformConfig, resolveTargetConfig, withRunOverrides, captureRepack } =
+const { DEFAULT_EXPLORE_CONFIG_PATH, assertExecutionMode, parseExploreConfig, readExploreConfig, validateExploreConfig, configPlatforms, configTargets, resolvePlatformConfig, resolveTargetConfig, withRunOverrides, captureRepack, hostedRepackPeers } =
   await tsImport("../../src/config/explore-config.ts", import.meta.url);
 
 const SOURCE = `app:
@@ -361,6 +361,25 @@ test("target ids and entries are validated", () => {
   assert.throws(() => validateExploreConfig({ ...base(), capture: { maxSessions: 1.5 } }), /capture.maxSessions must be a positive integer/);
   const platforms = { ios: {}, android: { bundleId: "com.example.app", easProfile: "explore" } };
   assert.equal(validateExploreConfig({ ...base(), platforms, capture: { maxSessions: 1 } }).capture.maxSessions, 1);
+});
+
+test("the targets that repack one app on EAS are its repack peers, led by the first in config order", () => {
+  const config = validateExploreConfig({ ...base(), targets: {
+    iphone: { platform: "ios" },
+    "duo-closed": { platform: "ios", device: "iPhone Duo", pose: "closed" },
+    "duo-open": { platform: "ios", device: "iPhone Duo", pose: "open" },
+    local: { platform: "ios", simulator: "local" },
+    android: { platform: "android", bundleId: "com.example.app", easProfile: "explore-apk" },
+  } });
+  const peers = (id, overrides) => hostedRepackPeers(config, withRunOverrides(resolveTargetConfig(config, { target: id }), overrides ?? {}), overrides);
+  assert.deepEqual(peers("duo-open"), ["iphone", "duo-closed", "duo-open"]);
+  assert.deepEqual(peers("android"), ["android"], "a target no other one shares an app with has only itself");
+  assert.deepEqual(peers("local"), [], "a repack on this machine is shared with nobody");
+  // A run that repacks on the runner (--repack local) shares nothing; one that repacks on EAS includes the local-simulator target.
+  assert.deepEqual(peers("iphone", { repack: "local" }), []);
+  assert.deepEqual(peers("iphone", { repack: "eas" }), ["iphone", "duo-closed", "duo-open", "local"]);
+  const flat = validateExploreConfig(base());
+  assert.deepEqual(hostedRepackPeers(flat, resolveTargetConfig(flat)), ["ios"]);
 });
 
 test("a target can choose its own controller and simulator over capture's", () => {

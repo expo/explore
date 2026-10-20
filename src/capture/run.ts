@@ -21,7 +21,7 @@ import { lstatIfExists, isWithin, temporaryCaptureDirectory, absoluteContractFil
 import { loadAppIcon, loadCachedAppIcon, storeAppIcon } from "./app-icon.js";
 import { defaultRunner, runAgentControllerCommand } from "./controller.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
-import { assertCaptureEasProfile, assertSimulatorAvailable, fingerprintFrom, hasEasEnvironmentFetchFailure, nativeBuildFrom, existingBuild, repackProfileFrom, prepareExactSourceBuild, type RepackMode } from "./eas-build.js";
+import { assertCaptureEasProfile, assertSimulatorAvailable, fingerprintFrom, hasEasEnvironmentFetchFailure, nativeBuildFrom, existingBuild, repackProfileFrom, prepareExactSourceBuild, type RepackMode, type RepackShare } from "./eas-build.js";
 import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, endedOwnSimulatorSession, liveSimulatorSessionsNamed, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, controllerVersion, simulatorOsVersion, type ActiveSimulatorRuntime, type SimulatorConnection } from "./simulator.js";
 import { argentControllerInvocation } from "./controller-invocation.js";
 import { startArgentBridgeRunner, type ArgentBridgeRunner } from "./argent-bridge-host.js";
@@ -71,6 +71,8 @@ export type CiMapOptions = {
   repack?: RepackMode;
   /** A folder the review's captures share builds through: targets of one platform, profile and commit build and repack once. */
   buildShare?: string;
+  /** The matrix jobs of this GitHub run that repack the same app: they make one hosted repack per commit between them. */
+  repackShare?: RepackShare;
   /** Which appearances to capture; `auto` (default) follows the app's `userInterfaceStyle`. */
   appearance?: AppearanceSetting;
   /**
@@ -580,6 +582,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const appDirectory = !options.buildShare ? await realpath(await mkdtemp(join(tmpdir(), "expo-explore-app-"))) : undefined;
   let localApp: string | undefined;
   type BuiltApp = { fingerprint: string; nativeEasBuildId: string | null; easBuildId: string | null; app?: string; reused: boolean; version?: string; buildNumber?: string };
+  // What a hosted repack shared with this run's other matrix jobs, or retried, waits with and reports through.
+  const repackWaits = { share: options.repackShare, progress: say, now: options.now, sleep: options.sleep, signal: options.signal };
   // `repacking` tells the captures sharing this build that their sessions can start too (sharedBuild).
   const buildApp = async (keepApp: string, repacking?: () => Promise<void>): Promise<BuiltApp> => {
     options.signal?.throwIfAborted();
@@ -593,7 +597,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       say(`reusing EAS build ${reusable.id} (fingerprint ${sourceFingerprint.slice(0, 12)}); repacking it with this commit's JavaScript and the route observer`);
       startSession(); await repacking?.();
       const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
-        project, nativeBuildId: reusable.id, fingerprint: sourceFingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp });
+        project, nativeBuildId: reusable.id, fingerprint: sourceFingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp, ...repackWaits });
       if (!repacked) throw new CiError({ code: "CAPTURE_OBSERVER_BUILD_UNSUPPORTED", stage: "instrumentation",
         message: "The build environment cannot be reproduced for automatic capture instrumentation.",
         nextAction: "Use a simulator build profile whose required bundle environment can be pulled for local repacking; an uninstrumented build cannot verify captures." });
@@ -607,7 +611,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     say(`EAS build ${built.id} finished; repacking it with the route observer`);
     startSession(); await repacking?.();
     const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
-      project, nativeBuildId: built.id, fingerprint: built.fingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp });
+      project, nativeBuildId: built.id, fingerprint: built.fingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp, ...repackWaits });
     if (!repacked) throw new CiError({ code: "CAPTURE_OBSERVER_BUILD_UNSUPPORTED", stage: "instrumentation",
       message: "The fresh native build cannot be instrumented with the required route observer.",
       nextAction: "Use a simulator profile with a reproducible bundle environment so both revisions can be repacked with the same observer." });
@@ -621,7 +625,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       ? await sharedBuild({ directory: options.buildShare, appName, ...(options.signal ? { signal: options.signal } : {}), build: buildApp, owner: options.outputDirectory,
         key: { platform: options.platform, easProfile: options.easProfile, bundleId: options.bundleId, gitCommit: options.gitCommit, repack: options.repack ?? "eas", local,
           routes: inventory.map(route => route.id) },
-        waiting: () => say("using the build another target of this review is preparing for this commit"),
+        waiting: () => say("using the build another capture of this run is preparing for this commit"),
         // The session is named before its app exists, so a waiter's session boots while the other capture repacks.
         repacking: () => startSession() })
       : await buildApp(join(appDirectory!, appName));

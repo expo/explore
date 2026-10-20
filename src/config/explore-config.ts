@@ -571,6 +571,19 @@ export function captureRepack(config: ExploreConfig): "eas" | "local" {
   return config.capture.repack ?? (config.capture.simulator === "local" ? "local" : "eas");
 }
 
+/**
+ * The targets, in config order, whose captures repack the same app as `selected` on EAS: one platform, EAS profile and
+ * bundle id. Their matrix jobs make one hosted repack per commit between them, led by the first (RepackShare); a target
+ * no other one shares an app with gets just itself.
+ */
+export function hostedRepackPeers(config: ExploreConfig, selected: ExploreConfig, overrides: Parameters<typeof withRunOverrides>[1] = {}): string[] {
+  if (captureRepack(selected) !== "eas" || !selected.target) return [];
+  const sameApp = (other: ExploreConfig) => other.app.platform === selected.app.platform && other.app.easProfile === selected.app.easProfile
+    && other.app.bundleId === selected.app.bundleId && captureRepack(other) === "eas";
+  return configTargets(config).filter(target => target.id === selected.target!.id || sameApp(withRunOverrides(resolveTargetConfig(config, { target: target.id }), overrides)))
+    .map(target => target.id);
+}
+
 const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}(?:\[bot\])?$/;
 export const TRUSTED_AUTHORS_MAX = 20;
 

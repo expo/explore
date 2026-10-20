@@ -128,7 +128,7 @@ async function fixture(t, settings = {}) {
   let current = '/'; let snapshots = 0; let sessionName; let screenshotAttempts = 0; let splashLeft = 0; let recordingPath = ''; let alert = null; let appearance = 'light'; let alertReads = 0;
   let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let deviceLost = false; let relaunchedAfterForeign = false; let serverStarts = 0; let unreadableLeft = settings.unreadableAfterFold ?? 0;
   // startsErrored / startsUnnamed: how many session starts EAS fails, after naming the session (it ERRORS) or before.
-  let starts = 0; let currentSession = 'session-1'; const erroredSessions = new Set(); let foldUnverifiedLeft = settings.foldUnverified ?? 0;
+  let starts = 0; let currentSession = 'session-1'; let workflowRuns = 0; const erroredSessions = new Set(); let foldUnverifiedLeft = settings.foldUnverified ?? 0;
   // listFailures: the first so many `simulator:control --list` calls fail, as a host that drops the connection does.
   let listFailuresLeft = settings.listFailures ?? 0;
   // focusedField: the screen at `path` focuses its text field, and the keyboard is up from the `keyboardFrom`th read of it.
@@ -219,6 +219,13 @@ async function fixture(t, settings = {}) {
       }
       if (command === 'fingerprint:generate') return json({ hash: 'source-fingerprint' });
       const buildMetadata = settings.buildMetadata ? { appVersion: '2.1.0', appBuildVersion: '42' } : {};
+      // eas: the project's builds on EAS, shared by the fixtures of one test as the matrix jobs of one run share EAS.
+      // A list without a fingerprint is a target looking for a repack another job of its run made (onList moves it on).
+      if (command === 'build:list' && !request.args.includes('--fingerprint-hash')) {
+        assert.ok(settings.eas, 'only a shared repack lists builds without a fingerprint');
+        settings.eas.lists += 1; settings.eas.onList?.(settings.eas);
+        return json(settings.eas.builds);
+      }
       if (command === 'build:list') return json(settings.reuse ? [{ id: 'native-build', ...buildMetadata }] : []);
       if (command === 'build') return json([{ id: 'built-app', fingerprint: { hash: 'source-fingerprint' }, ...buildMetadata }]);
       if (command === 'env:pull') { writeFileSync(value(request, '--path'), '# Environment: preview\nEXPO_PUBLIC_ENDPOINT=sample\n'); return { stdout: '', stderr: '' }; }
@@ -237,6 +244,14 @@ async function fixture(t, settings = {}) {
         assert.match(readFileSync(join(request.cwd, '.expo-explore-observer/metro.config.cjs'), 'utf8'), /PROJECT_RELATIVE = "\.\."/);
         assert.ok(existsSync(join(request.cwd, 'package.json')), 'tracked files are staged');
         assert.ok(!existsSync(join(request.cwd, 'node_modules')), 'untracked files are not staged');
+        // repackFailures: how EAS ends the first runs, as { status, message } of the repack job and its build.
+        workflowRuns += 1;
+        clockMs += settings.repackMs ?? 0;
+        const failure = settings.repackFailures?.[workflowRuns - 1];
+        if (failure) return { stdout: json({ id: `run-${workflowRuns}`, url: `https://expo.dev/accounts/acme/projects/example/workflows/run-${workflowRuns}`,
+          jobs: [{ key: 'repack', status: failure.status, turtleBuild: { status: 'ERRORED', ...(failure.message ? { error: { errorCode: 'UNKNOWN_CUSTOM_BUILD_ERROR', message: failure.message } } : {}) }, outputs: {} }] }).stdout,
+          stderr: `See logs: https://expo.dev/accounts/acme/projects/example/workflows/run-${workflowRuns}\n` };
+        if (settings.eas) settings.eas.builds.unshift({ id: 'repacked-app', status: 'FINISHED', platform: settings.android ? 'ANDROID' : 'IOS', message: JSON.parse(/^ {6}message: (.*)$/m.exec(workflow)[1]) });
         if (settings.workflowPlanLimit) return json({ jobs: [{ key: 'repack', status: 'FAILURE', turtleBuild: { status: 'ERRORED', error: { message: 'This account has used its local builds from the production_plus plan this month, which will reset in 13 days (on Sat Oct 24 2026). | Request ID: 1234 | Error: GraphQL request failed.' } }, outputs: {} }] });
         if (settings.workflowFailure) return { stdout: json({ jobs: [{ key: 'repack', status: 'FAILURE', turtleBuild: { status: 'ERRORED', error: { errorCode: 'UNKNOWN_CUSTOM_BUILD_ERROR', message: 'Build step "Repack" failed.' } }, outputs: {} }] }).stdout, stderr: 'See logs: https://expo.dev/accounts/acme/projects/example/workflows/run-1\n' };
         return json({ jobs: [{ key: 'repack', status: 'SUCCESS', outputs: { build_id: 'repacked-app', platform: settings.android ? 'android' : 'ios' } }] });
@@ -1874,6 +1889,126 @@ test('a failed hosted repack job stops the capture as EAS_REPACK_FAILED with the
   await assert.rejects(runCiMap(f.options), error => error.code === 'EAS_REPACK_FAILED' && /Build step "Repack" failed/.test(error.message) && /workflows\/run-1/.test(error.nextAction));
   // The session started beside the repack, so it is stopped.
   assert.deepEqual(f.operations().filter(operation => operation.startsWith('simulator:')).filter(operation => operation !== 'simulator:availability'), ['simulator:start', 'simulator:stop']);
+});
+
+test('a repack the app broke is not started again', async t => {
+  for (const failure of [{ status: 'FAILURE', message: 'Build step "Repack app" failed.' }, { status: 'CANCELED' }]) {
+    const f = await fixture(t, { repackFailures: [failure] });
+    await assert.rejects(runCiMap(f.options), error => error.code === 'EAS_REPACK_FAILED');
+    assert.equal(f.operations().filter(operation => operation === 'workflow:run').length, 1, failure.status);
+  }
+});
+
+test('a hosted repack EAS ended before it saved the app starts again, and the capture goes on (brentvatne/euxy#176)', async t => {
+  const f = await fixture(t, { repackFailures: [{ status: 'FAILURE', message: 'Failed to upload application archive.' }] });
+  const lines = [];
+  const result = await runCiMap({ ...f.options, progress: line => lines.push(line) });
+  assert.equal(result.runStatus, 'complete');
+  assert.equal(result.easBuildId, 'repacked-app');
+  assert.equal(f.operations().filter(operation => operation === 'workflow:run').length, 2);
+  assert.ok(lines.some(line => /the hosted EAS repack https:\/\/expo\.dev\/accounts\/acme\/projects\/example\/workflows\/run-1 failed \(The hosted EAS repack of the ios build finished with status FAILURE: Failed to upload application archive\.\); starting another repack \(1\/2\)/.test(line)), lines.join('\n'));
+  // One session, started beside the first repack, installs the second one's app.
+  assert.equal(f.operations().filter(operation => operation === 'simulator:start').length, 1);
+  assert.equal(f.operations().filter(operation => operation === 'simulator:stop').length, 1);
+});
+
+test('a repack EAS keeps failing is started twice more, one nothing explains once more, and a late failure not again', async t => {
+  const upload = { status: 'FAILURE', message: 'Failed to upload application archive.' };
+  const cases = [{ failures: [upload, upload, upload], runs: 3 }, { failures: [{ status: 'ERRORED' }, { status: 'ERRORED' }], runs: 2 },
+    // A repack that failed 21 minutes in has used the time the session was given for it.
+    { failures: [upload], runs: 1, repackMs: 21 * 60_000 }];
+  for (const { failures, runs, repackMs } of cases) {
+    const f = await fixture(t, { repackFailures: failures, ...(repackMs ? { repackMs } : {}) });
+    await assert.rejects(runCiMap(f.options), error => error.code === 'EAS_REPACK_FAILED' && new RegExp(`workflows/run-${runs}`).test(error.nextAction));
+    assert.equal(f.operations().filter(operation => operation === 'workflow:run').length, runs);
+    assert.deepEqual(f.operations().filter(operation => /^simulator:(start|stop)$/.test(operation)), ['simulator:start', 'simulator:stop']);
+  }
+});
+
+// Two matrix jobs of one GitHub run: iphone leads, duo-open follows, as hostedRepackPeers orders them.
+const share = (target, scope = 'acme/example#39506405687') => ({ repackShare: { scope, leader: 'iphone', target } });
+const shareLists = f => f.requests.filter(request => request.args[0] === 'build:list' && !request.args.includes('--fingerprint-hash')).length;
+const downloaded = f => f.requests.filter(request => request.args[0] === 'build:download').map(request => value(request, '--build-id'));
+/** The message the leader's repack of this fixture's app gives its build, with the key the others look for. */
+async function leaderMessage(t, scope) {
+  const eas = { builds: [], lists: 0 };
+  const leader = await fixture(t, { reuse: true, eas });
+  await runCiMap({ ...leader.options, ...share('iphone', scope) });
+  return eas.builds[0].message;
+}
+
+test('two jobs of one run that repack the same app share one hosted repack', async t => {
+  const eas = { builds: [], lists: 0 };
+  const leader = await fixture(t, { reuse: true, eas });
+  await runCiMap({ ...leader.options, ...share('iphone') });
+  // The leader looks once, finds nothing, and repacks with the key in its build's message.
+  assert.equal(shareLists(leader), 1);
+  assert.equal(leader.operations().filter(operation => operation === 'workflow:run').length, 1);
+  assert.match(eas.builds[0].message, /^expo-explore ios capture: route observer repack \[explore share [0-9a-f]{32}\]$/);
+  const follower = await fixture(t, { reuse: true, eas });
+  const lines = [];
+  const result = await runCiMap({ ...follower.options, ...share('duo-open'), progress: line => lines.push(line) });
+  assert.equal(follower.operations().includes('workflow:run'), false, 'the follower does not repack');
+  assert.deepEqual(downloaded(follower), ['repacked-app']);
+  assert.equal(result.easBuildId, 'repacked-app');
+  assert.equal(result.runStatus, 'complete');
+  assert.ok(lines.some(line => /using EAS build repacked-app, the hosted repack of this commit another target of this run made/.test(line)), lines.join('\n'));
+});
+
+test("a target waits for the leader's repack while it runs, then installs it", async t => {
+  const message = await leaderMessage(t);
+  // The leader's build is queued, then repacking, then done on the fourth list.
+  const eas = { builds: [{ id: 'leader-repack', status: 'IN_QUEUE', platform: 'IOS', message }], lists: 0,
+    onList: state => { state.builds[0].status = state.lists >= 4 ? 'FINISHED' : state.lists >= 2 ? 'IN_PROGRESS' : 'IN_QUEUE'; } };
+  const follower = await fixture(t, { reuse: true, eas });
+  const lines = [];
+  const result = await runCiMap({ ...follower.options, ...share('duo-open'), progress: line => lines.push(line) });
+  assert.equal(follower.operations().includes('workflow:run'), false);
+  assert.deepEqual(downloaded(follower), ['leader-repack']);
+  assert.equal(result.easBuildId, 'leader-repack');
+  assert.equal(eas.lists, 4);
+  assert.ok(lines.some(line => /waiting for EAS build leader-repack, the hosted repack of this commit another target of this run started/.test(line)), lines.join('\n'));
+});
+
+test("a target whose leader's repack fails repacks itself, with the same key for the others", async t => {
+  const message = await leaderMessage(t);
+  const eas = { builds: [{ id: 'leader-repack', status: 'IN_PROGRESS', platform: 'IOS', message }], lists: 0,
+    onList: state => { if (state.lists === 3) state.builds.find(build => build.id === 'leader-repack').status = 'ERRORED'; } };
+  const follower = await fixture(t, { reuse: true, eas });
+  const lines = [];
+  const result = await runCiMap({ ...follower.options, ...share('duo-open'), progress: line => lines.push(line) });
+  assert.equal(follower.operations().filter(operation => operation === 'workflow:run').length, 1);
+  assert.equal(result.easBuildId, 'repacked-app');
+  assert.equal(eas.lists, 3);
+  assert.equal(eas.builds[0].message, message, "the follower's own repack carries the same key");
+  assert.ok(lines.some(line => /the shared repack \(EAS build leader-repack\) ended ERRORED; repacking here/.test(line)), lines.join('\n'));
+});
+
+test('a repack of other inputs is never used, and the wait for one ends after three minutes of modest polling', async t => {
+  // Another run's repack of the same app, and builds of another platform or with the key not at the end.
+  const otherRun = await leaderMessage(t, 'acme/example#1');
+  const message = await leaderMessage(t);
+  const changedEas = { builds: [], lists: 0 };
+  const changedLeader = await fixture(t, { reuse: true, eas: changedEas });
+  writeFileSync(join(changedLeader.options.project, 'app.json'), JSON.stringify({ expo: { name: 'Example', slug: 'example', version: '2' } }));
+  await runCiMap({ ...changedLeader.options, ...share('iphone') });
+  const otherJavaScript = changedEas.builds[0].message;
+  assert.notEqual(otherJavaScript, message, 'another commit of the app has another key');
+  assert.notEqual(otherRun, message, 'another run has another key');
+  const eas = { builds: [
+    { id: 'other-run', status: 'FINISHED', platform: 'IOS', message: otherRun },
+    { id: 'other-javascript', status: 'FINISHED', platform: 'IOS', message: otherJavaScript },
+    { id: 'other-platform', status: 'FINISHED', platform: 'ANDROID', message },
+    { id: 'not-the-key', status: 'FINISHED', platform: 'IOS', message: `${message} (edited)` },
+  ], lists: 0 };
+  const follower = await fixture(t, { reuse: true, eas });
+  const lines = [];
+  const result = await runCiMap({ ...follower.options, ...share('duo-open'), progress: line => lines.push(line) });
+  assert.equal(result.easBuildId, 'repacked-app', 'the follower repacked its own app');
+  assert.equal(follower.operations().filter(operation => operation === 'workflow:run').length, 1);
+  // One list every 15 s for three minutes, and the first at once.
+  assert.ok(eas.lists >= 12 && eas.lists <= 13, `${eas.lists} lists`);
+  assert.ok(lines.some(line => /no repack of this commit from iphone appeared within 3 minutes; repacking here/.test(line)), lines.join('\n'));
 });
 
 test('capture.repack: local repacks on the runner and installs the app from it, with no upload', async t => {

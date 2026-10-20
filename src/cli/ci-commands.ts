@@ -15,7 +15,7 @@ import { installCiFiles } from "../ci/workflow-install.js";
 import { readRouteEntry } from "../ci/route-entry.js";
 import { buildVerifiedPlan } from "../ci/verified-plan.js";
 import { formatCaptureCheck, formatDoctorReport, referencedSecretNames, runCaptureCheck, runDoctor } from "../ci/doctor.js";
-import { readExploreConfig, readExploreInstructions, resolveTargetConfig, configTargets, posedTargets, isTargetId, withRunOverrides, warnIgnoredExpiry, configPlatforms as listPlatforms, EXPLORE_PLATFORMS, DEFAULT_EXPLORE_CONFIG_PATH, type ExplorePlatform } from "../config/explore-config.js";
+import { readExploreConfig, readExploreInstructions, resolveTargetConfig, configTargets, posedTargets, hostedRepackPeers, isTargetId, withRunOverrides, warnIgnoredExpiry, configPlatforms as listPlatforms, EXPLORE_PLATFORMS, DEFAULT_EXPLORE_CONFIG_PATH, type ExplorePlatform } from "../config/explore-config.js";
 import { argumentError, output, required, has, flag, flags, nonNegativeInteger, oneOf, positiveInteger } from "./args.js";
 import { help } from "./help.js";
 import { CiError } from "../shared/ci-errors.js";
@@ -236,12 +236,14 @@ export async function captureReview(): Promise<void> {
   const rawConfig = await readExploreConfig(headProject, configPath);
   // A release comparison's workflow may still pass --expires-in; ci:deploy says once that report.preview.expiresAfter is ignored.
   if (has("expires-in")) warnIgnoredExpiry("--expires-in");
-  const config = withRunOverrides(resolveTargetConfig(rawConfig, selection), { scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") });
+  const overrides = { scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") };
+  const config = withRunOverrides(resolveTargetConfig(rawConfig, selection), overrides);
   if (has("pull-request") === has("compare")) argumentError("Pass --pull-request FILE for a pull request, or --compare FILE for any two commits.", has("compare") ? "compare" : "pull-request");
   // A matrix job names its target; its artifacts, report and comment section carry the target's id.
   const named = selection.target !== undefined || selection.platform !== undefined;
   const common = { ...(named ? { target: config.target!.id } : {}), ...(selection.platform ? { platform: selection.platform } : {}),
-    platforms: listPlatforms(rawConfig), targets: configTargets(rawConfig), posedTargets: posedTargets(rawConfig), baseProject: required("base-project"), headProject,
+    platforms: listPlatforms(rawConfig), targets: configTargets(rawConfig), posedTargets: posedTargets(rawConfig), repackPeers: hostedRepackPeers(rawConfig, config, overrides),
+    baseProject: required("base-project"), headProject,
     output: required("output"), config, configPath, progress: stderrProgress() };
   const result = has("compare") ? await runCompareCi({ ...common, comparePath: required("compare") })
     : await runPublicCi({ ...common, pullRequestPath: required("pull-request") });
@@ -253,8 +255,10 @@ export async function captureReview(): Promise<void> {
 export async function captureBaseline(): Promise<void> {
   const project = required("project");
   const rawConfig = await readExploreConfig(project, flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH);
-  const config = withRunOverrides(resolveTargetConfig(rawConfig, targetSelection()), { controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") });
-  output({ ok: true, ...await runBaselineCi({ platform: config.app.platform, project, sha: required("sha"), output: required("output"), config, targets: configTargets(rawConfig), posedTargets: posedTargets(rawConfig), progress: stderrProgress() }) });
+  const overrides = { controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") };
+  const config = withRunOverrides(resolveTargetConfig(rawConfig, targetSelection()), overrides);
+  output({ ok: true, ...await runBaselineCi({ platform: config.app.platform, project, sha: required("sha"), output: required("output"), config, targets: configTargets(rawConfig), posedTargets: posedTargets(rawConfig),
+    repackPeers: hostedRepackPeers(rawConfig, config, overrides), progress: stderrProgress() }) });
 }
 
 /** `capture` (or `capture:review`) `[--base REF] [--head REF | --committed]`: a local review, opened in the Viewer or hosted with --upload. */
