@@ -61,10 +61,18 @@ async function materializedFile(data: unknown): Promise<string | undefined> {
   return undefined;
 }
 
-/** An error's message with its cause's, as Argent's client words a failed fetch: "fetch failed: connect ECONNREFUSED …". */
-function failureText(error: unknown): string {
+/**
+ * An error's message with its cause's, as Argent's client words a failed fetch: "fetch failed: connect ECONNREFUSED …".
+ * A host that resolves to several addresses (localhost: ::1 and 127.0.0.1) fails with an AggregateError whose message is
+ * empty, so the causes' codes are named too.
+ */
+export function failureText(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
-  return error.cause instanceof Error ? `${error.message}: ${error.cause.message}` : error.message;
+  const cause = error.cause;
+  if (!(cause instanceof Error)) return error.message;
+  const codes = [cause, ...(cause instanceof AggregateError ? cause.errors : [])]
+    .map(item => (item as { code?: unknown } | undefined)?.code).filter((code): code is string => typeof code === "string" && !cause.message.includes(code));
+  return [`${error.message}:`, cause.message, ...(codes.length ? [`(${[...new Set(codes)].join(", ")})`] : [])].filter(Boolean).join(" ");
 }
 
 async function loadClient(environment: NodeJS.ProcessEnv, clientModule?: string): Promise<ArgentClient> {
@@ -80,7 +88,8 @@ export function argentClientCall(client: ArgentClient, signal: () => AbortSignal
     const active = signal();
     if (active.aborted) throw new ArgentCallError(`argent run ${tool} was not sent: the command was given up.`, false);
     let answer: { data: unknown };
-    try { answer = await client.callTool(tool, args, { signal: AbortSignal.any([active, AbortSignal.timeout(ARGENT_CALL_TIMEOUT_MS)]) }); }
+    const timeoutMs = Math.max(1, Math.ceil(Math.min(ARGENT_CALL_TIMEOUT_MS, options?.timeoutMs ?? ARGENT_CALL_TIMEOUT_MS)));
+    try { answer = await client.callTool(tool, args, { signal: AbortSignal.any([active, AbortSignal.timeout(timeoutMs)]) }); }
     catch (error) { throw new ArgentCallError(`argent run ${tool} failed: ${failureText(error).slice(0, 800)}`, true); }
     if (!options?.out) return answer.data;
     const file = await materializedFile(answer.data);

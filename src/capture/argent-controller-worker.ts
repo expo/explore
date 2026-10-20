@@ -8,7 +8,7 @@
 import { spawnSync } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { ArgentCallError } from "./argent-driver.js";
-import { argentBridgeSettings, createArgentBridge } from "./argent-bridge.js";
+import { argentBridgeSettings, argentRunFailureDetail, createArgentBridge } from "./argent-bridge.js";
 import { ensureController } from "../shared/controller-cache.js";
 
 const ARGENT_CALL_TIMEOUT_MS = 180_000;
@@ -34,17 +34,12 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const callArgent = async (tool: string, args: Record<string, unknown>, options?: { out?: string }): Promise<unknown> => {
+  const callArgent = async (tool: string, args: Record<string, unknown>, options?: { out?: string; timeoutMs?: number }): Promise<unknown> => {
     const run = spawnSync(process.execPath, [cli, "run", tool, "--args", JSON.stringify(args), ...(options?.out ? ["--out", options.out] : [])],
-      { env: environment, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: ARGENT_CALL_TIMEOUT_MS });
+      { env: environment, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: Math.min(ARGENT_CALL_TIMEOUT_MS, options?.timeoutMs ?? ARGENT_CALL_TIMEOUT_MS) });
     if (run.error) throw new ArgentCallError(`argent run ${tool}: ${run.error.message}`, true);
     if (run.status !== 0) {
-      const lines = `${run.stderr ?? ""}\n${run.stdout ?? ""}`.trim().split("\n").filter(Boolean);
-      // A stack trace can follow the line that says the tool-server is not serving its tools yet, which the bridge waits
-      // out (argent-driver's TOOLS_NOT_SERVED), so that line is kept ahead of the last ones.
-      const notServed = lines.find(line => /GET \/tools failed: \d{3}|ECONNREFUSED/.test(line));
-      const detail = [...new Set([...(notServed ? [notServed] : []), ...lines.slice(-4)])].join(" | ").slice(0, 800);
-      throw new ArgentCallError(`argent run ${tool} failed: ${detail}`, true);
+      throw new ArgentCallError(`argent run ${tool} failed: ${argentRunFailureDetail(run.stderr ?? "", run.stdout ?? "")}`, true);
     }
     // With --out the client saves the tool's file and prints where ("Wrote: <path>"), not the tool's JSON.
     if (options?.out) {

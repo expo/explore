@@ -57,6 +57,17 @@ function summarize(tool: string, value: unknown): unknown {
     screen: tree.screen, nodes, roots: (tree.roots ?? []).map(root => [root.type ?? null, root.bundleId ?? null, (root.children ?? []).length]) };
 }
 
+/**
+ * What a failed `argent run` printed, for its error: the last few lines, and ahead of them the line saying the
+ * tool-server is not serving its tools yet, which the bridge waits out (argent-driver's TOOLS_NOT_SERVED) and which a
+ * stack trace can push out of the last lines.
+ */
+export function argentRunFailureDetail(stderr: string, stdout: string): string {
+  const lines = `${stderr}\n${stdout}`.trim().split("\n").filter(Boolean);
+  const notServed = lines.find(line => /GET \/tools failed: \d{3}|ECONNREFUSED/.test(line));
+  return [...new Set([...(notServed ? [notServed] : []), ...lines.slice(-4)])].join(" | ").slice(0, 800);
+}
+
 /** A command's answer, with the lines it has for the capture's log (`notes`), which its host prints. */
 export type ArgentBridgeResult = BridgeResult & { notes?: string[] };
 

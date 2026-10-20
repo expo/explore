@@ -306,37 +306,65 @@ test("an unreachable tool-server before a UI action is the retryable 'Remote dae
 // first list-devices of its install, before it served its tools.
 const TOOLS_404 = "argent run list-devices failed: GET /tools failed: 404 Not Found";
 
+/** A clock the harness's pauses (and, given `requestMs`, its requests) move forward. */
+function withClock(context, requestMs = () => 0) {
+  const clock = { now: 0, pauses: [], timeouts: [] };
+  context.now = () => clock.now;
+  context.sleep = async milliseconds => { clock.pauses.push(milliseconds); clock.now += milliseconds; };
+  const call = context.call;
+  context.call = async (tool, args, options) => {
+    if (options?.timeoutMs !== undefined) clock.timeouts.push(options.timeoutMs);
+    clock.now += Math.min(requestMs(tool), options?.timeoutMs ?? Infinity);
+    return call(tool, args, options);
+  };
+  return clock;
+}
+
 test("a tool-server that does not serve /tools yet is asked again, with a log line, until it does", async () => {
   const { run, calls, context } = harness("ios", { "list-devices": [new ArgentCallError(TOOLS_404, true), new ArgentCallError(TOOLS_404, true), IOS_DEVICES], "reinstall-app": {} }, { bundleId: BUNDLE });
-  const pauses = [], lines = [];
-  context.sleep = async milliseconds => { pauses.push(milliseconds); };
+  const clock = withClock(context);
+  const lines = [];
   context.progress = line => lines.push(line);
   assert.deepEqual((await run(["install", "/work/bundle/euxy.app", ...flags("ios")])).json.data, { installed: true, appBundleId: BUNDLE });
   assert.equal(calls.filter(call => call.tool === "list-devices").length, 3);
-  assert.deepEqual(pauses, [1_000, 2_000]);
-  assert.equal(lines.length, 2);
-  assert.match(lines[0], /^Argent's tool-server is not serving its tools yet \(argent run list-devices failed: GET \/tools failed: 404 Not Found\); sending list-devices again in 1 s \(1\/10\)$/);
+  assert.deepEqual(clock.pauses, [1_000, 2_000]);
+  assert.deepEqual(lines, [
+    "Argent's tool-server is not serving its tools yet (argent run list-devices failed: GET /tools failed: 404 Not Found); sending list-devices again in 1 s (75 s left of 75 s)",
+    "Argent's tool-server is not serving its tools yet (argent run list-devices failed: GET /tools failed: 404 Not Found); sending list-devices again in 2 s (74 s left of 75 s)"]);
   assert.equal(context.state.toolsServed, true);
+  assert.deepEqual(clock.timeouts, [75_000, 74_000, 72_000], "each try gets only what is left of the window");
+  assert.equal(calls.filter(call => call.tool === "reinstall-app")[0].options, undefined, "a served tool-server's calls keep their own timeout");
 });
 
 test("a refused connection or a 503 from /tools is the tool-server still starting too", async () => {
   for (const failure of ["fetch failed: connect ECONNREFUSED 127.0.0.1:9", "GET /tools failed: 503 Service Unavailable"]) {
     const starting = new ArgentCallError(`argent run list-devices failed: ${failure}`, true);
-    const { run, calls } = harness("ios", { "list-devices": [starting, starting, starting, IOS_DEVICES], "ui-tree": IOS_HOME });
+    const { run, calls, context } = harness("ios", { "list-devices": [starting, starting, starting, IOS_DEVICES], "ui-tree": IOS_HOME });
+    withClock(context);
     assert.equal((await run(["snapshot", ...flags("ios")])).exitCode, 0, failure);
     assert.equal(calls.filter(call => call.tool === "list-devices").length, 4, "asked past the two read retries");
   }
 });
 
-test("a tool-server that never serves /tools fails with a clear error after about 75 s", async () => {
+test("a tool-server that never serves /tools fails with a clear error 75 s after the first try", async () => {
   const { run, calls, context } = harness("ios", { "list-devices": new ArgentCallError(TOOLS_404, true), "reinstall-app": {} }, { bundleId: BUNDLE });
-  const pauses = [];
-  context.sleep = async milliseconds => { pauses.push(milliseconds); };
+  const clock = withClock(context);
   const failed = await run(["install", "/work/bundle/euxy.app", ...flags("ios")]);
   assert.deepEqual(failed.json.error, { code: "TOOL_SERVER_NOT_READY", message: `Argent's tool-server did not start serving its tools within 75 s: ${TOOLS_404}` });
-  assert.equal(pauses.reduce((sum, pause) => sum + pause, 0), 75_000);
+  assert.equal(clock.now, 75_000);
   assert.equal(calls.filter(call => call.tool === "list-devices").length, 11);
   assert.ok(!calls.some(call => call.tool === "reinstall-app"));
+});
+
+test("slow answers count against the 75 s too: each try is cut to the time left, and the wait ends on time", async () => {
+  const slow = new ArgentCallError("argent run list-devices failed: GET /tools failed: 503 Service Unavailable", true);
+  const { run, calls, context } = harness("ios", { "list-devices": slow, "reinstall-app": {} }, { bundleId: BUNDLE });
+  // Each 503 takes 30 s to come back, as a gateway's might.
+  const clock = withClock(context, () => 30_000);
+  assert.equal((await run(["install", "/work/bundle/euxy.app", ...flags("ios")])).json.error.code, "TOOL_SERVER_NOT_READY");
+  assert.equal(clock.now, 75_000, "not eleven 30 s tries");
+  assert.deepEqual(clock.timeouts, [75_000, 44_000, 12_000]);
+  assert.equal(calls.filter(call => call.tool === "list-devices").length, 3);
 });
 
 test("an unknown tool's 404 after the tool-server is up fails at once, and a later /tools 404 keeps only the read retries", async () => {

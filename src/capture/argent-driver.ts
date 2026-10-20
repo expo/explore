@@ -15,7 +15,8 @@ export class ArgentCallError extends Error {
   constructor(message: string, readonly sent: boolean) { super(message); }
 }
 
-export type ArgentCall = (tool: string, args: Record<string, unknown>, options?: { out?: string }) => Promise<unknown>;
+/** `timeoutMs` shortens the call's own timeout, so a wait for a tool-server still starting stays within its window. */
+export type ArgentCall = (tool: string, args: Record<string, unknown>, options?: { out?: string; timeoutMs?: number }) => Promise<unknown>;
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -45,6 +46,8 @@ export type ArgentBridgeContext = {
   device?: string;
   version: string;
   sleep: (milliseconds: number) => Promise<void>;
+  /** A monotonic clock in milliseconds (performance.now when absent), which bounds the wait for a tool-server to start. */
+  now?: () => number;
   /** Moves a file the Argent client downloaded (a screen recording) to where Explore asked for it. */
   moveFile: (from: string, to: string) => Promise<void>;
   /** Whether the tool-server answers, checked before a UI action is sent (see `remoteUnavailable`). */
@@ -271,9 +274,12 @@ const DEPENDENCY_RETRY_DELAYS_MS = [3_000, 6_000] as const;
  * and the whole target failed. An unknown tool's 404 comes from POST /tools/<name> instead, and still fails at once.
  */
 const TOOLS_NOT_SERVED = /GET \/tools failed: (?:404|503)\b|ECONNREFUSED/;
-/** How long a tool-server that has not answered yet gets to start serving its tools: about 75 s in all. */
-const STARTUP_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 10_000, 10_000, 10_000, 10_000, 10_000, 10_000] as const;
-const STARTUP_WINDOW_SECONDS = STARTUP_RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0) / 1_000;
+/**
+ * How long a tool-server that has not answered yet gets to start serving its tools, requests included: a deadline, not
+ * a number of tries, since each try can itself take until the call's timeout. The pauses between tries grow to 10 s.
+ */
+const STARTUP_WINDOW_MS = 75_000;
+const STARTUP_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 10_000] as const;
 const SPRINGBOARD = "com.apple.springboard";
 const ANDROID_SYSTEM_UI = "com.android.systemui";
 const OPEN_IN_APP_PROMPT = /^Open in “.+”\?$/;
@@ -366,21 +372,33 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
   const call = async (tool: string, args: Record<string, unknown> = {}, options?: { out?: string }): Promise<Record<string, unknown>> => {
     // Tools that name devices their own way (or none) take no udid.
     const withDevice = tool === "list-devices" || tool === "stop-all-simulator-servers" ? args : { udid: state.udid, ...args };
+    const clock = context.now ?? (() => performance.now());
+    // The window opens with the first call to a tool-server that has not answered yet, and closes 75 s later. A device
+    // already named came from the tool-server's own answer.
+    const served = () => state.toolsServed === true || state.udid !== undefined;
+    const startupDeadline = served() ? undefined : clock() + STARTUP_WINDOW_MS;
     for (let readRetry = 0, dependencyRetry = 0, startupRetry = 0; ;) {
+      const starting = !served() && startupDeadline !== undefined;
       try {
-        const answer = record(await context.call(tool, withDevice, options));
+        // A call to a tool-server still starting gets only the time left in the window.
+        const answer = record(await context.call(tool, withDevice, starting ? { ...options, timeoutMs: Math.max(1, Math.ceil(startupDeadline - clock())) } : options));
         state.toolsServed = true;
         return answer;
       } catch (error) {
         // Until the session's tool-server has answered once, a GET /tools it does not serve is it still starting.
-        if (!state.toolsServed && error instanceof ArgentCallError && TOOLS_NOT_SERVED.test(error.message)) {
-          if (startupRetry >= STARTUP_RETRY_DELAYS_MS.length) {
-            throw new BridgeFailure("TOOL_SERVER_NOT_READY", `Argent's tool-server did not start serving its tools within ${STARTUP_WINDOW_SECONDS} s: ${error.message}`);
+        if (starting && error instanceof ArgentCallError) {
+          const notServed = TOOLS_NOT_SERVED.test(error.message);
+          const left = startupDeadline - clock();
+          // A try the window's end cut short is the tool-server not starting in time, whatever the request reported.
+          if (left <= 0) {
+            throw new BridgeFailure("TOOL_SERVER_NOT_READY", `Argent's tool-server did not start serving its tools within ${STARTUP_WINDOW_MS / 1_000} s: ${error.message}`);
           }
-          const delay = STARTUP_RETRY_DELAYS_MS[startupRetry++]!;
-          context.progress?.(`Argent's tool-server is not serving its tools yet (${error.message}); sending ${tool} again in ${delay / 1_000} s (${startupRetry}/${STARTUP_RETRY_DELAYS_MS.length})`);
-          await context.sleep(delay);
-          continue;
+          if (notServed) {
+            const delay = Math.min(STARTUP_RETRY_DELAYS_MS[Math.min(startupRetry++, STARTUP_RETRY_DELAYS_MS.length - 1)]!, left);
+            context.progress?.(`Argent's tool-server is not serving its tools yet (${error.message}); sending ${tool} again in ${Math.ceil(delay / 1_000)} s (${Math.ceil(left / 1_000)} s left of ${STARTUP_WINDOW_MS / 1_000} s)`);
+            await context.sleep(delay);
+            continue;
+          }
         }
         if (error instanceof ArgentCallError && error.message.includes(`[Tool:${tool}] ${SERVICE_DEPENDENCY_FAILED}`)
           && dependencyRetry < DEPENDENCY_RETRY_DELAYS_MS.length) {
