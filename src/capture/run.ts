@@ -21,7 +21,7 @@ import { lstatIfExists, isWithin, temporaryCaptureDirectory, absoluteContractFil
 import { loadAppIcon, loadCachedAppIcon, storeAppIcon } from "./app-icon.js";
 import { defaultRunner, runAgentControllerCommand } from "./controller.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
-import { assertCaptureEasProfile, assertSimulatorAvailable, fingerprintFrom, hasEasEnvironmentFetchFailure, nativeBuildFrom, existingBuild, repackProfileFrom, prepareExactSourceBuild, type RepackMode } from "./eas-build.js";
+import { assertCaptureEasProfile, assertSimulatorAvailable, fingerprintFrom, hasEasEnvironmentFetchFailure, nativeBuildFrom, existingBuild, repackProfileFrom, prepareExactSourceBuild, HOSTED_REPACK_BUDGET_MS, type RepackMode, type RepackShare } from "./eas-build.js";
 import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, endedOwnSimulatorSession, liveSimulatorSessionsNamed, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, controllerVersion, simulatorOsVersion, type ActiveSimulatorRuntime, type SimulatorConnection } from "./simulator.js";
 import { argentControllerInvocation } from "./controller-invocation.js";
 import { startArgentBridgeRunner, type ArgentBridgeRunner } from "./argent-bridge-host.js";
@@ -71,6 +71,8 @@ export type CiMapOptions = {
   repack?: RepackMode;
   /** A folder the review's captures share builds through: targets of one platform, profile and commit build and repack once. */
   buildShare?: string;
+  /** The matrix jobs of this GitHub run that repack the same app: they make one hosted repack per commit between them. */
+  repackShare?: RepackShare;
   /** Which appearances to capture; `auto` (default) follows the app's `userInterfaceStyle`. */
   appearance?: AppearanceSetting;
   /**
@@ -504,6 +506,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const localName = `Explore ${options.device} (${side} ${options.gitCommit.slice(0, 8)})`;
   // An EAS session's start, once begun (startSession): it resolves with the start command's failure, if any.
   let sessionStart: Promise<unknown> | undefined;
+  // When the current session was asked for, so a session whose app took longer than its allowance can be replaced.
+  let sessionStartedAt: number | undefined;
   const stopEarlyDevice = async () => {
     // An EAS session started beside a repack that then failed: stop the exact session its handoff names.
     if (sessionStart) {
@@ -557,6 +561,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const startSession = (retry?: { timeoutMs: number }) => {
     if (local || sessionStart) return;
     if (!retry) say(`starting an EAS Simulator session (${options.device}) while the app is repacked`);
+    sessionStartedAt = (options.now ?? Date.now)();
     const request = (minutes: number) => ({ command: options.easCommand, args: ["simulator:start", "--name", sessionName, "--platform", options.platform, "--device", options.device,
       "--type", controller, "--package-version", controllerVersion(controller), "--public-link",
       "--max-duration-minutes", String(minutes), "--out-config-type", "dotenv", "--non-interactive"], cwd: simulatorProject, environment: easEnvironment,
@@ -580,6 +585,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const appDirectory = !options.buildShare ? await realpath(await mkdtemp(join(tmpdir(), "expo-explore-app-"))) : undefined;
   let localApp: string | undefined;
   type BuiltApp = { fingerprint: string; nativeEasBuildId: string | null; easBuildId: string | null; app?: string; reused: boolean; version?: string; buildNumber?: string };
+  // What a hosted repack waits with and reports through: one deadline from the moment the session starts beside it, for
+  // the wait for another job's repack and every repack of its own. The repack is shared with this run's other matrix
+  // jobs only when it repacks a build EAS already had: a native build this job made is its own, so nobody else's key matches it.
+  const repackWaits = (shared: boolean) => ({ ...(shared ? { share: options.repackShare } : {}), progress: say, now: options.now, sleep: options.sleep,
+    signal: options.signal, deadline: (options.now ?? Date.now)() + HOSTED_REPACK_BUDGET_MS });
   // `repacking` tells the captures sharing this build that their sessions can start too (sharedBuild).
   const buildApp = async (keepApp: string, repacking?: () => Promise<void>): Promise<BuiltApp> => {
     options.signal?.throwIfAborted();
@@ -588,12 +598,12 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     const sourceFingerprint = fingerprintFrom(fingerprintResult.stdout);
     const reusable = options.forceFreshBuild || hasEasEnvironmentFetchFailure(configResult.stderr) || hasEasEnvironmentFetchFailure(fingerprintResult.stderr)
       ? undefined : existingBuild(eas(["build:list", "--platform", options.platform, "--status", "finished", "--build-profile", options.easProfile,
-        "--fingerprint-hash", sourceFingerprint, ...(options.platform === "ios" ? ["--simulator"] : []), "--limit", "1", "--json", "--non-interactive"]).stdout);
+        "--fingerprint-hash", sourceFingerprint, ...(options.platform === "ios" ? ["--simulator"] : []), "--limit", "20", "--json", "--non-interactive"]).stdout);
     if (reusable) {
       say(`reusing EAS build ${reusable.id} (fingerprint ${sourceFingerprint.slice(0, 12)}); repacking it with this commit's JavaScript and the route observer`);
       startSession(); await repacking?.();
       const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
-        project, nativeBuildId: reusable.id, fingerprint: sourceFingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp });
+        project, nativeBuildId: reusable.id, fingerprint: sourceFingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp, ...repackWaits(true) });
       if (!repacked) throw new CiError({ code: "CAPTURE_OBSERVER_BUILD_UNSUPPORTED", stage: "instrumentation",
         message: "The build environment cannot be reproduced for automatic capture instrumentation.",
         nextAction: "Use a simulator build profile whose required bundle environment can be pulled for local repacking; an uninstrumented build cannot verify captures." });
@@ -607,7 +617,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     say(`EAS build ${built.id} finished; repacking it with the route observer`);
     startSession(); await repacking?.();
     const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
-      project, nativeBuildId: built.id, fingerprint: built.fingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp });
+      project, nativeBuildId: built.id, fingerprint: built.fingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp, ...repackWaits(false) });
     if (!repacked) throw new CiError({ code: "CAPTURE_OBSERVER_BUILD_UNSUPPORTED", stage: "instrumentation",
       message: "The fresh native build cannot be instrumented with the required route observer.",
       nextAction: "Use a simulator profile with a reproducible bundle environment so both revisions can be repacked with the same observer." });
@@ -621,12 +631,28 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       ? await sharedBuild({ directory: options.buildShare, appName, ...(options.signal ? { signal: options.signal } : {}), build: buildApp, owner: options.outputDirectory,
         key: { platform: options.platform, easProfile: options.easProfile, bundleId: options.bundleId, gitCommit: options.gitCommit, repack: options.repack ?? "eas", local,
           routes: inventory.map(route => route.id) },
-        waiting: () => say("using the build another target of this review is preparing for this commit"),
+        waiting: () => say("using the build another capture of this run is preparing for this commit"),
         // The session is named before its app exists, so a waiter's session boots while the other capture repacks.
         repacking: () => startSession() })
       : await buildApp(join(appDirectory!, appName));
     // A capture that used another capture's build has its session started above; this starts the rest.
     startSession();
+    // A session started beside an app that took longer to prepare than its allowance has less than the capture's minutes
+    // left, so it is replaced. One that named no session is left to the session block below, which finds out why.
+    const clock = options.now ?? Date.now;
+    if (!local && sessionStart && sessionStartedAt !== undefined && clock() - sessionStartedAt > SESSION_PREPARATION_MINUTES * 60_000) {
+      await sessionStart;
+      const handoff = await readSimulatorDotenvHandoff(dotenvPath).catch(() => undefined);
+      if (handoff?.sessionId) {
+        say(`the app took ${Math.round((clock() - sessionStartedAt) / 60_000)} minutes to prepare, more than the ${SESSION_PREPARATION_MINUTES} session ${handoff.sessionId} was started with for it; replacing it so the capture keeps its ${options.maxDurationMinutes} minutes`);
+        assertSimulatorStopped(eas(["simulator:stop", "--id", handoff.sessionId, "--json", "--non-interactive"], 2 * 60_000, simulatorProject).stdout, handoff.sessionId);
+        await rm(dotenvPath, { force: true });
+        sessionRetries += 1;
+        sessionName = sessionNameFor(sessionRetries);
+        sessionStart = undefined;
+        startSession({ timeoutMs: SESSION_START_TIMEOUT_MS });
+      }
+    }
     fingerprint = built.fingerprint; nativeEasBuildId = built.nativeEasBuildId; easBuildId = built.easBuildId; localApp = built.app; reusedEasBuild = built.reused;
     if (!app.version && built.version) app.version = built.version;
     if (!app.buildNumber && built.buildNumber) app.buildNumber = built.buildNumber;
