@@ -90,10 +90,10 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
 
 
 
-  "explore:binary": { archive:"value", output:"value", platform:"value", controller:"value", simulator:"value", device:"value", "bundle-id":"value", "launch-url":"value", hints:"value", "allow-destructive":"value",
+  "explore:binary": { replay:"value", archive:"value", output:"value", platform:"value", controller:"value", simulator:"value", device:"value", "bundle-id":"value", "launch-url":"value", hints:"value", "allow-destructive":"value",
     "max-duration-minutes":"value", "max-screens":"value", "max-actions":"value", provider:"value", model:"value", owner:"value", project:"value",
     upload:"boolean", "no-upload":"boolean", "expires-in":"value", alias:"value", "no-open":"boolean", port:"value" },
-  "explore:session": { session:"value", "env-file":"value", "bundle-id":"value", "app-name":"value", "app-version":"value", output:"value", platform:"value", controller:"value", device:"value", "launch-url":"value", hints:"value",
+  "explore:session": { replay:"value", session:"value", "env-file":"value", "bundle-id":"value", "app-name":"value", "app-version":"value", output:"value", platform:"value", controller:"value", device:"value", "launch-url":"value", hints:"value",
     "allow-destructive":"value", "max-duration-minutes":"value", "max-screens":"value", "max-actions":"value", provider:"value", model:"value", owner:"value", project:"value",
     upload:"boolean", "expires-in":"value", alias:"value", "no-open":"boolean", port:"value" },
   "ci:report": { input:"value", output:"value", target:"value", platform:"value" },

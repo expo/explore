@@ -103,8 +103,11 @@ export type PlatformRecord = {
     accessibility?: { compared: number; described: number; failed: number };
     routes?: number;
   };
-  /** The review's changed surfaces, one per surface; `scheme` for a secondary appearance (`<route>@<scheme>`). */
-  changes?: { id: string; route: string; group: ChangeGroup; description: string; scheme?: string }[];
+  /**
+   * The review's changed surfaces, one per surface; `scheme` for a secondary appearance (`<route>@<scheme>`). `offScreen`
+   * marks an accessibility-only change whose elements lie past the edge of the screen.
+   */
+  changes?: { id: string; route: string; group: ChangeGroup; description: string; scheme?: string; offScreen?: true }[];
   /** Screens whose source changed and whose captures were verified, but that got no verdict: the comparison did not run or failed. */
   notCompared?: number;
   /** Differences stated once rather than per screen (variants, app-wide source changes). */
@@ -270,7 +273,8 @@ export function parsePlatformRecord(value: unknown): PlatformRecord | undefined 
   if (Array.isArray(value.changes)) {
     const changes = value.changes.flatMap((entry): NonNullable<PlatformRecord["changes"]> => isRecord(entry) && isString(entry.id, 220) && isString(entry.route, 2000)
       && CHANGE_GROUPS.includes(entry.group as ChangeGroup) && isString(entry.description, 2000)
-      ? [{ id: entry.id, route: entry.route, group: entry.group as ChangeGroup, description: entry.description, ...(isString(entry.scheme, 20) ? { scheme: entry.scheme } : {}) }] : []);
+      ? [{ id: entry.id, route: entry.route, group: entry.group as ChangeGroup, description: entry.description, ...(isString(entry.scheme, 20) ? { scheme: entry.scheme } : {}),
+        ...(entry.offScreen === true && entry.group === "accessibility-only" ? { offScreen: true as const } : {}) }] : []);
     if (changes.length <= 2000) record.changes = changes;
   }
   const navigation = parseNavigation(value.navigation);

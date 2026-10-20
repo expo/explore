@@ -33,6 +33,10 @@ Platform, bundle id, app name and version are read from the archive; do not pass
 
 Budgets default to 15 minutes, 40 screens, 150 actions (`--max-duration-minutes`, `--max-screens`, `--max-actions`). Steer the model with `--hints "focus on the onboarding and settings"`, skip onboarding with `--launch-url myapp://home`, and allow a specific risky control with `--allow-destructive "Clear cache"`.
 
+## The same steps on every run: `--replay`
+
+To compare runs, or an iPhone with an Android phone, screen for screen, pass `--replay steps.json` to `explore:binary` or `explore:session`: Explore takes the steps in the file instead of a model's, and no model access is needed. The format is in the README ("Take the same steps on every run and device"): `{ "steps": [{ "capture": "Home" }, { "action": "tap", "label": "Settings" }, { "capture": "Settings" }] }`, with `platforms` to limit a step and `optional` for an action that may fail. The plan is checked before a device starts: unknown fields, a plan with no steps for the platform, more captures or actions than `--max-screens` / `--max-actions`, and a `{{secret:NAME}}` in a `fill` or `type` whose variable is not set are all refused (`REPLAY_PLAN_INVALID`, `REPLAY_PLAN_EMPTY`, `REPLAY_PLAN_OVER_BUDGET`, `EXPLORATION_SECRET_MISSING`). `--provider`, `--model` and `--hints` cannot be combined with it (`REPLAY_OPTIONS_IGNORED`).
+
 ## Sign-in and other app state
 
 Without help, the model treats a sign-in wall as the end of the road: it captures it and stops (`blocked`). Before running, read what you can about the app (its source if you have it, its first screens otherwise) and decide what it needs.

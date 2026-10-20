@@ -57,6 +57,7 @@ function assertReviewFields(surface: Surface, enforceComparisonEvidence: boolean
       || (["modified", "unchanged", "variant"].includes(review.status) && (!surface.base || !surface.head))
       || (surface.sourceScope !== undefined && !["added", "removed"].includes(review.status)
         && !SCOPE_VERDICTS[surface.sourceScope]?.includes(review.status))
+      || (review.offScreen !== undefined && (review.offScreen !== true || review.status !== "modified" || surface.visual?.verdict !== "unchanged"))
       || (review.facts !== undefined && (!Array.isArray(review.facts) || review.facts.length > 100
         || review.facts.some((fact) => !fact || typeof fact.category !== "string" || typeof fact.templateId !== "string"
           || typeof fact.bullet !== "string" || !fact.bullet.trim() || fact.bullet.length > MAX_REVIEW_DESCRIPTION)))) {

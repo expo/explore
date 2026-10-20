@@ -93,6 +93,8 @@ export type EvidenceComparatorResult = {
   visualAssessment?: VisualEvidenceAssessment;
   /** Feed directly to summarizeReviewerChanges. */
   reviewerChanges: ReviewerChangeInput[];
+  /** The screenshots match, and every element the changes name lies at least partly past the edge of the screen. */
+  offScreen?: true;
 };
 
 type SupportedInput = Extract<ReviewerChangeInput, { assessment: "supported" }>;
@@ -614,6 +616,54 @@ function outermost(elements: readonly ObservedElement[]): ObservedElement[] {
         || (ROLE_SPECIFICITY[other.role] === ROLE_SPECIFICITY[element.role]
           && compareText(other.elementId, element.elementId) < 0);
     });
+  });
+}
+
+/**
+ * The screen in its accessibility tree's units: the element at the origin with the screenshot's shape (either way round,
+ * since a frame turned to show an opened iPhone Duo upright keeps the tree on the panel's portrait axes), the largest if
+ * several. Both controllers report the app's root that way. Without the screenshot's size there is no telling which
+ * element is the screen.
+ */
+function viewportOf(side: ResolvedSide): ElementBounds | undefined {
+  const image = side.map.artifacts.find(artifact => artifact.id === side.observation.screenshotArtifactId);
+  if (!image?.width || !image.height) return undefined;
+  const { width, height } = image;
+  const shaped = (bounds: ElementBounds) => Math.abs(bounds.width * height - bounds.height * width) <= 0.01 * width * height
+    || Math.abs(bounds.width * width - bounds.height * height) <= 0.01 * width * height;
+  return side.observation.elements.flatMap(element => boundsOf(element) ?? [])
+    .filter(bounds => Math.abs(bounds.x) < 1 && Math.abs(bounds.y) < 1 && bounds.width > 0 && bounds.height > 0 && shaped(bounds))
+    .sort((a, b) => b.width * b.height - a.width * a.height)[0];
+}
+
+/**
+ * Whether the screenshots cannot show the changes because the elements they name lie past the edge of the screen: each
+ * change names at least one element, and more than half of each named element's area is beyond the screen on its side.
+ * Both controllers leave an element wholly outside the screen out of the tree (the Argent bridge as agent-device does),
+ * so a change past the edge can only show as an element straddling it, as Tempo's footnote below the fold of its sheet
+ * on the closed iPhone Duo in brentvatne/euxy#172 (review run 39362642343) would. Mostly outside, not merely crossing
+ * an edge: a control nudged a point or two past the edge is still on the screen, and its change stays "accessibility
+ * only". A change whose elements have no bounds never qualifies.
+ */
+function changesOffScreen(facts: readonly SupportedInput[], base: ResolvedSide, head: ResolvedSide): boolean {
+  const changes = facts.filter(fact => !["unstable-text", "no-visible-change", "visual-changed"].includes(fact.change.kind));
+  if (!changes.length) return false;
+  const viewports = { base: viewportOf(base), head: viewportOf(head) };
+  const outside = (reference: string) => {
+    const [, side, id] = /^(base|head):element:(.+)$/.exec(reference) ?? [];
+    if (side !== "base" && side !== "head") return undefined;
+    const viewport = viewports[side];
+    const element = (side === "base" ? base : head).observation.elements.find(candidate => candidate.elementId === id);
+    const bounds = element && boundsOf(element);
+    if (!viewport || !bounds) return false;
+    const visibleWidth = Math.max(0, Math.min(bounds.x + bounds.width, viewport.x + viewport.width) - Math.max(bounds.x, viewport.x));
+    const visibleHeight = Math.max(0, Math.min(bounds.y + bounds.height, viewport.y + viewport.height) - Math.max(bounds.y, viewport.y));
+    const area = bounds.width * bounds.height;
+    return area > 0 && visibleWidth * visibleHeight < area / 2;
+  };
+  return changes.every(fact => {
+    const named = fact.evidenceRefs.map(outside).filter((value): value is boolean => value !== undefined);
+    return named.length > 0 && named.every(Boolean);
   });
 }
 
@@ -1276,6 +1326,7 @@ function commonResult(input: CommonSurfaceComparatorInput): EvidenceComparatorRe
   const status: "modified" | "unchanged" = hasRuntimeDelta || reasons.length > 0
     ? "modified"
     : "unchanged";
+  const offScreen = input.visualAssessment.status === "unchanged" && changesOffScreen(facts, base, head);
   return {
     surfaceId: input.impact.id,
     status,
@@ -1288,6 +1339,7 @@ function commonResult(input: CommonSurfaceComparatorInput): EvidenceComparatorRe
     ),
     visualAssessment: input.visualAssessment,
     reviewerChanges,
+    ...(offScreen ? { offScreen: true as const } : {}),
   };
 }
 

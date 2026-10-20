@@ -143,6 +143,16 @@ function notComparedChange(surface: Surface): boolean {
   return verified && (!surface.review || surface.visual?.reason === "diff-failed");
 }
 
+/**
+ * An accessibility-only change whose elements lie past the edge of the screen (the review's `offScreen`), so another
+ * target's row can say the change is there, off-screen, rather than missing. Like notComparedChange, a comparison that
+ * failed or a redirect is not one.
+ */
+function offScreenChange(surface: Surface): boolean {
+  return surface.review?.offScreen === true && isAccessibilityOnlyChange(surface) && surface.visual?.reason !== "diff-failed"
+    && (surface.head ?? surface.base)?.kind !== "redirect";
+}
+
 function routeOf(surface: Surface): string {
   return plainText(surface.head?.route || surface.base?.route || surface.id, MAX_ROUTE_LENGTH);
 }
@@ -302,7 +312,8 @@ export function platformRecordOf(state: PublicCommentState, target?: CommentTarg
       const group = groupOf(surface, evidenceBased);
       if (group === "unlisted") continue;
       const scheme = schemeOf(surface.id);
-      record.changes.push({ id: surface.id, route: routeOf(surface), group, description: descriptionOf(surface, group), ...(scheme ? { scheme } : {}) });
+      record.changes.push({ id: surface.id, route: routeOf(surface), group, description: descriptionOf(surface, group), ...(scheme ? { scheme } : {}),
+        ...(group === "accessibility-only" && offScreenChange(surface) ? { offScreen: true as const } : {}) });
     }
     const navigation = state.map ? navigationOf(state.review, new Map(record.changes.map(change => [change.id, change.group]))) : undefined;
     if (navigation) record.navigation = navigation;
@@ -562,10 +573,24 @@ function renderChangeRow(row: ChangeRow, ready: PlatformRecord[]): string {
     text = `${route} · ${description}`;
   }
   const tag = row.group === "accessibility-only" ? "accessibility only" : row.group === "needs-review" ? "needs review" : undefined;
+  return `- ${[text, tag, ...whereNote(row, ready)].filter(Boolean).join(" · ")}`;
+}
+
+/**
+ * Where a screen's change shows. A target whose screenshots match because the changed elements lie past the edge of the
+ * screen has the change, off-screen, so it is named apart: "iPhone 17, Android only · off-screen on iPhone Duo (closed)"
+ * for Tempo's footnote below the fold of its sheet in brentvatne/euxy#172 (review run 39362642343). The targets that show
+ * it are still named the shorter way among the others (none when all of them do); without such a target the note is what
+ * it always was.
+ */
+function whereNote(row: ChangeRow, ready: PlatformRecord[]): string[] {
+  const offScreen = row.group === "modified"
+    ? row.targets.filter(record => record.changes?.some(change => change.id === row.id && change.offScreen === true)) : [];
+  const shown = row.targets.filter(record => !offScreen.includes(record));
   // A target with screens it has no verdict on may have changed this one too: name where it changed, not where it did not.
-  const where = ready.some(record => !row.targets.includes(record) && gaps(record).length)
-    ? `on ${row.targets.map(labelOf).join(", ")}` : targetsNote(row.targets, ready);
-  return `- ${[text, tag, where].filter(Boolean).join(" · ")}`;
+  const unsure = ready.some(record => !row.targets.includes(record) && gaps(record).length);
+  const visible = unsure ? `on ${shown.map(labelOf).join(", ")}` : targetsNote(shown, ready.filter(record => !offScreen.includes(record)));
+  return [visible, offScreen.length ? `off-screen on ${offScreen.map(labelOf).join(", ")}` : undefined].filter((part): part is string => Boolean(part));
 }
 
 /** "Android only" / "not on Android": the targets a screen changed on, when not all of them, named the shorter way. */

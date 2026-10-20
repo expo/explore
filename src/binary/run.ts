@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createCiAgentSession, type CiAgentSession, type CiAgentSessionConfig } from "../capture/agent/session.js";
 import { createLocalCiAgentSession } from "../capture/agent/session-local.js";
 import type { CiAgentProviderName } from "../capture/agent/provider.js";
+import { assertReplayFits, createReplaySession, parseReplayPlan, replaySetup, type ReplayPlan } from "./replay.js";
 import { CONTROLLER_SESSION, baseEnvironment, isRecord } from "../capture/common.js";
 import { controllerData, defaultRunner, openedSimulatorDevice } from "../capture/controller.js";
 import type { CommandRequest, CommandResult } from "../capture/run.js";
@@ -59,6 +60,8 @@ export type BinaryExploreOptions = {
   simulator?: "eas" | "local";
   environment?: NodeJS.ProcessEnv;
   runner?: typeof defaultRunner;
+  /** Fixed steps to take instead of a model's; no model access is needed. */
+  replay?: ReplayPlan;
   createSession?: (config: CiAgentSessionConfig, options: { env: NodeJS.ProcessEnv; auth: ModelAuth }) => CiAgentSession;
   progress?: (message: string) => void;
   now?: () => number;
@@ -70,7 +73,7 @@ export type BinaryExploreResult = {
   archive: Omit<InspectedArchive, "path"> & { path: string };
   session: { id: string; platform: Platform; device: string; owner: string; project: string };
   runtime: ActiveSimulatorRuntime;
-  model: { provider: CiAgentProviderName; model: string; auth: "local-login" | "api-key" };
+  model: { provider: CiAgentProviderName | "replay"; model: string; auth: "local-login" | "api-key" | "none" };
   exploration: BlackBoxExplorerResult;
   durationMs: number;
 };
@@ -164,8 +167,8 @@ export function resolveSessionApp(runner: typeof defaultRunner, connection: Simu
  * App-test inputs: each {{secret:NAME}} in the hints names an environment variable whose value Explore types for the
  * model. Read before any session starts, so a missing one costs nothing.
  */
-export function hintInputs(hints: string | undefined, environment: NodeJS.ProcessEnv): ReturnType<typeof createExplorationInputs> {
-  try { return createExplorationInputs({ instructions: hints ?? "", environment }); }
+export function hintInputs(hints: string | undefined, environment: NodeJS.ProcessEnv, replay?: ReplayPlan): ReturnType<typeof createExplorationInputs> {
+  try { return createExplorationInputs({ instructions: hints ?? "", ...(replay ? { setup: replaySetup(replay) } : {}), environment }); }
   catch (error) {
     if (!(error instanceof CiError) || !error.code.startsWith("EXPLORATION_SECRET_")) throw error;
     const name = typeof error.details?.secretName === "string" ? error.details.secretName : "NAME";
@@ -194,6 +197,36 @@ function modelSession(provider: CiAgentProviderName, auth: ModelAuth, options: M
   const session = options.createSession ? options.createSession(config, { env: environment, auth })
     : auth === "api-key" ? createCiAgentSession(config, { env: environment }) : createLocalCiAgentSession(config, { env: environment });
   return { session, provider, model: config.model, auth };
+}
+
+/** The turns the model gets: three for each action and two for each screen, plus a few to look around and finish. */
+const turnBudget = (limits: { maxScreens: number; maxActions: number }): number => limits.maxActions * 3 + limits.maxScreens * 2 + 20;
+
+/**
+ * A replay plan is checked here as well as by the CLI, for callers that pass one directly. It takes the model's place, so
+ * the options that only steer a model would do nothing; the plan's own fill and type steps name the secrets it types.
+ */
+function replayPlan(options: Pick<BinaryExploreOptions, "replay" | "provider" | "model" | "hints">): ReplayPlan | undefined {
+  if (!options.replay) return undefined;
+  const ignored = (["provider", "model", "hints"] as const).filter(name => options[name] !== undefined);
+  if (ignored.length) {
+    throw binaryError("REPLAY_OPTIONS_IGNORED", `--replay takes the model's place, so ${ignored.map(name => `--${name}`).join(" and ")} would do nothing.`,
+      `Drop ${ignored.map(name => `--${name}`).join(" and ")}. A {{secret:NAME}} in the plan's fill and type steps is read from the environment, as one in --hints is.`);
+  }
+  const plan = parseReplayPlan(options.replay);
+  for (const [index, step] of plan.steps.entries()) {
+    if (!("action" in step) || step.action !== "open") continue;
+    try { assertAppUrl(step.url); }
+    catch (error) { throw new CiError({ code: "REPLAY_PLAN_INVALID", stage: "exploration", message: `Step ${index + 1}: ${error instanceof Error ? error.message : String(error)}`, nextAction: "Open only the app's own URLs in the replay plan." }); }
+  }
+  return plan;
+}
+
+/** A replay plan takes the model's place: no model access is checked or used. */
+function replayModel(plan: ReplayPlan, platform: Platform, limits: { maxScreens: number; maxActions: number }) {
+  assertReplayFits(plan, platform, { ...limits, maxTurns: turnBudget(limits) });
+  const session = createReplaySession(plan, platform);
+  return { session, budgetNote: session.budgetNote, provider: "replay" as const, model: "replay plan", auth: "none" as const };
 }
 
 /** Local `claude`/`codex` login unless an API key is present; preflight proves access before a simulator is paid for. */
@@ -262,7 +295,7 @@ export type ConnectedSessionExploration = {
   limits: { maxDurationMinutes: number; maxScreens: number; maxActions: number };
   store: ExploreStore;
   map: ExploreMap;
-  model: { session: CiAgentSession };
+  model: { session: Pick<CiAgentSession, "run">; budgetNote?: () => string | undefined };
   /** `eas simulator:get --json` for the attached session; descriptive (OS version) only. */
   sessionJson: () => string;
   /** agent-device session name on the daemon; explore:session reuses the caller's session so the device is not "in use" by another. */
@@ -460,7 +493,8 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
   }
   const exploration = blockedAtLaunch ?? await runBlackBoxExploration({ session: model.session, store, map, app: { name: app.name, bundleId, platform, ...(app.version ? { version: app.version } : {}) },
     inputs, ...(hints ? { hints: hints } : {}), ...(launchUrl ? { launchUrl: launchUrl } : {}), ...(allowDestructive ? { allowDestructive: allowDestructive } : {}), ...(ctx.appIcon ? { appIcon: ctx.appIcon } : {}),
-    deadlineMs, maxScreens: limits.maxScreens, maxActions: limits.maxActions, maxTurns: limits.maxActions * 3 + limits.maxScreens * 2 + 20, now, observe, progress: say,
+    ...(model.budgetNote ? { budgetNote: model.budgetNote } : {}),
+    deadlineMs, maxScreens: limits.maxScreens, maxActions: limits.maxActions, maxTurns: turnBudget(limits), now, observe, progress: say,
     act: async action => {
       const perform = async () => {
         if (action.action === "tap" && "frameId" in action) {
@@ -524,7 +558,8 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
   const environment = options.environment ?? process.env;
   const runner = options.runner ?? defaultRunner;
   const limits = validatedLimits(options);
-  const inputs = hintInputs(options.hints, environment);
+  const replay = replayPlan(options);
+  const inputs = hintInputs(options.hints, environment, replay);
   if (options.bundleId !== undefined && !appIdPattern.test(options.bundleId)) throw binaryError("BUNDLE_ID_INVALID", `${options.bundleId} is not a bundle or package id.`, "Pass --bundle-id with the app's bundle identifier (iOS) or package name (Android).");
   let connection: SimulatorConnection;
   try { connection = await resolveAttachedSimulatorSession(environment, options.envFile, options.session); }
@@ -588,7 +623,7 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
     map.run.environment = { deviceModel: device };
     session = { id: connection.sessionId, platform, device, name: info.name, ...(info.deviceRunSessionUrl ? { url: info.deviceRunSessionUrl } : {}) };
 
-    const model = await preflightModelSession(options, environment, say);
+    const model = replay ? replayModel(replay, platform, limits) : await preflightModelSession(options, environment, say);
     const outputDirectory = await realpath(await mkdir(options.output, { recursive: true }).then(() => options.output));
     const store = new ExploreStore(outputDirectory);
     if (await store.exists()) throw binaryError("OUTPUT_NOT_EMPTY", `${outputDirectory} already holds an Explore map.`, "Pass an empty --output directory.");
@@ -681,7 +716,8 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
   const environment = options.environment ?? process.env;
   const runner = options.runner ?? defaultRunner;
   const limits = validatedLimits(options);
-  const inputs = hintInputs(options.hints, environment);
+  const replay = replayPlan(options);
+  const inputs = hintInputs(options.hints, environment, replay);
   const local = options.simulator === "local";
   // A local emulator runs this Mac's ABI (arm64-v8a on Apple silicon); EAS's runs x86_64.
   const emulatorAbi = local ? hostEmulatorAbi() : "x86_64";
@@ -698,7 +734,7 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
   say(`${archive.appName} ${archive.version ?? ""} (${bundleId}, ${platform}, ${(archive.bytes / 1048576).toFixed(0)} MB, sha256 ${archive.sha256.slice(0, 12)})`);
   if (archive.missingLibs?.length && emulatorAbi === "x86_64") say(`warning: lib/x86_64 lacks ${archive.missingLibs.slice(0, 4).join(", ")}${archive.missingLibs.length > 4 ? ` and ${archive.missingLibs.length - 4} more` : ""} that another ABI ships; the app may stop with UnsatisfiedLinkError on the emulator`);
 
-  const model = await preflightModelSession(options, environment, say);
+  const model = replay ? replayModel(replay, platform, limits) : await preflightModelSession(options, environment, say);
 
   const outputDirectory = await realpath(await mkdir(options.output, { recursive: true }).then(() => options.output));
   const store = new ExploreStore(outputDirectory);

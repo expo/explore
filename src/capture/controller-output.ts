@@ -5,6 +5,7 @@ import type {
   ElementRole,
   InputElement,
 } from "../types.js";
+import { INPUT_METHOD_PACKAGES, keyboardNodes } from "./keyboard.js";
 
 export type ControllerParseResult = {
   controller: Controller;
@@ -221,10 +222,7 @@ function nodeToElement(node: Record<string, unknown>): InputElement | undefined 
 const SYSTEM_UI_PACKAGES = new Set([
   "android",
   "com.android.systemui",
-  "com.google.android.inputmethod.latin",
-  "com.samsung.android.honeyboard",
-  "com.touchtype.swiftkey",
-  "com.microsoft.swiftkey",
+  ...INPUT_METHOD_PACKAGES,
 ]);
 
 export function isSystemUiNode(node: Record<string, unknown>): boolean {
@@ -240,6 +238,12 @@ function collectJsonElements(value: unknown, output: InputElement[], seen: Set<u
     return;
   }
   const record = value as Record<string, unknown>;
+  // iOS's software keyboard is system UI too, like Android's: its keys and its Emoji and Dictate buttons are not the
+  // app's elements. A keyboard that rose on one side only made "Added button “Dictate”" lead a review whose real
+  // change was a field's label (brentvatne/euxy#172, review run 39362642343).
+  if (Array.isArray(record.nodes)) {
+    for (const node of keyboardNodes(record.nodes.filter((node): node is Record<string, unknown> => !!node && typeof node === "object" && !Array.isArray(node)))) seen.add(node);
+  }
   const element = isSystemUiNode(record) ? undefined : nodeToElement(record);
   if (element) output.push(element);
   for (const [key, child] of Object.entries(record)) {

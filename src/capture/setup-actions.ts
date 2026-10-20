@@ -6,6 +6,8 @@ export type CaptureSetupSnapshot = {
   nodes: readonly Record<string, unknown>[];
   refsGeneration?: number;
   truncated?: boolean;
+  /** Whether the controller says a software keyboard shows, when it says (Argent does). */
+  keyboardVisible?: boolean;
 };
 
 type Awaitable<T> = T | Promise<T>;
@@ -98,13 +100,24 @@ function failure(code: string, message: string, details?: Record<string, unknown
     ...(details ? { details } : {}) });
 }
 
+export const SETUP_SELECTOR_MAX = 256;
+
+/** A label or identifier the executor can select by; a replay plan's selectors are checked against it before any device starts. */
+export function isSetupSelector(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= SETUP_SELECTOR_MAX && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+/** Text the executor can fill or type: one line of at most 4,096 characters. */
+export function isSetupInput(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 4_096 && !/[\u0000\r\n]/.test(value);
+}
+
 function selectorValue(selector: CaptureSetupSelector): { key: "label" | "identifier"; value: string } {
   const hasLabel = typeof selector.label === "string";
   const hasIdentifier = typeof selector.identifier === "string";
   const key = hasLabel ? "label" : "identifier";
   const value = selector[key];
-  if (hasLabel === hasIdentifier || typeof value !== "string" || !value.trim()
-    || value.length > 256 || /[\u0000-\u001f\u007f]/.test(value)) {
+  if (hasLabel === hasIdentifier || !isSetupSelector(value)) {
     throw failure("SETUP_SELECTOR_INVALID", "A UI selector must contain exactly one nonempty label or identifier.");
   }
   return { key, value };
@@ -274,8 +287,7 @@ export async function executeCaptureSetup(actions: readonly CaptureSetupAction[]
       case "tap":
       case "fill": {
         selectorValue(action);
-        if (action.action === "fill" && (typeof action.text !== "string" || action.text.length > 4_096
-          || /[\u0000\r\n]/.test(action.text))) {
+        if (action.action === "fill" && !isSetupInput(action.text)) {
           throw failure("SETUP_INPUT_INVALID", "A UI fill input must be a single line of at most 4,096 characters.");
         }
         let resolved = false;
@@ -330,7 +342,7 @@ export async function executeCaptureSetup(actions: readonly CaptureSetupAction[]
         break;
       }
       case "type": {
-        if (typeof action.text !== "string" || !action.text || action.text.length > 4_096 || /[\u0000\r\n]/.test(action.text)) {
+        if (!isSetupInput(action.text) || !action.text) {
           throw failure("SETUP_INPUT_INVALID", "A UI type input must be a nonempty single line of at most 4,096 characters.");
         }
         let ready = false;

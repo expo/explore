@@ -716,6 +716,7 @@ export async function assessPublicEvidence(options: {
           const summary = summarizeReviewerChanges({ changes: result.reviewerChanges });
           accessibilityCounts.compared += 1;
           review = decideReview(scope, visual, summary);
+          if (result.offScreen && review.status === "modified" && visual.verdict === "unchanged") review = { ...review, offScreen: true };
           if (review.facts?.length) accessibilityCounts.described += 1;
         } catch (error) {
           accessibilityCounts.failed += 1;

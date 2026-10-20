@@ -14,6 +14,7 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node
 import { fileURLToPath } from "node:url";
 import { Ajv2020, type ErrorObject, type ValidateFunction } from "ajv/dist/2020.js";
 import { isSystemUiNode } from "../capture/controller-output.js";
+import { keyboardNodes } from "../capture/keyboard.js";
 import { validateNavigationGraph } from "../contracts/navigation-graph.js";
 import {
   CONTRACT,
@@ -67,11 +68,26 @@ export const normalizeSelector = (input?: string): string | undefined => {
   return input.replace(/\s+/g, " ").trim() || undefined;
 };
 
-const VOLATILE_SNAPSHOT_NODE_KEYS = new Set(["ref"]);
+/** A ref names a node within one read; which field has the focus can change between two reads of one screen. */
+const VOLATILE_SNAPSHOT_NODE_KEYS = new Set(["ref", "focused"]);
+
+/**
+ * The accessibility fingerprint's algorithm, written as its prefix. Version 2 leaves the system keyboard and the focus out
+ * of the tree; a hash from before carries no prefix. Two fingerprints of different versions say nothing about whether the
+ * trees differ, so a comparison treats them as not comparable rather than changed (see accessibilityFingerprintsComparable).
+ */
+const ACCESSIBILITY_FINGERPRINT_VERSION = "a2";
+
+export function accessibilityFingerprintsComparable(left: string, right: string): boolean {
+  const version = (hash: string) => /^(a\d+):/.exec(hash)?.[1] ?? "a1";
+  return version(left) === version(right);
+}
 
 /** Canonical JSON of the node tree only: controller wrappers carry per-session diagnostics and
  * ref generations that would otherwise make identical screens fingerprint differently, and Android
- * system UI nodes (status bar clock and signal, keyboard) change between emulator sessions. */
+ * system UI nodes (status bar clock and signal, keyboard) change between emulator sessions. The
+ * system keyboard on either platform is left out as the elements leave it out, so a keyboard up on
+ * one side only does not make two captures of one screen differ. */
 function normalizeJsonSnapshotNodes(input: string): string | undefined {
   if (!/^\s*\{/.test(input)) return undefined;
   let value: unknown;
@@ -86,10 +102,12 @@ function normalizeJsonSnapshotNodes(input: string): string | undefined {
   if (!data || typeof data !== "object" || !Array.isArray((data as { nodes?: unknown }).nodes)) {
     return undefined;
   }
+  const nodes = (data as { nodes: unknown[] }).nodes;
+  const keyboard: Set<unknown> = keyboardNodes(nodes.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry)));
   const canonical = (node: unknown): unknown => {
     if (Array.isArray(node)) {
       return node
-        .filter((entry) => !(entry && typeof entry === "object" && isSystemUiNode(entry as Record<string, unknown>)))
+        .filter((entry) => !(entry && typeof entry === "object" && (isSystemUiNode(entry as Record<string, unknown>) || keyboard.has(entry))))
         .map(canonical);
     }
     if (!node || typeof node !== "object") return node;
@@ -100,7 +118,7 @@ function normalizeJsonSnapshotNodes(input: string): string | undefined {
         .map(([key, entry]) => [key, canonical(entry)]),
     );
   };
-  return `nodes\0${JSON.stringify(canonical((data as { nodes: unknown[] }).nodes))}`;
+  return `nodes\0${JSON.stringify(canonical(nodes))}`;
 }
 
 export const normalizeSnapshot = (input: string): string =>
@@ -118,7 +136,7 @@ export async function fingerprintState(options: {
   snapshotText?: string;
 }): Promise<ObservationFingerprints> {
   const accessibility = options.snapshotText
-    ? sha256(`snapshot\0${normalizeSnapshot(options.snapshotText)}`)
+    ? `${ACCESSIBILITY_FINGERPRINT_VERSION}:${sha256(`snapshot\0${normalizeSnapshot(options.snapshotText)}`)}`
     : undefined;
   const screenshot = options.screenshotPath ? await readFile(options.screenshotPath) : undefined;
   const visual = screenshot ? sha256(Buffer.concat([Buffer.from("visual\0"), screenshot])) : undefined;

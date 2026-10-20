@@ -251,6 +251,11 @@ export type PublicSurfaceReview = {
   description: string;
   /** Every deterministic accessibility fact for this surface, in reviewer priority order. */
   facts?: Array<{ category: string; templateId: string; bullet: string }>;
+  /**
+   * The screenshots match because the change is past the edge of the screen: every element its facts name reaches
+   * beyond the captured screen. Only on a `modified` verdict whose screenshots match.
+   */
+  offScreen?: true;
 };
 /** An evidence-bound explanation. It never changes a deterministic comparison verdict. */
 export type PublicChangeNote = {

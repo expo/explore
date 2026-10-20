@@ -320,3 +320,15 @@ test("an excluded surface carries no capture evidence", () => {
   excluded.surfaces[1].excluded = false;
   assert.throws(() => assertPublicReview(excluded), /excluded surface carries capture evidence/);
 });
+
+test("a review says its change is off-screen only on a modified verdict whose screenshots match", () => {
+  const offScreen = (status, verdict) => {
+    const input = review();
+    input.surfaces[0].review = { status, description: status === "modified" ? "Added text “lanes you add next”." : "No visible change", offScreen: true };
+    input.surfaces[0].visual = { verdict, reason: verdict === "unchanged" ? "matched" : "repeated-cross-build-delta", mismatchPercentage: verdict === "unchanged" ? 0 : 3, threshold: 0.1, tool: "agent-device@0.21.29" };
+    return input;
+  };
+  assert.doesNotThrow(() => assertPublicReview(offScreen("modified", "unchanged")));
+  assert.throws(() => assertPublicReview(offScreen("modified", "modified")), /inconsistent/);
+  assert.throws(() => assertPublicReview(offScreen("unchanged", "unchanged")), /inconsistent/);
+});
