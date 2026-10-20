@@ -387,9 +387,38 @@ test("collectPlatformReports pairs downloaded artifact directories by platform a
   const lookups = eas.requests.filter(request => request.url.pathname.endsWith("/actions/runs/10/artifacts"));
   assert.deepEqual(lookups.map(request => request.url.searchParams.get("name")), ["explore-review-10-1-android", "explore-review-10-1-ios"]);
   assert.ok(lookups.every(request => request.options.headers.authorization === "Bearer test-token"));
+  // A target whose report job failed (brentvatne/euxy#172) is left out; the others still deploy, without waiting for it.
   await rm(join(root, "reports", "explore-review-10-1-android"), { recursive: true });
+  const before = eas.requests.length;
+  const remaining = await collectPlatformReports({ inputsPath: join(root, "inputs"), reportsPath: join(root, "reports"), environment: deployEnvironment, transport: eas.transport });
+  assert.deepEqual(remaining.map(entry => entry.target.id), ["ios"]);
+  assert.deepEqual(eas.requests.slice(before).map(request => request.url.searchParams.get("name")), ["explore-review-10-1-ios"], "no lookup for the target without a report");
+  await rm(join(root, "reports", "explore-review-10-1-ios"), { recursive: true });
   await assert.rejects(collectPlatformReports({ inputsPath: join(root, "inputs"), reportsPath: join(root, "reports"), environment: deployEnvironment, transport: eas.transport }),
     error => error.code === "PREVIEW_REPORTS_INCOMPLETE");
+});
+
+test("collectPlatformReports reads a lone target's artifacts, which download-artifact extracts into the path itself", async t => {
+  const fixture = await asTarget(await exportFixture(t), TARGETS[2]);
+  const root = await mkdtemp(join(tmpdir(), "explore-fanin-lone-")); t.after(() => rm(root, { recursive: true, force: true }));
+  // Four of five captures failed, so each pattern matched one artifact: its files sit in --inputs and --reports themselves.
+  await mkdir(join(root, "inputs"), { recursive: true }); await cp(fixture.inputPath, join(root, "inputs", "report-input.json"));
+  await cp(fixture.reportPath, join(root, "reports"), { recursive: true });
+  const eas = easFixture();
+  const transport = async (input, options) => {
+    const url = new URL(input);
+    if (url.pathname.endsWith("/actions/runs/10/artifacts") && url.searchParams.get("name") === "explore-review-10-1-duo-open") {
+      return new Response(JSON.stringify({ artifacts: [{ id: 33, name: "explore-review-10-1-duo-open" }] }), { status: 200 });
+    }
+    return eas.transport(input, options);
+  };
+  const [entry, ...rest] = await collectPlatformReports({ inputsPath: join(root, "inputs"), reportsPath: join(root, "reports"), environment: deployEnvironment, transport });
+  assert.deepEqual(rest, []);
+  assert.deepEqual([entry.target.id, entry.inputPath, entry.reportPath, entry.artifactUrl.split("/").at(-1)],
+    ["duo-open", join(root, "inputs", "report-input.json"), join(root, "reports"), "33"]);
+  // A pattern that matched nothing left no directory: there is nothing to deploy, and that is said plainly.
+  await assert.rejects(collectPlatformReports({ inputsPath: join(root, "missing"), reportsPath: join(root, "reports"), environment: deployEnvironment, transport }),
+    error => error.code === "PREVIEW_REPORTS_MISSING");
 });
 
 test("collectPlatformReports looks up a report artifact the run does not list yet again, but not one its token cannot read", async t => {

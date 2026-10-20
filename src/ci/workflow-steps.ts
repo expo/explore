@@ -106,8 +106,11 @@ type GithubArtifact = { id: number; expired: boolean; workflow_run?: { id?: numb
 type GithubRun = { conclusion: string | null; workflow_id: number; head_sha: string; head_branch: string; event: string; head_repository?: { full_name?: string } };
 
 /**
- * `ci:find-baseline`: the newest successful baseline-workflow artifact of exactly this commit, uploaded from the
- * default branch of this repository. Its id and run go to the step outputs for actions/download-artifact.
+ * `ci:find-baseline`: the newest baseline-workflow artifact of exactly this commit, uploaded from the default branch of
+ * this repository by a finished run. Its id and run go to the step outputs for actions/download-artifact. A run that
+ * failed counts: a target's baseline job uploads its artifact only after every step before it passed, so another
+ * target's failure (one flaky simulator session, as in brentvatne/euxy#172) does not make this target's baseline
+ * unusable. A run still in progress or cancelled does not.
  */
 export async function findBaselineArtifact(options: { sha: string; target?: string;
   /** What callers from before targets pass: a platform is the id of its default target. */ platform?: string; environment?: Environment; transport?: typeof fetch }): Promise<{ id: number; run: number } | undefined> {
@@ -131,7 +134,7 @@ export async function findBaselineArtifact(options: { sha: string; target?: stri
   for (const artifact of artifacts.filter(candidate => !candidate.expired).sort((a, b) => b.id - a.id)) {
     if (!artifact.workflow_run?.id) continue;
     const run = await githubGet<GithubRun>(`repos/${context.repository}/actions/runs/${artifact.workflow_run.id}`, context, transport);
-    if (!run || run.conclusion !== "success" || run.workflow_id !== workflow.id || run.head_sha !== options.sha
+    if (!run || (run.conclusion !== "success" && run.conclusion !== "failure") || run.workflow_id !== workflow.id || run.head_sha !== options.sha
       || run.head_branch !== repository.default_branch || !["push", "workflow_dispatch"].includes(run.event)
       || run.head_repository?.full_name !== context.repository) continue;
     return { id: artifact.id, run: artifact.workflow_run.id };

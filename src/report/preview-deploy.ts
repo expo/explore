@@ -791,10 +791,26 @@ export async function deployLocalReports(options: {
 const ARTIFACT_DIRECTORY = /^explore-(capture|review)-\d+-\d+-([a-z][a-z0-9-]{0,31})$/;
 
 /**
+ * The target a lone artifact holds. actions/download-artifact puts each artifact a pattern matches in a directory named
+ * after it, except when the pattern matches exactly one, which it extracts into the download path itself: then only the
+ * report names its target (its platform for configs without targets).
+ */
+async function unnamedArtifactTarget(root: string, kind: "capture" | "review"): Promise<string | undefined> {
+  const file = join(root, kind === "capture" ? "report-input.json" : "review.json");
+  if (!(await lstat(file).catch(() => undefined))?.isFile()) return undefined;
+  const runtime = kind === "capture" ? (await readCiReportInput(file)).publicReview.runtime
+    : (JSON.parse(await readFile(file, "utf8")) as Partial<ArtifactReport>).review?.runtime;
+  const id = readTarget(runtime?.target)?.id ?? runtime?.platform;
+  return isTargetId(id) ? id : undefined;
+}
+
+/**
  * The fan-in deploy job's inputs: actions/download-artifact puts each explore-capture-<run>-<attempt>-<target>
  * directory under --inputs and each explore-review-… directory under --reports (the target is the platform for
  * configs without targets). Pairs them by target, in the order the run's review lists its targets, and looks up each
- * report artifact's URL on the run, since matrix jobs cannot hand their artifact URLs forward.
+ * report artifact's URL on the run, since matrix jobs cannot hand their artifact URLs forward. A target whose capture
+ * failed uploaded no capture artifact, and one whose report job failed no report artifact: the preview serves the
+ * targets that have both, and the review workflow's failure job names the others on the comment.
  */
 export async function collectPlatformReports(options: { inputsPath: string; reportsPath: string; environment?: NodeJS.ProcessEnv; transport?: typeof fetch;
   /** Pause between artifact lookups that may succeed later; tests replace it so retries take no real time. */
@@ -802,13 +818,15 @@ export async function collectPlatformReports(options: { inputsPath: string; repo
   const environment = options.environment ?? process.env; const transport = options.transport ?? fetch;
   const directories = async (root: string, kind: "capture" | "review") => {
     const found = new Map<string, string>();
-    for (const name of (await readdir(root)).sort()) {
+    // A pattern that matched nothing leaves no directory behind.
+    for (const name of (await readdir(root).catch(() => [] as string[])).sort()) {
       const match = ARTIFACT_DIRECTORY.exec(name);
       if (!match || match[1] !== kind || !isTargetId(match[2])) continue;
       if (found.has(match[2]!)) throw previewError("PREVIEW_REPORTS_INVALID", `Several ${kind} artifacts for ${match[2]} were downloaded`,
         "Download only this run attempt's artifacts into the --inputs and --reports directories.");
       found.set(match[2]!, join(root, name));
     }
+    if (!found.size) { const id = await unnamedArtifactTarget(root, kind); if (id) found.set(id, root); }
     return found;
   };
   const inputs = await directories(options.inputsPath, "capture"); const reports = await directories(options.reportsPath, "review");
@@ -819,8 +837,9 @@ export async function collectPlatformReports(options: { inputsPath: string; repo
   const entries: PreviewReportInput[] = [];
   for (const [id, inputDirectory] of inputs) {
     const reportPath = reports.get(id);
-    if (!reportPath) throw previewError("PREVIEW_REPORTS_INCOMPLETE", `The ${id} capture has no report artifact to deploy`,
-      "Rerun the workflow; the report job for that target did not upload its explore-review artifact.");
+    // In brentvatne/euxy#172 (review run 39348956443) one target's failed job kept every other target's report off the
+    // PR; a target without a report is left out of the preview instead.
+    if (!reportPath) { process.stderr.write(`The ${id} capture has no report artifact (its report job failed), so the preview leaves it out.\n`); continue; }
     const inputPath = join(inputDirectory, "report-input.json");
     const runtime = (await readCiReportInput(inputPath)).publicReview.runtime;
     // A report from before targets names only its platform, and its artifact is named after it.
@@ -830,6 +849,8 @@ export async function collectPlatformReports(options: { inputsPath: string; repo
     const target = named ?? (id === "ios" || id === "android" ? platformTarget(id) : { id, platform: runtime.platform ?? "ios", label: id });
     entries.push({ ...(id === target.platform ? { platform: target.platform } : {}), target, inputPath, reportPath, artifactUrl: "" });
   }
+  if (!entries.length) throw previewError("PREVIEW_REPORTS_INCOMPLETE", "No target's capture has a report artifact to deploy",
+    "Rerun the workflow; the report jobs did not upload their explore-review artifacts.");
   // Config order, as the review lists its targets (or, before targets, its platforms); directory order otherwise.
   const listed = (await readCiReportInput(entries[0]!.inputPath)).publicReview.runtime;
   const order: string[] = listed.targets?.map(target => target.id) ?? listed.platforms ?? [];

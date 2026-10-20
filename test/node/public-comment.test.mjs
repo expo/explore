@@ -710,6 +710,53 @@ test('several targets share a comment: named in config order in the subtitle, ea
   assert.match(next, /\n- \[bbbbbbbb\]\(<[^>]+>\) · iPhone 17 🟩 3 changes \(.*?\) · iPhone Duo \\\(closed\\\) ⏳ did not finish \(.*?\) · iPhone Duo \\\(open\\\) 🟩 3 changes \(.*?\) · Pixel 7 🟩 3 changes /);
 });
 
+test('one of five targets failed: the comment shows the four reports and that failure, and no new-run banner (brentvatne/euxy#172)', async t => {
+  const { platformSectionMerge, readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
+  const { publishFailureComment } = await import('../../dist/report/failure-comment.js');
+  const { mkdir, mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const targets = [...duoTargets, { id: 'pixel-dark', platform: 'android', label: 'Pixel 7 (dark)' }];
+  const configPath = '.expo-explore/config.yaml';
+  const firstAttempt = viewerLinks({ artifactUrl: 'https://github.com/expo/explore-playground/actions/runs/42/artifacts/7650', repository: pullRequest.repository, headSha, runId: '42', runAttempt: '1', configPath });
+  const working = viewerLinks({ repository: pullRequest.repository, headSha, runId: '42', runAttempt: '2', configPath });
+  // Attempt 1 published every target; attempt 2 captured them all at once, and the iPhone Duo (open) session failed.
+  let body;
+  for (const target of targets) body = platformSectionMerge(targetState(target, { targets, links: firstAttempt }), target.id).merge(body);
+  for (const target of targets) body = platformSectionMerge(targetState(target, { targets, links: working, phase: 'capturing', review: undefined, evidence: undefined,
+    capture: { planned: { base: 3, head: 3 }, done: { base: 3, head: 1 }, baseFromCache: false, current: 'head' } }), target.id).merge(body);
+  assert.match(visible(body), /New run in progress/);
+  for (const target of targets.filter(target => target.id !== 'duo-open')) body = platformSectionMerge(targetState(target, { targets }), target.id).merge(body);
+
+  const root = await mkdtemp(join(tmpdir(), 'explore-one-failed-')); t.after(() => rm(root, { recursive: true, force: true }));
+  for (const target of targets) await mkdir(join(root, 'capture', `explore-diagnostics-42-2-${target.id}`, 'explore-diagnostics'), { recursive: true });
+  await writeFile(join(root, 'capture', 'explore-diagnostics-42-2-duo-open', 'explore-diagnostics', 'error.json'), JSON.stringify({ code: 'ARGENT_TOOL_FAILED', stage: 'session',
+    message: 'fold: argent run fold failed: [Tool:fold] Service dependency failed', nextAction: 'Rerun the capture.', retryable: false, target: 'duo-open' }));
+  let comments = [{ id: 5, user: { login: 'github-actions[bot]' }, body }];
+  const transport = async (input, init = {}) => {
+    const url = new URL(input);
+    if (url.pathname === '/repos/expo/explore-playground/pulls/1') return Response.json({ state: 'open', draft: false, title: pullRequest.title, html_url: pullRequest.url,
+      base: { ref: 'main', sha: baseSha, repo: { id: 1, full_name: pullRequest.repository } }, head: { ref: pullRequest.head.ref, sha: headSha, repo: { full_name: pullRequest.repository } } });
+    if (url.pathname === '/repos/expo/explore-playground/issues/1/comments') return Response.json(comments);
+    if (url.pathname === '/repos/expo/explore-playground/issues/comments/5' && init.method === 'PATCH') {
+      comments = [{ ...comments[0], body: JSON.parse(init.body).body }]; return Response.json({ id: 5 });
+    }
+    throw new Error(`unexpected request ${init.method ?? 'GET'} ${url}`);
+  };
+  assert.deepEqual(await publishFailureComment({ repository: pullRequest.repository, pullNumber: 1, headSha, baseSha, runId: '42', runAttempt: '2', diagnosticsPath: root,
+    environment: { GITHUB_TOKEN: 'test-token' }, transport }), { posted: true });
+  const final = comments[0].body;
+  assert.doesNotMatch(visible(final), /New run in progress|New run failed/);
+  assert.equal(readCommentRecords(final).previous, undefined, "attempt 1's records go once every target of attempt 2 finished");
+  const records = readCommentRecords(final).current;
+  assert.deepEqual(targets.map(target => [records[target.id].runAttempt, records[target.id].phase]),
+    [['2', 'ready'], ['2', 'ready'], ['2', 'failed'], ['2', 'ready'], ['2', 'ready']]);
+  assert.match(statusOf(final, 'iPhone Duo \\(open\\)'), /^\*\*iPhone Duo \\\(open\\\) failed\*\* · session · ARGENT\\_TOOL\\_FAILED\\: fold\\: argent run fold failed/);
+  // Each published target links its report; the failure's record is the newest, so it sets the updated time.
+  assert.ok(subtitleOf(final).startsWith(`<sub>[iPhone 17](<${reportUrl}>) · [iPhone Duo \\(closed\\)](<${reportUrl}>) · iPhone Duo \\(open\\) · [Pixel 7](<${reportUrl}>) · [Pixel 7 \\(dark\\)](<${reportUrl}>) · ${commits} · updated `), subtitleOf(final));
+  assert.equal(titleOf(final), `### 3 screens changed · [Review in Explore](<${reportUrl}>)`);
+});
+
 test('a comment written by a per-platform version keeps parsing, and malformed target records are dropped', async () => {
   const { platformSectionMerge, readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
   const { encodeRecordPayload } = await import('../../dist/report/pr-comment-record.js');

@@ -798,8 +798,10 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       const target = deviceArgs({ platform: options.platform, deviceModel: options.device, ...(localDevice() ? { provider: "local-simulator" as const, controllerDeviceId: localDevice()! } : {}) });
       // agent-device reads the hinge back after folding and fails to (locally and on EAS); its display is checked instead.
       const easAgentDevice = !!sessionId && controller === "agent-device";
+      // Argent's bridge sends a fold again, twice, when the simulator-server it needs did not start within Argent's 30 s,
+      // so a fold can take three of those waits and the panel checks after it: 4 minutes covers that.
       const fold = () => runner({ command: controllerCommand, args: ["fold", options.devicePose!, "--session", CONTROLLER_SESSION, ...target, "--platform", options.platform, "--json"],
-        cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 2 * 60_000, ...(localSimulator || easAgentDevice ? { allowFailure: true } : {}) });
+        cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 4 * 60_000, ...(localSimulator || easAgentDevice ? { allowFailure: true } : {}) });
       const pause = options.sleep ?? (milliseconds => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); });
       if (localSimulator && controller === "argent") {
         // Argent folds without a session and checks the fold against its own reader; this machine also checks the display.

@@ -173,6 +173,22 @@ test("CI argument failures preserve JSON output, annotation, summary, and diagno
   assert.match(await readFile(summary, "utf8"), /Next action/);
 });
 
+test("a failed command's diagnostics file names the matrix target it ran for, so the failure comment can", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "explore-cli-target-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cli = new URL("../../src/cli.ts", import.meta.url);
+  const run = target => {
+    const result = spawnSync(process.execPath, ["--import", "tsx", cli.pathname, "ci:report", "--input", join(root, "missing.json"), "--output", join(root, "out"), "--target", target],
+      { encoding: "utf8", env: { ...process.env, GITHUB_ACTIONS: "true", RUNNER_TEMP: root } });
+    assert.equal(result.status, 1, result.stderr);
+    return readFile(join(root, "explore-diagnostics/error.json"), "utf8").then(JSON.parse);
+  };
+  const written = await run("duo-closed");
+  assert.equal(written.target, "duo-closed");
+  assert.equal(written.code, "REPORT_INPUT_INVALID");
+  assert.equal((await run("../ios")).target, undefined, "only a valid target id is written");
+});
+
 test("source worker failures emit a structured diagnostic without a raw stack", () => {
   const worker = new URL("../../src/source/plan-worker.ts", import.meta.url);
   const result = spawnSync(process.execPath, ["--import", "tsx", worker.pathname], { input: "{", encoding: "utf8" });
