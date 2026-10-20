@@ -70,17 +70,15 @@ const unreadableSurface = () => json({ success: false, error: { code: 'COMMAND_F
 
 
 /**
- * The iOS 26 keyboard as Argent reports it under the app's root (brentvatne/euxy#172, review run 39362642343): the input
- * view placeholder, the key plane, and the Emoji and Dictate buttons in an unnamed container beside it.
+ * The iOS 26 keyboard as agent-device reports it: the Keyboard element with its keys beneath it, and the dock's Emoji and
+ * Dictate buttons, which its host bridge names by their view class (brentvatne/euxy#172, review run 39362642343).
  */
 const softKeyboard = [
   { index: 900, type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 }, visible: true },
-  { index: 901, parentIndex: 900, type: 'Other', identifier: 'inputView', rect: { x: 0, y: 539, width: 402, height: 335 }, visible: true },
   { index: 902, parentIndex: 900, type: 'Keyboard', rect: { x: 0, y: 583, width: 402, height: 233 }, visible: true },
   { index: 903, parentIndex: 902, type: 'Key', label: 'Q', rect: { x: 5, y: 590, width: 39, height: 54 }, visible: true },
-  { index: 904, parentIndex: 900, type: 'Other', rect: { x: 0, y: 583, width: 402, height: 291 }, visible: true },
-  { index: 905, parentIndex: 904, type: 'Button', label: 'Emoji', rect: { x: 8, y: 806, width: 68, height: 68 }, visible: true },
-  { index: 906, parentIndex: 904, type: 'Button', label: 'Dictate', identifier: 'dictation', rect: { x: 325, y: 806, width: 68, height: 68 }, visible: true },
+  { index: 905, parentIndex: 900, type: 'Button', role: 'UIKeyboardDockItemButton', label: 'Emoji', rect: { x: 8, y: 806, width: 68, height: 68 }, visible: true },
+  { index: 906, parentIndex: 900, type: 'Button', role: 'UIKeyboardDockItemButton', label: 'Dictate', identifier: 'dictation', rect: { x: 325, y: 806, width: 68, height: 68 }, visible: true },
 ];
 
 function agentFixture(actions, observedRequests = []) {
@@ -1208,7 +1206,7 @@ test('a screen whose text field has the focus is captured once its keyboard is u
   const result = await runCiMap(f.options);
   assert.equal(result.outcomes[f.ids.rename].status, 'captured');
   assert.equal(result.outcomes[f.ids.rename].attempts, 1);
-  assert.deepEqual((await keyboardLog(f)).map(line => [line.route, line.outcome, line.polls]), [[f.ids.rename, 'shown', 2]],
+  assert.deepEqual((await keyboardLog(f)).map(line => [line.route, line.outcome, line.reads]), [[f.ids.rename, 'shown', 2]],
     'read until the keyboard was up in the same place twice');
   const calls = f.requests.filter(request => request.command === 'fake-controller').map(request => request.args[0]);
   const shot = calls.lastIndexOf('screenshot');
@@ -1216,21 +1214,27 @@ test('a screen whose text field has the focus is captured once its keyboard is u
   const map = await readExportedMap(f.options.outputDirectory);
   const labels = map.observations.flatMap(observation => observation.elements.map(element => element.label));
   assert.ok(labels.includes('Pattern name'));
-  for (const label of ['Q', 'Emoji', 'Dictate', 'inputView']) assert.equal(labels.includes(label), false, `${label} is the keyboard's, not the app's`);
+  for (const label of ['Q', 'Emoji', 'Dictate']) assert.equal(labels.includes(label), false, `${label} is the keyboard's, not the app's`);
 });
 
-test('a focused field whose keyboard never rises is captured after about a second, without it', async t => {
+test('a focused field whose keyboard never rises is captured after about a second and at least two reads, without it', async t => {
   const f = await fixture(t, { routes: [route('rename')], focusedField: { path: '/rename' } });
   const result = await runCiMap(f.options);
   assert.equal(result.outcomes[f.ids.rename].status, 'captured');
   const [line] = await keyboardLog(f);
   assert.equal(line.outcome, 'absent');
-  assert.ok(line.polls >= 1 && line.polls <= 4 && line.elapsedMs >= 1000 && line.elapsedMs < 2000, `gave up after ${line.polls} reads in ${line.elapsedMs} ms`);
+  assert.ok(line.reads >= 2 && line.reads <= 6 && line.elapsedMs >= 1000, `gave up after ${line.reads} reads in ${line.elapsedMs} ms`);
   assert.equal(f.operations().includes('keyboard'), false, 'the keyboard is never dismissed or summoned');
   // A screen without a focused field is not read again.
   const plain = await fixture(t, { routes: [route('home')] });
   await runCiMap(plain.options);
   assert.equal(existsSync(join(plain.options.mapDirectory, 'capture-diagnostics', 'keyboard.jsonl')), false);
+});
+
+test('a keyboard already up when the screen is read is captured once a later read finds it in the same place', async t => {
+  const f = await fixture(t, { routes: [route('rename')], focusedField: { path: '/rename', keyboardFrom: 1 } });
+  assert.equal((await runCiMap(f.options)).outcomes[f.ids.rename].status, 'captured');
+  assert.deepEqual((await keyboardLog(f)).map(line => [line.outcome, line.reads]), [['shown', 1]]);
 });
 
 test('an application Open button is never an implicit confirmation action', async t => {

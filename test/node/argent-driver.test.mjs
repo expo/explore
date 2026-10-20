@@ -201,6 +201,8 @@ test("Android fill uses Argent's fill and requires it to verify the text", async
   const snapshot = await run(["snapshot", ...flags("android")]);
   const node = snapshot.json.data.nodes.find(item => item.type === "TextField");
   assert.ok(node, "the rename fixture has an EditText");
+  assert.equal(node.focused, true, "the focused field is marked, as agent-device marks it");
+  assert.equal(snapshot.json.data.keyboardVisible, false, "whether a keyboard shows, which the Android tree cannot say, is passed on");
   assert.equal((await run(["fill", node.ref, ...flags("android"), "--", "Groove"])).exitCode, 0);
   assert.deepEqual(calls.find(call => call.tool === "fill").args, { udid: "emulator-5554", text: "Groove" });
   const unverified = await run(["fill", node.ref, ...flags("android"), "--", "Groove"]);

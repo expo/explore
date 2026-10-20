@@ -14,6 +14,7 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node
 import { fileURLToPath } from "node:url";
 import { Ajv2020, type ErrorObject, type ValidateFunction } from "ajv/dist/2020.js";
 import { isSystemUiNode } from "../capture/controller-output.js";
+import { keyboardNodes } from "../capture/keyboard.js";
 import { validateNavigationGraph } from "../contracts/navigation-graph.js";
 import {
   CONTRACT,
@@ -71,7 +72,9 @@ const VOLATILE_SNAPSHOT_NODE_KEYS = new Set(["ref"]);
 
 /** Canonical JSON of the node tree only: controller wrappers carry per-session diagnostics and
  * ref generations that would otherwise make identical screens fingerprint differently, and Android
- * system UI nodes (status bar clock and signal, keyboard) change between emulator sessions. */
+ * system UI nodes (status bar clock and signal, keyboard) change between emulator sessions. The
+ * system keyboard on either platform is left out as the elements leave it out, so a keyboard up on
+ * one side only does not make two captures of one screen differ. */
 function normalizeJsonSnapshotNodes(input: string): string | undefined {
   if (!/^\s*\{/.test(input)) return undefined;
   let value: unknown;
@@ -86,10 +89,12 @@ function normalizeJsonSnapshotNodes(input: string): string | undefined {
   if (!data || typeof data !== "object" || !Array.isArray((data as { nodes?: unknown }).nodes)) {
     return undefined;
   }
+  const nodes = (data as { nodes: unknown[] }).nodes;
+  const keyboard: Set<unknown> = keyboardNodes(nodes.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry)));
   const canonical = (node: unknown): unknown => {
     if (Array.isArray(node)) {
       return node
-        .filter((entry) => !(entry && typeof entry === "object" && isSystemUiNode(entry as Record<string, unknown>)))
+        .filter((entry) => !(entry && typeof entry === "object" && (isSystemUiNode(entry as Record<string, unknown>) || keyboard.has(entry))))
         .map(canonical);
     }
     if (!node || typeof node !== "object") return node;
@@ -100,7 +105,7 @@ function normalizeJsonSnapshotNodes(input: string): string | undefined {
         .map(([key, entry]) => [key, canonical(entry)]),
     );
   };
-  return `nodes\0${JSON.stringify(canonical((data as { nodes: unknown[] }).nodes))}`;
+  return `nodes\0${JSON.stringify(canonical(nodes))}`;
 }
 
 export const normalizeSnapshot = (input: string): string =>

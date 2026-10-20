@@ -17,7 +17,7 @@ import { type CaptureSetupSnapshot, credentialSavePromptDecline, describeSetupAc
 import { silentProgress } from "../shared/progress.js";
 import type { CaptureSetupReady } from "../config/explore-config.js";
 import { READINESS_POLL_MS, defaultReadinessSeconds } from "./readiness.js";
-import { focusedTextInput, keyboardBounds } from "./keyboard.js";
+import { KEYBOARD_POLL_MS, keyboardSettle, type KeyboardRead, type KeyboardSettle } from "./keyboard.js";
 import { CAPTURE_OBSERVER_IDENTIFIER, captureObserverMarkers, parseCaptureDestination, captureDestinationMatches } from "./observer.js";
 import { type CiAgentRuntimeOptions, runCiAgentNavigation, assertAgentCaptureContext } from "./agent/runtime.js";
 import { createExplorationInputs } from "../config/exploration-inputs.js";
@@ -33,14 +33,6 @@ export function deviceArgs(runtime: Pick<ActiveSimulatorRuntime, "platform" | "d
   if (runtime.provider === "local-simulator" && runtime.controllerDeviceId) return [runtime.platform === "android" ? "--serial" : "--udid", runtime.controllerDeviceId];
   return runtime.platform === "android" ? [] : ["--device", runtime.deviceModel];
 }
-
-/**
- * How long a screen whose text field has the focus gets to raise the software keyboard, and how often it is read while
- * it does. A sheet that focuses its field when it opens raises the keyboard a moment after the sheet itself has settled;
- * a field that raises none (a hardware keyboard, a custom input view) is captured once this has passed.
- */
-const KEYBOARD_WAIT_MS = 1_000;
-const KEYBOARD_POLL_MS = 250;
 
 /** agent-device defers its XCTest snapshot tiers for 120 s; wait a little longer, polling every 5 s. */
 const UNREADABLE_SURFACE_WAIT_MS = 130_000;
@@ -99,6 +91,11 @@ function snapshotNodes(raw: string): Record<string, unknown>[] {
       details: { truncated: typeof data.truncated === "boolean" ? data.truncated : typeof data.truncated, nodes: Array.isArray(data.nodes) ? data.nodes.length : null } });
   }
   return data.nodes;
+}
+
+/** Whether the controller says a keyboard shows: Argent does, and its Android tree has no input method window to show it. */
+function keyboardVisibility(data: Record<string, unknown>): { keyboardVisible?: boolean } {
+  return typeof data.keyboardVisible === "boolean" ? { keyboardVisible: data.keyboardVisible } : {};
 }
 
 /** The visible element each required label matched, so an image assessor can find icon-only controls. */
@@ -386,7 +383,7 @@ export async function capturePlannedRoutes(options: {
       lastSnapshot = raw;
       const generation = typeof data.refsGeneration === "number" ? data.refsGeneration : undefined;
       const decline = declined < 2 && generation ? credentialSavePromptDecline(nodes) : undefined;
-      if (!decline) return { nodes, truncated: false, ...(generation ? { refsGeneration: generation } : {}) };
+      if (!decline) return { nodes, truncated: false, ...(generation ? { refsGeneration: generation } : {}), ...keyboardVisibility(data) };
       controller(["press", `@${String(decline.ref).replace(/^@/, "")}~s${generation}`, "--level", "full", "--json"]);
       recordDeclinedPrompt("deterministic");
       controller(["wait", "500", "--level", "full", "--json"]);
@@ -520,32 +517,30 @@ export async function capturePlannedRoutes(options: {
    * A screen that focused a text field shows the keyboard that field raises, as its users see it. The keyboard rises
    * after the screen has settled, so the controller's quiescence gate can pass in between: in brentvatne/euxy#172
    * (review run 39362642343) the rename sheet's base was captured with its cursor showing and no keyboard, its head with
-   * the keyboard up, and the 48% mismatch was the keyboard. This reads the screen again until the keyboard is up and
-   * in the same place twice running, within KEYBOARD_WAIT_MS; a keyboard that never comes is not waited for longer. A
-   * keyboard already up when the destination was read has finished rising: the quiescence gate waited for it to stop.
+   * the keyboard up, and the 48% mismatch was the keyboard. The screen is read again until the keyboard is in the same
+   * place twice running (see keyboardSettle); a keyboard that never comes is not waited for long, and none is dismissed.
    */
-  const awaitKeyboard = (route: SourceRoute, nodes: readonly Record<string, unknown>[]): readonly Record<string, unknown>[] => {
-    if (!focusedTextInput(nodes) || keyboardBounds(nodes)) return nodes;
+  const awaitKeyboard = (route: SourceRoute, first: KeyboardRead): readonly Record<string, unknown>[] => {
+    const settle = keyboardSettle(first);
+    if (!settle) return first.nodes;
     const startedAt = clock();
-    let current = nodes, polls = 0, previous: string | undefined, outcome = "absent", pollStartedAt = startedAt;
-    // A snapshot counts for at least one poll interval, so a clock that stands still (a fake controller) still expires.
-    const elapsed = () => Math.max(clock() - startedAt, polls * KEYBOARD_POLL_MS);
-    while (elapsed() < KEYBOARD_WAIT_MS) {
+    let current = first, pollStartedAt = startedAt;
+    // A read counts for at least one poll interval, so a clock that stands still (a fake controller) still expires.
+    const elapsed = () => Math.max(clock() - startedAt, settle.reads * KEYBOARD_POLL_MS);
+    while (settle.more(elapsed())) {
       (capture.sleep ?? pause)(KEYBOARD_POLL_MS - (clock() - pollStartedAt));
       pollStartedAt = clock();
-      current = snapshot().nodes;
-      polls += 1;
-      const bounds = keyboardBounds(current);
-      const position = bounds && JSON.stringify(bounds);
-      if (position && position === previous) { outcome = "shown"; break; }
-      if (position) outcome = "moving";
-      previous = position;
+      current = snapshot();
+      settle.read(current);
     }
+    recordKeyboardWait(route.id, settle, elapsed());
+    return current.nodes;
+  };
+  const recordKeyboardWait = (route: string | undefined, settle: KeyboardSettle, elapsedMs: number) => {
     const diagnostics = join(store.root, "capture-diagnostics");
     mkdirSync(diagnostics, { recursive: true, mode: 0o700 });
-    appendFileSync(join(diagnostics, "keyboard.jsonl"), `${JSON.stringify({ route: route.id, outcome, polls, elapsedMs: elapsed(),
-      at: new Date(clock()).toISOString() })}\n`, { mode: 0o600 });
-    return current;
+    appendFileSync(join(diagnostics, "keyboard.jsonl"), `${JSON.stringify({ ...(route ? { route } : { phase: "agent-observe" }), outcome: settle.outcome,
+      reads: settle.reads, elapsedMs, at: new Date(clock()).toISOString() })}\n`, { mode: 0o600 });
   };
   const attempted = new Set<string>();
   const captureCurrent = async (route: SourceRoute, attempt: number, before?: readonly Record<string, unknown>[],
@@ -557,7 +552,7 @@ export async function capturePlannedRoutes(options: {
       const arrived = before ?? waitForDestination(route, () => resolveDeepLinkConfirmation());
       if (unattributed) assertNoAlert({ route, nodes: arrived });
       else landing(arrived, route, inventory);
-      const accepted = unattributed ? arrived : awaitKeyboard(route, arrived);
+      const accepted = unattributed ? arrived : awaitKeyboard(route, { nodes: arrived });
       if (accepted !== arrived) landing(accepted, route, inventory);
       assertSafeScreenshot(accepted);
       const screenshot = join(temporary, "screen.png");
@@ -705,7 +700,7 @@ export async function capturePlannedRoutes(options: {
         const generation = typeof data.refsGeneration === "number" ? data.refsGeneration : undefined;
         const decline = declined < 2 && generation ? credentialSavePromptDecline(nodes) : undefined;
         if (!decline) {
-          const snapshot: CaptureSetupSnapshot = { nodes, truncated: false, ...(generation ? { refsGeneration: generation } : {}) };
+          const snapshot: CaptureSetupSnapshot = { nodes, truncated: false, ...(generation ? { refsGeneration: generation } : {}), ...keyboardVisibility(data) };
           return { snapshot, raw };
         }
         await command(["press", `@${String(decline.ref).replace(/^@/, "")}~s${generation}`, "--level", "full", "--json"], signal);
@@ -811,16 +806,32 @@ export async function capturePlannedRoutes(options: {
         }
       }
     };
+    /** The same wait for a focused field's keyboard as a route link's capture, before an observation's screenshot. */
+    const awaitKeyboardAsync = async (first: CaptureSetupSnapshot, signal: AbortSignal): Promise<CaptureSetupSnapshot> => {
+      const settle = keyboardSettle(first);
+      if (!settle) return first;
+      const startedAt = clock();
+      let current = first;
+      const elapsed = () => Math.max(clock() - startedAt, settle.reads * KEYBOARD_POLL_MS);
+      while (settle.more(elapsed())) {
+        await sleep(KEYBOARD_POLL_MS, undefined, { signal: liveSignal(signal) });
+        current = (await readSnapshot(signal)).snapshot;
+        settle.read(current);
+      }
+      recordKeyboardWait(undefined, settle, elapsed());
+      return current;
+    };
     const observe = async (signal: AbortSignal, options?: { includeImage: boolean }) => {
       await discard();
       await appIdentity(signal);
       const first = await readSnapshotThroughDeferral(signal);
-      const before = first.snapshot;
+      let before = first.snapshot;
       if (first.retries > 0) {
         await appendFile(join(dirname(tracePath), "accessibility-deferral.jsonl"), `${JSON.stringify({ retries: first.retries, waitedMs: first.deferredMs,
           at: new Date(clock()).toISOString() })}\n`, { mode: 0o600 });
       }
       if (options?.includeImage === false) return { snapshot: before };
+      before = await awaitKeyboardAsync(before, signal);
       try { assertSafeScreenshot(before.nodes); }
       catch (error) {
         if (error instanceof CiError && error.code === "CAPTURE_SENSITIVE_INPUT") return { snapshot: before, imageUnavailable: { code: error.code, message: error.message } };

@@ -5,7 +5,7 @@
  * injected, so the translation is tested against recorded Argent output.
  */
 import { CONTROLLER_SESSION } from "./common.js";
-import { INPUT_METHOD_PACKAGES } from "./keyboard.js";
+import { INPUT_METHOD_PACKAGES, KEYBOARD_WINDOW_IDENTIFIERS } from "./keyboard.js";
 import type { DecodedFrame } from "../shared/png-evidence.js";
 
 export type ArgentPlatform = "ios" | "android";
@@ -138,7 +138,11 @@ export function snapshotFromTree(tree: ArgentTree, platform: ArgentPlatform, gen
     if (root || !node.frame || ![node.frame.x, node.frame.y, node.frame.width, node.frame.height].every(finite)) return clip;
     return clip && intersect(node.frame, clip);
   };
-  const visit = (node: ArgentNode, depth: number, parentIndex: number | undefined, appRoot: boolean, clip: Rect | undefined, root: boolean, inputMethod?: string) => {
+  const keyboard = platform === "ios" ? keyboardWindows(roots) : new Set<ArgentNode>();
+  /** `owner` marks every node of a window that is the system keyboard's, as agent-device marks an input method's nodes. */
+  type Owner = { bundleId?: string; systemKeyboard?: true };
+  const visit = (node: ArgentNode, depth: number, parentIndex: number | undefined, appRoot: boolean, clip: Rect | undefined, root: boolean, owner: Owner) => {
+    if (keyboard.has(node)) owner = { ...owner, systemKeyboard: true };
     const frame = node.frame;
     const inner = clipOf(node, clip, root);
     const rect = frame && [frame.x, frame.y, frame.width, frame.height].every(finite) ? toPoints(frame) : undefined;
@@ -163,19 +167,31 @@ export function snapshotFromTree(tree: ArgentTree, platform: ArgentPlatform, gen
         ...(visible ? {} : { visible: false }), ...(node.selected || traits.includes("selected") ? { selected: true } : {}),
         // The field with the keyboard focus, as agent-device marks it, so capture can wait for the keyboard it raises.
         ...(node.focused === true || traits.includes("isEditing") ? { focused: true } : {}),
-        // An Android input method's window names its package on each node, as agent-device's do, which marks the keyboard.
-        ...(inputMethod ? { bundleId: inputMethod } : {}) });
+        ...owner });
       refs[ref] = { rect: appRoot ? { x: 0, y: 0, width: screen.width, height: screen.height } : rect, type,
         ...(node.value !== undefined ? { value: node.value } : {}), ...(type === "SecureTextField" ? { secure: true } : {}) };
     }
-    for (const child of node.children ?? []) visit(child, depth + 1, index, false, inner, false, inputMethod);
+    for (const child of node.children ?? []) visit(child, depth + 1, index, false, inner, false, owner);
   };
   for (const root of roots) {
     const isAppRoot = platform === "ios" ? root.type === "Application" || nodes.length === 0 : root.bundleId === app;
+    // An Android input method's window names its package on each node, as agent-device's do, which marks the keyboard.
     const inputMethod = platform === "android" && root.bundleId && INPUT_METHOD_PACKAGES.has(root.bundleId) ? root.bundleId : undefined;
-    visit(root, 0, undefined, isAppRoot, { x: 0, y: 0, width: 1, height: 1 }, true, inputMethod);
+    visit(root, 0, undefined, isAppRoot, { x: 0, y: 0, width: 1, height: 1 }, true, inputMethod ? { bundleId: inputMethod } : {});
   }
   return { nodes, refs, screen: { width: screen.width, height: screen.height } };
+}
+
+/**
+ * The windows iOS draws the software keyboard in. Argent lists each window as a child of its root, the app's first; the
+ * keyboard's are later ones that hold the keyboard (a `Keyboard` element) or its input view placeholder and prediction
+ * bar. A window is judged by what it holds, never by where its elements sit, and the app's own window never counts: an
+ * element the app identifies as `inputView` there is the app's.
+ */
+function keyboardWindows(roots: readonly ArgentNode[]): Set<ArgentNode> {
+  const holdsKeyboard = (node: ArgentNode): boolean => node.type === "Keyboard" || KEYBOARD_WINDOW_IDENTIFIERS.has(node.identifier ?? "")
+    || (node.children ?? []).some(holdsKeyboard);
+  return new Set(roots.flatMap(root => (root.children ?? []).slice(1).filter(holdsKeyboard)));
 }
 
 function intersect(a: Rect, b: Rect): Rect | undefined {
@@ -444,7 +460,9 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
           converted.nodes.push({ depth: 1, index: converted.nodes.length, parentIndex: 0, type: "Alert", ref: `e${converted.nodes.length + 1}`,
             rect: { x: 0, y: 0, width: converted.screen.width, height: converted.screen.height }, label: "System alert", enabled: true, hittable: false });
         }
+        // Whether a keyboard shows, which Argent's Android tree does not hold: the input method's window is not in it.
         return success({ nodes: converted.nodes, truncated: current.truncated === true, refsGeneration: state.generation,
+          ...(typeof current.keyboardVisible === "boolean" ? { keyboardVisible: current.keyboardVisible } : {}),
           ...(current.foregroundApp ? { appBundleId: current.foregroundApp, appName: current.foregroundApp } : {}),
           snapshotQuality: { state: "healthy", backend: "argent" } });
       }
