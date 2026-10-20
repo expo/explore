@@ -827,8 +827,8 @@ test("a capture's snapshot backend is read from its saved controller response", 
 /**
  * Tempo on the closed iPhone Duo in brentvatne/euxy#172 (review run 39362642343): a 1398 × 2034 screenshot of a
  * 466 × 678 pt screen, and a footnote whose text changed below the fold of its scrolling sheet, so the screenshots match.
- * The review carries no accessibility tree; the footnote's bounds are placed from the screenshot, under the
- * Base Resolution row, running past the screen's bottom edge.
+ * The published review carries no accessibility tree, so the footnote's real bounds are unknown: these tests pin the
+ * rule (more than half of the changed element past the screen's edge), not where euxy's footnote was.
  */
 function tempoSide(sideName, footnote, footnoteBounds, image = { width: 1398, height: 2034 }) {
   const evidence = side(sideName, [
@@ -844,27 +844,27 @@ function tempoSide(sideName, footnote, footnoteBounds, image = { width: 1398, he
 }
 const NEW_LANES = "Changes apply live while playing. Base resolution sets the step grid for new lanes.";
 const ADD_NEXT = "Changes apply live while playing. Base resolution sets the step grid for lanes you add next.";
-const belowFold = { x: 26, y: 652, width: 414, height: 40, unit: "points" };
+// Its top 12 pt on the screen, 28 pt below the bottom edge: 70% past it.
+const mostlyBelow = { x: 26, y: 666, width: 414, height: 40, unit: "points" };
+const offScreenOf = (bounds, assessment = visual("unchanged"), image) => compareSurfaceEvidence({ impact: impact(),
+  base: tempoSide("base", NEW_LANES, bounds, image), head: tempoSide("head", ADD_NEXT, bounds, image), visualAssessment: assessment }).offScreen;
 
-test("matching screenshots of a change whose elements run past the screen's edge are off-screen (euxy#172, closed iPhone Duo)", () => {
-  const result = compareSurfaceEvidence({ impact: impact(), base: tempoSide("base", NEW_LANES, belowFold), head: tempoSide("head", ADD_NEXT, belowFold), visualAssessment: visual("unchanged") });
-  assert.ok(supportedChanges(result).length > 0);
-  assert.equal(result.offScreen, true);
+test("matching screenshots of a change whose elements lie mostly past the screen's edge are off-screen", () => {
+  assert.equal(offScreenOf(mostlyBelow), true);
   // A turned frame (an opened iPhone Duo shown upright) keeps the tree on the portrait axes: the screen is still found.
-  const turned = { width: 2034, height: 1398 };
-  assert.equal(compareSurfaceEvidence({ impact: impact(), base: tempoSide("base", NEW_LANES, belowFold, turned), head: tempoSide("head", ADD_NEXT, belowFold, turned),
-    visualAssessment: visual("unchanged") }).offScreen, true);
+  assert.equal(offScreenOf(mostlyBelow, visual("unchanged"), { width: 2034, height: 1398 }), true);
 });
 
-test("a change on the screen, one whose screenshots differ, or one with no screen to measure against is never off-screen", () => {
-  const onScreen = { x: 26, y: 600, width: 414, height: 40, unit: "points" };
+test("a change on the screen, partly on it, with differing screenshots, or with no screen to measure against is never off-screen", () => {
   const cases = {
-    "an on-screen text change": [tempoSide("base", NEW_LANES, onScreen), tempoSide("head", ADD_NEXT, onScreen), visual("unchanged")],
-    "screenshots that differ": [tempoSide("base", NEW_LANES, belowFold), tempoSide("head", ADD_NEXT, belowFold), visual("modified")],
-    "no screenshot size": [tempoSide("base", NEW_LANES, belowFold, null), tempoSide("head", ADD_NEXT, belowFold, null), visual("unchanged")],
-    "a changed element without bounds": [tempoSide("base", NEW_LANES, undefined), tempoSide("head", ADD_NEXT, undefined), visual("unchanged")],
+    "an on-screen text change": [{ x: 26, y: 600, width: 414, height: 40, unit: "points" }],
+    // Its top 28 pt on the screen, 12 pt below: mostly visible, so matching pixels prove nothing about it.
+    "a footnote mostly on the screen": [{ x: 26, y: 650, width: 414, height: 40, unit: "points" }],
+    // A control nudged 2 pt past the left edge, otherwise wholly visible.
+    "a control just crossing an edge": [{ x: -2, y: 600, width: 300, height: 40, unit: "points" }],
+    "screenshots that differ": [mostlyBelow, visual("modified")],
+    "no screenshot size": [mostlyBelow, visual("unchanged"), null],
+    "a changed element without bounds": [undefined],
   };
-  for (const [name, [base, head, assessment]] of Object.entries(cases)) {
-    assert.equal(compareSurfaceEvidence({ impact: impact(), base, head, visualAssessment: assessment }).offScreen, undefined, name);
-  }
+  for (const [name, args] of Object.entries(cases)) assert.equal(offScreenOf(...args), undefined, name);
 });

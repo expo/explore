@@ -637,11 +637,13 @@ function viewportOf(side: ResolvedSide): ElementBounds | undefined {
 }
 
 /**
- * Whether the screenshots cannot show any of the changes because the elements they name lie past the edge of the screen:
- * each change names at least one element, and each element named reaches beyond the screen on its side. With matching
- * screenshots, that is what an accessibility tree holding content below a scrolling sheet's fold looks like: Tempo's
- * footnote on the closed iPhone Duo in brentvatne/euxy#172 (review run 39362642343). A change to a label or title that is
- * on the screen never qualifies, nor does a change whose elements have no bounds.
+ * Whether the screenshots cannot show the changes because the elements they name lie past the edge of the screen: each
+ * change names at least one element, and more than half of each named element's area is beyond the screen on its side.
+ * Both controllers leave an element wholly outside the screen out of the tree (the Argent bridge as agent-device does),
+ * so a change past the edge can only show as an element straddling it, as Tempo's footnote below the fold of its sheet
+ * on the closed iPhone Duo in brentvatne/euxy#172 (review run 39362642343) would. Mostly outside, not merely crossing
+ * an edge: a control nudged a point or two past the edge is still on the screen, and its change stays "accessibility
+ * only". A change whose elements have no bounds never qualifies.
  */
 function changesOffScreen(facts: readonly SupportedInput[], base: ResolvedSide, head: ResolvedSide): boolean {
   const changes = facts.filter(fact => !["unstable-text", "no-visible-change", "visual-changed"].includes(fact.change.kind));
@@ -654,8 +656,10 @@ function changesOffScreen(facts: readonly SupportedInput[], base: ResolvedSide, 
     const element = (side === "base" ? base : head).observation.elements.find(candidate => candidate.elementId === id);
     const bounds = element && boundsOf(element);
     if (!viewport || !bounds) return false;
-    return bounds.x < viewport.x - 1 || bounds.y < viewport.y - 1
-      || bounds.x + bounds.width > viewport.x + viewport.width + 1 || bounds.y + bounds.height > viewport.y + viewport.height + 1;
+    const visibleWidth = Math.max(0, Math.min(bounds.x + bounds.width, viewport.x + viewport.width) - Math.max(bounds.x, viewport.x));
+    const visibleHeight = Math.max(0, Math.min(bounds.y + bounds.height, viewport.y + viewport.height) - Math.max(bounds.y, viewport.y));
+    const area = bounds.width * bounds.height;
+    return area > 0 && visibleWidth * visibleHeight < area / 2;
   };
   return changes.every(fact => {
     const named = fact.evidenceRefs.map(outside).filter((value): value is boolean => value !== undefined);
