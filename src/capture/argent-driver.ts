@@ -5,6 +5,7 @@
  * injected, so the translation is tested against recorded Argent output.
  */
 import { CONTROLLER_SESSION } from "./common.js";
+import { INPUT_METHOD_PACKAGES, KEYBOARD_WINDOW_IDENTIFIERS } from "./keyboard.js";
 import type { DecodedFrame } from "../shared/png-evidence.js";
 
 export type ArgentPlatform = "ios" | "android";
@@ -88,7 +89,7 @@ export function parseCommand(argv: readonly string[]): { positional: string[]; f
 }
 
 type ArgentNode = { role?: string; type?: string; label?: string; identifier?: string; value?: string; contentDescription?: string; disabled?: boolean;
-  frame?: Rect; traits?: string[]; hidden?: boolean; selected?: boolean; password?: boolean; bundleId?: string; children?: ArgentNode[] };
+  frame?: Rect; traits?: string[]; hidden?: boolean; selected?: boolean; focused?: boolean; password?: boolean; bundleId?: string; children?: ArgentNode[] };
 export type ArgentTree = { schemaVersion?: number; source?: string; screen?: { width: number; height: number }; roots?: ArgentNode[];
   truncated?: boolean; alertVisible?: boolean; keyboardVisible?: boolean; foregroundApp?: string };
 
@@ -137,7 +138,11 @@ export function snapshotFromTree(tree: ArgentTree, platform: ArgentPlatform, gen
     if (root || !node.frame || ![node.frame.x, node.frame.y, node.frame.width, node.frame.height].every(finite)) return clip;
     return clip && intersect(node.frame, clip);
   };
-  const visit = (node: ArgentNode, depth: number, parentIndex: number | undefined, appRoot: boolean, clip: Rect | undefined, root: boolean) => {
+  const keyboard = platform === "ios" ? keyboardWindows(roots) : new Set<ArgentNode>();
+  /** `owner` marks every node of a window that is the system keyboard's, as agent-device marks an input method's nodes. */
+  type Owner = { bundleId?: string; systemKeyboard?: true };
+  const visit = (node: ArgentNode, depth: number, parentIndex: number | undefined, appRoot: boolean, clip: Rect | undefined, root: boolean, owner: Owner) => {
+    if (keyboard.has(node)) owner = { ...owner, systemKeyboard: true };
     const frame = node.frame;
     const inner = clipOf(node, clip, root);
     const rect = frame && [frame.x, frame.y, frame.width, frame.height].every(finite) ? toPoints(frame) : undefined;
@@ -159,17 +164,40 @@ export function snapshotFromTree(tree: ArgentTree, platform: ArgentPlatform, gen
         rect: appRoot ? { x: 0, y: 0, width: screen.width, height: screen.height } : rect,
         ...(label ? { label } : {}), ...(node.identifier ? { identifier: node.identifier } : {}),
         ...(node.value !== undefined ? { value: node.value } : {}), enabled, hittable: enabled && visible && !appRoot,
-        ...(visible ? {} : { visible: false }), ...(node.selected || traits.includes("selected") ? { selected: true } : {}) });
+        ...(visible ? {} : { visible: false }), ...(node.selected || traits.includes("selected") ? { selected: true } : {}),
+        // The field with the keyboard focus, as agent-device marks it, so capture can wait for the keyboard it raises.
+        ...(node.focused === true || traits.includes("isEditing") ? { focused: true } : {}),
+        ...owner });
       refs[ref] = { rect: appRoot ? { x: 0, y: 0, width: screen.width, height: screen.height } : rect, type,
         ...(node.value !== undefined ? { value: node.value } : {}), ...(type === "SecureTextField" ? { secure: true } : {}) };
     }
-    for (const child of node.children ?? []) visit(child, depth + 1, index, false, inner, false);
+    for (const child of node.children ?? []) visit(child, depth + 1, index, false, inner, false, owner);
   };
   for (const root of roots) {
     const isAppRoot = platform === "ios" ? root.type === "Application" || nodes.length === 0 : root.bundleId === app;
-    visit(root, 0, undefined, isAppRoot, { x: 0, y: 0, width: 1, height: 1 }, true);
+    // An Android input method's window names its package on each node, as agent-device's do, which marks the keyboard.
+    const inputMethod = platform === "android" && root.bundleId && INPUT_METHOD_PACKAGES.has(root.bundleId) ? root.bundleId : undefined;
+    visit(root, 0, undefined, isAppRoot, { x: 0, y: 0, width: 1, height: 1 }, true, inputMethod ? { bundleId: inputMethod } : {});
   }
   return { nodes, refs, screen: { width: screen.width, height: screen.height } };
+}
+
+/**
+ * The windows iOS draws the software keyboard in. Argent lists each window as a child of its root, the app's first. A
+ * later window is the keyboard's when it holds XCTest's `Keyboard` element, which no app can give itself; an identifier
+ * never decides it alone, since an app can set any identifier on its own views (a second window of the app's with a
+ * `testID="inputView"` stays the app's). While such a window is up, UIKit also hosts the keyboard's input view
+ * placeholder in a window of its own: a later window whose only named node is an `inputView` belongs to it too.
+ */
+function keyboardWindows(roots: readonly ArgentNode[]): Set<ArgentNode> {
+  const holds = (node: ArgentNode, test: (node: ArgentNode) => boolean): boolean => test(node) || (node.children ?? []).some(child => holds(child, test));
+  const later = roots.flatMap(root => (root.children ?? []).slice(1));
+  const keyboard = later.filter(window => holds(window, node => node.type === "Keyboard"));
+  if (!keyboard.length) return new Set();
+  const named = (node: ArgentNode) => Boolean(node.label?.trim() || node.contentDescription?.trim() || node.value !== undefined
+    || (node.identifier && !KEYBOARD_WINDOW_IDENTIFIERS.has(node.identifier)));
+  const placeholders = later.filter(window => !keyboard.includes(window) && holds(window, node => node.identifier === "inputView") && !holds(window, named));
+  return new Set([...keyboard, ...placeholders]);
 }
 
 function intersect(a: Rect, b: Rect): Rect | undefined {
@@ -438,7 +466,9 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
           converted.nodes.push({ depth: 1, index: converted.nodes.length, parentIndex: 0, type: "Alert", ref: `e${converted.nodes.length + 1}`,
             rect: { x: 0, y: 0, width: converted.screen.width, height: converted.screen.height }, label: "System alert", enabled: true, hittable: false });
         }
+        // Whether a keyboard shows, which Argent's Android tree does not hold: the input method's window is not in it.
         return success({ nodes: converted.nodes, truncated: current.truncated === true, refsGeneration: state.generation,
+          ...(typeof current.keyboardVisible === "boolean" ? { keyboardVisible: current.keyboardVisible } : {}),
           ...(current.foregroundApp ? { appBundleId: current.foregroundApp, appName: current.foregroundApp } : {}),
           snapshotQuality: { state: "healthy", backend: "argent" } });
       }

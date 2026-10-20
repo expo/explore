@@ -679,6 +679,80 @@ test('a config without targets writes the same records and comment as before tar
   assert.deepEqual(Object.keys(readCommentRecords(after).current), ['ios', 'android']);
 });
 
+/**
+ * brentvatne/euxy#172, review run 39362642343: five targets, two strings changed. Tempo's footnote sits low in a
+ * scrolling sheet. On the closed iPhone Duo the accessibility tree has the new text but the screenshots match: the
+ * footnote runs past the bottom of the screen (`offScreen`, from the elements' bounds). On the half-open and opened Duo
+ * neither the tree nor the pixels have it. Android captures no dark appearance.
+ */
+const euxyTargets = [{ id: 'iphone', platform: 'ios', label: 'iPhone 17' }, { id: 'duo-closed', platform: 'ios', label: 'iPhone Duo (closed)' },
+  { id: 'duo-half-open', platform: 'ios', label: 'iPhone Duo (half-open)' }, { id: 'duo-open', platform: 'ios', label: 'iPhone Duo (open)' },
+  { id: 'android', platform: 'android', label: 'Android' }];
+const footnote = 'Added text “Changes apply live while playing. Base resolution sets the step grid for lanes you add next.”.';
+const footnoteText = 'Added text “Changes apply live while playing\\. Base resolution sets the step grid for lanes you add next\\.”';
+function euxyReview(target, options = {}) {
+  const own = { sourceImpact: ['own'], sourceScope: 'screen' };
+  const matched = { verdict: 'unchanged', reason: 'matched', mismatchPercentage: 0, threshold: 0.1, tool: 'agent-device@0.21.29' };
+  const changed = (description, mismatchPercentage) => ({ ...own,
+    review: { status: 'modified', description, facts: [{ category: 'element', templateId: 'element.added', bullet: description }] },
+    visual: { verdict: 'modified', reason: 'repeated-cross-build-delta', mismatchPercentage, threshold: 0.1, tool: 'agent-device@0.21.29' } });
+  const inTreeOnly = { ...changed(footnote, 0), visual: matched };
+  if (options.offScreen !== false) inTreeOnly.review.offScreen = true;
+  if (options.diffFailed) inTreeOnly.visual = { ...matched, reason: 'diff-failed' };
+  const unseen = { ...own, review: { status: 'unchanged', description: 'No visible change' }, visual: matched };
+  const tempo = target === 'duo-closed' ? inTreeOnly : ['duo-half-open', 'duo-open'].includes(target) ? unseen : changed(footnote, 0.11);
+  const rename = changed('Added text “Pattern name”.', 0.16);
+  const schemes = target === 'android' ? [''] : ['', '@dark'];
+  return review(schemes.flatMap(scheme => [
+    surface(`tempo${scheme}`, 'modified', { route: '/tempo', extra: structuredClone(tempo) }),
+    surface(`rename-pattern${scheme}`, 'modified', { route: '/rename-pattern', extra: structuredClone(rename) }),
+  ]));
+}
+async function euxyRows(reviewOf = euxyReview) {
+  const { platformSectionMerge } = await import('../../dist/report/pr-comment-body.js');
+  let body;
+  for (const target of euxyTargets) body = platformSectionMerge(state({ artifactOnly: true, target, targets: euxyTargets, review: reviewOf(target.id),
+    build: { ...state().build, platform: target.platform }, runtime: { ...state().runtime, platform: target.platform, deviceModel: target.label } }), target.id).merge(body);
+  return { body, rows: listOf(body).map(line => line.replace(/\(<[^>]+>\)/, '')) };
+}
+
+test('a change whose elements run past the screen on a device is named off-screen there, beside the devices that show it (euxy#172)', async () => {
+  const { body, rows } = await euxyRows();
+  assert.deepEqual(rows, [
+    `- [\`/tempo\`] · ${footnoteText} · iPhone 17, Android only · off-screen on iPhone Duo \\(closed\\)`,
+    `- [\`/rename-pattern\`] · Added text “Pattern name”`,
+    `- [\`/tempo\`] (dark) · ${footnoteText} · iPhone 17 only · off-screen on iPhone Duo \\(closed\\)`,
+    `- [\`/rename-pattern\`] (dark) · Added text “Pattern name” · not on Android`,
+  ], 'the half-open and opened Duo have no trace of it, so they stay among the devices it is not on');
+  const { readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
+  assert.deepEqual(readCommentRecords(body).current['duo-closed'].changes.filter(change => change.offScreen).map(change => change.id), ['tempo', 'tempo@dark'],
+    'the mark survives the comment round trip');
+});
+
+test('without geometry that puts it past the screen, or with a failed comparison, a device keeps today\'s wording', async () => {
+  // The review euxy#172 published: the closed Duo's change is accessibility-only, with nothing saying where its elements are.
+  const { rows } = await euxyRows(target => euxyReview(target, { offScreen: false }));
+  assert.equal(rows[0], `- [\`/tempo\`] · ${footnoteText} · not on iPhone Duo \\(half\\-open\\), iPhone Duo \\(open\\)`);
+  assert.equal(rows[2], `- [\`/tempo\`] (dark) · ${footnoteText} · iPhone 17, iPhone Duo \\(closed\\) only`);
+  // A comparison that failed is no verdict at all: the closed Duo is not counted among the devices with the change.
+  const failed = await euxyRows(target => euxyReview(target, { diffFailed: true }));
+  assert.match(failed.rows[0], / · on iPhone 17, Android$/);
+  assert.doesNotMatch(failed.rows.join('\n'), /off-screen/);
+});
+
+test('a change one platform has and another lacks keeps "only" and "not on"', async () => {
+  // An iOS-only branch in a shared screen file: Android's capture of the screen shows no change, and says nothing off-screen.
+  const iosOnly = target => {
+    const reviewed = euxyReview(target);
+    if (target === 'android') for (const entry of reviewed.surfaces) Object.assign(entry, { review: { status: 'unchanged', description: 'No visible change' },
+      visual: { verdict: 'unchanged', reason: 'matched', mismatchPercentage: 0, threshold: 0.1, tool: 'agent-device@0.21.29' } });
+    return reviewed;
+  };
+  const { rows } = await euxyRows(iosOnly);
+  assert.equal(rows[0], `- [\`/tempo\`] · ${footnoteText} · iPhone 17 only · off-screen on iPhone Duo \\(closed\\)`);
+  assert.match(rows.find(row => row.startsWith('- [`/rename-pattern`] ·')), / · not on Android$/);
+});
+
 test('several targets share a comment: named in config order in the subtitle, each linking its report, keyed by id in the records and history', async () => {
   const { platformSectionMerge, readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
   const [iphone, closed, open, android] = duoTargets;

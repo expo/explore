@@ -69,6 +69,18 @@ const unreadableSurface = () => json({ success: false, error: { code: 'COMMAND_F
   details: { hint: 'com.apple.SafariViewService hosts the surface presented over the app, and this capture targeted that surface. No snapshot backend could read this screen (XCTest-backed snapshot tiers were deferred after recent slow accessibility work on this screen).' } } });
 
 
+/**
+ * The iOS 26 keyboard as agent-device reports it: the Keyboard element with its keys beneath it, and the dock's Emoji and
+ * Dictate buttons, which its host bridge names by their view class (brentvatne/euxy#172, review run 39362642343).
+ */
+const softKeyboard = [
+  { index: 900, type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 }, visible: true },
+  { index: 902, parentIndex: 900, type: 'Keyboard', rect: { x: 0, y: 583, width: 402, height: 233 }, visible: true },
+  { index: 903, parentIndex: 902, type: 'Key', label: 'Q', rect: { x: 5, y: 590, width: 39, height: 54 }, visible: true },
+  { index: 905, parentIndex: 900, type: 'Button', role: 'UIKeyboardDockItemButton', label: 'Emoji', rect: { x: 8, y: 806, width: 68, height: 68 }, visible: true },
+  { index: 906, parentIndex: 900, type: 'Button', role: 'UIKeyboardDockItemButton', label: 'Dictate', identifier: 'dictation', rect: { x: 325, y: 806, width: 68, height: 68 }, visible: true },
+];
+
 function agentFixture(actions, observedRequests = []) {
   return { instructions: 'Capture each selected route in its normal loaded state.', contexts: {},
     provider: { provider: 'anthropic', model: 'test-model', preflight: async () => {}, run: async request => {
@@ -117,6 +129,8 @@ async function fixture(t, settings = {}) {
   let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let deviceLost = false; let relaunchedAfterForeign = false; let serverStarts = 0; let unreadableLeft = settings.unreadableAfterFold ?? 0;
   // startsErrored / startsUnnamed: how many session starts EAS fails, after naming the session (it ERRORS) or before.
   let starts = 0; let currentSession = 'session-1'; const erroredSessions = new Set(); let foldUnverifiedLeft = settings.foldUnverified ?? 0;
+  // focusedField: the screen at `path` focuses its text field, and the keyboard is up from the `keyboardFrom`th read of it.
+  let focusedReads = 0;
   // blackAfterFold: the first so many folds of an EAS agent-device session light the panel but draw nothing.
   let folds = 0;
   const deviceName = settings.android ? 'Pixel 7' : 'iPhone 17 Pro';
@@ -369,6 +383,8 @@ async function fixture(t, settings = {}) {
           ] : []),
           ...(settings.statefulSetup && current === '/transient' ? [{ type: 'Button', label: 'Finish', ref: 'e103', enabled: true, visible: !finishHidden }] : []),
           ...(alert ? [{ type: 'Alert', label: alert.message }, ...alert.items.map((label, index) => ({ type: 'Button', label, ref: `e${index + 1}`, enabled: true, visible: true }))] : []),
+          ...(settings.focusedField?.path === current ? [{ type: 'TextField', label: 'Pattern name', focused: true, visible: true, rect: { x: 23, y: 386, width: 355, height: 50 } },
+            ...(++focusedReads >= (settings.focusedField.keyboardFrom ?? Infinity) ? softKeyboard : [])] : []),
           ...(settings.missingObserver || settings.missingObserverAt === current ? [] : [observer]),
           // A second active destination is ambiguous; the host AX bridge's identical copy is not.
           ...(settings.duplicateObserver ? [{ ...observer, label: JSON.stringify({ provider: 'expo-router', pathname: '/other', segments: ['other'], parameters: {} }) }] : []),
@@ -1179,6 +1195,46 @@ test('every app link settles before the screen is read', async t => {
     && request.args[0] === 'wait' && request.args[1] === 'stable');
   const read = f.requests.findIndex((request, index) => index > opened && request.args[0] === 'snapshot');
   assert.ok(opened >= 0 && settled > opened && settled < read, 'the settle runs between the link and the first read');
+});
+
+const keyboardLog = async f => (await readFile(join(f.options.mapDirectory, 'capture-diagnostics', 'keyboard.jsonl'), 'utf8'))
+  .trim().split('\n').map(line => JSON.parse(line));
+
+test('a screen whose text field has the focus is captured once its keyboard is up and still, and the keyboard is not one of its elements', async t => {
+  // euxy#172 (review run 39362642343): the rename sheet focuses its field, and the keyboard rises after the sheet settles.
+  const f = await fixture(t, { routes: [route('rename')], focusedField: { path: '/rename', keyboardFrom: 2 } });
+  const result = await runCiMap(f.options);
+  assert.equal(result.outcomes[f.ids.rename].status, 'captured');
+  assert.equal(result.outcomes[f.ids.rename].attempts, 1);
+  assert.deepEqual((await keyboardLog(f)).map(line => [line.route, line.outcome, line.reads]), [[f.ids.rename, 'shown', 2]],
+    'read until the keyboard was up in the same place twice');
+  const calls = f.requests.filter(request => request.command === 'fake-controller').map(request => request.args[0]);
+  const shot = calls.lastIndexOf('screenshot');
+  assert.deepEqual(calls.slice(shot - 3, shot), ['snapshot', 'snapshot', 'snapshot'], 'the destination read, then the keyboard reads, then the screenshot');
+  const map = await readExportedMap(f.options.outputDirectory);
+  const labels = map.observations.flatMap(observation => observation.elements.map(element => element.label));
+  assert.ok(labels.includes('Pattern name'));
+  for (const label of ['Q', 'Emoji', 'Dictate']) assert.equal(labels.includes(label), false, `${label} is the keyboard's, not the app's`);
+});
+
+test('a focused field whose keyboard never rises is captured after about a second and at least two reads, without it', async t => {
+  const f = await fixture(t, { routes: [route('rename')], focusedField: { path: '/rename' } });
+  const result = await runCiMap(f.options);
+  assert.equal(result.outcomes[f.ids.rename].status, 'captured');
+  const [line] = await keyboardLog(f);
+  assert.equal(line.outcome, 'absent');
+  assert.ok(line.reads >= 2 && line.reads <= 6 && line.elapsedMs >= 1000, `gave up after ${line.reads} reads in ${line.elapsedMs} ms`);
+  assert.equal(f.operations().includes('keyboard'), false, 'the keyboard is never dismissed or summoned');
+  // A screen without a focused field is not read again.
+  const plain = await fixture(t, { routes: [route('home')] });
+  await runCiMap(plain.options);
+  assert.equal(existsSync(join(plain.options.mapDirectory, 'capture-diagnostics', 'keyboard.jsonl')), false);
+});
+
+test('a keyboard already up when the screen is read is captured once a later read finds it in the same place', async t => {
+  const f = await fixture(t, { routes: [route('rename')], focusedField: { path: '/rename', keyboardFrom: 1 } });
+  assert.equal((await runCiMap(f.options)).outcomes[f.ids.rename].status, 'captured');
+  assert.deepEqual((await keyboardLog(f)).map(line => [line.outcome, line.reads]), [['shown', 1]]);
 });
 
 test('an application Open button is never an implicit confirmation action', async t => {

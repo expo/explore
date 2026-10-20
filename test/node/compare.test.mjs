@@ -331,3 +331,15 @@ test("compare CLI emits a comparison, review, and catalog that reload as a works
   ));
   assert.deepEqual(shared.baselineScreenIds, ["shared-home"]);
 });
+
+test("fingerprints from different Explore versions are not comparable: the match needs review instead of reading as changed", async () => {
+  // A map saved by Explore 0.20.x hashes the tree with the keyboard and the focus in it, unprefixed; a2 hashes leave them out.
+  const baseline = makeMap("main-eeeeeee", [{ id: "home", route: "/", acc: "0".repeat(64) }]);
+  const current = makeMap("pr-3-fffffff", [{ id: "home", route: "/", acc: `a2:${"1".repeat(64)}` }]);
+  const { comparison, review } = generateComparison(baseline, current);
+  await validateComparisonDocument(comparison, baseline, current);
+  const home = review.entries.find((entry) => entry.entryId === "match-home");
+  assert.equal(home.needsReview, true);
+  assert.match(entryById(comparison, "match-home").rationale, /different Explore versions/);
+  assert.ok(home.notes.some((note) => /compare the screenshots/.test(note)));
+});

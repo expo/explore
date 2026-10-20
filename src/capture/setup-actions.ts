@@ -6,6 +6,8 @@ export type CaptureSetupSnapshot = {
   nodes: readonly Record<string, unknown>[];
   refsGeneration?: number;
   truncated?: boolean;
+  /** Whether the controller says a software keyboard shows, when it says (Argent does). */
+  keyboardVisible?: boolean;
 };
 
 type Awaitable<T> = T | Promise<T>;
