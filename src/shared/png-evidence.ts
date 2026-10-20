@@ -145,9 +145,14 @@ export function assertDecodedPng(contents: Buffer, label: string): void {
   }
 }
 
+/** The chunks that say how a PNG's samples map to colour; pngjs reads past them and writes none of its own. */
+const COLOUR_CHUNKS = new Set(["iCCP", "sRGB", "gAMA", "cHRM"]);
+
 /**
  * The image turned a quarter clockwise. An opened iPhone Duo shows a landscape UI on a panel whose native axes are
- * portrait, and its screenshot comes back on those axes; turned, it is what a person sees.
+ * portrait, and its screenshot comes back on those axes; turned, it is what a person sees. The source's colour chunks
+ * are carried over unchanged. pngjs reads every PNG as 8-bit RGBA, so a 16-bit image comes out 8-bit; simulator
+ * screenshots are 8-bit already.
  */
 export function turnedClockwise(png: Buffer): Buffer {
   const { PNG } = createRequire(import.meta.url.replace(/\?.*$/, ""))("pngjs") as { PNG: { new(size: { width: number; height: number }): DecodedFrame; sync: {
@@ -161,5 +166,17 @@ export function turnedClockwise(png: Buffer): Buffer {
       source.data.copy(turned.data, (x * height + (height - 1 - y)) * 4, from, from + 4);
     }
   }
-  return PNG.sync.write(turned);
+  const written = PNG.sync.write(turned);
+  // Each chunk is copied whole, CRC included: its data does not depend on the pixels or their size. They belong before
+  // the image data, so they go right after the header (8 bytes of signature, then IHDR's 25). The output is RGBA, so a
+  // grey source's ICC profile, which describes grey samples only, is left out.
+  const grey = png[25] === 0 || png[25] === 4;
+  const colour: Buffer[] = [];
+  for (let offset = 8; offset + 12 <= png.length;) {
+    const length = png.readUInt32BE(offset), type = png.toString("latin1", offset + 4, offset + 8), next = offset + 12 + length;
+    if (type === "IDAT" || type === "IEND" || next > png.length) break;
+    if (COLOUR_CHUNKS.has(type) && !(grey && type === "iCCP")) colour.push(png.subarray(offset, next));
+    offset = next;
+  }
+  return colour.length ? Buffer.concat([written.subarray(0, 33), ...colour, written.subarray(33)]) : written;
 }

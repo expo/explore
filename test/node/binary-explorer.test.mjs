@@ -947,6 +947,33 @@ test("a coordinate tap on an opened Duo is named by where it shows in the uprigh
   assert.deepEqual(map.artifacts.find(item => item.kind === "screenshot").turned, { width: 669, height: 951 });
 });
 
+test("turnedClockwise puts the portrait top on the right and keeps the colour chunks", async () => {
+  const { turnedClockwise, assertDecodedPng } = await tsImport("../../src/shared/png-evidence.ts", import.meta.url);
+  const { createRequire } = await import("node:module");
+  const { PNG: Png } = createRequire(import.meta.url)("pngjs");
+  const { crc32 } = await import("node:zlib");
+  // 3 wide and 2 tall; each pixel's red is its index, so where it lands says where it came from.
+  const plain = await pngOf(3, 2, [0, 1, 2, 3, 4, 5].map(index => [index * 40, 0, 0, 255]));
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]), out = Buffer.alloc(body.length + 8);
+    out.writeUInt32BE(data.length, 0); body.copy(out, 4); out.writeUInt32BE(crc32(body), body.length + 4);
+    return out;
+  };
+  const gamma = Buffer.alloc(4); gamma.writeUInt32BE(45455);
+  const source = Buffer.concat([plain.subarray(0, 33), chunk("sRGB", Buffer.from([0])), chunk("gAMA", gamma), plain.subarray(33)]);
+  const turned = turnedClockwise(source);
+  assertDecodedPng(turned, "Turned");
+  const decoded = Png.sync.read(turned);
+  assert.deepEqual([decoded.width, decoded.height], [2, 3]);
+  // Source (x, y) lands at (height - 1 - y, x): the top row (0, 1, 2) runs down the right-hand column.
+  const red = [...Array(6).keys()].map(index => decoded.data[index * 4] / 40);
+  assert.deepEqual(red, [3, 0, 4, 1, 5, 2]);
+  const types = [];
+  for (let offset = 8; offset < turned.length; offset += 12 + turned.readUInt32BE(offset)) types.push(turned.toString("latin1", offset + 4, offset + 8));
+  assert.deepEqual(types.slice(0, 3), ["IHDR", "sRGB", "gAMA"]);
+  assert.ok(turned.includes(gamma), "the gamma is the source's");
+});
+
 test("only an opened Duo's frame on its inner panel's portrait axes is turned upright", () => {
   const { duoScreenshotTurn } = tsRun;
   const root = (width, height) => ({ type: "Application", label: "Expo Go", rect: { x: 0, y: 0, width, height } });
