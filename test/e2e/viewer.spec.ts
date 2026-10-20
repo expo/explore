@@ -1254,7 +1254,7 @@ test("does not send viewer cookies to a cross-origin static workspace", async ({
 
 test("the logo returns to the Map root", async ({ page }) => {
   await page.goto("/screens?screen=settings-root");
-  await page.locator(".left-panel-collapsed-pill").getByRole("button", { name: "Map", exact: true }).click();
+  await page.locator(".left-panel-collapsed-pill").getByRole("button", { name: /^Map of / }).click();
   await expect(page).toHaveURL(/\/map$/);
   await expect(page.locator(".map-canvas")).toBeVisible();
 });
@@ -2811,7 +2811,7 @@ test("floats the pill over the canvas and remembers the Inspector across a reloa
   expect(expandedCameraShadow).not.toBe("none");
   const collapsedPanel = page.locator(".left-panel.collapsed");
   await expect(collapsedPanel).toBeVisible();
-  await expect(collapsedPanel.getByRole("button", { name: "Map", exact: true })).toBeVisible();
+  await expect(collapsedPanel.getByRole("button", { name: /^Map of / })).toBeVisible();
   await expect(collapsedPanel.locator(".collapsed-app-identity strong")).toBeVisible();
   // There is no sidebar to open: the pill is the only left chrome.
   await expect(page.getByRole("button", { name: /^(Expand|Collapse) panel$/ })).toHaveCount(0);
@@ -3076,7 +3076,7 @@ test("keeps fixed objects and canvas pan after a reload", async ({ page }) => {
 
 test("delays the first tooltip, then shows subsequent tooltips instantly", async ({ page }) => {
   await page.goto("/map");
-  const menu = page.locator(".left-panel-collapsed-pill").getByRole("button", { name: "Map", exact: true });
+  const menu = page.locator(".left-panel-collapsed-pill").getByRole("button", { name: /^Map of / });
   const changes = page.getByRole("button", { name: "Fit canvas", exact: true });
   const tooltip = page.locator(".tooltip");
 

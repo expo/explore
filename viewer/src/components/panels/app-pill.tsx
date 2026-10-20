@@ -118,18 +118,9 @@ function ChipLabel({ text }: { text: string }) {
   );
 }
 
-/**
- * Each item's width with nothing squeezed or left out: what the row would take if it could, so its own width plus
- * whatever its clipped parts hide (a label's text and pose fade behind an overflow).
- */
-function naturalWidth(item: HTMLElement): number {
-  let width = item.offsetWidth;
-  for (const part of [item, ...item.querySelectorAll("*")]) {
-    if (!(part instanceof HTMLElement)) continue;
-    const overflow = getComputedStyle(part).overflowX;
-    if (overflow === "hidden" || overflow === "clip") width += part.scrollWidth - part.offsetWidth;
-  }
-  return width;
+/** Whether an element's text runs past its box: scrollWidth is an integer, so a sub-pixel overrun is no cut. */
+function cut(element: HTMLElement | null): boolean {
+  return Boolean(element && element.scrollWidth > element.offsetWidth);
 }
 
 type AppPillProps = {
@@ -167,7 +158,6 @@ export function AppPill(props: AppPillProps) {
   const platformRef = useRef<HTMLButtonElement>(null);
   const phone = usePhoneLayout();
   const identityRef = useRef<HTMLDivElement>(null);
-  const [drop, setDrop] = useState("");
   const [platformOpen, setPlatformOpen] = useState(false);
   // A target still downloading: this report stays up, the trigger and the menu row say so. One that failed says why.
   const { switching, switchError } = useSyncExternalStore(REPORT_SOURCE.subscribe, REPORT_SOURCE.getSnapshot, REPORT_SOURCE.getSnapshot);
@@ -182,6 +172,9 @@ export function AppPill(props: AppPillProps) {
   const applicationName = props.map.run.name;
   // The app's own icon when the report carries one; the Expo mark otherwise.
   const appIcon = artifactUrl(props.map.run.appIcon);
+  // An icon that cannot be read shows the Expo mark instead, which does not name the app: the icon it was for.
+  const [failedIcon, setFailedIcon] = useState<string>();
+  const iconShown = Boolean(appIcon) && failedIcon !== appIcon;
   const platform = props.map.run.platform;
   const environment = props.map.run.environment ?? {};
   const device = [
@@ -203,48 +196,71 @@ export function AppPill(props: AppPillProps) {
   const currentTarget = run.targets.find(target => target.id === run.current);
   const targetLabel = currentTarget?.label ?? PLATFORM_NAMES[platform] ?? platform;
 
-  // The phone's header is the window's width. When the row's natural width exceeds its room, it leaves items out in
-  // order: the app's name (when its icon still names it), then the pull request link (Search keeps "Open pull
-  // request"); only then does the target's label fade: its device first, its pose only once the device is gone, so
-  // the label never runs out of its chip over the next. Measured from natural widths, so the result is a function
-  // of the row's width alone, never of the last result. The desktop's pill is sized by its content, so it leaves
-  // nothing out.
+  // The phone's header is the window's width. When the row cannot fit, it gives way in order: the app's name (left
+  // out while the app's own icon names it, or else cut down to its minimum), then the pull request link (Search keeps
+  // "Open pull request"); only then does the target's chip shrink, holding the name at its minimum: its device first,
+  // its pose only once the device is gone, so the label never runs out of its chip over the next. A name without its
+  // icon is left out last, when even the shrunk chip leaves it no room. Each step is laid out and measured in turn
+  // from the first, so the result is a function of the row's width alone, never of the last result. A label fades at
+  // its end only where it is cut. The desktop's pill is sized by its content, so it leaves nothing out.
   const appearanceCurrent = props.appearance?.current;
   useLayoutEffect(() => {
     const row = identityRef.current;
-    if (!row || !phone) {
-      setDrop("");
+    if (!row) return;
+    if (!phone) {
+      delete row.dataset.drop;
+      delete row.dataset.fade;
       return;
     }
+    let disposed = false;
     const fit = () => {
-      const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
-      const items = Array.from(row.children) as HTMLElement[];
-      let deficit = items.reduce((sum, item) => sum + naturalWidth(item), 0) + gap * (items.length - 1) - row.getBoundingClientRect().width;
-      const drops: string[] = [];
-      const optional: [string, HTMLElement | undefined][] = [
-        ["name", appIcon ? items.find(item => item.tagName === "STRONG") : undefined],
-        ["pr", items.find(item => item.querySelector(".collapsed-pr"))],
+      if (disposed) return;
+      const name = row.querySelector<HTMLElement>(":scope > strong");
+      const target = row.querySelector<HTMLElement>(".collapsed-target");
+      const label = target?.querySelector<HTMLElement>(".collapsed-platform-label") ?? null;
+      const device = target?.querySelector<HTMLElement>(".collapsed-platform-label-text") ?? null;
+      const pose = target?.querySelector<HTMLElement>(".collapsed-platform-label-suffix") ?? null;
+      const style = getComputedStyle(row);
+      const minimum = parseFloat(style.getPropertyValue("--collapsed-name-min")) || 0;
+      // A chip no wider than its squeezed minimum has nothing to give: squeezing it would only widen it.
+      row.dataset.drop = "";
+      const squeezable = Boolean(target && target.getBoundingClientRect().width > (parseFloat(style.getPropertyValue("--collapsed-target-min")) || 0));
+      const steps = [
+        ...(name && iconShown ? ["name"] : []),
+        ...(row.querySelector(".collapsed-pr") ? ["pr"] : []),
+        ...(squeezable ? ["squeeze"] : []),
+        ...(squeezable && pose ? ["pose"] : []),
+        ...(name && !iconShown ? ["name"] : []),
       ];
-      for (const [name, item] of optional) {
-        if (deficit <= 0.5 || !item) continue;
-        drops.push(name);
-        deficit -= naturalWidth(item) + gap;
-      }
-      // scrollWidth is an integer: a sub-pixel "squeeze" would fade a label that shows whole.
-      if (deficit > 1) {
-        drops.push("squeeze");
-        const device = row.querySelector<HTMLElement>(".collapsed-target .collapsed-platform-label-text");
-        if (device && deficit > device.scrollWidth) drops.push("pose");
-      }
-      setDrop(drops.join(" "));
+      // With `drops` left out, nothing runs past the row's end, a name that stays shows whole beside its icon and at
+      // least its minimum without, and a squeezed label still shows its whole pose.
+      const fits = (drops: string[]) => {
+        row.dataset.drop = drops.join(" ");
+        const end = row.getBoundingClientRect().right - parseFloat(style.paddingRight);
+        if (Array.from(row.children).some(item => item.getBoundingClientRect().right > end + 0.5)) return false;
+        if (name && !drops.includes("name") && !drops.includes("squeeze")) {
+          if (iconShown ? cut(name) : name.getBoundingClientRect().width < Math.min(minimum, name.scrollWidth) - 0.5) return false;
+        }
+        return !drops.includes("squeeze") || drops.includes("pose") || !cut(label);
+      };
+      let count = 0;
+      while (count < steps.length && !fits(steps.slice(0, count))) count += 1;
+      if (count === steps.length) row.dataset.drop = steps.join(" ");
+      if (!row.dataset.drop) delete row.dataset.drop;
+      const fade = [...(cut(device) ? ["device"] : []), ...(cut(pose) ? ["pose"] : [])];
+      if (fade.length) row.dataset.fade = fade.join(" ");
+      else delete row.dataset.fade;
     };
     fit();
-    // The row's room, and its items' natural widths: a font arriving after the first paint changes the latter alone.
+    // The row's room, and its items' widths: a font arriving after the first paint changes the latter alone.
     const observer = new ResizeObserver(fit);
     for (const node of [row, ...row.children]) observer.observe(node);
     void document.fonts.ready.then(fit);
-    return () => observer.disconnect();
-  }, [targetLabel, appearanceCurrent, pullRequest, phone, appIcon]);
+    return () => {
+      disposed = true;
+      observer.disconnect();
+    };
+  }, [targetLabel, appearanceCurrent, pullRequest, phone, iconShown]);
   // Platform-named targets (every report from before targets) switch platforms; named targets switch devices.
   const noun = run.targets.every(target => target.id === target.platform) ? "platform" : "device";
   const siblings = run.targets
@@ -316,15 +332,17 @@ export function AppPill(props: AppPillProps) {
     <div className="left-panel collapsed">
       <div ref={pillRef} className="left-panel-collapsed-pill">
         <Tooltip label="Map">
-          <button type="button" className="panel-logo-button" aria-label="Map" onClick={props.onOpenMap}>
+          {/* The button names the app as well: the icon has no text of its own, and a phone's row can leave the name out. */}
+          <button type="button" className="panel-logo-button" aria-label={`Map of ${applicationName}`} onClick={props.onOpenMap}>
             {appIcon ? (
               <ScreenshotImage className="panel-app-icon" src={appIcon} alt="" loading="eager" draggable={false}
-                fallback={<ExpoLogo mark />} holdPrevious />
+                fallback={<ExpoLogo mark />} holdPrevious onError={() => setFailedIcon(appIcon)} />
             ) : <ExpoLogo mark />}
           </button>
         </Tooltip>
         <span className="panel-logo-divider" aria-hidden="true" />
-        <div ref={identityRef} className="collapsed-app-identity" data-drop={drop || undefined}>
+        {/* The phone's fit (above) sets data-drop and data-fade on the row itself. */}
+        <div ref={identityRef} className="collapsed-app-identity">
           <strong title={appTitle}>
             {repositoryUrl ? (
               <a className="collapsed-app-name" href={repositoryUrl} target="_blank" rel="noreferrer noopener"

@@ -1930,7 +1930,6 @@ img[data-screenshot-reveal] { animation: screenshot-reveal var(--screenshot-reve
   backdrop-filter: blur(8px);
 }
 .collapsed-app-identity {
-  position: relative;
   display: flex;
   min-width: 0;
   flex: 1;
@@ -2450,21 +2449,27 @@ html [data-sonner-toaster][data-sonner-theme] {
   background: var(--element); color: var(--secondary); font: inherit; font-size: 12.5px; font-weight: 500; line-height: 16px; white-space: nowrap; cursor: pointer;
 }
 .collapsed-platform > svg { flex: none; width: 9px; height: 9px; }
-/* What the fit leaves out (AppPill's data-drop) stays in the tree to be measured, out of flow and unseen. */
-.collapsed-app-identity[data-drop~="name"] > strong,
-.collapsed-app-identity[data-drop~="pr"] > .tooltip-anchor:has(> .collapsed-pr) { position: absolute; top: 0; left: 0; visibility: hidden; pointer-events: none; }
+/* What the phone's fit leaves out (AppPill's data-drop) is not drawn. */
+.phone-layout .collapsed-app-identity[data-drop~="name"] > strong { display: none; }
+.phone-layout .collapsed-app-identity[data-drop~="pr"] > .tooltip-anchor:has(> .collapsed-pr) { display: none; }
 .collapsed-platform-label { display: flex; min-width: 0; overflow: hidden; }
 .collapsed-platform-label-text { min-width: 0; overflow: hidden; }
 .collapsed-platform-label-suffix { flex: none; white-space: pre; }
-/* The target's label is the pill's one long configured text: once the phone's row has left out all it can, the
-   label's device fades out at its end rather than ending in "…" and the slack an ellipsis leaves; the full name is
-   a tap away in its menu. */
-.collapsed-app-identity[data-drop~="squeeze"] .collapsed-target .collapsed-platform-label-text,
-.collapsed-app-identity[data-drop~="pose"] .collapsed-target .collapsed-platform-label-suffix { mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); }
-.collapsed-app-identity[data-drop~="pose"] .collapsed-target .collapsed-platform-label-suffix { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+/* The name a phone's row keeps gives way first, cut to its end down to its minimum, and the target's chip after it,
+   down to its own; the fit reads both. */
+.phone-layout .collapsed-app-identity { --collapsed-name-min: 64px; --collapsed-target-min: 72px; }
+/* The target's label is the pill's one long configured text: once the phone's row has left out all it can, the name
+   holds at its minimum and the target's chip shrinks instead. */
+.phone-layout .collapsed-app-identity[data-drop~="squeeze"] > strong { flex: none; max-width: var(--collapsed-name-min); }
+.phone-layout .collapsed-app-identity[data-drop~="squeeze"] .collapsed-target { flex: 0 1 auto; min-width: var(--collapsed-target-min); }
+.phone-layout .collapsed-app-identity[data-drop~="squeeze"] > .tooltip-anchor:has(> .collapsed-target) { flex: 0 1 auto; min-width: var(--collapsed-target-min); }
+.phone-layout .collapsed-app-identity[data-drop~="pose"] .collapsed-target .collapsed-platform-label-suffix { flex: 0 1 auto; min-width: 0; overflow: hidden; }
 /* The device's text gives way before the pose: it takes what the pose leaves, if anything. */
-.collapsed-app-identity[data-drop~="pose"] .collapsed-target .collapsed-platform-label-text { flex: 1 1 0; }
-.phone-layout .collapsed-target, .phone-layout .collapsed-app-identity > .tooltip-anchor:has(> .collapsed-target) { flex: 0 1 auto; min-width: 72px; }
+.phone-layout .collapsed-app-identity[data-drop~="pose"] .collapsed-target .collapsed-platform-label-text { flex: 1 1 0; }
+/* A cut device or pose (AppPill's data-fade) fades out at its end rather than ending in "…" and the slack an ellipsis
+   leaves; the full name is a tap away in its menu. */
+.phone-layout .collapsed-app-identity[data-fade~="device"] .collapsed-target .collapsed-platform-label-text,
+.phone-layout .collapsed-app-identity[data-fade~="pose"] .collapsed-target .collapsed-platform-label-suffix { mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); }
 .collapsed-platform > .collapsed-platform-busy { width: 11px; height: 11px; animation: spin 1s linear infinite; }
 .collapsed-platform:hover, .collapsed-platform[aria-expanded="true"] { color: var(--text); background: var(--hover); }
 .collapsed-platform:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
