@@ -227,6 +227,23 @@ export async function sourceVerify(): Promise<void> {
   output({ ok: true, deterministic: true, routes: plan.inventorySurfaceIds.length });
 }
 
+/**
+ * Stops a CI capture GitHub cancels: the runner sends SIGINT, then SIGTERM. The first stops the captures between steps,
+ * so each stops its session and cancels a hosted repack run it waits on (a blocked eas-cli command gets the signal too
+ * and returns); the second quits at once. Without it a cancelled job left its EAS workflow run repacking.
+ */
+function ciInterrupt(): AbortSignal {
+  const controller = new AbortController();
+  const interrupt = (signal: NodeJS.Signals) => {
+    if (controller.signal.aborted) process.exit(130);
+    process.stderr.write(`\nStopping the capture (${signal}): its sessions are stopped and its hosted repack cancelled. A second signal quits now.\n`);
+    controller.abort(new CiError({ code: "CAPTURE_CANCELLED", stage: "capture", message: `The capture was stopped (${signal}).`, nextAction: "Rerun the workflow when you are ready." }));
+  };
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", interrupt);
+  return controller.signal;
+}
+
 export async function captureReview(): Promise<void> {
   // Refs without the CI flags: a review on this machine, with your own logins (see runLocalReview).
   if (!has("base-project") && !has("head-project") && !has("pull-request") && !has("compare")) return localReview();
@@ -244,7 +261,7 @@ export async function captureReview(): Promise<void> {
   const common = { ...(named ? { target: config.target!.id } : {}), ...(selection.platform ? { platform: selection.platform } : {}),
     platforms: listPlatforms(rawConfig), targets: configTargets(rawConfig), posedTargets: posedTargets(rawConfig), repackPeers: hostedRepackPeers(rawConfig, config, overrides),
     baseProject: required("base-project"), headProject,
-    output: required("output"), config, configPath, progress: stderrProgress() };
+    output: required("output"), config, configPath, progress: stderrProgress(), signal: ciInterrupt() };
   const result = has("compare") ? await runCompareCi({ ...common, comparePath: required("compare") })
     : await runPublicCi({ ...common, pullRequestPath: required("pull-request") });
   // The deploy job runs only when the reviewed config asks for a hosted report.
@@ -258,7 +275,7 @@ export async function captureBaseline(): Promise<void> {
   const overrides = { controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") };
   const config = withRunOverrides(resolveTargetConfig(rawConfig, targetSelection()), overrides);
   output({ ok: true, ...await runBaselineCi({ platform: config.app.platform, project, sha: required("sha"), output: required("output"), config, targets: configTargets(rawConfig), posedTargets: posedTargets(rawConfig),
-    repackPeers: hostedRepackPeers(rawConfig, config, overrides), progress: stderrProgress() }) });
+    repackPeers: hostedRepackPeers(rawConfig, config, overrides), progress: stderrProgress(), signal: ciInterrupt() }) });
 }
 
 /** `capture` (or `capture:review`) `[--base REF] [--head REF | --committed]`: a local review, opened in the Viewer or hosted with --upload. */

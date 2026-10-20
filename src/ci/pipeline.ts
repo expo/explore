@@ -83,16 +83,19 @@ function captureOptions(config: ExploreConfig, environment: NodeJS.ProcessEnv, r
     environment, ...(runner ? { runner } : {}), easCommand: packageBin("eas-cli", "eas"), agentDeviceCommand: agentDeviceLauncher(environment), repackCommand: packageBin("@expo/repack-app", "repack-app") };
 }
 /**
- * The hosted repack this capture shares with the other matrix jobs of its GitHub run (RepackShare): only inside a GitHub
- * Actions run, whose jobs are the only ones that meet, and only when another target repacks the same app (`peers`, in
- * config order, from hostedRepackPeers). A run's repacks are never used by another run, such as the baseline workflow's.
+ * The hosted repack this capture shares with the other matrix jobs of its GitHub run attempt (RepackShare): only inside
+ * a GitHub Actions run, whose jobs are the only ones that meet, and only when another target repacks the same app
+ * (`peers`, in config order, from hostedRepackPeers). A run attempt's repacks are never used by another attempt or run,
+ * such as the baseline workflow's: "Re-run failed jobs" after an EAS environment value was fixed rebundles with it.
+ * Each target's `rank` (its place among the peers) staggers how long it waits for another's repack (sharedRepackWaitMs);
+ * a re-run attempt runs only the jobs it re-runs, so its leader may not be one of them, and its stagger starts at once.
  */
 export function repackShareOption(config: ExploreConfig, environment: NodeJS.ProcessEnv, peers: readonly string[] | undefined): { repackShare?: RepackShare } {
   const target = config.target?.id;
   if (!peers || peers.length < 2 || !target || !peers.includes(target) || captureRepack(config) !== "eas") return {};
-  const run = environment.GITHUB_RUN_ID ?? "", repository = environment.GITHUB_REPOSITORY ?? "";
-  if (!/^[1-9][0-9]*$/.test(run) || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) return {};
-  return { repackShare: { scope: `${repository}#${run}`, leader: peers[0]!, target } };
+  const run = environment.GITHUB_RUN_ID ?? "", attempt = environment.GITHUB_RUN_ATTEMPT ?? "1", repository = environment.GITHUB_REPOSITORY ?? "";
+  if (!/^[1-9][0-9]*$/.test(run) || !/^[1-9][0-9]*$/.test(attempt) || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) return {};
+  return { repackShare: { scope: `${repository}#${run}.${attempt}`, leader: peers[0]!, target, rank: peers.indexOf(target), ...(attempt === "1" ? {} : { rerun: true }) } };
 }
 /**
  * Head and base run in parallel worker threads when nothing ties them together: an agent session is
@@ -245,6 +248,8 @@ export type PublicCiOptions = {
   /** Internal dependency injection for tests: replaces the wait for a baseline run that EXPLORE_BASELINE_RUN names. */
   awaitBaseline?: BaselineWait;
   progress?: Progress;
+  /** Stops the captures between steps (a cancelled job): a session is still stopped, and a hosted repack run cancelled. */
+  signal?: AbortSignal;
 };
 
 /** Waits for a baseline of the base commit still being captured: its downloaded export's directory, or undefined. */
@@ -657,7 +662,9 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
   /** Use the local `eas login` session instead of EXPO_TOKEN (expo-explore doctor --capture). */
   useLocalEasSession?: boolean;
   /** Agent mode with the local claude or codex login instead of the provider's API key. */
-  subscription?: boolean }) {
+  subscription?: boolean;
+  /** Stops the capture between steps (a cancelled job): its session is still stopped, and a hosted repack run cancelled. */
+  signal?: AbortSignal }) {
   const environment = options.environment ?? process.env;
   assertCheckout(options.project, options.sha);
   if (!options.runner) await prefetchControllers(options.config, environment, options.progress ?? silentProgress);
@@ -683,14 +690,14 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
     mapDirectory: join(output, "baseline-map"), outputDirectory: directory, name: options.config.app.name ?? options.config.app.bundleId,
     buildId: `baseline-${options.sha.slice(0, 12)}`, buildVersion: options.sha.slice(0, 8), gitCommit: options.sha,
     side: "head", planPath: join(output, "execution-plan.json"), sessionStatePath: join(output, "baseline-session"),
-    ...repackShareOption(options.config, environment, options.repackPeers) };
+    ...repackShareOption(options.config, environment, options.repackPeers), ...(options.signal ? { signal: options.signal } : {}) };
   const share = targetSessionShare(options.config, options.targets, options.posedTargets);
   // Passes on worker threads cannot take an injected runner or an agent session.
   const passes = !options.runner && !exploration.agent
     ? await sideAppearancePasses(options.config, environment, { share, sides: 1, routes: plan.headCaptureSurfaceIds.length, project: options.project }) : undefined;
   progress(`sessions: ${share} of ${options.config.capture.maxSessions ?? DEFAULT_MAX_SESSIONS} for this target; `
     + (passes ? `capturing ${passes.map(pass => pass.join("+")).join(" and ")} in separate sessions` : "one session"));
-  const result = await captureSideInSessions(baselineOptions, passes, progress, undefined, passes !== undefined);
+  const result = await captureSideInSessions(baselineOptions, passes, progress, options.signal, passes !== undefined);
   const cacheRecipe = await recipe(options.config, plan, "head", environment, exploration.instructionsSha256);
   if (options.subscription) cacheRecipe.toolsCommit += ":local-subscription";
   const bundle = await readCaptureBundle(directory); bundle.profile = cacheRecipe.profile;

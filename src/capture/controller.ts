@@ -13,7 +13,8 @@ export function defaultRunner(request: CommandRequest): CommandResult {
     maxBuffer: 50 * 1024 * 1024,
     ...(request.timeoutMs ? { timeout: request.timeoutMs } : {}),
   });
-  if (result.error) throw result.error;
+  // A command that timed out or could not run keeps what it printed on its error: a hosted repack's start names its run there.
+  if (result.error) throw Object.assign(result.error, { stdout: result.stdout ?? "", stderr: result.stderr ?? "" });
   return commandOutcome(request, { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" });
 }
 

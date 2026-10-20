@@ -159,7 +159,12 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
         assert.ok(existsSync(join(request.cwd, '.expo-explore-observer/metro.config.cjs')), 'the staged copy carries the observer');
         assert.ok(!existsSync(join(request.cwd, '.git')), 'the staged copy has no repository');
         repackedSha = /build_id: "build-([0-9a-f]+)"/.exec(workflow)[1];
-        return json({ jobs: [{ key: 'repack', status: 'SUCCESS', outputs: { build_id: `repacked-${repackedSha}`, platform } }] });
+        // Explore waits on the run itself; the run's id carries the commit its repack is of.
+        return json({ id: `run-${repackedSha}`, url: `https://expo.dev/accounts/acme/projects/example/workflows/run-${repackedSha}` });
+      }
+      if (command === 'workflow:view') {
+        const sha = /^run-([0-9a-f]+)$/.exec(request.args[1])[1];
+        return json({ id: request.args[1], status: 'SUCCESS', jobs: [{ id: `job-${sha}`, key: 'repack', status: 'SUCCESS', outputs: { build_id: `repacked-${sha}`, platform } }] });
       }
       if (command === 'simulator:start') {
         const id = `session-${++sessionCounter}`; currentSession = id; openFailed = false;

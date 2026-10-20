@@ -378,6 +378,14 @@ test("the targets that repack one app on EAS are its repack peers, led by the fi
   // A run that repacks on the runner (--repack local) shares nothing; one that repacks on EAS includes the local-simulator target.
   assert.deepEqual(peers("iphone", { repack: "local" }), []);
   assert.deepEqual(peers("iphone", { repack: "eas" }), ["iphone", "duo-closed", "duo-open", "local"]);
+  // An override that makes every target run on a local simulator repacks each on its runner, unless it also asks for EAS.
+  assert.deepEqual(peers("iphone", { simulator: "local" }), []);
+  assert.deepEqual(peers("iphone", { simulator: "local", repack: "eas" }), ["iphone", "duo-closed", "duo-open", "local"]);
+  // A config whose own repack setting makes one target local leaves it out of the others' peers under the same override.
+  const mixed = validateExploreConfig({ ...base(), targets: { iphone: { platform: "ios" }, duo: { platform: "ios", device: "iPhone Duo" }, desk: { platform: "ios", simulator: "local" } } });
+  const mixedPeers = (id, overrides) => hostedRepackPeers(mixed, withRunOverrides(resolveTargetConfig(mixed, { target: id }), overrides), overrides);
+  assert.deepEqual(mixedPeers("duo", { controller: "argent" }), ["iphone", "duo"]);
+  assert.deepEqual(mixedPeers("desk", { controller: "argent" }), []);
   const flat = validateExploreConfig(base());
   assert.deepEqual(hostedRepackPeers(flat, resolveTargetConfig(flat)), ["ios"]);
 });
