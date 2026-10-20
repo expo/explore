@@ -47,6 +47,12 @@ test("rejects obsolete configuration and gives the exact next action", () => {
   assert.equal(validateExploreConfig({ ...base(), capture: { readinessSeconds: 12 } }).capture.readinessSeconds, 12);
   assert.equal("readinessSeconds" in validateExploreConfig(base()).capture, false);
   assert.throws(() => validateExploreConfig({ ...base(), capture: { readinessSeconds: 0 } }), /capture.readinessSeconds must be a positive integer/);
+  // 0 never waits for a baseline still being captured; absent, the review waits DEFAULT_BASELINE_WAIT_MINUTES.
+  for (const minutes of [0, 15, 60]) assert.equal(validateExploreConfig({ ...base(), capture: { baselineWaitMinutes: minutes } }).capture.baselineWaitMinutes, minutes);
+  assert.equal("baselineWaitMinutes" in validateExploreConfig(base()).capture, false);
+  for (const minutes of [-1, 61, 1.5, "15"]) {
+    assert.throws(() => validateExploreConfig({ ...base(), capture: { baselineWaitMinutes: minutes } }), /capture.baselineWaitMinutes must be a whole number from 0 to 60/, String(minutes));
+  }
 });
 
 test("validates device, capture limits, providers, paths, and custom app schemes", () => {

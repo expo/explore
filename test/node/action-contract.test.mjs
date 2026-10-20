@@ -403,6 +403,24 @@ test("review captures and reports each configured target in its own matrix job, 
   }
 });
 
+test("a review waits for the baseline run ci:find-baseline names, with the token's Actions read and nothing the PR head chooses", () => {
+  for (const workflow of [review, compare]) {
+    const steps = workflow.jobs.capture.steps;
+    const find = steps.find(step => step.name === "Find optional exact-base evidence");
+    const capture = steps.find(step => step.name === "Capture review");
+    assert.equal(find["continue-on-error"], true, "a failed lookup never fails the review");
+    assert.ok(steps.indexOf(find) < steps.indexOf(capture));
+    // The run is the find step's output, chosen by the base commit and the default branch's baseline workflow; capture
+    // checks it again before it waits.
+    assert.equal(capture.env.EXPLORE_BASELINE_RUN, "${{ steps.cache.outputs.pending }}");
+    assert.equal(capture.env.GITHUB_TOKEN, "${{ github.token }}", "the wait reads the run, its jobs and its artifact");
+    assert.equal(workflow.jobs.capture.permissions.actions, "read");
+    assert.equal(workflow.jobs.capture.permissions.contents, "read");
+  }
+  assert.deepEqual(compare.jobs.capture.permissions, { contents: "read", actions: "read" }, "the wait needs no permission a comparison did not have");
+  assert.deepEqual(review.jobs.capture.permissions, { contents: "read", actions: "read", "pull-requests": "write" });
+});
+
 test("compare reviews any two refs from a manual run or another workflow, with no pull request access", () => {
   for (const trigger of ["workflow_dispatch", "workflow_call"]) {
     assert.deepEqual(Object.keys(compare.on[trigger].inputs).sort(), ["base", "expires-in", "head", "scope"]);

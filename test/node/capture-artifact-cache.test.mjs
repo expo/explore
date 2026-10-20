@@ -138,6 +138,8 @@ test("capture recipes exclude display settings but bind agent instructions and c
   // How many sessions capture it does not change the evidence: a baseline captured under any ceiling serves the review.
   assert.equal(key,captureRecipeConfig({...config,capture:{...config.capture,maxSessions:16}}));
   assert.equal(captureRecipeConfig({...config,capture:{...config.capture,maxSessions:4}}),captureRecipeConfig({...config,capture:{...config.capture,maxSessions:16}}));
+  // Nor does how long a review waits for a baseline still being captured.
+  assert.equal(key,captureRecipeConfig({...config,capture:{...config.capture,baselineWaitMinutes:0}}));
   // An unset repack is keyed as it resolves, so configs that never chose one keep the recipe of the old written-out default.
   assert.equal(key,captureRecipeConfig({...config,capture:{...config.capture,repack:"eas"}}));
   assert.equal(JSON.parse(key).capture.repack, "eas");

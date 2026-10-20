@@ -15,7 +15,10 @@ import { ARGENT_VERSION } from "../shared/argent-version.js";
 
 const METADATA = "cache-metadata.json";
 const CONTRACT = "explore.capture-cache";
-const MAX_BYTES = 250 * 1024 * 1024;
+/** The most evidence a capture cache holds; a downloaded baseline is refused past it before it is unpacked. */
+export const CAPTURE_CACHE_MAX_BYTES = 250 * 1024 * 1024;
+/** The most files a capture cache holds, besides its metadata. */
+export const CAPTURE_CACHE_MAX_FILES = 10_000;
 type Recipe = { inventory: unknown; profile: string; config: string; toolsCommit: string };
 type FileRecord = { path: string; bytes: number; sha256: string };
 type CacheMetadata = { contract: typeof CONTRACT; recipe: string; commit: string; files: FileRecord[] };
@@ -28,9 +31,9 @@ const recipeKey = ({ inventory, profile, config, toolsCommit }: Recipe) => {
 
 /** Only settings that can change captured runtime evidence belong in the recipe. */
 export function captureRecipeConfig(config: ExploreConfig, instructionsSha256?: string): string {
-  // How many sessions capture the evidence (capture.maxSessions) does not change it.
-  const { maxSessions: _maxSessions, ...capture } = config.capture;
-  void _maxSessions;
+  // How many sessions capture the evidence (capture.maxSessions), and how long a review waits for a baseline, do not change it.
+  const { maxSessions: _maxSessions, baselineWaitMinutes: _baselineWaitMinutes, ...capture } = config.capture;
+  void _maxSessions; void _baselineWaitMinutes;
   return canonicalJson({
     observer: CAPTURE_OBSERVER_HASH,
     mode: config.mode,
@@ -104,7 +107,7 @@ async function fileInventory(directory: string, path = ""): Promise<FileRecord[]
     else if (info.isFile()) files.push({ path: child, bytes: info.size, sha256: hash(await readFile(join(directory, child))) });
     else throw new Error("Capture cache contains an unsupported file");
   }
-  if (files.length > 10_000 || files.reduce((sum, file) => sum + file.bytes, 0) > MAX_BYTES) {
+  if (files.length > CAPTURE_CACHE_MAX_FILES || files.reduce((sum, file) => sum + file.bytes, 0) > CAPTURE_CACHE_MAX_BYTES) {
     throw new Error("Capture cache exceeds the evidence size limit");
   }
   return files;

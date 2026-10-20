@@ -99,6 +99,11 @@ export type ExploreConfig = {
      * DEFAULT_MAX_SESSIONS (5). Below the number of targets, that many target jobs run at once, one session each.
      */
     maxSessions?: number;
+    /**
+     * How many minutes a review waits for the default branch's baseline run of its base commit, still capturing when
+     * the review starts, before it captures the base itself; 0 never waits. Absent: DEFAULT_BASELINE_WAIT_MINUTES (15).
+     */
+    baselineWaitMinutes?: number;
     /** Where the route observer is bundled into the app, when the config chooses; captureRepack gives the default. */
     repack?: "eas" | "local"; appearance: AppearanceSetting; launch: LaunchSetting; reset: RouteResetSetting; unattributed: UnattributedSetting; readinessSeconds?: number;
     /** The device controller; absent means agent-device, so configs that never chose one keep their cache recipes. */
@@ -191,6 +196,11 @@ function literal<T extends string>(value: unknown, allowed: readonly T[], label:
 function positiveInteger(value: unknown, label: string, fallback?: number): number {
   if (value === undefined && fallback !== undefined) return fallback;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) fail(`${label} must be a positive integer`, label);
+  return value;
+}
+
+function boundedInteger(value: unknown, label: string, minimum: number, maximum: number): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum || value > maximum) fail(`${label} must be a whole number from ${minimum} to ${maximum}`, label);
   return value;
 }
 
@@ -300,7 +310,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
   const exploration = optionalRecord(root.exploration, "exploration");
   exactKeys(exploration, ["scope", "exclude"], "exploration");
   const capture = optionalRecord(root.capture, "capture");
-  exactKeys(capture, ["maxMinutes", "maxActions", "maxSessions", "repack", "appearance", "launch", "reset", "unattributed", "readinessSeconds", "controller", "simulator"], "capture");
+  exactKeys(capture, ["maxMinutes", "maxActions", "maxSessions", "baselineWaitMinutes", "repack", "appearance", "launch", "reset", "unattributed", "readinessSeconds", "controller", "simulator"], "capture");
   const controller = literal(capture.controller, ["agent-device", "argent"] as const, "capture.controller", "agent-device");
   const simulator = literal(capture.simulator, ["eas", "local"] as const, "capture.simulator", "eas");
   const mode = literal(root.mode, ["deterministic", "agent"] as const, "mode", "deterministic");
@@ -348,6 +358,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
       maxMinutes: positiveInteger(capture.maxMinutes, "capture.maxMinutes", 30),
       maxActions: positiveInteger(capture.maxActions, "capture.maxActions", 500),
       ...(capture.maxSessions === undefined ? {} : { maxSessions: positiveInteger(capture.maxSessions, "capture.maxSessions", 2) }),
+      ...(capture.baselineWaitMinutes === undefined ? {} : { baselineWaitMinutes: boundedInteger(capture.baselineWaitMinutes, "capture.baselineWaitMinutes", 0, 60) }),
       ...(capture.repack === undefined ? {} : { repack: literal(capture.repack, ["eas", "local"] as const, "capture.repack") }),
       appearance: parseAppearance(capture.appearance, "capture.appearance"),
       launch: parseLaunchSetting(capture.launch, "capture.launch"),

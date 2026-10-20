@@ -110,13 +110,20 @@ export async function ciPullRequest(): Promise<void> {
   output({ ok: true, pullRequest: presentation, author });
 }
 
-/** `ci:find-baseline --sha SHA [--platform P]`: a reusable baseline artifact of the base commit, if one exists. */
+/**
+ * `ci:find-baseline --sha SHA [--platform P]`: a reusable baseline artifact of the base commit, if one exists, or else
+ * the baseline run still capturing it (`pending`), which `capture:review` waits for alongside head.
+ */
 export async function ciFindBaseline(): Promise<void> {
   const platform = platformFlag(), target = targetFlag();
-  const { baseline, warning } = await findOptionalBaseline({ sha: required("sha"), ...(platform ? { platform } : {}), ...(target ? { target } : {}) });
+  const { baseline, pending, warning } = await findOptionalBaseline({ sha: required("sha"), ...(platform ? { platform } : {}), ...(target ? { target } : {}) });
   if (baseline) await writeStepOutputs(process.env, { id: String(baseline.id), run: String(baseline.run) });
+  if (pending) {
+    await writeStepOutputs(process.env, { pending: String(pending.run) });
+    console.error(`No finished baseline of ${required("sha").slice(0, 8)} yet; baseline run ${pending.run} is still capturing it; capture:review waits for it while head captures, up to capture.baselineWaitMinutes.`);
+  }
   if (warning && process.env.GITHUB_ACTIONS) console.log(`::warning title=${warning.code}::${warning.message.replace(/[\r\n]+/g, " ")}`);
-  output({ ok: true, baseline: baseline ?? null, ...(warning ? { warning } : {}) });
+  output({ ok: true, baseline: baseline ?? null, ...(pending ? { pending } : {}), ...(warning ? { warning } : {}) });
 }
 
 /** `ci:compare-refs --project DIR --base REF --head REF [--output FILE]`: the two commits a comparison captures. */

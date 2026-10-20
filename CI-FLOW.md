@@ -14,7 +14,7 @@ Source of truth: `templates/explore-review.yml`, `templates/explore-baseline.yml
 | Pipeline | `capture:review` → `runCiReview` | The same `runCiReview`, called directly |
 | EAS credentials | `EXPO_TOKEN` secret | Local `eas login` session or `EXPO_TOKEN` |
 | Model credentials (agent mode) | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | Claude Code or Codex subscription login; API keys are removed from the subprocess |
-| Base cache | A baseline workflow artifact for the exact base SHA, when one exists | None; both sides are captured |
+| Base cache | A baseline workflow artifact for the exact base SHA, when one exists, or the baseline run still capturing it, waited for alongside head | None; both sides are captured |
 | Output | Report artifact + sticky PR comment with **Open** / **zip** | `runs/<id>/artifacts/report.zip` + `PR-comment.md`, opened with `ci:local:view` |
 
 ## 1. Installing Explore in an app repository
@@ -49,8 +49,8 @@ Each workflow starts with a `targets` job: it installs the pinned CLI and runs `
 | | checkout `app-base`, `app-head` | Checks out the exact base and head SHAs with full history and without persisted credentials. |
 | | Verify deterministic source planning | `source:verify` builds the capture plan from source alone in two fresh processes and compares the bytes. Runs before any build or simulator work and needs no credentials. |
 | | Install app dependencies | `npm ci --ignore-scripts` in both checkouts (`APP_INSTALL_DIR` for monorepos). |
-| | Find / Download optional exact-base evidence | `ci:find-baseline` looks for a finished run's `explore-baseline-<base sha>-<target>` artifact (a run another target's baseline failed in counts: a baseline job uploads its artifact only after its own steps passed) (target `ios` also accepts the older unsuffixed `explore-baseline-<base sha>`) from the baseline workflow on the default branch and downloads it as `EXPLORE_CAPTURE_CACHE`. Missing evidence is not an error. |
-| | Capture review | `capture:review` (§3). `EXPO_TOKEN`, the provider key and the app's `{{secret:NAME}}` values reach only this step. The sticky PR comment is updated while it runs. It writes `preview=<hosting>` to the step outputs, which decides whether the deploy job runs. |
+| | Find / Download optional exact-base evidence | `ci:find-baseline` looks for a finished run's `explore-baseline-<base sha>-<target>` artifact (a run another target's baseline failed in counts: a baseline job uploads its artifact only after its own steps passed) (target `ios` also accepts the older unsuffixed `explore-baseline-<base sha>`) from the baseline workflow on the default branch and downloads it as `EXPLORE_CAPTURE_CACHE`. With none, it names a baseline run of the base commit still queued or capturing (`pending`), held to the same checks: the baseline workflow, the default branch of this repository, a `push` or `workflow_dispatch`, exactly the base SHA; nothing from the PR head selects it. Missing evidence and a failed lookup are not errors. |
+| | Capture review | `capture:review` (§3). With `EXPLORE_BASELINE_RUN` (the find step's `pending`) it waits for that run's baseline of this target (§3.1). `EXPO_TOKEN`, the provider key and the app's `{{secret:NAME}}` values reach only this step. The sticky PR comment is updated while it runs. It writes `preview=<hosting>` to the step outputs, which decides whether the deploy job runs. |
 | | Stop capture sessions and check the checkouts | `ci:after-capture`, whenever the PR was resolved, success or not: stops the EAS Simulator sessions named in `head-session` / `base-session`, nothing else, then fails with `CHECKOUT_MODIFIED` if capture modified an app checkout. |
 | | Upload captured review / diagnostics | `explore-capture-<run>-<attempt>-<target>` feeds the report job. On failure `explore-diagnostics-<run>-<attempt>-<target>` keeps plans, exports and agent diagnostics for 7 days. |
 | report (matrix: target) | Download the capture, install Explore | Runs without Expo or model credentials, after every capture job, whether or not each succeeded (`!cancelled()`). Each leg downloads its own target's capture by an exact-name pattern: a target whose capture failed uploaded none, so its leg packages and publishes nothing, and the other targets' reports still reach the comment. |
@@ -68,7 +68,7 @@ Validate baseline source → Install Explore → Verify deterministic source pla
 
 ### 2.4 `explore-compare.yml`
 
-The same jobs as a PR review, for any `base` and `head` without a pull request. The `targets` job resolves both refs once with `ci:compare-refs` (a tag wins over a branch of the same name; the same commit twice fails with `COMPARE_SAME_COMMIT`) and passes the comparison to the capture jobs, which run `capture:review --compare` with no GitHub requests. The optional `scope` input overrides `exploration.scope` for that run; `expires-in` is accepted and ignored. The report job's `ci:publish` writes each target's **Open** and **zip** links to the run summary, and the deploy job adds the hosted link there; nothing comments on a pull request.
+The same jobs as a PR review, for any `base` and `head` without a pull request. The `targets` job resolves both refs once with `ci:compare-refs` (a tag wins over a branch of the same name; the same commit twice fails with `COMPARE_SAME_COMMIT`) and passes the comparison to the capture jobs, which run `capture:review --compare`; its only GitHub requests are the wait for a baseline run still capturing the base (§3.1), with the job's `actions: read` token. The optional `scope` input overrides `exploration.scope` for that run; `expires-in` is accepted and ignored. The report job's `ci:publish` writes each target's **Open** and **zip** links to the run summary, and the deploy job adds the hosted link there; nothing comments on a pull request.
 
 ## 3. Inside `capture:review` (`runCiReview`)
 
@@ -77,7 +77,7 @@ The same jobs as a PR review, for any `base` and `head` without a pull request. 
 | 1 | `plan` | `buildVerifiedPlan`: snapshot both sources, compute the two-dot diff, run `plan-worker` twice with reversed input order and compare the canonical plans byte for byte. Summarises `sourceChange` per surface into `execution-plan.json`; the PR comment shows the planned capture count and warnings. | `SOURCE_ANALYSIS_FAILED`, inconsistent plan |
 | 2 | `preflight` | Checks `EXPO_TOKEN`. `prepareCiExploration`: nothing for deterministic mode; for agent mode, confirms the instructions file is committed, creates the provider session and makes one short tool-free model request. | `AGENT_API_KEY_MISSING`, `AGENT_INSTRUCTIONS_UNCOMMITTED`, `AGENT_MODEL_NOT_FOUND` |
 | 3 | `capture-head` | `runCiMap(head)` (§4). Records head's runtime profile and build. | `CAPTURE_*`, `SETUP_*`, `EAS_*` |
-| 4 | `capture-base` | Tries the cache first: a baseline is reused only when its recipe matches (tools, config, instructions, device, profile, observer hash, runtime profile). Only routes missing from the cache run through `runCiMap(base)`. | same |
+| 4 | `capture-base` | Tries the cache first: a baseline is reused only when its recipe matches (tools, config, instructions, device, profile, observer hash, runtime profile). Only routes missing from the cache run through `runCiMap(base)`. With no cache but a baseline run still capturing the base, base starts only once the wait for it ends (§3.1). | same |
 | 5 | `compare` | `assessPublicEvidence` compares pixels and accessibility for route pairs verified on both sides; `prepareCaptureReview` assigns verdicts (§6). | |
 | 6 | `capture-validation` | Every selected route was captured on both sides. | `CAPTURE_INCOMPLETE` |
 | 7 | `comparison-validation` | Every pair was compared visually and for accessibility. | `COMPARISON_INCOMPLETE` |
@@ -85,6 +85,17 @@ The same jobs as a PR review, for any `base` and `head` without a pull request. 
 | 9 | done | Writes `report-input.json` and `execution.json`, final PR comment update. | |
 
 A failure at any stage is recorded in `state.failure`, a partial report is written when a plan exists, and the PR comment switches to the failed state.
+
+### 3.1 Waiting for a baseline still being captured
+
+Right after a merge, the next pull request's review starts while the baseline workflow is still capturing the new base: in brentvatne/euxy's review run 39348956443 it had started 15 s before, and every target captured its base too (10–14 minutes per target instead of about 6, on twice the EAS Simulator sessions). A baseline job takes 6–8 minutes and head capture 5–8, so `capture:review` waits for the baseline beside head instead of before it (`src/ci/baseline-wait.ts`):
+
+1. The wait starts after preflight, only when `EXPLORE_BASELINE_RUN` names a run, no downloaded baseline matches, base has routes to capture, and `capture.baselineWaitMinutes` (default 15, 0 never waits) is not 0. Head starts capturing at once.
+2. Every 20 s it reads the run (checked again by the same trust rules as `ci:find-baseline`), this target's artifact (`explore-baseline-<sha>-<target>`) in that run, and the run's jobs, logging `waiting for main's baseline run <id> of <sha> (<target>: in progress, 3 min)` once a minute or when the state changes. Each read retries GitHub's 5xx and network failures (`retryGitHubLookup`).
+3. When the artifact is listed, it is downloaded in-process (the token goes to GitHub, never to the storage URL it redirects to), unpacked into `<output>/baseline-download` within the cache's size limits, and restored as a downloaded baseline once head has its runtime profile. Another target's failed job does not matter; each target's job uploads its own artifact.
+4. The wait ends without a baseline when this target's job fails, is cancelled or is skipped, the run ends without listing the artifact for a minute, the time runs out, GitHub refuses the token (`actions: read` missing) or keeps failing, or head fails. Base then captures at once, beside head when the sides capture concurrently. The wait never fails the review.
+
+Head capture is never delayed. When the baseline arrives while head captures, base costs only its restore; when it does not, base starts the moment the wait gives up, so a failed baseline delays base only by the time it took to fail. Sessions are planned as without a wait: with a share of two or more, head keeps its half while base waits, so base can start in the rest; with one session, base follows head as before, and the wait may go on past head, up to its limit.
 
 ## 4. Capturing one side (`runCiMap`)
 

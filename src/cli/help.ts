@@ -95,6 +95,7 @@ const CI = `CI (the installed workflows run these; they manage remote EAS Simula
        (resolves the live PR and refuses it unless it is open, from this repository, and by a trusted author)
   ci:compare-refs --project DIRECTORY --base REF --head REF [--output FILE]
   ci:find-baseline --sha COMMIT [--target ID | --platform ios|android]
+       (a finished baseline's artifact of the commit, or else the default branch's baseline run still capturing it)
   ci:after-capture --output TEMP_DIRECTORY --checkout DIRECTORY...
        (stops the capture's EAS Simulator sessions and checks capture left each checkout unchanged)
        (the ci:* commands write their results to $GITHUB_OUTPUT for the next steps)`;
