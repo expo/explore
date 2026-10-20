@@ -689,11 +689,12 @@ export type FixturePreviewOptions = {
 };
 
 /**
- * How long a fixture preview waits for its alias. EAS Hosting keeps serving the deployment an alias named for about five
- * minutes (307–314 s, measured 2026-10-19) after the alias was last requested, so a push within five minutes of the last
- * one, whose deploy polled it, or of a reviewer opening the link, finds it behind; a later one finds it moved within
- * seconds. Waiting the whole verification budget for that held a third of the pull requests' deploy jobs for three
- * minutes, only to link the deployment instead. The pull request's comment says when the alias is behind.
+ * How long a fixture preview waits for its alias. An edge of EAS Hosting that served an alias keeps serving the
+ * deployment it named for about five minutes (307–314 s, measured 2026-10-19 redeploying back to back from one machine),
+ * so a deploy whose check reaches an edge that served the alias in the last five minutes, to the previous deploy's check
+ * or to a reviewer, finds it behind; otherwise it has moved within seconds. Waiting the whole verification budget for
+ * that held a third of the pull requests' deploy jobs for three minutes, only to link the deployment instead. The pull
+ * request's comment says when the alias is behind.
  */
 export const FIXTURE_ALIAS_WAIT_MS = 20_000;
 

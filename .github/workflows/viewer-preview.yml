@@ -67,8 +67,8 @@ jobs:
         shell: bash
         env:
           COMMENT_ID: ${{ steps.comment.outputs.id }}
-          # How long an alias can keep serving the previous push: EAS Hosting caches it for about five minutes after
-          # it was last requested (FIXTURE_ALIAS_WAIT_MS in src/report/preview-deploy.ts).
+          # How long an alias can keep serving the previous push: an EAS Hosting edge that served it keeps it for about
+          # five minutes (FIXTURE_ALIAS_WAIT_MS in src/report/preview-deploy.ts).
           ALIAS_CATCH_UP: 5 minutes
         run: |
           set -euo pipefail
