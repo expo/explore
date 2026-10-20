@@ -8,7 +8,8 @@ import { tsImport } from "tsx/esm/api";
 const { runBlackBoxExploration, screenEvidenceKey, elementsOf, fieldName, systemDialogTitle } = await tsImport("../../src/binary/explorer.ts", import.meta.url);
 const { ExploreStore, validateMap } = await tsImport("../../src/map/store.ts", import.meta.url);
 const { CONTRACT } = await tsImport("../../src/types.ts", import.meta.url);
-const { assertAppUrl, describeForeground, foreignNode, guardPositionals, leftForeground, retryWhileBusy } = await tsImport("../../src/binary/run.ts", import.meta.url);
+const tsRun = await tsImport("../../src/binary/run.ts", import.meta.url);
+const { assertAppUrl, describeForeground, foreignNode, guardPositionals, leftForeground, retryWhileBusy } = tsRun;
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 const SCREENS = {
@@ -880,6 +881,133 @@ test("when nothing passes preflight, the first failure is reported", async () =>
   const { preflightModelSession } = await tsImport("../../src/binary/run.ts", import.meta.url);
   const createSession = (config, { auth }) => ({ async preflight() { throw new Error(`${config.provider} ${auth} refused`); } });
   await assert.rejects(preflightModelSession({ createSession }, {}, () => {}), /anthropic local-login refused/);
+});
+
+test("a landscape frame on a portrait panel (an opened iPhone Duo) is stored upright", async () => {
+  const { createRequire } = await import("node:module");
+  const { PNG: Png } = createRequire(import.meta.url)("pngjs");
+  const raw = new Png({ width: 1, height: 2 });
+  raw.data.set([255, 0, 0, 255, 0, 0, 255, 255]);
+  const png = Png.sync.write(raw);
+  const { map, root } = await harness([["observe", { includeImage: true }], ["capture", { frameId: "frame-0", title: "Home" }], ["finish", { summary: "One." }]], {
+    observe: async includeImage => ({ nodes: SCREENS.home, capturedAt: new Date().toISOString(), ...(includeImage ? { frameId: "frame-0", png, width: 1, height: 2, landscape: true } : {}) }) });
+  const artifact = map.artifacts.find(item => item.kind === "screenshot");
+  assert.deepEqual([artifact.width, artifact.height], [2, 1]);
+  const { readFile } = await import("node:fs/promises");
+  const stored = Png.sync.read(await readFile(join(root, artifact.path)));
+  // The panel's top (red) is the UI's right-hand side once turned a quarter clockwise.
+  assert.deepEqual([...stored.data], [0, 0, 255, 255, 255, 0, 0, 255]);
+});
+
+/** A PNG of `width` × `height` RGBA pixels, each given as [r, g, b, a] row by row. */
+async function pngOf(width, height, pixels) {
+  const { createRequire } = await import("node:module");
+  const { PNG: Png } = createRequire(import.meta.url)("pngjs");
+  const image = new Png({ width, height });
+  image.data.set(pixels.flat());
+  return Png.sync.write(image);
+}
+
+test("an opened Duo's frame shows the same pixels as a screen already seen once turned, so it is that screen (AudioScape's playlist title, rotated)", async () => {
+  const tabs = [{ type: "Button", label: "Home", hittable: true }, { type: "Button", label: "Library", hittable: true }];
+  const library = [{ type: "StaticText", label: "Library" }, { type: "Button", label: "My Playlist", hittable: true }, ...tabs];
+  const trees = { library, titled: [{ type: "StaticText", label: "My Playlist" }, ...tabs], untitled: [...tabs] };
+  const images = { library: await pngOf(1, 2, [[255, 0, 0, 255], [0, 0, 255, 255]]), playlist: await pngOf(1, 2, [[0, 255, 0, 255], [0, 0, 255, 255]]) };
+  let visits = 0; let frames = 0; let where = "library";
+  const { map } = await harness([
+    ["observe", { includeImage: true }], ["capture", { frameId: "frame-0", title: "Library" }],
+    ["act", { action: "tap", label: "My Playlist" }], ["observe", { includeImage: true }],
+    ["act", { action: "back" }], ["observe", { includeImage: true }],
+    ["act", { action: "tap", label: "My Playlist" }], ["observe", { includeImage: true }],
+    ["finish", { summary: "Done." }],
+  ], { observe: async includeImage => ({ nodes: trees[where], capturedAt: new Date().toISOString(),
+      ...(includeImage ? { frameId: `frame-${frames++}`, png: Buffer.from(images[where === "library" ? "library" : "playlist"]), width: 1, height: 2, landscape: true } : {}) }),
+    act: async action => { if (action.action === "back") where = "library"; else where = visits++ === 0 ? "titled" : "untitled"; } });
+  assert.equal(map.screens.length, 2, "the second read of the playlist did not mint a screen");
+  assert.equal(map.observations.filter(item => item.screenId === map.screens[1].id).length, 2, "both reads are observations of the one playlist screen");
+  assert.equal(map.artifacts.filter(item => item.kind === "screenshot").length, 2);
+});
+
+test("a coordinate tap on an opened Duo is named by where it shows in the upright screenshot", async () => {
+  // The inner panel's portrait axes: a button near the portrait top right is at the upright bottom right.
+  const home = [
+    { type: "Application", label: "", rect: { x: 0, y: 0, width: 669, height: 951 } },
+    { type: "Button", label: "", hittable: true, rect: { x: 600, y: 40, width: 44, height: 44 } },
+  ];
+  let frames = 0; let tapped = false;
+  // The look without an image carries no landscape flag; the screen's stored screenshot still says it was turned.
+  const { map } = await harness([
+    ["observe", { includeImage: true }], ["capture", { frameId: "frame-0", title: "Home" }], ["observe", { includeImage: false }],
+    ["act", { action: "tap", frameId: "frame-0", x: 622 / 669, y: 62 / 951 }],
+    ["finish", { summary: "Done." }],
+  ], { observe: async includeImage => ({ nodes: tapped ? SCREENS.settings : home, capturedAt: new Date().toISOString(),
+      ...(includeImage ? { frameId: `frame-${frames++}`, png: await pngOf(1, 2, [[255, 0, 0, 255], [0, 0, 255, 255]]), width: 1, height: 2, landscape: true } : {}) }),
+    act: async () => { tapped = true; } });
+  assert.equal(map.actionAttempts.find(item => item.action.kind === "press").action.label, "icon button, bottom right");
+  assert.deepEqual(map.artifacts.find(item => item.kind === "screenshot").turned, { width: 669, height: 951 });
+});
+
+test("turnedClockwise puts the portrait top on the right and keeps the colour chunks", async () => {
+  const { turnedClockwise, assertDecodedPng } = await tsImport("../../src/shared/png-evidence.ts", import.meta.url);
+  const { createRequire } = await import("node:module");
+  const { PNG: Png } = createRequire(import.meta.url)("pngjs");
+  const { crc32 } = await import("node:zlib");
+  // 3 wide and 2 tall; each pixel's red is its index, so where it lands says where it came from.
+  const plain = await pngOf(3, 2, [0, 1, 2, 3, 4, 5].map(index => [index * 40, 0, 0, 255]));
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]), out = Buffer.alloc(body.length + 8);
+    out.writeUInt32BE(data.length, 0); body.copy(out, 4); out.writeUInt32BE(crc32(body), body.length + 4);
+    return out;
+  };
+  const gamma = Buffer.alloc(4); gamma.writeUInt32BE(45455);
+  const source = Buffer.concat([plain.subarray(0, 33), chunk("sRGB", Buffer.from([0])), chunk("gAMA", gamma), plain.subarray(33)]);
+  const turned = turnedClockwise(source);
+  assertDecodedPng(turned, "Turned");
+  const decoded = Png.sync.read(turned);
+  assert.deepEqual([decoded.width, decoded.height], [2, 3]);
+  // Source (x, y) lands at (height - 1 - y, x): the top row (0, 1, 2) runs down the right-hand column.
+  const red = [...Array(6).keys()].map(index => decoded.data[index * 4] / 40);
+  assert.deepEqual(red, [3, 0, 4, 1, 5, 2]);
+  const types = [];
+  for (let offset = 8; offset < turned.length; offset += 12 + turned.readUInt32BE(offset)) types.push(turned.toString("latin1", offset + 4, offset + 8));
+  assert.deepEqual(types.slice(0, 3), ["IHDR", "sRGB", "gAMA"]);
+  assert.ok(turned.includes(gamma), "the gamma is the source's");
+});
+
+test("only an opened Duo's frame on its inner panel's portrait axes is turned upright", () => {
+  const { duoScreenshotTurn } = tsRun;
+  const root = (width, height) => ({ type: "Application", label: "Expo Go", rect: { x: 0, y: 0, width, height } });
+  const frame = (deviceModel, nodes, width, height, platform = "ios") => duoScreenshotTurn({ platform, deviceModel, nodes, width, height });
+  const cases = [
+    ["Duo open", frame("iPhone Duo", [root(669, 951)], 2007, 2853), "turn"],
+    ["Duo half-open", frame("iPhone Duo", [root(669, 951), { type: "Button", label: "Home", rect: { x: 20, y: 40, width: 44, height: 44 } }], 2007, 2853), "turn"],
+    ["Duo closed", frame("iPhone Duo", [root(466, 678)], 1398, 2034), "keep"],
+    ["iPhone 17 Pro", frame("iPhone 17 Pro", [root(402, 874)], 1206, 2622), "keep"],
+    ["an iPhone in landscape", frame("iPhone 17 Pro", [root(874, 402)], 2622, 1206), "keep"],
+    ["iPad", frame("iPad Pro 13-inch (M5)", [root(1032, 1376)], 2064, 2752), "keep"],
+    ["Android", frame("Pixel 9", [root(669, 951)], 2007, 2853, "android"), "keep"],
+    ["an empty tree", frame("iPhone Duo", [], 2007, 2853), "keep"],
+    ["a first node that isn't the Application", frame("iPhone Duo", [{ type: "Window", rect: { x: 0, y: 0, width: 300, height: 200 } }, root(669, 951)], 2007, 2853), "turn"],
+    ["a root off by a fraction of a point", frame("iPhone Duo", [root(669.33, 951)], 2008, 2853), "turn"],
+    ["an already-landscape image", frame("iPhone Duo", [root(669, 951)], 2853, 2007), "keep"],
+    ["the inner panel on its own axes", frame("iPhone Duo", [root(951, 669)], 2853, 2007), "keep"],
+    ["a Duo root on neither panel", frame("iPhone Duo", [root(700, 1000)], 2100, 3000), "unmatched"],
+    ["a Duo root the image does not show", frame("iPhone Duo", [root(669, 951)], 2000, 2000), "unmatched"],
+  ];
+  for (const [name, actual, expected] of cases) assert.equal(actual, expected, name);
+});
+
+test("the agent API lists a turned screenshot's element bounds on its upright axes", async () => {
+  const { agentApiReply } = await tsImport("../../src/report/agent-api.ts", import.meta.url);
+  const sha = "a".repeat(64);
+  const map = { screens: [{ id: "scr_home", title: "Home", observationIds: ["obs_1"] }], observations: [{ id: "obs_1", screenshotArtifactId: "art_1" }],
+    artifacts: [{ id: "art_1", kind: "screenshot", sha256: sha, width: 2853, height: 2007, turned: { width: 669, height: 951 } }],
+    elements: [{ id: "el_1", screenId: "scr_home", label: "Settings", role: "button", bounds: { x: 600, y: 40, width: 44, height: 30, unit: "points" } }], transitions: [], variants: [], gaps: [] };
+  const loaded = { kind: "exploration", file: "exploration.json", raw: new Uint8Array(), json: { map }, entries: new Map(), read: async () => undefined };
+  const reply = await agentApiReply({ pageUrl: "https://example.test/p/token", platforms: ["ios"], expiresAt: null }, loaded, "/screens/scr_home", new URLSearchParams(), "application/json");
+  const body = JSON.parse(await new Response(reply.body).text());
+  // Portrait (600, 40) on a 951-point-tall screen shows at (951 - 40 - 30, 600) upright, near the bottom right.
+  assert.deepEqual(body.elements[0].bounds, { x: 881, y: 600, width: 30, height: 44, unit: "points" });
 });
 
 const { assertReplayFits, createReplaySession, parseReplayPlan, replaySetup } = await tsImport("../../src/binary/replay.ts", import.meta.url);

@@ -202,6 +202,15 @@
         "mimeType": { "type": "string", "minLength": 1 },
         "width": { "type": "integer", "minimum": 0 },
         "height": { "type": "integer", "minimum": 0 },
+        "turned": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["width", "height"],
+          "properties": {
+            "width": { "type": "number", "exclusiveMinimum": 0 },
+            "height": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
         "createdAt": { "$ref": "#/$defs/timestamp" }
       }
     },

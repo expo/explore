@@ -178,7 +178,7 @@ export type SystemRegion = { kind: "status-bar" | "home-indicator"; x: number; y
  * EAS Simulator captures of both panels; the pill is the same 40×64 points on each, only its top differs. The app's own
  * rail controls start about 3% of the height below it on the outer panel, so the padding stays small.
  */
-const DUO_PANELS = {
+export const DUO_PANELS = {
   outer: { width: 466, height: 678, statusBar: { x: 398, y: 87, width: 40, height: 64 } },
   inner: { width: 951, height: 669, statusBar: { x: 883, y: 34, width: 40, height: 64 } },
 } as const;

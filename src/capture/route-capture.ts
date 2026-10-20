@@ -113,6 +113,24 @@ export function verifiedCaptureLabels(nodes: readonly Record<string, unknown>[],
 }
 
 /**
+ * The full-screen logical space a screenshot shows: the one Application node at the origin whose aspect is the image's,
+ * at any pixel density. Failing that, the one whose aspect is the image's transpose (`transposed`): the image is then the
+ * screen turned a quarter. A square screen matches both ways and is read upright. `slack` is how many image pixels the
+ * root, scaled to the image, may miss it by; capture asks for an exact match.
+ */
+export function screenSpace(nodes: readonly Record<string, unknown>[], image: { width: number; height: number }, slack = 0): { width: number; height: number; transposed: boolean } | undefined {
+  const roots = (transposed: boolean) => nodes.filter(node => node.type === "Application" && isRecord(node.rect)
+    && node.rect.x === 0 && node.rect.y === 0 && typeof node.rect.width === "number" && typeof node.rect.height === "number"
+    && Number.isFinite(node.rect.width) && Number.isFinite(node.rect.height) && node.rect.width > 0 && node.rect.height > 0
+    && Math.abs(transposed ? node.rect.width * image.width - node.rect.height * image.height : node.rect.width * image.height - node.rect.height * image.width) <= slack * node.rect.height);
+  const upright = roots(false), turned = upright.length ? [] : roots(true);
+  const matched = upright.length ? upright : turned;
+  if (matched.length !== 1) return undefined;
+  const rect = matched[0]!.rect as { width: number; height: number };
+  return { width: rect.width, height: rect.height, transposed: turned.length === 1 };
+}
+
+/**
  * A swipe that closes a presented sheet, or undefined when the snapshot does not prove a sheet.
  * The route observer is drawn at the focused scene's top-left corner. A sheet's scene starts below
  * the top of the window; a navigation bar above the scene explains the same offset for a pushed screen.
@@ -730,18 +748,11 @@ export async function capturePlannedRoutes(options: {
      * then the transpose of the frame, and a tap is turned back (see `toLogical`).
      */
     const bounds = (frame: Candidate) => {
-      const roots = (transposed: boolean) => frame.snapshot.nodes.filter(node => node.type === "Application" && isRecord(node.rect)
-        && node.rect.x === 0 && node.rect.y === 0 && typeof node.rect.width === "number" && typeof node.rect.height === "number"
-        && Number.isFinite(node.rect.width) && Number.isFinite(node.rect.height) && node.rect.width > 0 && node.rect.height > 0
-        && (transposed ? node.rect.width * frame.width === node.rect.height * frame.height : node.rect.width * frame.height === node.rect.height * frame.width));
-      // A square screen matches both ways; it is read upright, as before rotated frames existed.
-      const upright = roots(false), turned = upright.length ? [] : roots(true);
-      const matched = upright.length ? upright : turned;
-      if (matched.length !== 1) throw captureError("AGENT_COORDINATE_BOUNDS_UNVERIFIED", "The screenshot does not identify one matching full-screen logical coordinate space.");
       // The official iOS screenshot is full-screen. Its default is 1x, but a proven
       // uniform pixel density must still map to XCTest points rather than raw pixels.
-      const rect = matched[0]!.rect as { width: number; height: number };
-      return { width: rect.width, height: rect.height, transposed: turned.length === 1 };
+      const space = screenSpace(frame.snapshot.nodes, frame);
+      if (!space) throw captureError("AGENT_COORDINATE_BOUNDS_UNVERIFIED", "The screenshot does not identify one matching full-screen logical coordinate space.");
+      return space;
     };
     /**
      * A normalized point (x, y) in the screenshot, in the tree's logical points. Upright, it scales by the root. Turned:
