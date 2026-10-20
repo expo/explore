@@ -8,6 +8,7 @@ import { compareTitleMarkdown, projectReviewPresentation, type CompareReviewPres
 import { renderPublicComment, platformSectionMerge, reviewChangeCount, type PublicCommentState } from "./pr-comment-body.js";
 import { isTargetId, type ExplorePlatform } from "../config/explore-config.js";
 import { upsertStickyComment } from "./pr-comment.js";
+import { retryGitHubLookup } from "./github-lookup.js";
 import { previewLinks, viewerLinks } from "./viewer-links.js";
 import type { PublicReview } from "../contracts/capture.js";
 import { CiError, toCiError } from "../shared/ci-errors.js";
@@ -136,6 +137,8 @@ export async function publishCiReportComment(options: {
   preview?: { url: string; expiresAt: number | null };
   /** Set by `ci:deploy` when the hosted preview failed: the comment falls back to the central Viewer and the ZIP. */
   previewFailed?: boolean;
+  /** Pause between GitHub lookups that may succeed later; tests replace it so retries take no real time. */
+  sleep?: (milliseconds: number) => Promise<void>;
 }) {
   const environment = options.environment ?? process.env; const transport = options.transport ?? fetch;
   const input = await readInput(options.inputPath); const review = input.publicReview; const pr = review.pullRequest;
@@ -186,16 +189,21 @@ export async function publishCiReportComment(options: {
     catch (error) { throw new CiError({ code: "GITHUB_RESPONSE_INVALID", stage: "publication",
       message: "GitHub returned invalid report metadata.", nextAction: "Rerun publication; if the response remains invalid, inspect the GitHub metadata request.", cause: error }); }
   };
-  const artifact = await api(`actions/artifacts/${new URL(options.artifactUrl).pathname.split("/").at(-1)}`);
+  // A lookup is made again when GitHub may answer it later: no answer, a 5xx, or a 404 from the Actions API, which may
+  // not list a just-uploaded artifact yet. A bad token, a missing permission or a rate limit fails at once, as before.
+  const lookup = (path: string) => retryGitHubLookup(() => api(path), error => error instanceof CiError
+    && (error.code === "GITHUB_NETWORK_FAILED" || error.code === "GITHUB_REQUEST_FAILED" && error.retryable
+      || error.code === "GITHUB_RESOURCE_NOT_FOUND" && path.startsWith("actions/")), options.sleep);
+  const artifact = await lookup(`actions/artifacts/${new URL(options.artifactUrl).pathname.split("/").at(-1)}`);
   if (artifact.expired || artifact.name !== `explore-review-${review.runId}-${review.runAttempt}${target ? `-${target}` : ""}` || String(artifact.workflow_run?.id) !== review.runId) {
     throw new CiError({ code: artifact.expired ? "REPORT_ARTIFACT_EXPIRED" : "REPORT_ARTIFACT_MISMATCH", stage: "publication",
       message: "The uploaded report artifact is unavailable or belongs to another run",
       nextAction: artifact.expired ? "Rerun Explore to upload a fresh report artifact." : "Pass the final report artifact from this workflow run and attempt." });
   }
-  const attempt = await api(`actions/runs/${review.runId}/attempts/${review.runAttempt}`);
+  const attempt = await lookup(`actions/runs/${review.runId}/attempts/${review.runAttempt}`);
   if (String(attempt.id) !== review.runId || String(attempt.run_attempt) !== review.runAttempt) throw new CiError({ code: "REPORT_RUN_MISMATCH", stage: "publication",
     message: "Report run attempt mismatch", nextAction: "Publish the artifact and report input from the same current workflow attempt." });
-  const current = await api(`pulls/${pr.number}`);
+  const current = await lookup(`pulls/${pr.number}`);
   if (current.state !== "open" || current.head?.repo?.full_name !== pr.repository || current.head?.ref !== pr.head.ref) {
     throw new CiError({ code: "PR_CHANGED", stage: "publication", message: "PR closed or changed branches before the report artifact was ready",
       nextAction: "Run Explore for the current PR head and base before publishing a ready report." });

@@ -392,6 +392,42 @@ test("collectPlatformReports pairs downloaded artifact directories by platform a
     error => error.code === "PREVIEW_REPORTS_INCOMPLETE");
 });
 
+test("collectPlatformReports looks up a report artifact the run does not list yet again, but not one its token cannot read", async t => {
+  const ios = await exportFixture(t);
+  const root = await mkdtemp(join(tmpdir(), "explore-fanin-late-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const { cp } = await import("node:fs/promises");
+  await mkdir(join(root, "inputs", "explore-capture-10-1-ios"), { recursive: true }); await cp(ios.inputPath, join(root, "inputs", "explore-capture-10-1-ios", "report-input.json"));
+  await cp(ios.reportPath, join(root, "reports", "explore-review-10-1-ios"), { recursive: true });
+  const eas = easFixture();
+  const listing = answers => {
+    const lookups = [];
+    const transport = async (input, options) => {
+      const url = new URL(input);
+      if (!url.pathname.endsWith("/actions/runs/10/artifacts")) return eas.transport(input, options);
+      lookups.push(url);
+      const answer = answers[Math.min(lookups.length, answers.length) - 1];
+      return answer ? new Response(JSON.stringify(answer.body ?? {}), { status: answer.status }) : eas.transport(input, options);
+    };
+    return { lookups, transport };
+  };
+  const pauses = [];
+  const sleep = async milliseconds => { pauses.push(milliseconds); };
+  // The list lags the report job's upload: empty, then a 404, then the artifact.
+  const late = listing([{ status: 200, body: { artifacts: [] } }, { status: 404 }, undefined]);
+  const [entry] = await collectPlatformReports({ inputsPath: join(root, "inputs"), reportsPath: join(root, "reports"), environment: deployEnvironment, transport: late.transport, sleep });
+  assert.equal(entry.artifactUrl, artifactUrl.replace(/20$/, "21"));
+  assert.equal(late.lookups.length, 3);
+  assert.equal(pauses.length, 2);
+  const denied = listing([{ status: 403 }]);
+  await assert.rejects(collectPlatformReports({ inputsPath: join(root, "inputs"), reportsPath: join(root, "reports"), environment: deployEnvironment, transport: denied.transport, sleep }),
+    error => error.code === "REPORT_ARTIFACT_MISSING" && /HTTP 403/.test(error.message));
+  assert.equal(denied.lookups.length, 1);
+  const never = listing([{ status: 200, body: { artifacts: [] } }]);
+  await assert.rejects(collectPlatformReports({ inputsPath: join(root, "inputs"), reportsPath: join(root, "reports"), environment: deployEnvironment, transport: never.transport, sleep }),
+    error => error.code === "REPORT_ARTIFACT_MISSING");
+  assert.equal(never.lookups.length, 5);
+});
+
 const now = Date.UTC(2026, 8, 11, 3, 7);
 const STALE_COMMENT = `<!-- expo-explore-ci -->
 Explore review for abc · Managed via config
@@ -789,7 +825,9 @@ test("ci:deploy pairs target-named artifacts, deploys them in config order, and 
   const entries = await collectPlatformReports({ inputsPath: join(root, "inputs"), reportsPath: join(root, "reports"), environment: deployEnvironment, transport });
   assert.deepEqual(entries.map(entry => [entry.target.id, entry.platform, entry.artifactUrl.split("/").at(-1)]),
     [["iphone", undefined, "31"], ["duo-closed", undefined, "32"], ["duo-open", undefined, "33"], ["android", "android", "34"]], "config order, not directory order");
-  const sealed = await deployPreview({ reports: entries.map(({ platform: _platform, ...entry }) => entry), exportPath: fixtures[0].exportPath, environment: deployEnvironment, transport, run: eas.run, now: () => now, verifyTimeoutMs: 1 })
+  // The fixture serves none of these artifacts by id, so each comment's artifact lookup answers 404 through all its retries.
+  const sealed = await deployPreview({ reports: entries.map(({ platform: _platform, ...entry }) => entry), exportPath: fixtures[0].exportPath, environment: deployEnvironment, transport, run: eas.run, now: () => now, verifyTimeoutMs: 1,
+    sleep: async () => {} })
     .catch(error => error);
   // Publishing each target's comment section after the deployment is the comment code's (publishCiReportComment, which needs
   // the target to name the artifact); the deployment itself must have been written per target either way.

@@ -38,3 +38,40 @@ test("link schemes are approved once each, lowercased, never http or https, and 
   assert.deepEqual(approveSessionUrlSchemes(none.eas, "session-1", new Set(), "dev.example.app", ["example"]), []);
   assert.equal(none.calls.length, 0);
 });
+
+// The host can fail an action once, as `app.approveUrlScheme` did in its `simctl spawn … defaults write` (euxy run 39348933440).
+function flakyEas(failures) {
+  const calls = [];
+  const eas = args => {
+    calls.push(args);
+    if (calls.length <= failures) throw new Error("eas simulator:control exited with status 1: The simulator could not run app.approveUrlScheme");
+    return { stdout: "{}" };
+  };
+  return { calls, eas };
+}
+
+test("an action that fails once is sent again after a pause", () => {
+  const { calls, eas } = flakyEas(1);
+  const pauses = [];
+  simulatorControl(eas, "session-1", "app.approveUrlScheme", ["dev.example.app", "example"], { sleep: milliseconds => pauses.push(milliseconds) });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1], calls[0]);
+  assert.equal(pauses.length, 1);
+});
+
+test("an action that keeps failing throws EAS's reason after its last attempt, with no pause after it", () => {
+  const { calls, eas } = flakyEas(Infinity);
+  const pauses = [];
+  assert.throws(() => simulatorControl(eas, "session-1", "app.approveUrlScheme", ["dev.example.app", "example"], { sleep: milliseconds => pauses.push(milliseconds) }),
+    /could not run app\.approveUrlScheme/);
+  assert.equal(calls.length, 3);
+  assert.equal(pauses.length, calls.length - 1);
+  assert.ok(pauses.every(milliseconds => milliseconds > 0 && milliseconds <= 10_000));
+});
+
+test("a link scheme the host fails to approve once is approved on the next attempt", () => {
+  const { calls, eas } = flakyEas(1);
+  const approved = approveSessionUrlSchemes(eas, "session-1", new Set(["app.approveUrlScheme"]), "dev.example.app", ["example"], { sleep: () => {} });
+  assert.deepEqual(approved, ["example"]);
+  assert.equal(calls.length, 2);
+});

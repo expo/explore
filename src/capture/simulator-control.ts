@@ -20,22 +20,45 @@ export function simulatorControlActions(eas: EasCommand, sessionId: string): Set
   } catch { return new Set(); }
 }
 
-/** Runs one `eas simulator:control` action on the session; eas-cli fills in the device. Throws with EAS's reason. */
-export function simulatorControl(eas: EasCommand, sessionId: string, action: string, values: readonly string[] = []): void {
+/**
+ * Pauses before each resend of a failed action. Every action Explore runs is idempotent, and the session's host can fail
+ * one once: in brentvatne/euxy's baseline run 39348933440, `app.approveUrlScheme` failed in its `simctl spawn … defaults
+ * write`, which failed the dark-appearance session and with it the target's whole baseline.
+ */
+const SIMULATOR_CONTROL_RETRY_DELAYS_MS = [3_000, 6_000] as const;
+
+/** Lets a test replace the pause between resends of a failed action. */
+export type SimulatorControlOptions = { sleep?: ((milliseconds: number) => void) | undefined };
+
+/**
+ * Runs one `eas simulator:control` action on the session; eas-cli fills in the device. A failed action is sent again
+ * after a pause; one that still fails throws with EAS's reason.
+ */
+export function simulatorControl(eas: EasCommand, sessionId: string, action: string, values: readonly string[] = [], options: SimulatorControlOptions = {}): void {
+  const sleep = options.sleep ?? (milliseconds => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); });
   // Values follow `--` so one that starts with a dash is never read as a flag.
-  eas(["simulator:control", action, "--id", sessionId, "--json", "--non-interactive", "--", ...values], { timeoutMs: 2 * 60_000 });
+  const args = ["simulator:control", action, "--id", sessionId, "--json", "--non-interactive", "--", ...values];
+  for (let retry = 0; ; retry += 1) {
+    try { eas(args, { timeoutMs: 2 * 60_000 }); return; }
+    catch (error) {
+      const delayMs = SIMULATOR_CONTROL_RETRY_DELAYS_MS[retry];
+      if (delayMs === undefined) throw error;
+      sleep(delayMs);
+    }
+  }
 }
 
 /**
  * Lets the app open its own links without iOS asking "Open in “App”?" first, like local captures do with simctl. A
  * session without the action keeps the controllers' prompt handling; http and https never prompt and are skipped.
  */
-export function approveSessionUrlSchemes(eas: EasCommand, sessionId: string, actions: ReadonlySet<string>, bundleId: string, schemes: readonly string[]): string[] {
+export function approveSessionUrlSchemes(eas: EasCommand, sessionId: string, actions: ReadonlySet<string>, bundleId: string, schemes: readonly string[],
+  options: SimulatorControlOptions = {}): string[] {
   if (!actions.has("app.approveUrlScheme")) return [];
   const approved: string[] = [];
   for (const scheme of new Set(schemes.map(value => value.toLowerCase()))) {
     if (scheme === "http" || scheme === "https" || !/^[a-z][a-z0-9+.-]*$/.test(scheme)) continue;
-    simulatorControl(eas, sessionId, "app.approveUrlScheme", [bundleId, scheme]);
+    simulatorControl(eas, sessionId, "app.approveUrlScheme", [bundleId, scheme], options);
     approved.push(scheme);
   }
   return approved;

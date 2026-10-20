@@ -454,6 +454,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   // `eas simulator:control` names the session by id, from the session's own project directory.
   const sessionEas: EasCommand = (args, commandOptions) => runner({ command: options.easCommand, args, cwd: simulatorProject, environment: easEnvironment,
     timeoutMs: commandOptions?.timeoutMs ?? 5 * 60_000, ...(commandOptions?.allowFailure ? { allowFailure: true } : {}) });
+  // A failed simulator:control action is sent again after a pause, which a test's clock replaces.
+  const controlOptions = { sleep: options.sleep };
   // What the EAS session's host can do through simulator:control (iOS sessions on serve-sim 0.10.0 or later).
   let controlActions = new Set<string>();
   const configResult = eas(["config", "--platform", options.platform, "--profile", options.easProfile, "--json", "--non-interactive"]);
@@ -785,7 +787,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         "--platform", options.platform, "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 15 * 60_000 });
       // Before any link opens, as a local capture does with simctl: the app's own links then open without the prompt.
       if (sessionId && scheme) {
-        const approved = approveSessionUrlSchemes(sessionEas, sessionId, controlActions, options.bundleId, [scheme]);
+        const approved = approveSessionUrlSchemes(sessionEas, sessionId, controlActions, options.bundleId, [scheme], controlOptions);
         if (approved.length) say(`approved ${approved.map(item => `${item}://`).join(", ")} links on session ${sessionId}`);
       }
     }
@@ -844,7 +846,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           if (!controlActions.has("springboard.restart")) throw new CiError({ code: "CONTROLLER_FOLD_UNVERIFIED", stage: "session",
             message: `${options.device} did not show the ${options.devicePose} display after folding.`, nextAction: "Rerun the capture on a new session." });
           say(`${options.device} did not draw the ${options.devicePose} display after the fold; restarting SpringBoard and folding ${options.devicePose} again`);
-          simulatorControl(sessionEas, sessionId, "springboard.restart");
+          simulatorControl(sessionEas, sessionId, "springboard.restart", [], controlOptions);
           pause(8_000);
           open(true);
           fold();
@@ -859,7 +861,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         catch (error) {
           if (toCiError(error).code !== "CONTROLLER_FOLD_UNVERIFIED") throw error;
           say(`Argent kept reading the other panel after the fold; restarting SpringBoard and folding ${options.devicePose} again`);
-          simulatorControl(sessionEas, sessionId, "springboard.restart");
+          simulatorControl(sessionEas, sessionId, "springboard.restart", [], controlOptions);
           pause(8_000);
           try { fold(); }
           catch (retry) {
@@ -892,7 +894,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           nextAction: "Rerun the capture; if it keeps happening, report it to Explore: this session's Argent tool-server needs a restart that EAS cannot do yet.", cause: error });
         if (recovery === 1) {
           say("Argent still did not read the app; restarting SpringBoard, then resetting Argent's device helpers and opening the app again");
-          simulatorControl(sessionEas, sessionId, "springboard.restart");
+          simulatorControl(sessionEas, sessionId, "springboard.restart", [], controlOptions);
           // SpringBoard takes a moment to come back, and sends the app to the background; the next open brings it back.
           (options.sleep ?? (milliseconds => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }))(8_000);
         } else say("Argent did not read the app after starting it; resetting Argent's device helpers and opening the app again");
@@ -944,7 +946,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       // machine and serve-sim on an EAS iOS session; elsewhere its single pass runs as the device starts.
       if (controller !== "argent") runner({ command: controllerCommand, args: [...appearanceArgs(colorScheme), "--session", CONTROLLER_SESSION, ...deviceArgs(runtime), "--platform", options.platform],
         cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
-      else if (sessionId && controlActions.has("appearance.set")) simulatorControl(sessionEas, sessionId, "appearance.set", [colorScheme]);
+      else if (sessionId && controlActions.has("appearance.set")) simulatorControl(sessionEas, sessionId, "appearance.set", [colorScheme], controlOptions);
       else if (localSimulator) setLocalSimulatorAppearance({ runner, udid: localSimulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
       else if (localEmulator) setLocalEmulatorAppearance({ runner, serial: localEmulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
       // A scheme change recreates the Android activity in place, and the sheets it re-presents lose their inset; a

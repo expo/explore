@@ -133,11 +133,14 @@ test("report export rejects path traversal and symlink images from downloaded ev
 });
 
 function transportFixture({ stale = false, expired = false, artifactName = "explore-review-10-1", artifactRun = 10, attempt = 1,
-  status, headers } = {}) {
+  status, headers, artifactNotFound = 0 } = {}) {
   const calls = [];
+  let artifactLookups = 0;
   const transport = async (input, options = {}) => {
     const url = new URL(input); calls.push({ url, options });
     if (status) return new Response("private-upstream-error", { status, headers });
+    // GitHub can answer 404 for an artifact its run uploaded moments ago (euxy run 39348956443).
+    if (url.pathname.endsWith("/actions/artifacts/20") && (artifactLookups += 1) <= artifactNotFound) return new Response("Not Found", { status: 404 });
     if (url.pathname.endsWith("/actions/artifacts/20")) return Response.json({ id: 20, name: artifactName, expired, workflow_run: { id: artifactRun } });
     if (url.pathname.endsWith("/actions/runs/10/attempts/1")) return Response.json({ id: 10, run_attempt: attempt, status: "in_progress", conclusion: null });
     if (url.pathname.endsWith("/pulls/1")) return Response.json({ state: "open", base: pr.base,
@@ -191,7 +194,8 @@ test("report publication separates credential, permission, rate limit, and servi
     [503, {}, "GITHUB_REQUEST_FAILED", true, /service status/],
   ]) {
     const { transport, calls } = transportFixture({ status, headers });
-    await assert.rejects(publishCiReportComment({ inputPath, artifactUrl, environment, transport }), error => {
+    const pauses = [];
+    await assert.rejects(publishCiReportComment({ inputPath, artifactUrl, environment, transport, sleep: async milliseconds => { pauses.push(milliseconds); } }), error => {
       assert.equal(error.code, code);
       assert.equal(error.stage, "publication");
       assert.equal(error.retryable, retryable);
@@ -200,7 +204,34 @@ test("report publication separates credential, permission, rate limit, and servi
       return true;
     });
     assert.equal(calls.some(call => call.options.method === "POST"), false);
+    // Only a 5xx is looked up again; a bad token, a missing permission and a rate limit fail on the first answer.
+    assert.equal(calls.length, status >= 500 ? 5 : 1, `${status} ${JSON.stringify(headers)}`);
+    assert.equal(pauses.length, calls.length - 1);
   }
+});
+
+test("an artifact GitHub does not list yet is looked up again, and one it never lists keeps the not-found failure", async t => {
+  const { inputPath } = await fixture(t);
+  const late = transportFixture({ artifactNotFound: 1 });
+  const pauses = [];
+  await publishCiReportComment({ inputPath, artifactUrl, environment, transport: late.transport, sleep: async milliseconds => { pauses.push(milliseconds); } });
+  assert.equal(late.calls.filter(call => call.url.pathname.endsWith("/actions/artifacts/20")).length, 2);
+  assert.equal(pauses.length, 1);
+  assert.ok(late.calls.some(call => call.options.method === "POST"), "the comment is published once the artifact is found");
+
+  const missing = transportFixture({ artifactNotFound: Infinity });
+  const waited = [];
+  await assert.rejects(publishCiReportComment({ inputPath, artifactUrl, environment, transport: missing.transport, sleep: async milliseconds => { waited.push(milliseconds); } }), error => {
+    assert.equal(error.code, "GITHUB_RESOURCE_NOT_FOUND");
+    assert.equal(error.message, "Report publication GitHub check failed (404)");
+    assert.match(error.nextAction, /artifact ID/);
+    return true;
+  });
+  assert.equal(missing.calls.length, 5);
+  assert.equal(waited.length, 4, "no pause after the last lookup");
+  const total = waited.reduce((sum, milliseconds) => sum + milliseconds, 0);
+  assert.ok(total >= 30_000 && total <= 60_000, `${total} ms of pauses`);
+  assert.equal(missing.calls.some(call => call.options.method === "POST"), false);
 });
 
 test("stale PRs, expired artifacts, foreign artifacts, and replayed attempts cannot announce Ready", async t => {

@@ -7,6 +7,7 @@ import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter, configure } from "@zip.j
 import { loadReport, MAX_METADATA_BYTES } from "./agent-api.js";
 import { MAX_ASSET_BYTES, manifestBody, PREVIEW_ASSET } from "./preview-manifest.js";
 import { publishCiReportComment, readCiReportInput, type CiReportInput } from "./artifact.js";
+import { retryGitHubLookup } from "./github-lookup.js";
 import { readZipDirectory, readZipEntry } from "./zip-reader.js";
 import { reviewChangeCount, reviewDevice } from "./pr-comment-body.js";
 import { isTargetId, warnIgnoredExpiry, type ExplorePlatform } from "../config/explore-config.js";
@@ -54,7 +55,7 @@ export type PreviewDeployOptions = (PreviewReportInput | {
   environment?: NodeJS.ProcessEnv;
   transport?: typeof fetch;
   run?: CommandRunner;
-  /** Pause between `eas deploy` attempts; tests replace it so retries take no real time. */
+  /** Pause between `eas deploy` attempts and between GitHub lookups that may succeed later; tests replace it so retries take no real time. */
   sleep?: (milliseconds: number) => Promise<void>;
   /** The preview export (client/ and server/); defaults to the one shipped in this package. */
   exportPath?: string;
@@ -386,7 +387,7 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
     if (pr.origin !== "compare") for (const report of reports) {
       try {
         await publishCiReportComment({ inputPath: report.entry.inputPath, artifactUrl: report.entry.artifactUrl, environment, transport,
-          ...commentTarget(report), previewFailed: true });
+          ...commentTarget(report), previewFailed: true, ...(options.sleep ? { sleep: options.sleep } : {}) });
       } catch { /* the deployment failure is the one to report */ }
     }
     throw error;
@@ -398,7 +399,7 @@ export async function deployPreview(options: PreviewDeployOptions): Promise<Prev
     let headSha = pr.head.sha;
     if (pr.origin !== "compare") for (const report of reports) {
       const published = await publishCiReportComment({ inputPath: report.entry.inputPath, artifactUrl: report.entry.artifactUrl, environment, transport,
-        ...commentTarget(report), preview: { url: previewUrl, expiresAt: null } });
+        ...commentTarget(report), preview: { url: previewUrl, expiresAt: null }, ...(options.sleep ? { sleep: options.sleep } : {}) });
       headSha = published.headSha;
     }
     return { previewUrl, expiresAt: null, deploymentId: hosted.deploymentId, deploymentUrl: hosted.deploymentUrl,
@@ -766,7 +767,9 @@ const ARTIFACT_DIRECTORY = /^explore-(capture|review)-\d+-\d+-([a-z][a-z0-9-]{0,
  * configs without targets). Pairs them by target, in the order the run's review lists its targets, and looks up each
  * report artifact's URL on the run, since matrix jobs cannot hand their artifact URLs forward.
  */
-export async function collectPlatformReports(options: { inputsPath: string; reportsPath: string; environment?: NodeJS.ProcessEnv; transport?: typeof fetch }): Promise<PreviewReportInput[]> {
+export async function collectPlatformReports(options: { inputsPath: string; reportsPath: string; environment?: NodeJS.ProcessEnv; transport?: typeof fetch;
+  /** Pause between artifact lookups that may succeed later; tests replace it so retries take no real time. */
+  sleep?: (milliseconds: number) => Promise<void> }): Promise<PreviewReportInput[]> {
   const environment = options.environment ?? process.env; const transport = options.transport ?? fetch;
   const directories = async (root: string, kind: "capture" | "review") => {
     const found = new Map<string, string>();
@@ -812,14 +815,22 @@ export async function collectPlatformReports(options: { inputsPath: string; repo
   for (const entry of entries) {
     const name = `explore-review-${review.runId}-${review.runAttempt}-${entry.target!.id}`;
     const url = `https://api.github.com/repos/${repository}/actions/runs/${review.runId}/artifacts?per_page=100&name=${encodeURIComponent(name)}`;
-    const response = await transport(url, { headers: { accept: "application/vnd.github+json", authorization: `Bearer ${environment.GITHUB_TOKEN ?? ""}`,
-      "x-github-api-version": "2022-11-28" }, signal: AbortSignal.timeout(60_000) });
-    const body = response.ok ? await response.json() as { artifacts?: Array<{ id?: unknown; name?: unknown; expired?: unknown }> } : undefined;
-    const artifact = body?.artifacts?.find(candidate => candidate.name === name && candidate.expired !== true);
-    if (!artifact || typeof artifact.id !== "number" || !Number.isSafeInteger(artifact.id) || artifact.id <= 0) {
-      throw deployError("REPORT_ARTIFACT_MISSING", `The run has no artifact named ${name} (HTTP ${response.status}).`,
-        "Rerun the workflow so every target's report job uploads its artifact before the deploy job runs.", { retryable: true });
-    }
+    // The run's artifact list can lag an upload, as the artifact lookup of a report job's publication does, so an
+    // empty list, a 404, a 5xx or no answer is looked up again; a bad token or a missing permission fails at once.
+    const artifact = await retryGitHubLookup(async () => {
+      const response = await transport(url, { headers: { accept: "application/vnd.github+json", authorization: `Bearer ${environment.GITHUB_TOKEN ?? ""}`,
+        "x-github-api-version": "2022-11-28" }, signal: AbortSignal.timeout(60_000) });
+      const body = response.ok ? await response.json() as { artifacts?: Array<{ id?: unknown; name?: unknown; expired?: unknown }> } : undefined;
+      const found = body?.artifacts?.find(candidate => candidate.name === name && candidate.expired !== true);
+      if (!found || typeof found.id !== "number" || !Number.isSafeInteger(found.id) || found.id <= 0) {
+        throw deployError("REPORT_ARTIFACT_MISSING", `The run has no artifact named ${name} (HTTP ${response.status}).`,
+          "Rerun the workflow so every target's report job uploads its artifact before the deploy job runs.", { retryable: true, details: { status: response.status } });
+      }
+      return found;
+    }, error => {
+      const status = error instanceof CiError ? error.details?.status : undefined;
+      return !(error instanceof CiError) || typeof status === "number" && (status === 200 || status === 404 || status >= 500);
+    }, options.sleep);
     entry.artifactUrl = `https://github.com/${repository}/actions/runs/${review.runId}/artifacts/${artifact.id}`;
   }
   return entries;
