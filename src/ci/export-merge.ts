@@ -1,7 +1,7 @@
 import { copyFile, mkdir, readdir, readFile, writeFile, appendFile, lstat } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 
-import { bundleColorSchemes, mergeSchemeOutcomes, routeIdOfScreen, type ColorScheme } from "../capture/appearance.js";
+import { bundleColorSchemes, mergeSchemeOutcomes, routeIdOfScreen, schemeScreenId, type ColorScheme } from "../capture/appearance.js";
 import type { CaptureOutcome } from "../contracts/capture.js";
 import type { CaptureBundle } from "../contracts/capture.js";
 import type { ExploreMap } from "../types.js";
@@ -32,8 +32,9 @@ export type SecondaryCaptureExport = { directory: string; scheme: ColorScheme } 
  * Fold the exports of a side's secondary appearance sessions into its primary export, in place: the frames, outcomes,
  * launch evidence and map records of each `<id>@<scheme>` screen, and their files. Each session captured its passes as
  * one run would (`appearancePass`), so records only append; a secondary export never replaces a primary record. A session
- * that failed adds a failed `<id>@<scheme>` outcome carrying its error for every route the primary captured, and leaves
- * the run partial, so its appearance reads as unavailable with the reason instead of going missing.
+ * that failed is listed in the bundle's `sessionFailures`, adds a failed `<id>@<scheme>` outcome carrying its error for
+ * every selected route, and leaves the run partial, so its appearance reads as unavailable with its own reason (a route
+ * the primary lost too would otherwise show the primary's) instead of going missing.
  */
 export async function mergeCaptureExports(primary: string, secondaries: readonly SecondaryCaptureExport[]): Promise<void> {
   if (secondaries.length === 0) return;
@@ -46,14 +47,16 @@ export async function mergeCaptureExports(primary: string, secondaries: readonly
   const passes: Record<string, CaptureOutcome>[] = schemes.map(() => ({}));
   for (const [id, outcome] of Object.entries(bundle.outcomes)) if (!routeIdOfScreen(id).scheme) passes[0]![id] = outcome;
   const failedSessions: string[] = [];
+  const failedOutcomes: Record<string, CaptureOutcome> = {};
   for (const secondary of secondaries) {
     const { scheme } = secondary;
     if ("error" in secondary) {
       failedSessions.push(`The ${scheme} session failed (${secondary.error.code}): ${secondary.error.message.replace(/\.+$/, "")}.`);
-      // A route the primary lost keeps the primary's own reason; only a captured one has a slot for this appearance.
-      const pass = passes[schemes.indexOf(scheme)];
-      for (const [id, outcome] of Object.entries(passes[0]!)) {
-        if (pass && outcome.status === "captured") pass[id] = { status: "failed", attempts: 0, landing: "unverified", reason: secondary.error.message, error: secondary.error };
+      (bundle.sessionFailures ??= []).push({ scheme, error: secondary.error });
+      // A primary that renders no such appearance has no slot for its frames; the failure stays on the bundle alone.
+      if (!schemes.includes(scheme)) continue;
+      for (const id of bundle.selectedSurfaceIds) {
+        failedOutcomes[schemeScreenId(id, scheme)] = { status: "failed", attempts: 0, landing: "unverified", reason: secondary.error.message, error: secondary.error };
       }
       continue;
     }
@@ -101,7 +104,7 @@ export async function mergeCaptureExports(primary: string, secondaries: readonly
   const manifest = await readJson<{ files: unknown[] }>(join(primary, "manifest.json"));
   manifest.files = map.artifacts.map(artifact => ({ path: artifact.path, sha256: artifact.sha256, bytes: artifact.bytes, mimeType: artifact.mimeType }));
   await writeFile(join(primary, "screen-map.json"), JSON.stringify(map));
-  bundle.outcomes = mergeSchemeOutcomes(passes, schemes);
+  bundle.outcomes = { ...mergeSchemeOutcomes(passes, schemes), ...failedOutcomes };
   await writeFile(join(primary, "bundle.json"), JSON.stringify(bundle));
   await writeFile(join(primary, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 }

@@ -325,6 +325,38 @@ test('a failed dark pass on a route that captured in light reads as a valid bund
   assert.equal(dark.headOutcome?.error?.code, 'CAPTURE_OBSERVER_MISSING');
 });
 
+test('a route light lost and whose dark session failed reviews dark with the dark session\'s reason, not light\'s', async t => {
+  // brentvatne/euxy's main baseline run 39506374824: the dark session's install failed; here light also lost the route.
+  const f = await captureFixture(t);
+  const error = { code: 'CAPTURE_SESSION_FAILED', stage: 'session', message: 'install: argent run list-devices failed: GET /tools failed: 404 Not Found',
+    nextAction: 'Rerun the capture on a new session.', retryable: true };
+  for (const side of ['base', 'head']) {
+    const bundle = f.bundles[side];
+    bundle.runtimeProfile = { ...runtimeProfile, colorSchemes: 'light,dark' };
+    if (side === 'base') {
+      await writeFile(join(f.root, side, 'home-dark.png'), png);
+      bundle.images[`${f.id}@dark`] = { ...bundle.images[f.id], path: 'home-dark.png' };
+    } else {
+      delete bundle.images[f.id];
+      bundle.outcomes[f.id] = { status: 'failed', attempts: 2, landing: 'unverified', reason: 'The route observer never answered.' };
+      bundle.outcomes[`${f.id}@dark`] = { status: 'failed', attempts: 0, landing: 'unverified', reason: error.message, error };
+      bundle.sessionFailures = [{ scheme: 'dark', error }];
+    }
+    await writeFile(join(f.root, side, 'bundle.json'), JSON.stringify(bundle));
+  }
+  await readCaptureBundle(f.options.headDirectory);
+  const result = await prepareCaptureReview(f.options);
+  assertPublicReview(result.review);
+  const [light, dark] = result.review.surfaces;
+  assert.equal(light.headOutcome.reason, 'The route observer never answered.');
+  assert.equal(dark.headOutcome.error.code, 'CAPTURE_SESSION_FAILED');
+  assert.equal(dark.headOutcome.reason, error.message);
+  // Without the session's record, a failed dark outcome beside a failed light one is not one the passes produce.
+  delete f.bundles.head.sessionFailures;
+  await writeFile(join(f.root, 'head', 'bundle.json'), JSON.stringify(f.bundles.head));
+  await assert.rejects(readCaptureBundle(f.options.headDirectory), /inventory is inconsistent/);
+});
+
 test('a head that gained a light appearance keeps its route in source navigation on the dark-only base', async t => {
   const f = await captureFixture(t);
   f.bundles.base.runtimeProfile = { ...runtimeProfile, colorSchemes: 'dark' };

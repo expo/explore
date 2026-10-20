@@ -1,4 +1,4 @@
-import type { CaptureOutcome } from "../contracts/capture.js";
+import type { CaptureBundle, CaptureOutcome } from "../contracts/capture.js";
 
 export type ColorScheme = "light" | "dark";
 /** `auto` follows the app's `userInterfaceStyle`; a list captures exactly those schemes, first one primary. */
@@ -117,4 +117,12 @@ export function appearancePairs(routeId: string, headSchemes: readonly ColorSche
     id, scheme,
     baseId: baseSchemes.includes(scheme) ? schemeScreenId(routeId, scheme === baseSchemes[0] ? undefined : scheme) : null,
   }));
+}
+
+/** A `<id>@<scheme>` outcome recording that its whole appearance pass failed (`sessionFailures`), whatever the primary did. */
+export function failedPassOutcome(bundle: Pick<CaptureBundle, "outcomes" | "sessionFailures">, id: string): boolean {
+  const { scheme } = routeIdOfScreen(id);
+  const own = bundle.outcomes[id];
+  return scheme !== undefined && own?.status === "failed" && (bundle.sessionFailures ?? []).some(failure => failure.scheme === scheme
+    && failure.error.code === own.error?.code && failure.error.message === own.error?.message);
 }

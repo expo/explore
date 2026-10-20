@@ -293,6 +293,17 @@ function sessionStateFiles(output: string): string[] {
   catch { return []; }
 }
 
+/**
+ * A finished target keeps only its report: the captures, maps and checkouts are the bulk of the run. A session file
+ * stays, since it names a session no capture confirmed stopped; the review stops it on its way out (stopRecordedSessions).
+ */
+export async function pruneTargetOutput(output: string): Promise<void> {
+  const sessions = new Set(sessionStateFiles(output));
+  for (const entry of await readdir(output)) {
+    if (entry !== "report" && entry !== "report.zip" && !sessions.has(entry)) await rm(join(output, entry), { recursive: true, force: true });
+  }
+}
+
 function recordedSessionIds(outputs: string[]): string[] {
   return outputs.flatMap(output => sessionStateFiles(output).flatMap(name => {
     try { const id = readFileSync(join(output, name), "utf8").trim(); return /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(id) ? [id] : []; } catch { return []; }
@@ -526,8 +537,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
         if (side === "head" && head.uncommitted) continue;
         await keepCapture(join(output, `${side}-export`), captureCacheDirectory(environment, target.id, side === "base" ? base.sha : head.sha));
       }
-      // The report is all that is kept; the captures, maps and checkouts are the bulk of the run.
-      for (const entry of await readdir(output)) if (entry !== "report" && entry !== "report.zip") await rm(join(output, entry), { recursive: true, force: true });
+      await pruneTargetOutput(output);
       abort.signal.throwIfAborted();
       return report;
     };

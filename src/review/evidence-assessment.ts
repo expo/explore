@@ -1,5 +1,5 @@
 import { unattributedIssue } from "../capture/health.js";
-import { appearancePairs, bundleColorSchemes, type ColorScheme } from "../capture/appearance.js";
+import { appearancePairs, bundleColorSchemes, failedPassOutcome, type ColorScheme } from "../capture/appearance.js";
 import { launchSurfaceId, systemRegions as defaultSystemRegions, type SystemRegion } from "../contracts/capture.js";
 import { readFileSync, statSync } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -79,7 +79,15 @@ export type PublicEvidenceSummary = {
   comparison: { planned: number; eligible: number; skipped: number };
   /** Every unavailable or unverified requested side, plus operational comparison errors. */
   diagnostics: PublicEvidenceDiagnostic[];
+  /**
+   * Each appearance pass of a side that failed while its primary one captured (the bundle's `sessionFailures`), with how
+   * many of its frames the failure left unavailable: the comment names it once, not once per frame.
+   */
+  sessionFailures?: PublicSessionFailure[];
 };
+
+export type PublicSessionFailure = { side: "base" | "head"; scheme: ColorScheme; frames: number;
+  code: string; stage: string; message: string; nextAction: string; retryable: boolean };
 
 const MAX_SUMMARY_ERRORS = 5;
 
@@ -756,6 +764,9 @@ export async function assessPublicEvidence(options: {
     }
   }
 
+  const sessionFailures = (["base", "head"] as const).flatMap(side => (options[side].bundle.sessionFailures ?? []).map(({ scheme, error }): PublicSessionFailure => ({
+    side, scheme, frames: Object.keys(options[side].bundle.outcomes).filter(id => id.endsWith(`@${scheme}`) && failedPassOutcome(options[side].bundle, id)
+      && options[side].bundle.outcomes[id]!.error?.message === error.message).length, ...error })));
   return {
     surfaces,
     summary: {
@@ -763,6 +774,7 @@ export async function assessPublicEvidence(options: {
       accessibility: accessibilityAvailable ? accessibilityCounts : null,
       review: reviewCounts,
       capture, comparison, diagnostics,
+      ...(sessionFailures.length ? { sessionFailures } : {}),
     },
   };
 }

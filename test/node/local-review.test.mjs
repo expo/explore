@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { lstat, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appEnvironment, captureCacheDirectory, defaultBase, installDependencies, keepCapture, localInstallCommand, localReviewConfig, reportRef, reviewHeadSource, runLocalReview, snapshotWorkingTree, stopRecordedSessions } from '../../dist/ci/local-review.js';
+import { appEnvironment, captureCacheDirectory, defaultBase, installDependencies, keepCapture, localInstallCommand, localReviewConfig, reportRef, pruneTargetOutput, reviewHeadSource, runLocalReview, snapshotWorkingTree, stopRecordedSessions } from '../../dist/ci/local-review.js';
 import { mkdir, readdir } from 'node:fs/promises';
 import { startLocalReportServer } from '../../dist/report/local-report-server.js';
 import { loadReport } from '../../dist/report/agent-api.js';
@@ -362,6 +362,19 @@ test('an interrupted review deletes the local simulators it recorded and stops i
   assert.deepEqual(simctl, [['shutdown', udid], ['delete', udid]]);
   assert.deepEqual(eas, [['simulator:stop', '--id', 'session-1', '--json', '--non-interactive']]);
   await assert.rejects(lstat(join(output, 'head-session')));
+});
+
+test('a finished target keeps its report and any session file, so the review still stops a session no capture confirmed stopped', async t => {
+  const output = await realpath(await mkdtemp(join(tmpdir(), 'explore-pruned-')));
+  t.after(() => rm(output, { recursive: true, force: true }));
+  for (const name of ['report.zip', 'head-session-dark', 'head-export', 'base-export-dark', 'head-map']) await writeFile(join(output, name), 'x\n');
+  await mkdir(join(output, 'report'));
+  await pruneTargetOutput(output);
+  assert.deepEqual((await readdir(output)).sort(), ['head-session-dark', 'report', 'report.zip']);
+  const eas = [];
+  await writeFile(join(output, 'head-session-dark'), '01a15b61-4df9\n');
+  assert.deepEqual(await stopRecordedSessions([output], {}, args => { eas.push(args); return { status: 0 }; }, true), ['01a15b61-4df9']);
+  assert.deepEqual(eas, [['simulator:stop', '--id', '01a15b61-4df9', '--json', '--non-interactive']]);
 });
 
 test('a local review captures every target of the config at once, two of them on one platform', async t => {

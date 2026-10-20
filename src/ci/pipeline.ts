@@ -1,7 +1,7 @@
 import { systemRegions } from "../contracts/capture.js";
 import type { RunTarget } from "../types.js";
 import { execFile, spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join, relative, resolve, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
@@ -16,7 +16,7 @@ import { abandonSharedBuilds } from "../capture/shared-build.js";
 import { prepareCaptureReview, readCaptureBundle } from "../review/capture-review.js";
 import { quarantineReviewContract } from "../contracts/review-validation.js";
 import { agentCaptureConstraints } from "../capture/agent/source-context.js";
-import { captureArtifactCacheMayMatch, captureRecipeConfig, restoreCaptureArtifactCache, writeCaptureArtifactCache } from "./artifact-cache.js";
+import { captureArtifactCacheMayMatch, captureRecipeConfig, incompleteCaptureReason, restoreCaptureArtifactCache, writeCaptureArtifactCache } from "./artifact-cache.js";
 import { runCiMapOnWorker } from "./capture-worker.js";
 import { DEFAULT_BASELINE_WAIT_MINUTES, awaitPendingBaseline } from "./baseline-wait.js";
 import { writeCiReportInput, readAppDirectory } from "../report/artifact.js";
@@ -29,10 +29,10 @@ import { viewerLinks } from "../report/viewer-links.js";
 import { DEFAULT_EXPLORE_CONFIG_PATH, captureRepack, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { prepareCiExploration, type PrepareCiExplorationOptions } from "../capture/agent/exploration.js";
 import { generateAgentChangeNotes } from "../capture/agent/change-notes.js";
-import { CiError, serializeCiError, toCiError } from "../shared/ci-errors.js";
+import { CiError, environmentSecrets, serializeCiError, toCiError } from "../shared/ci-errors.js";
 import type { SourceCapturePlan } from "../source/capture-plan.js";
 import { createSourceChangeSummaries } from "../source/change-summary.js";
-import { assertNoCaptureHealthIssues, partitionCaptureHealthIssues, renderCaptureIssueAnnotation, renderComparisonDiagnosticAnnotation, renderNotesUnavailableAnnotation, renderReviewGapAnnotation, sortedCaptureHealthIssues } from "../capture/health.js";
+import { assertNoCaptureHealthIssues, capturedEvidenceInDoubt, partitionCaptureHealthIssues, renderCaptureIssueAnnotation, renderComparisonDiagnosticAnnotation, renderNotesUnavailableAnnotation, renderReviewGapAnnotation, sortedCaptureHealthIssues } from "../capture/health.js";
 import { EXPLORE_PACKAGE, packageBin } from "../shared/package-paths.js";
 import { agentDeviceLauncher, ensureArgentToolServer, ensureController } from "../shared/controller-cache.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
@@ -115,14 +115,24 @@ async function expectedColorSchemes(config: ExploreConfig, project: string, envi
 }
 
 /**
- * A failure that must fail the side even when only a secondary appearance session had it: a session that may still be
- * running (one Explore could not confirm stopped, or whose identity it could not verify) must never be hidden behind a
- * partial report.
+ * Failures that fail the side even when only a secondary appearance session had them. A session Explore could not
+ * confirm stopped, or whose identity it could not verify, must never be hidden behind a partial report; a checkout that
+ * changed, evidence that failed its integrity checks, or a failure Explore did not classify means the primary's frames
+ * may not be what they claim either.
  */
-function leavesSessionUnaccounted(error: unknown): boolean {
-  const failure = toCiError(error);
-  return failure.code === "SESSION_CLEANUP_FAILED" || failure.code === "SESSION_HANDOFF_UNVERIFIED"
-    || (failure.details as { allocation?: unknown } | undefined)?.allocation === "unknown";
+const SIDE_FAILURE_CODES = new Set(["SESSION_CLEANUP_FAILED", "SESSION_HANDOFF_UNVERIFIED", "CAPTURE_WORKER_EXITED", "EXPLORE_FAILED"]);
+
+/**
+ * Whether a secondary appearance session's failure can be reported as that appearance's frames failing, keeping the
+ * primary's: only when the capture reported it itself (a worker that died before its cleanup ran rejects otherwise), its
+ * session is proven stopped (the capture removes its session file only after a confirmed stop), and nothing in it
+ * casts doubt on the primary's evidence.
+ */
+async function secondaryFailureKept(error: unknown, sessionStatePath: string | undefined): Promise<boolean> {
+  if (!(error instanceof CiError)) return false;
+  if (SIDE_FAILURE_CODES.has(error.code) || capturedEvidenceInDoubt(error.code)
+    || (error.details as { allocation?: unknown } | undefined)?.allocation === "unknown") return false;
+  return !(sessionStatePath && await lstat(sessionStatePath).then(() => true, () => false));
 }
 
 /**
@@ -155,18 +165,23 @@ export async function captureSideInSessions(mapOptions: CiMapOptions, passes: re
   }));
   // The build folder holds the repacked app, which the sessions have installed.
   if (ownBuildShare) await rm(ownBuildShare, { recursive: true, force: true });
-  // Only the primary appearance's session fails the side, besides a session left unaccounted for or a stopped review. In
-  // brentvatne/euxy's main baseline run 39506374824 the light session captured 16 of 16 routes and the dark session's
-  // install failed, which failed the whole target and lost its baseline. A secondary session's failure is kept in the
-  // report instead: every frame of its appearance is failed with its error, and the run is partial.
-  for (const outcome of settled) if (outcome.status === "rejected" && leavesSessionUnaccounted(outcome.reason)) throw outcome.reason;
+  // Only the primary appearance's session fails the side, besides a stopped review and a secondary failure that cannot be
+  // kept (secondaryFailureKept). In brentvatne/euxy's main baseline run 39506374824 the light session captured 16 of 16
+  // routes and the dark session's install failed, which failed the whole target and lost its baseline. Such a failure is
+  // kept in the report instead: every frame of its appearance is failed with its error, and the run is partial.
+  const suffixOf = (pass: readonly ColorScheme[]) => `-${pass.join("-")}`;
+  for (const [index, outcome] of settled.entries()) {
+    if (outcome.status !== "rejected" || index === 0) continue;
+    const statePath = mapOptions.sessionStatePath ? `${mapOptions.sessionStatePath}${suffixOf(passes[index]!)}` : undefined;
+    if (signal?.aborted || !await secondaryFailureKept(outcome.reason, statePath)) throw outcome.reason;
+  }
   const primary = settled[0]!;
   if (primary.status === "rejected") throw primary.reason;
-  for (const outcome of settled) if (outcome.status === "rejected" && signal?.aborted) throw outcome.reason;
+  const secrets = [mapOptions.expoToken, ...environmentSecrets(mapOptions.environment ?? {})];
   const secondaries = passes.slice(1).map((pass, index): SecondaryCaptureExport => {
     const outcome = settled[index + 1]!;
-    if (outcome.status === "fulfilled") return { directory: `${mapOptions.outputDirectory}-${pass.join("-")}`, scheme: pass[0]! };
-    const error = serializeCiError(outcome.reason, { secrets: [mapOptions.expoToken] });
+    if (outcome.status === "fulfilled") return { directory: `${mapOptions.outputDirectory}${suffixOf(pass)}`, scheme: pass[0]! };
+    const error = serializeCiError(outcome.reason, { secrets });
     progress(`${mapOptions.side}: the ${pass.join("+")} session failed (${error.code}: ${error.message}); keeping the ${passes[0]!.join("+")} captures, and the report marks every ${pass.join("+")} frame failed`);
     return { scheme: pass[0]!, error: { code: error.code, stage: error.stage, message: error.message, nextAction: error.nextAction, retryable: error.retryable } };
   });
@@ -441,7 +456,7 @@ export async function runCiReview(options: {
   if (!options.runner) await prefetchControllers(config, environment, progress);
   const pr = options.presentation;
   const now = options.now ?? Date.now;
-  const secretValues = Object.entries(environment).filter(([key]) => /(?:TOKEN|SECRET|PASSWORD|API_KEY)/i.test(key)).flatMap(([, value]) => value ? [value] : []);
+  const secretValues = environmentSecrets(environment);
   let stage = "plan";
   let usagePhase: AgentUsagePhase = "preflight";
   let preserveReport: (() => Promise<void>) | undefined;
@@ -506,7 +521,10 @@ export async function runCiReview(options: {
           commit: pr.base.sha, selectedIds, directory: join(output, "base-cache"), runtimeProfile,
           ...(exploration.agent ? { captureContexts: exploration.agent.contexts } : {}) });
         if (restored) reuseDirectory = join(output, "base-cache");
-        progress(restored ? `base: found the baseline captures of ${pr.base.sha.slice(0, 8)}` : `base: no compatible baseline of ${pr.base.sha.slice(0, 8)}; capturing the base too`);
+        const incomplete = restored ? undefined : await incompleteCaptureReason(cacheDirectory, pr.base.sha);
+        progress(restored ? `base: found the baseline captures of ${pr.base.sha.slice(0, 8)}`
+          : incomplete ? `base: the baseline of ${pr.base.sha.slice(0, 8)} has nothing to reuse (${incomplete}); capturing the base too`
+            : `base: no compatible baseline of ${pr.base.sha.slice(0, 8)}; capturing the base too`);
       }
       const mapOptions = { ...captureOptions(config, environment, options.runner, { now: options.now, sleep: options.sleep }), progress,
         ...(options.useLocalEasSession ? { useLocalEasSession: true } : {}),

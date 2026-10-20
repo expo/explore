@@ -55,6 +55,11 @@ export function ciErrorForCommand(error: unknown, command: string): CiError {
 
 export type CiErrorRenderOptions = { secrets?: readonly string[] };
 
+/** The values of every variable that names a secret (a token, secret, password or API key), to redact from what Explore writes. */
+export function environmentSecrets(environment: NodeJS.ProcessEnv): string[] {
+  return Object.entries(environment).filter(([key]) => /(?:TOKEN|SECRET|PASSWORD|API_KEY)/i.test(key)).flatMap(([, value]) => value ? [value] : []);
+}
+
 function redact(value: string, secrets: readonly string[]): string {
   let result = value;
   // Controller failures may embed JSON or URLs inside their message rather than

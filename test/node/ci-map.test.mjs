@@ -495,6 +495,36 @@ test('an app that follows the system appearance is captured light then dark, dar
   assert.equal(execution.colorScheme, 'light');
 });
 
+test('a single session whose dark pass fails keeps its light captures and marks every dark frame failed, as split sessions do', async t => {
+  // brentvatne/euxy's main baseline run 39506374824 split the appearances over two sessions; one session must read the same.
+  const f = await fixture(t, { userInterfaceStyle: 'automatic' });
+  const lines = [];
+  const result = await runCiMap({ ...f.options, progress: line => lines.push(line), runner: request => {
+    if (request.args[0] === 'settings' && request.args[2] === 'dark') throw new Error('Controller settings exited with status 1: the device stopped answering');
+    return f.options.runner(request);
+  } });
+  assert.equal(result.runStatus, 'partial');
+  const bundle = JSON.parse(await readFile(join(f.options.outputDirectory, 'bundle.json'), 'utf8'));
+  assert.deepEqual(Object.keys(bundle.images).sort(), [f.ids.home, f.ids.settings].sort());
+  for (const id of Object.values(f.ids)) {
+    assert.equal(bundle.outcomes[id].status, 'captured');
+    assert.equal(bundle.outcomes[`${id}@dark`].status, 'failed');
+    assert.match(bundle.outcomes[`${id}@dark`].error.message, /the device stopped answering/);
+  }
+  assert.deepEqual(bundle.sessionFailures.map(failure => failure.scheme), ['dark']);
+  const map = JSON.parse(await readFile(join(f.options.outputDirectory, 'screen-map.json'), 'utf8'));
+  assert.equal(map.run.status, 'partial');
+  assert.match(map.run.stopReason, /^The dark pass failed \(/);
+  assert.ok(lines.some(line => /the dark pass failed .*keeping the light captures/.test(line)), lines.join('\n'));
+  assert.equal(f.operations().filter(operation => operation === 'simulator:stop').length, 1);
+  // A checkout that changed under the dark pass casts doubt on the light frames too: the capture fails.
+  const g = await fixture(t, { userInterfaceStyle: 'automatic' });
+  await assert.rejects(runCiMap({ ...g.options, runner: request => {
+    if (request.args[0] === 'settings' && request.args[2] === 'dark') throw new CiError({ code: 'SOURCE_CHECKOUT_CHANGED', stage: 'source', message: 'The application checkout differs from its recorded commit.', nextAction: 'Rerun.' });
+    return g.options.runner(request);
+  } }), error => error.code === 'SOURCE_CHECKOUT_CHANGED');
+});
+
 test('an app pinned to one appearance is captured once, in that appearance', async t => {
   const f = await fixture(t, { userInterfaceStyle: 'dark' });
   const result = await runCiMap(f.options);
@@ -711,6 +741,15 @@ test('a start that fails before naming a session stops any session of that name 
   const always = await fixture(t, { startsUnnamed: 6, orphanFromFailedStart: true });
   await assert.rejects(runCiMap({ ...always.options, sleep: () => {} }), error => error.code === 'SIMULATOR_START_FAILED');
   assert.equal(always.requests.filter(request => request.args[0] === 'simulator:stop' && value(request, '--id') === 'orphan-1').length, 6);
+});
+
+test('a session a failed start left that does not stop is reported as left running, not as a start failure', async t => {
+  // No session file names it, so a split side would otherwise keep its other appearance and hide it.
+  const f = await fixture(t, { startsUnnamed: 1, orphanFromFailedStart: true });
+  await assert.rejects(runCiMap({ ...f.options, sleep: () => {}, runner: request => {
+    if (request.args[0] === 'simulator:stop' && value(request, '--id') === 'orphan-1') throw new Error('Controller simulator:stop exited with status 1: network unreachable');
+    return f.options.runner(request);
+  } }), error => error.code === 'SESSION_CLEANUP_FAILED' && /orphan-1/.test(error.message));
 });
 
 test('a session of that name Explore cannot prove is its own is never stopped or replaced', async t => {
@@ -1874,6 +1913,14 @@ test('a failed hosted repack job stops the capture as EAS_REPACK_FAILED with the
   await assert.rejects(runCiMap(f.options), error => error.code === 'EAS_REPACK_FAILED' && /Build step "Repack" failed/.test(error.message) && /workflows\/run-1/.test(error.nextAction));
   // The session started beside the repack, so it is stopped.
   assert.deepEqual(f.operations().filter(operation => operation.startsWith('simulator:')).filter(operation => operation !== 'simulator:availability'), ['simulator:start', 'simulator:stop']);
+});
+
+test('a session started beside a repack that failed, and that does not stop, is the failure reported', async t => {
+  const f = await fixture(t, { workflowFailure: true });
+  await assert.rejects(runCiMap({ ...f.options, runner: request => {
+    if (request.args[0] === 'simulator:stop') throw new Error('Controller simulator:stop exited with status 1: network unreachable');
+    return f.options.runner(request);
+  } }), error => error.code === 'SESSION_CLEANUP_FAILED' && error.details.originalFailure.code === 'EAS_REPACK_FAILED');
 });
 
 test('capture.repack: local repacks on the runner and installs the app from it, with no upload', async t => {
