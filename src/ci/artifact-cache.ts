@@ -1,4 +1,4 @@
-import { routeIdOfScreen } from "../capture/appearance.js";
+import { bundleColorSchemes, routeIdOfScreen, schemeScreenId } from "../capture/appearance.js";
 import { createHash } from "node:crypto";
 import { cp, lstat, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -54,7 +54,8 @@ function requiresAgentAcceptance(recipe: Recipe, bundle: CaptureBundle): boolean
   catch { return false; }
 }
 
-async function validateEvidence(directory: string, bundle: CaptureBundle): Promise<void> {
+/** Checks an export the way a cache entry is checked before it is written or restored: its provenance, profile and frames. */
+export async function validateEvidence(directory: string, bundle: CaptureBundle): Promise<void> {
   const map = await readExportedMap(directory, { checkArtifacts: true });
   const execution = parseRuntimeExecutionContext(JSON.parse(await readFile(join(directory, "execution.json"), "utf8")));
   if (!bundle.runtimeProfile || !/^[a-f0-9]{40}$/.test(bundle.gitCommit)
@@ -113,6 +114,31 @@ async function fileInventory(directory: string, path = ""): Promise<FileRecord[]
   return files;
 }
 
+/**
+ * The routes a review can reuse from a capture: a verified frame in every appearance it renders. A baseline whose dark
+ * session failed (brentvatne/euxy's main baseline run 39506374824) holds its light frames and a failed `<route>@dark`;
+ * reusing the light frame alone would leave the review's base with no dark frame, and dark would read as unavailable
+ * because of the base. Such a route is captured by the review's base instead, in every appearance.
+ */
+export function reusableSurfaceIds(bundle: CaptureBundle): string[] {
+  const secondarySchemes = bundleColorSchemes(bundle).slice(1);
+  return bundle.selectedSurfaceIds.filter(id => hasVerifiedCapture(bundle, id)
+    && secondarySchemes.every(scheme => bundle.images[schemeScreenId(id, scheme)] && bundle.outcomes[schemeScreenId(id, scheme)] === undefined));
+}
+
+/**
+ * Why a capture of `commit` in `sourceDirectory` is not offered for reuse, when it is there and captured some routes:
+ * none has every appearance (its dark session failed). Undefined otherwise, the cache's usual misses included.
+ */
+export async function incompleteCaptureReason(sourceDirectory: string, commit: string): Promise<string | undefined> {
+  try {
+    const bundle = await readCaptureBundle(sourceDirectory);
+    if (bundle.gitCommit !== commit || reusableSurfaceIds(bundle).length || !bundle.selectedSurfaceIds.some(id => hasVerifiedCapture(bundle, id))) return undefined;
+    const failed = (bundle.sessionFailures ?? []).map(failure => failure.scheme);
+    return failed.length ? `its ${failed.join(" and ")} session failed, so no route has every appearance` : "no route was captured in every appearance";
+  } catch { return undefined; }
+}
+
 /** Cache full exported evidence, including accessibility maps and all referenced screenshots. */
 export async function writeCaptureArtifactCache(directory: string, recipe: Recipe): Promise<boolean> {
   try {
@@ -122,6 +148,9 @@ export async function writeCaptureArtifactCache(directory: string, recipe: Recip
     if (!bundle.runtimeProfile) return false;
     assertAgentAcceptance(bundle, undefined, { required: requiresAgentAcceptance(recipe, bundle) });
     await validateEvidence(directory, bundle);
+    // A capture with no route a review could reuse is not offered: a review that found it would wait for it, and capture
+    // its sides in turn instead of together, only to capture every route of the base itself.
+    if (!reusableSurfaceIds(bundle).length) return false;
     const metadata: CacheMetadata = {
       contract: CONTRACT, recipe: recipeKey(recipe), commit: bundle.gitCommit, files: await fileInventory(directory),
     };
@@ -181,7 +210,8 @@ export async function restoreCaptureArtifactCache(options: Recipe & {
     stage = await mkdtemp(`${options.directory}.cache-`);
     const stagedEvidence = join(stage, "evidence");
     await cp(source, stagedEvidence, { recursive: true, force: false, errorOnExist: true });
-    const available = options.selectedIds.filter(id => hasVerifiedCapture(bundle, id)
+    const reusable = new Set(reusableSurfaceIds(bundle));
+    const available = options.selectedIds.filter(id => reusable.has(id)
       && (!options.captureContexts || options.captureContexts[id] && bundle.captureContexts?.[id]
         && canonicalJson(options.captureContexts[id]) === canonicalJson(bundle.captureContexts[id])));
     if (!available.length) return false;
@@ -192,7 +222,8 @@ export async function restoreCaptureArtifactCache(options: Recipe & {
     const captureContexts = bundle.captureContexts ? Object.fromEntries(available.map(id => [id, bundle.captureContexts![id]])) : undefined;
     const agentAcceptance = bundle.agentAcceptance ? { policy: bundle.agentAcceptance.policy,
       frames: Object.fromEntries(available.map(id => [id, bundle.agentAcceptance!.frames[id]!])) } : undefined;
-    await writeFile(join(stagedEvidence, "bundle.json"), JSON.stringify({ ...bundle, side: "base", selectedSurfaceIds: available, images, outcomes,
+    // Only complete routes are restored, so a failed pass of the baseline's is no part of the restored bundle.
+    await writeFile(join(stagedEvidence, "bundle.json"), JSON.stringify({ ...bundle, side: "base", selectedSurfaceIds: available, images, outcomes, sessionFailures: undefined,
       ...(captureContexts ? { captureContexts } : {}), ...(agentAcceptance ? { agentAcceptance } : {}) }));
     await cp(stagedEvidence, options.directory, { recursive: true, force: false, errorOnExist: true });
     return true;

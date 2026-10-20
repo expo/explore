@@ -93,6 +93,12 @@ export type CaptureBundle = {
   }>;
   /** The exact observed frames explicitly accepted by the agent, never replacement screenshots. */
   agentAcceptance?: { policy: typeof AGENT_ACCEPTANCE_POLICY; frames: Record<string, AgentAcceptedFrame> };
+  /**
+   * The appearance passes that failed while the primary one captured (a secondary session that failed, or a later pass of
+   * one session), each with its error. Every selected route then has a failed `<id>@<scheme>` outcome carrying it, when
+   * the bundle renders that appearance. Absent when every pass finished.
+   */
+  sessionFailures?: Array<{ scheme: "light" | "dark"; error: NonNullable<CaptureOutcome["error"]> }>;
 };
 
 /** Bind acceptance receipts to captured images and, when supplied, their exported observations. */

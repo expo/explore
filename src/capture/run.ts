@@ -1,5 +1,5 @@
 import { appearanceArgs, argentColorSchemes, bundleColorSchemes, mergeSchemeOutcomes, resolveColorSchemes, routeIdOfScreen, schemeScreenId, type AppearanceSetting, type ColorScheme } from "./appearance.js";
-import { assertNoCaptureHealthIssues, captureHealthIssues, partitionCaptureHealthIssues } from "./health.js";
+import { assertNoCaptureHealthIssues, capturedEvidenceInDoubt, captureHealthIssues, partitionCaptureHealthIssues } from "./health.js";
 import { type RouteResetSetting } from "./route-reset.js";
 import { defaultReadinessSeconds } from "./readiness.js";
 import { captureLaunch, ffmpegRecordingTools, launchDirectory, type LaunchSetting, type RecordingTools } from "./launch-capture.js";
@@ -13,7 +13,7 @@ import { sourceRouteNames } from "../contracts/source-route.js";
 import type { SourceCapturePlan } from "../source/capture-plan.js";
 import { CONTRACT, type ExploreMap, type Platform, type RunStatus } from "../types.js";
 import { ExploreStore, validateMap } from "../map/store.js";
-import { CiError, serializeCiError, toCiError } from "../shared/ci-errors.js";
+import { CiError, environmentSecrets, serializeCiError, toCiError } from "../shared/ci-errors.js";
 import type { CaptureSetupAction, DevicePose } from "../config/explore-config.js";
 import { type CiAgentRuntimeOptions } from "./agent/runtime.js";
 import { EAS_CLI_VERSION, CONTROLLER_SESSION, isRecord, parseJson, baseEnvironment, nonEmpty } from "./common.js";
@@ -360,6 +360,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     + (routes.length - missingRoutes.length ? `, ${routes.length - missingRoutes.length} reused from the baseline` : "")
     + (missingRoutes.length ? `, ${missingRoutes.length} to capture` : ""));
   let captureFailure: unknown;
+  // Later appearance passes that failed after the primary one captured (see the pass loop).
+  const sessionFailures: NonNullable<CaptureBundle["sessionFailures"]> = [];
   const finish = async (): Promise<CiMapResult> => {
     if (!(await store.exists())) await store.initialize(map, false);
     // A session making only secondary passes owns the `<id>@<scheme>` frames of those passes, not the primary ones, even
@@ -368,10 +370,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       ? selectedIds.flatMap(id => options.appearancePass!.capture.filter(scheme => scheme !== colorSchemes[0]).map(scheme => schemeScreenId(id, scheme)))
       : selectedIds;
     const incomplete = captureFailure !== undefined || ownFrameIds.some(id => outcomes[id]?.status !== "captured" || outcomes[id]?.landing !== "verified")
-      || map.gaps.some(gap => gap.status === "open");
+      || map.gaps.some(gap => gap.status === "open") || sessionFailures.length > 0;
     map.run.status = incomplete || map.screens.length === 0 ? "partial" : "complete";
     if (routes.length === 0) map.run.stopReason = "No source targets require capture.";
     else if (captureFailure) map.run.stopReason = "Agent exploration did not finish; see capture diagnostics and bundle outcomes.";
+    else if (sessionFailures.length) map.run.stopReason = sessionFailures.map(failure => `The ${failure.scheme} pass failed (${failure.error.code}): ${failure.error.message.replace(/\.+$/, "")}.`).join(" ");
     else if (incomplete) map.run.stopReason = "Some source targets could not be captured; see bundle outcomes.";
     map.run.completedAt = new Date((options.now ?? Date.now)()).toISOString();
     await store.write(map);
@@ -432,7 +435,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       ...(Object.keys(launchRecords).length ? { launch: launchRecords } : {}),
       ...(options.agent ? { captureContexts: Object.fromEntries(selectedIds.filter(id => outcomes[id]?.status === "captured" && options.agent!.contexts[id])
         .map(id => [id, options.agent!.contexts[id]!])), agentAcceptance: { policy: AGENT_ACCEPTANCE_POLICY,
-          frames: Object.fromEntries(Object.keys(images).map(id => [id, acceptedFrames[id]!])) } } : {}) };
+          frames: Object.fromEntries(Object.keys(images).map(id => [id, acceptedFrames[id]!])) } } : {}),
+      ...(sessionFailures.length ? { sessionFailures } : {}) };
     if (options.agent) assertAgentAcceptance(bundle, map, { required: true });
     // The side that produces the evidence checks it the way the review will: an integrity defect fails here, naming
     // its codes, instead of on the consuming side after both captures. Unavailable screens are not defects.
@@ -521,6 +525,10 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     await rm(simulatorProject, { recursive: true, force: true });
     await localRecord?.close();
   };
+  const earlyCleanupFailure = (original: unknown, cleanup: unknown) => new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup",
+    message: "A simulator Explore started before the app was ready could not be confirmed stopped.",
+    nextAction: "Stop the EAS Simulator session or local device this capture started (eas simulator:list), and verify its status.",
+    details: { originalFailure: serializeCiError(original, { secrets: [options.expoToken] }) }, cause: cleanup });
   // What this side starts on this machine, so a later review cleans up after it if this process is stopped hard.
   const localRecord = local ? await openLocalCaptureRecord(sourceEnvironment, simulatorProject) : undefined;
   if (local) try {
@@ -546,7 +554,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         } });
       localOsVersion = created.osVersion;
     }
-  } catch (error) { await stopEarlyDevice().catch(() => undefined); throw error; }
+  } catch (error) { await stopEarlyDevice().catch(cleanup => { throw earlyCleanupFailure(error, cleanup); }); throw error; }
   // The session is named before its app exists: an EAS session starts while the app is repacked (startSession).
   // A session EAS failed to start is replaced once (see the session block), under a name of its own.
   const sessionNameFor = (retry: number) => simulatorSessionName({ mapName: options.name, mapId: options.buildId, gitCommit: options.gitCommit, easBuildId: local ? "local" : "installed",
@@ -659,7 +667,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     options.signal?.throwIfAborted();
   } catch (error) {
     // A build or repack that fails leaves nothing running: a device started for it goes, with the session's files and the app.
-    await stopEarlyDevice().catch(() => undefined);
+    // One that does not go is the failure to report: a session left running is never hidden behind the build's error.
+    await stopEarlyDevice().catch(cleanup => { throw earlyCleanupFailure(error, cleanup); });
     if (appDirectory) await rm(appDirectory, { recursive: true, force: true });
     throw error;
   }
@@ -714,7 +723,14 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           const live = liveSimulatorSessionsNamed(easRead(["simulator:list", "--name", sessionName, "--status", "new", "--status", "queued", "--status", "starting",
             "--status", "in-progress", "--limit", "100", "--json", "--non-interactive"]), sessionName, profile.projectIdentity);
           if (live) {
-            for (const id of live) assertSimulatorStopped(eas(["simulator:stop", "--id", id, "--json", "--non-interactive"], 2 * 60_000).stdout, id);
+            // No session file names these sessions, so one that does not stop is reported as left running, never as a
+            // capture failure a split side could keep as a partial report.
+            for (const id of live) {
+              try { assertSimulatorStopped(eas(["simulator:stop", "--id", id, "--json", "--non-interactive"], 2 * 60_000).stdout, id); }
+              catch (error) { throw new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup",
+                message: `EAS Simulator session ${id}, started by a request that failed, could not be confirmed stopped.`,
+                nextAction: `Stop EAS Simulator session ${id} and verify its status.`, details: { sessionId: id }, cause: error }); }
+            }
             reason = `EAS could not start the simulator session (${simulatorStartFailure(startError, [options.expoToken]).message})`;
           }
         }
@@ -991,41 +1007,60 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     const passes: CaptureBundle["outcomes"][] = [];
     const recordingTools = launchSetting === "off" ? undefined : options.recordingTools === undefined ? ffmpegRecordingTools() : options.recordingTools ?? undefined;
     const capturedSchemes = options.appearancePass ? colorSchemes.filter(scheme => options.appearancePass!.capture.includes(scheme)) : colorSchemes;
+    const activeRuntime = runtime;
     for (const [index, colorScheme] of colorSchemes.entries()) {
       // A pass another session makes leaves its slot empty, so the passes stay aligned with the appearances they merge by.
       if (!capturedSchemes.includes(colorScheme)) { passes.push({}); continue; }
-      // Argent cannot switch the appearance yet (software-mansion/argent#1509): the host does, simctl or adb on this
-      // machine and serve-sim on an EAS iOS session; elsewhere its single pass runs as the device starts.
-      if (controller !== "argent") runner({ command: controllerCommand, args: [...appearanceArgs(colorScheme), "--session", CONTROLLER_SESSION, ...deviceArgs(runtime), "--platform", options.platform],
-        cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
-      else if (sessionId && controlActions.has("appearance.set")) simulatorControl(sessionEas, sessionId, "appearance.set", [colorScheme], controlOptions);
-      else if (localSimulator) setLocalSimulatorAppearance({ runner, udid: localSimulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
-      else if (localEmulator) setLocalEmulatorAppearance({ runner, serial: localEmulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
-      // A scheme change recreates the Android activity in place, and the sheets it re-presents lose their inset; a
-      // relaunch starts the app in the new scheme, the same way the first pass did.
-      if (launchSetting !== "off") {
-        // Observing the launch relaunches the app before setup runs, so no UI-created state is lost.
-        say(`observing the app launch${colorSchemes.length > 1 ? ` (${colorScheme})` : ""}`);
-        try {
-          // A restored baseline's launch evidence is replaced only by a fresh observation.
-          const record = await captureLaunch({ bundleId: options.bundleId, keepVideo: launchSetting === "video", platform: options.platform,
-            directory: join(launchWorkDirectory, launchDirectory(colorScheme)), relativeDirectory: launchDirectory(colorScheme), ...(options.now ? { now: options.now } : {}),
-            ...(recordingTools ? { recordingTools } : {}),
-            controller: (args, controllerOptions) => runner({ command: controllerCommand, args: [...args, "--session", CONTROLLER_SESSION, ...deviceArgs(runtime!), "--platform", options.platform],
-              cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: controllerOptions?.timeoutMs ?? 60_000, ...(controllerOptions?.allowFailure ? { allowFailure: true } : {}) }) });
-          launch[colorScheme] = { root: launchWorkDirectory, record };
-        } catch (error) {
-          // The launch is supplementary evidence: a failure to observe it leaves the route capture intact.
-          say(`the app launch could not be observed (${(error as Error).message}); the report has no launch evidence for ${colorScheme}`);
-          await rm(join(launchWorkDirectory, launchDirectory(colorScheme)), { recursive: true, force: true });
-        }
-      } else if (index > 0) runner({ command: controllerCommand, args: ["open", options.bundleId, "--relaunch", "--session", CONTROLLER_SESSION,
-        ...deviceArgs(runtime), "--platform", options.platform, "--level", "full", "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
-      runtime.colorScheme = colorScheme;
-      if (colorSchemes.length > 1) say(`appearance ${colorScheme} (${index + 1}/${colorSchemes.length})`);
-      passes.push(await capturePlannedRoutes({ capture: { ...options, ...(argentBridge && !options.agent ? { runner: argentBridge.runner } : {}), agentDeviceCommand: controllerCommand, setup, progress: say }, routes: missingRoutes, inventory, scheme, appName: app.name, runtime,
-        connection, environment: controllerEnvironment, store, map, acceptedFrames, outcomes: index === 0 ? outcomes : {},
-        ...(colorSchemes.length > 1 ? { appearance: { scheme: colorScheme, primary: index === 0 } } : {}) }));
+      const passOutcomes: CaptureBundle["outcomes"] = index === 0 ? outcomes : {};
+      const capturePass = async () => {
+        // Argent cannot switch the appearance yet (software-mansion/argent#1509): the host does, simctl or adb on this
+        // machine and serve-sim on an EAS iOS session; elsewhere its single pass runs as the device starts.
+        if (controller !== "argent") runner({ command: controllerCommand, args: [...appearanceArgs(colorScheme), "--session", CONTROLLER_SESSION, ...deviceArgs(activeRuntime), "--platform", options.platform],
+          cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
+        else if (sessionId && controlActions.has("appearance.set")) simulatorControl(sessionEas, sessionId, "appearance.set", [colorScheme], controlOptions);
+        else if (localSimulator) setLocalSimulatorAppearance({ runner, udid: localSimulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
+        else if (localEmulator) setLocalEmulatorAppearance({ runner, serial: localEmulator, scheme: colorScheme, cwd: simulatorProject, environment: restrictedEnvironment });
+        // A scheme change recreates the Android activity in place, and the sheets it re-presents lose their inset; a
+        // relaunch starts the app in the new scheme, the same way the first pass did.
+        if (launchSetting !== "off") {
+          // Observing the launch relaunches the app before setup runs, so no UI-created state is lost.
+          say(`observing the app launch${colorSchemes.length > 1 ? ` (${colorScheme})` : ""}`);
+          try {
+            // A restored baseline's launch evidence is replaced only by a fresh observation.
+            const record = await captureLaunch({ bundleId: options.bundleId, keepVideo: launchSetting === "video", platform: options.platform,
+              directory: join(launchWorkDirectory, launchDirectory(colorScheme)), relativeDirectory: launchDirectory(colorScheme), ...(options.now ? { now: options.now } : {}),
+              ...(recordingTools ? { recordingTools } : {}),
+              controller: (args, controllerOptions) => runner({ command: controllerCommand, args: [...args, "--session", CONTROLLER_SESSION, ...deviceArgs(activeRuntime), "--platform", options.platform],
+                cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: controllerOptions?.timeoutMs ?? 60_000, ...(controllerOptions?.allowFailure ? { allowFailure: true } : {}) }) });
+            launch[colorScheme] = { root: launchWorkDirectory, record };
+          } catch (error) {
+            // The launch is supplementary evidence: a failure to observe it leaves the route capture intact.
+            say(`the app launch could not be observed (${(error as Error).message}); the report has no launch evidence for ${colorScheme}`);
+            await rm(join(launchWorkDirectory, launchDirectory(colorScheme)), { recursive: true, force: true });
+          }
+        } else if (index > 0) runner({ command: controllerCommand, args: ["open", options.bundleId, "--relaunch", "--session", CONTROLLER_SESSION,
+          ...deviceArgs(activeRuntime), "--platform", options.platform, "--level", "full", "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
+        activeRuntime.colorScheme = colorScheme;
+        if (colorSchemes.length > 1) say(`appearance ${colorScheme} (${index + 1}/${colorSchemes.length})`);
+        return await capturePlannedRoutes({ capture: { ...options, ...(argentBridge && !options.agent ? { runner: argentBridge.runner } : {}), agentDeviceCommand: controllerCommand, setup, progress: say }, routes: missingRoutes, inventory, scheme, appName: app.name, runtime: activeRuntime,
+          connection, environment: controllerEnvironment, store, map, acceptedFrames, outcomes: passOutcomes,
+          ...(colorSchemes.length > 1 ? { appearance: { scheme: colorScheme, primary: index === 0 } } : {}) });
+      };
+      // A later pass of a session whose primary pass captured fails only its own appearance, as a secondary session does
+      // when the passes are split over sessions (captureSideInSessions): in brentvatne/euxy's main baseline run
+      // 39506374824 a failed dark session failed a target whose light session had captured 16 of 16 routes.
+      if (index === 0 || !capturedSchemes.includes(colorSchemes[0]!) || options.agent) { passes.push(await capturePass()); continue; }
+      try { passes.push(await capturePass()); }
+      catch (error) {
+        const failure = toCiError(error, { code: `CAPTURE_${runtimeStage.toUpperCase()}_FAILED`, stage: runtimeStage,
+          nextAction: "Inspect the capture diagnostic, correct the failing prerequisite, and rerun Explore." });
+        if (options.signal?.aborted || capturedEvidenceInDoubt(failure.code)) throw failure;
+        const { code, stage, message, nextAction, retryable } = serializeCiError(failure, { secrets: [options.expoToken, ...environmentSecrets(sourceEnvironment)] });
+        say(`the ${colorScheme} pass failed (${code}: ${message}); keeping the ${colorSchemes[0]} captures, and the report marks every ${colorScheme} frame it did not take failed`);
+        sessionFailures.push({ scheme: colorScheme, error: { code, stage, message, nextAction, retryable } });
+        // The routes the pass finished keep what it recorded.
+        passes.push(passOutcomes);
+      }
     }
     runtime.colorScheme = colorSchemes[0]!;
     // A session without the primary pass keeps each outcome as its pass recorded it, under `<id>@<scheme>`: the export
@@ -1034,6 +1069,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     if (options.appearancePass && !capturedSchemes.includes(colorSchemes[0]!)) {
       for (const [index, pass] of passes.entries()) for (const [id, outcome] of Object.entries(pass)) outcomes[schemeScreenId(id, colorSchemes[index])] = outcome;
     } else Object.assign(outcomes, mergeSchemeOutcomes(passes, colorSchemes));
+    // A failed pass records its failure under each route it did not finish, as the export merge does for a failed session.
+    for (const { scheme: failedScheme, error } of sessionFailures) {
+      const pass = passes[colorSchemes.indexOf(failedScheme)] ?? {};
+      for (const id of selectedIds) if (!pass[id]) outcomes[schemeScreenId(id, failedScheme)] = { status: "failed", attempts: 0, landing: "unverified", reason: error.message, error };
+    }
   } catch (error) { primaryError = toCiError(error, { code: `CAPTURE_${runtimeStage.toUpperCase()}_FAILED`, stage: runtimeStage,
     nextAction: "Inspect the capture diagnostic, correct the failing prerequisite, and rerun Explore." }); }
   finally {

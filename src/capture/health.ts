@@ -1,5 +1,5 @@
 import type { CaptureBundle, CaptureOutcome } from "../contracts/capture.js";
-import { bundleColorSchemes, routeIdOfScreen, schemeScreenId } from "./appearance.js";
+import { bundleColorSchemes, failedPassOutcome, routeIdOfScreen, schemeScreenId } from "./appearance.js";
 import { CiError } from "../shared/ci-errors.js";
 
 type CaptureSide = CaptureBundle["side"];
@@ -59,8 +59,10 @@ export function captureHealthIssues(bundle: CaptureBundle, expectedIds: readonly
   for (const id of [...extras].sort()) {
     // A secondary frame is expected evidence; its own outcome is the failure of that appearance pass, or its verified
     // frame when the primary pass has none (the route is then published from this appearance alone).
+    // A pass that failed as a whole (sessionFailures) records its failure under every route's `<target>@<scheme>`.
     const primaryCaptured = bundle.outcomes[routeIdOfScreen(id).routeId]?.status === "captured";
-    if (!expected.has(id) && !(expectedSecondary.has(id) && !selected.has(id) && hasVerifiedOutcome(bundle.outcomes[id]) !== primaryCaptured)) {
+    if (!expected.has(id) && !(expectedSecondary.has(id) && !selected.has(id)
+      && (hasVerifiedOutcome(bundle.outcomes[id]) !== primaryCaptured || failedPassOutcome(bundle, id)))) {
       add(id, "CAPTURE_TARGET_UNEXPECTED", "Capture evidence contains a target absent from the source plan.", inventoryAction);
     }
   }
@@ -120,6 +122,14 @@ export function captureHealthIssues(bundle: CaptureBundle, expectedIds: readonly
 /** Issue codes that mean the evidence itself cannot be trusted, as opposed to a screen the run could not reach. */
 const INTEGRITY_CODES = new Set(["CAPTURE_SIDE_MISMATCH", "CAPTURE_COMMIT_INVALID", "CAPTURE_SELECTION_DUPLICATE", "CAPTURE_TARGET_UNEXPECTED",
   "CAPTURE_TARGET_MISSING", "CAPTURE_OUTCOME_MISSING", "CAPTURE_IMAGE_BINDING_INVALID", "CAPTURE_IMAGE_PROVENANCE_INVALID"]);
+
+/**
+ * Whether a failure casts doubt on everything a capture took, so its other appearances cannot be kept as a partial
+ * report: a checkout that changed under it, or evidence that failed its integrity checks.
+ */
+export function capturedEvidenceInDoubt(code: string): boolean {
+  return /^(?:SOURCE|CHECKOUT)_/.test(code) || code === "CAPTURE_INCOMPLETE" || INTEGRITY_CODES.has(code);
+}
 
 export function sortedCaptureHealthIssues(inputs: readonly CaptureHealthInput[]): CaptureHealthIssue[] {
   const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;

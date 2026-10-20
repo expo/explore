@@ -115,6 +115,8 @@ export type PlatformRecord = {
   navigation?: CommentNavigation;
   diagnostics?: { side?: "base" | "head"; route: string; code: string; message: string; nextAction: string }[];
   diagnosticCount?: number;
+  /** Appearance passes that failed while the primary one captured: that appearance was not captured on that side. */
+  sessionFailures?: { side: "base" | "head"; scheme: "light" | "dark"; frames: number }[];
   failure?: { step: string; message: string };
   /** The PR moved while this run worked; its report stays reachable but it is not the current review. */
   superseded?: boolean;
@@ -287,6 +289,11 @@ export function parsePlatformRecord(value: unknown): PlatformRecord | undefined 
   }
   if (isCount(value.notCompared) && value.notCompared > 0) record.notCompared = value.notCompared;
   if (isCount(value.diagnosticCount)) record.diagnosticCount = value.diagnosticCount;
+  if (Array.isArray(value.sessionFailures)) {
+    const failures = value.sessionFailures.flatMap((entry): NonNullable<PlatformRecord["sessionFailures"]> => isRecord(entry) && isSide(entry.side)
+      && (entry.scheme === "light" || entry.scheme === "dark") && isCount(entry.frames) ? [{ side: entry.side, scheme: entry.scheme, frames: entry.frames }] : []).slice(0, 4);
+    if (failures.length) record.sessionFailures = failures;
+  }
   if (isRecord(value.failure) && isString(value.failure.step, 200) && isString(value.failure.message)) record.failure = { step: value.failure.step, message: value.failure.message };
   if (value.superseded === true) record.superseded = true;
   return record;

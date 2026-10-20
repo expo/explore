@@ -1,6 +1,6 @@
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 import { runCiMap, type CiMapOptions, type CiMapResult } from "../capture/run.js";
-import { CiError, serializeCiError, type CiErrorData } from "../shared/ci-errors.js";
+import { CiError, environmentSecrets, serializeCiError, type CiErrorData } from "../shared/ci-errors.js";
 import type { Progress } from "../shared/progress.js";
 
 type WorkerMessage = { type: "progress"; message: string } | { type: "done"; result: CiMapResult } | { type: "error"; error: CiErrorData };
@@ -41,5 +41,5 @@ if (!isMainThread && parentPort) {
   port.unref();
   runCiMap({ ...options, signal: controller.signal, progress: message => port.postMessage({ type: "progress", message } satisfies WorkerMessage) })
     .then(result => port.postMessage({ type: "done", result } satisfies WorkerMessage))
-    .catch((error: unknown) => port.postMessage({ type: "error", error: serializeCiError(error, { secrets: [options.expoToken] }) } satisfies WorkerMessage));
+    .catch((error: unknown) => port.postMessage({ type: "error", error: serializeCiError(error, { secrets: [options.expoToken, ...environmentSecrets(options.environment ?? {})] }) } satisfies WorkerMessage));
 }

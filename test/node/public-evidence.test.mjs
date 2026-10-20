@@ -684,3 +684,20 @@ test("on a foldable a region across the pill's edge is kept whole, and one acros
   assert.deepEqual([clipped.ignoredStatusBar, clipped.ignoredHomeIndicator, clipped.measurement.match, clipped.measurement.differentPixels], [0, 1, false, 80]);
   assert.deepEqual(clipped.measurement.regions.map((entry) => [entry.rect.y, entry.rect.height, entry.differentPixels, entry.shareOfDiffPercentage]), [[840, 8, 80, 100]]);
 });
+
+test("a failed appearance pass is summarized once per side, with the frames it left unavailable", async (t) => {
+  // brentvatne/euxy's main baseline run 39506374824: the dark session's install failed after light captured every route.
+  const root = await mkdtemp(join(tmpdir(), "explore-public-evidence-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const base = await side(root, "base", manifests.base);
+  const head = await side(root, "head", manifests.head);
+  const error = { code: "CAPTURE_SESSION_FAILED", stage: "session", message: "install: argent run list-devices failed: GET /tools failed: 404 Not Found",
+    nextAction: "Rerun the capture on a new session.", retryable: true };
+  head.bundle.runtimeProfile = { deviceModel: "iPhone 17", osVersion: "26.0", locale: "en-US", orientation: "portrait", colorScheme: "light", colorSchemes: "light,dark" };
+  for (const id of head.bundle.selectedSurfaceIds) head.bundle.outcomes[`${id}@dark`] = { status: "failed", attempts: 0, landing: "unverified", reason: error.message, error };
+  head.bundle.sessionFailures = [{ scheme: "dark", error }];
+  const result = await assessPublicEvidence({ plan: plan(), base, head, profile: "explore:bundle", agentDeviceCommand: "/nonexistent/agent-device", measure: measurer({}) });
+  assert.deepEqual(result.summary.sessionFailures, [{ side: "head", scheme: "dark", frames: head.bundle.selectedSurfaceIds.length, ...error }]);
+  delete head.bundle.sessionFailures;
+  const complete = await assessPublicEvidence({ plan: plan(), base, head, profile: "explore:bundle", agentDeviceCommand: "/nonexistent/agent-device", measure: measurer({}) });
+  assert.equal(complete.summary.sessionFailures, undefined);
+});

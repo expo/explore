@@ -1,5 +1,5 @@
 import type { RunTarget } from "../types.js";
-import { appearancePairs, bundleColorSchemes, routeIdOfScreen } from "../capture/appearance.js";
+import { appearancePairs, bundleColorSchemes, failedPassOutcome, routeIdOfScreen } from "../capture/appearance.js";
 import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
@@ -95,8 +95,10 @@ function secondaryPassOutcome(bundle: CaptureBundle, selected: ReadonlySet<strin
   const { routeId, scheme } = routeIdOfScreen(id);
   const own = bundle.outcomes[id];
   const verified = own?.status === "captured" && own.landing === "verified";
-  return scheme !== undefined && selected.has(routeId) && verified !== (bundle.outcomes[routeId]?.status === "captured");
+  return scheme !== undefined && selected.has(routeId)
+    && (verified !== (bundle.outcomes[routeId]?.status === "captured") || failedPassOutcome(bundle, id));
 }
+
 
 export async function readCaptureBundle(directory: string): Promise<CaptureBundle> {
   const bundle = JSON.parse(await readFile(resolve(await realpath(directory), "bundle.json"), "utf8")) as CaptureBundle;
@@ -110,6 +112,11 @@ export async function readCaptureBundle(directory: string): Promise<CaptureBundl
     throw new Error("Capture bundle completion timestamp is invalid");
   }
   if (bundle.appIcon !== undefined) assertAppIconRecord(bundle.appIcon);
+  if (bundle.sessionFailures !== undefined && (!Array.isArray(bundle.sessionFailures) || bundle.sessionFailures.some(failure => !failure
+    || !["light", "dark"].includes(failure.scheme) || !failure.error || typeof failure.error.code !== "string" || typeof failure.error.message !== "string"
+    || typeof failure.error.stage !== "string" || typeof failure.error.nextAction !== "string" || typeof failure.error.retryable !== "boolean"))) {
+    throw new Error("Capture bundle session failures are invalid");
+  }
   if (bundle.launch !== undefined) assertLaunchRecords(bundle.launch);
   const selected = new Set(bundle.selectedSurfaceIds);
   if (selected.size !== bundle.selectedSurfaceIds.length

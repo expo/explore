@@ -321,21 +321,34 @@ export function platformRecordOf(state: PublicCommentState, target?: CommentTarg
     if (notCompared) record.notCompared = notCompared;
     record.context = splashLines(state.review);
     const diagnostics = [...(state.evidence?.diagnostics ?? [])];
+    // A failed appearance pass is one issue, named first, rather than one per frame it left unavailable: in brentvatne/
+    // euxy's main baseline run 39506374824 the dark session's failure would have listed all 16 routes, crowding out the rest.
+    const sessionFailures = state.evidence?.sessionFailures ?? [];
+    if (sessionFailures.length) record.sessionFailures = sessionFailures.map(({ side, scheme, frames }) => ({ side, scheme, frames }));
+    const sessionLines = sessionFailures.map(failure => ({ side: failure.side, route: `${failure.scheme} session`, code: failure.code,
+      message: `${failure.message.replace(/\.+$/, "")}.${failure.frames ? ` ${plural(failure.frames, `${failure.scheme} frame`)} ${failure.frames === 1 ? "is" : "are"} unavailable.` : ""}`,
+      nextAction: failure.nextAction }));
+    const ofFailedPass = (surfaceId: string, side: "base" | "head", outcome: NonNullable<Surface["headOutcome"]>) => sessionFailures.some(failure => failure.side === side
+      && schemeOf(surfaceId) === failure.scheme && outcome.error?.code === failure.code && outcome.error.message === failure.message);
     for (const surface of state.review.surfaces) {
       for (const side of ["base", "head"] as const) {
         const outcome = surface[`${side}Outcome`];
         if (!outcome || (outcome.status === "captured" && outcome.landing === "verified") || diagnostics.some(item => item.surfaceId === surface.id && item.side === side)) continue;
+        if (ofFailedPass(surface.id, side, outcome)) continue;
         diagnostics.push({ surfaceId: surface.id, side, code: outcome.error?.code ?? (outcome.status === "captured" ? "CAPTURE_LANDING_UNVERIFIED" : "CAPTURE_UNAVAILABLE"),
           stage: outcome.error?.stage ?? "capture", message: outcome.error?.message ?? outcome.reason ?? (outcome.status === "captured" ? "Destination route was not verified." : `Capture ${outcome.status}.`),
           nextAction: outcome.error?.nextAction ?? "Check this side's capture diagnostics, correct the route configuration or capture failure, and rerun capture.", retryable: outcome.error?.retryable ?? false });
       }
     }
-    if (diagnostics.length) {
-      record.diagnostics = diagnostics.slice(0, 20).map(diagnostic => {
+    if (diagnostics.length || sessionLines.length) {
+      record.diagnostics = [...sessionLines, ...diagnostics.map(diagnostic => {
         const surface = state.review!.surfaces.find(surface => surface.id === diagnostic.surfaceId);
-        return { ...(diagnostic.side ? { side: diagnostic.side } : {}), route: surface ? routeOf(surface) : diagnostic.surfaceId, code: diagnostic.code, message: diagnostic.message, nextAction: diagnostic.nextAction };
-      });
-      record.diagnosticCount = diagnostics.length;
+        // A secondary appearance's issue names its appearance, as its change row does: its light frame may be fine.
+        const scheme = schemeOf(diagnostic.surfaceId);
+        return { ...(diagnostic.side ? { side: diagnostic.side } : {}), route: `${surface ? routeOf(surface) : diagnostic.surfaceId}${surface && scheme ? ` (${scheme})` : ""}`,
+          code: diagnostic.code, message: diagnostic.message, nextAction: diagnostic.nextAction };
+      })].slice(0, 20);
+      record.diagnosticCount = sessionLines.length + diagnostics.length;
     }
   }
   if (state.failure) record.failure = { step: state.failure.step, message: state.failure.message };
@@ -480,9 +493,11 @@ function title(records: PlatformRecord[], rows: ChangeRow[]): string {
   }
   // With screens left uncompared, nothing changed only among the ones compared.
   const summary = rows.length ? `${plural(rows.length, "screen")} changed` : ready.some(record => gaps(record).length) ? "No compared screens changed" : "No screens changed";
+  // An appearance a pass never captured is said in the heading too: the verdict above says nothing about it.
+  const missing = [...new Set(ready.flatMap(record => (record.sessionFailures ?? []).map(failure => failure.scheme)))].map(scheme => `${scheme} not captured`);
   const report = firstReport(ready);
   const open = report ? link("Review in Explore", report) : ready.some(record => record.links.deploying) ? "report deploying…" : undefined;
-  return `### ${summary}${open ? ` · ${open}` : ""}`;
+  return `### ${[summary, ...missing, ...(open ? [open] : [])].join(" · ")}`;
 }
 
 /** Every target by name, each linking its own report, then the commits and when the comment last changed. */
@@ -512,12 +527,21 @@ function statusLine(record: PlatformRecord): string | undefined {
   }
 }
 
+/** "dark not captured" for an appearance whose pass failed on head (or both sides), "… on base" when only the base's did. */
+function missingAppearances(record: PlatformRecord): string[] {
+  const failures = record.sessionFailures ?? [];
+  return [...new Set(failures.map(failure => failure.scheme))].map(scheme => {
+    const sides = new Set(failures.filter(failure => failure.scheme === scheme).map(failure => failure.side));
+    return `${scheme} not captured${sides.size === 1 && sides.has("base") ? " on base" : ""}`;
+  });
+}
+
 /** What a finished target has no verdict on: captures missing or unattributed, comparisons that did not run or failed. */
 function gaps(record: PlatformRecord): string[] {
   const unavailable = record.health ? record.health.base.unavailable + record.health.head.unavailable : 0;
   const unverified = record.health ? record.health.base.unverified + record.health.head.unverified : 0;
   const failed = (record.validation?.visual?.failed ?? 0) + (record.validation?.accessibility?.failed ?? 0);
-  return [unavailable ? `${plural(unavailable, "capture")} unavailable` : undefined, unverified ? `${unverified} unattributed` : undefined,
+  return [...missingAppearances(record), unavailable ? `${plural(unavailable, "capture")} unavailable` : undefined, unverified ? `${unverified} unattributed` : undefined,
     record.notCompared ? `${record.notCompared} not compared` : undefined, failed ? `${plural(failed, "comparison")} failed` : undefined]
     .filter((part): part is string => Boolean(part));
 }

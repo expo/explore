@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { createServer } from "node:http";
 import { startArgentBridgeRunner } from "../../dist/capture/argent-bridge-host.js";
+import { argentClientCall } from "../../dist/capture/argent-bridge-worker.js";
+import { argentRunFailureDetail } from "../../dist/capture/argent-bridge.js";
+import { runBridgeCommand } from "../../dist/capture/argent-driver.js";
 import { ARGENT_VERSION } from "../../dist/shared/argent-version.js";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
@@ -132,4 +136,49 @@ test("a recording runs per command, and a screenshot is taken only from a file t
   assert.equal(failed.success, false);
   assert.match(failed.error.message, /did not write/);
   await assert.rejects(readFile(join(root, "out", "two.png")), { code: "ENOENT" });
+});
+
+test("the thread's lines about a tool-server still starting reach the capture's log with the command's answer", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "explore-argent-bridge-")); t.after(() => rm(root, { recursive: true, force: true }));
+  // Argent's client asks GET /tools before each call; the first one is answered 404, as on euxy's main baseline run 39506374824.
+  const clientModule = await fakeClient(root, `
+    if (name === "list-devices" && calls.filter(call => call.name === "list-devices").length === 1) throw new Error("GET /tools failed: 404 Not Found");
+    if (name === "list-devices") return { data: { devices: [{ udid: "UDID-1", name: "iPhone 17", state: "Booted", platform: "ios", runtime: "iOS 26.0" }] } };
+    if (name === "await-screen-idle") return { data: { settled: true } };
+    throw new Error("unexpected tool " + name);`);
+  const messages = [];
+  const environment = { EXPLORE_ARGENT_STATE: join(root, "state.json"), EXPLORE_ARGENT_PLATFORM: "ios", ARGENT_TOOLS_URL: "http://127.0.0.1:9/tools", HOME: root, PATH: process.env.PATH };
+  const bridge = startArgentBridgeRunner({ command: "/opt/argent-controller", environment, clientModule, progress: message => messages.push(message),
+    fallback: () => assert.fail("the thread serves every command") });
+  t.after(() => bridge.close());
+  const waited = JSON.parse(bridge.runner({ command: "/opt/argent-controller", args: ["wait", "stable", "--session", "explore", "--platform", "ios", "--json"], cwd: root, environment, timeoutMs: 20_000 }).stdout);
+  assert.deepEqual(waited, { success: true, data: { stable: true } });
+  assert.deepEqual(messages, ["Argent's tool-server is not serving its tools yet (argent run list-devices failed: GET /tools failed: 404 Not Found); sending list-devices again in 1 s (75 s left of 75 s)"]);
+});
+
+test("a refused connection to a localhost tool-server, whose cause is an AggregateError with no message, is the tool-server still starting", async () => {
+  // A port nothing listens on: bound, then closed.
+  const port = await new Promise(resolve => { const server = createServer().listen(0, "127.0.0.1", () => { const { port } = server.address(); server.close(() => resolve(port)); }); });
+  const client = { async callTool() { const response = await fetch(`http://localhost:${port}/tools`); return { data: await response.json() }; } };
+  const call = argentClientCall(client, () => new AbortController().signal);
+  const refused = await call("list-devices", {}).then(() => assert.fail("nothing listens"), error => error);
+  assert.match(refused.message, /^argent run list-devices failed: fetch failed: .*ECONNREFUSED/);
+  // Through the bridge, the refusal is waited out like a 404 from /tools, until the window ends.
+  let now = 0, tries = 0;
+  const result = await runBridgeCommand(["snapshot", "--platform", "ios", "--json"], { state: { generation: 0 }, platform: "ios", version: "0.29.0",
+    now: () => now, sleep: async milliseconds => { now += milliseconds; }, reachable: async () => true, moveFile: async () => {},
+    call: async (tool, args, options) => { tries++; return call(tool, args, options); } });
+  assert.equal(JSON.parse(result.stdout).error.code, "TOOL_SERVER_NOT_READY");
+  assert.equal(tries, 11);
+});
+
+test("a failed argent run keeps the line saying /tools is not served ahead of the stack trace that follows it", () => {
+  const stderr = ["[argent] Unhandled rejection: Error: GET /tools failed: 404 Not Found", "    at fetchTools (file:///argent/dist/cli-cmds.mjs:10065:21)",
+    "    at async fetchTool (file:///argent/dist/cli-cmds.mjs:10070:19)", "    at async run (file:///argent/dist/cli-cmds.mjs:31166:17)",
+    "    at async main (file:///argent/dist/cli.js:12:3)"].join("\n");
+  const detail = argentRunFailureDetail(stderr, "");
+  assert.ok(detail.startsWith("[argent] Unhandled rejection: Error: GET /tools failed: 404 Not Found |     at fetchTools "), detail);
+  assert.ok(detail.endsWith("at async main (file:///argent/dist/cli.js:12:3)"), "the last frames follow it");
+  assert.equal(argentRunFailureDetail("Tool \"gesture-tap\" not found. Run `argent tools` to list available tools.\n", ""), "Tool \"gesture-tap\" not found. Run `argent tools` to list available tools.");
+  assert.equal(argentRunFailureDetail("GET /tools failed: 503 Service Unavailable\n", ""), "GET /tools failed: 503 Service Unavailable", "a line named once");
 });

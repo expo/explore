@@ -57,9 +57,23 @@ function summarize(tool: string, value: unknown): unknown {
     screen: tree.screen, nodes, roots: (tree.roots ?? []).map(root => [root.type ?? null, root.bundleId ?? null, (root.children ?? []).length]) };
 }
 
+/**
+ * What a failed `argent run` printed, for its error: the last few lines, and ahead of them the line saying the
+ * tool-server is not serving its tools yet, which the bridge waits out (argent-driver's TOOLS_NOT_SERVED) and which a
+ * stack trace can push out of the last lines.
+ */
+export function argentRunFailureDetail(stderr: string, stdout: string): string {
+  const lines = `${stderr}\n${stdout}`.trim().split("\n").filter(Boolean);
+  const notServed = lines.find(line => /GET \/tools failed: \d{3}|ECONNREFUSED/.test(line));
+  return [...new Set([...(notServed ? [notServed] : []), ...lines.slice(-4)])].join(" | ").slice(0, 800);
+}
+
+/** A command's answer, with the lines it has for the capture's log (`notes`), which its host prints. */
+export type ArgentBridgeResult = BridgeResult & { notes?: string[] };
+
 export type ArgentBridge = {
   /** Runs one agent-device-shaped command against the session. */
-  run(argv: readonly string[]): Promise<BridgeResult>;
+  run(argv: readonly string[]): Promise<ArgentBridgeResult>;
 };
 
 /**
@@ -77,8 +91,10 @@ export function createArgentBridge(settings: ArgentBridgeSettings, call: ArgentC
         await appendFile(logPath, `${JSON.stringify({ at: new Date().toISOString(), host, command: argv[0], ...entry })}\n`, { mode: 0o600 }).catch(() => undefined);
       };
       const state = await readState(statePath);
+      const notes: string[] = [];
       const result = await runBridgeCommand(argv, {
         state, platform, version: ARGENT_VERSION,
+        progress: message => { notes.push(message); void log({ note: message }); },
         ...(environment.EXPLORE_ARGENT_BUNDLE_ID ? { bundleId: environment.EXPLORE_ARGENT_BUNDLE_ID } : {}),
         ...(environment.EXPLORE_ARGENT_DEVICE ? { device: environment.EXPLORE_ARGENT_DEVICE } : {}),
         // An opened foldable's inner panel shows its UI in landscape (Argent's fold: "Unfolded, the UI is landscape").
@@ -101,7 +117,8 @@ export function createArgentBridge(settings: ArgentBridgeSettings, call: ArgentC
             // The same URL Argent's own client checks: ARGENT_TOOLS_URL may carry a path, which /tools is appended to.
             const response = await fetch(`${(toolsUrl ?? "").replace(/\/+$/, "")}/tools`, { headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(5_000) });
             await response.body?.cancel();
-            ok = response.status < 500;
+            // A tool-server still starting can answer 404 to /tools (euxy main baseline run 39506374824): it is not serving yet.
+            ok = response.status < 500 && response.status !== 404;
           } catch { ok = false; }
           if (!ok) await log({ tool: "reachable", ok });
           return ok;
@@ -131,7 +148,7 @@ export function createArgentBridge(settings: ArgentBridgeSettings, call: ArgentC
       });
       await writeState(statePath, state);
       await log({ result: result.exitCode === 0 ? "ok" : result.stdout.slice(0, 300) });
-      return result;
+      return notes.length ? { ...result, notes } : result;
     },
   };
 }

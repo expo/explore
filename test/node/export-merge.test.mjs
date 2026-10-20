@@ -6,6 +6,8 @@ import test from "node:test";
 
 import { mergeSchemeOutcomes } from "../../dist/capture/appearance.js";
 import { mergeCaptureExports } from "../../dist/ci/export-merge.js";
+import { captureSideInSessions } from "../../dist/ci/pipeline.js";
+import { CiError } from "../../dist/shared/ci-errors.js";
 
 async function writeExport(root, { screens, images, outcomes, launch, diagnostics }) {
   await mkdir(join(root, "artifacts"), { recursive: true });
@@ -20,7 +22,8 @@ async function writeExport(root, { screens, images, outcomes, launch, diagnostic
     screens: screens.map(id => ({ id, colorScheme: id.endsWith("@dark") ? "dark" : "light" })), variants: [], observations: screens.map(id => ({ screenId: id })),
     elements: [], actionAttempts: [], transitions: [], journeys: [], frontier: [], gaps: [] };
   await writeFile(join(root, "screen-map.json"), JSON.stringify(map));
-  await writeFile(join(root, "bundle.json"), JSON.stringify({ contract: "explore.bundle", side: "head", runtimeProfile: { colorSchemes: "light,dark" }, images, outcomes, ...(launch ? { launch } : {}) }));
+  await writeFile(join(root, "bundle.json"), JSON.stringify({ contract: "explore.bundle", side: "head", runtimeProfile: { colorSchemes: "light,dark" },
+    selectedSurfaceIds: [...new Set(Object.keys(outcomes).map(id => id.replace(/@(light|dark)$/, "")))], images, outcomes, ...(launch ? { launch } : {}) }));
   await writeFile(join(root, "manifest.json"), JSON.stringify({ contract: "explore.map", runId: "run", revision: 1, files: artifacts.map(({ id: _id, ...file }) => file) }));
   await writeFile(join(root, "capture-diagnostics", "controller-timing.jsonl"), diagnostics);
   return root;
@@ -93,4 +96,112 @@ test("a dark session that could not show dark (Argent without appearance.set) ad
   await writeFile(bundlePath, JSON.stringify({ ...JSON.parse(await readFile(bundlePath, "utf8")), runtimeProfile: { colorSchemes: "light,dark" } }));
   await mergeCaptureExports(primary, [{ directory: gapped, scheme: "dark" }]);
   assert.equal(JSON.parse(await readFile(mapPath, "utf8")).run.status, "partial", "a complete run has no open gaps");
+});
+
+// brentvatne/euxy's main baseline run 39506374824: the light session captured every route, then the dark session's install failed.
+const DARK_FAILURE = { code: "CAPTURE_SESSION_FAILED", stage: "session", message: "install: argent run list-devices failed: GET /tools failed: 404 Not Found",
+  nextAction: "Rerun the capture on a new session.", retryable: true };
+const failedDark = { status: "failed", attempts: 0, landing: "unverified", reason: DARK_FAILURE.message, error: DARK_FAILURE };
+
+test("a dark session that left no export records its failure as every route's own dark outcome, and the run is partial", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explore-merge-"));
+  const lost = { status: "failed", landing: "unverified", attempts: 3, reason: "The route observer never answered." };
+  const primary = await writeExport(join(root, "head-export"), { screens: ["home"], images: { home: { path: "artifacts/home.png" } },
+    outcomes: { home: { status: "captured", landing: "verified", attempts: 1 }, settings: lost }, diagnostics: "" });
+  const mapPath = join(primary, "screen-map.json");
+  await writeFile(mapPath, JSON.stringify({ ...JSON.parse(await readFile(mapPath, "utf8")), run: { id: "run", status: "complete", environment: { colorSchemes: ["light", "dark"] } } }));
+  await mergeCaptureExports(primary, [{ scheme: "dark", error: DARK_FAILURE }]);
+  const bundle = JSON.parse(await readFile(join(primary, "bundle.json"), "utf8"));
+  // A route the light session lost keeps its own reason, and its dark frame carries the dark session's, not the light one's.
+  assert.deepEqual(bundle.outcomes, { home: { status: "captured", landing: "verified", attempts: 1 }, settings: lost, "home@dark": failedDark, "settings@dark": failedDark });
+  assert.deepEqual(bundle.sessionFailures, [{ scheme: "dark", error: DARK_FAILURE }]);
+  assert.deepEqual(Object.keys(bundle.images), ["home"]);
+  const map = JSON.parse(await readFile(mapPath, "utf8"));
+  assert.equal(map.run.status, "partial");
+  assert.equal(map.run.stopReason, `The dark session failed (CAPTURE_SESSION_FAILED): ${DARK_FAILURE.message}.`);
+});
+
+test("a dark session that failed beside a primary that renders no dark has no frames to fail, and stays on the bundle", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explore-merge-"));
+  const primary = await writeExport(join(root, "head-export"), { screens: ["home"], images: { home: { path: "artifacts/home.png" } },
+    outcomes: { home: { status: "captured", landing: "verified", attempts: 1 } }, diagnostics: "" });
+  const bundlePath = join(primary, "bundle.json");
+  // The light session could not switch appearance (Argent without appearance.set): it captured light alone.
+  await writeFile(bundlePath, JSON.stringify({ ...JSON.parse(await readFile(bundlePath, "utf8")), runtimeProfile: { colorScheme: "light" } }));
+  await mergeCaptureExports(primary, [{ scheme: "dark", error: DARK_FAILURE }]);
+  const bundle = JSON.parse(await readFile(bundlePath, "utf8"));
+  assert.deepEqual(Object.keys(bundle.outcomes), ["home"]);
+  assert.deepEqual(bundle.sessionFailures, [{ scheme: "dark", error: DARK_FAILURE }], "the comment still names the failed session");
+  assert.equal(JSON.parse(await readFile(join(primary, "screen-map.json"), "utf8")).run.status, "partial");
+});
+
+/** The side's sessions as captureSideInSessions runs them: the light one exports, the dark one does what `dark` says. */
+async function sideInSessions({ light, dark, leftSessionFile = false, environment = {}, signal } = {}) {
+  const root = await mkdtemp(join(tmpdir(), "explore-sessions-"));
+  const progress = [];
+  const mapOptions = { side: "head", outputDirectory: join(root, "head-export"), mapDirectory: join(root, "head-map"), buildShare: join(root, "builds"),
+    sessionStatePath: join(root, "head-session"), expoToken: "expo-secret-token", environment };
+  const runPass = async options => {
+    const scheme = options.appearancePass.capture[0];
+    const outcome = scheme === "light" ? light : dark;
+    // A capture removes its session file only once its session is confirmed stopped.
+    if (scheme === "dark" && leftSessionFile) await writeFile(options.sessionStatePath, "01a15b61-4df9\n");
+    if (outcome instanceof Error) throw outcome;
+    const id = scheme === "light" ? "home" : "home@dark";
+    await writeExport(options.outputDirectory, { screens: [id], images: { [id]: { path: `artifacts/${id}.png` } },
+      outcomes: { [id]: { status: "captured", landing: "verified", attempts: 1 } }, diagnostics: "" });
+    return { runStatus: "complete", outputDirectory: options.outputDirectory, scheme };
+  };
+  const run = () => captureSideInSessions(mapOptions, [["light"], ["dark"]], line => progress.push(line), signal, true, runPass);
+  return { root, progress, run, bundle: async () => JSON.parse(await readFile(join(mapOptions.outputDirectory, "bundle.json"), "utf8")) };
+}
+
+test("a side keeps its light captures when only its dark session fails, and the report marks every dark frame failed", async () => {
+  const side = await sideInSessions({ dark: new CiError({ ...DARK_FAILURE, message: `${DARK_FAILURE.message} (tokens expo-secret-token, gh-secret)` }),
+    environment: { GITHUB_TOKEN: "gh-secret", PATH: "/usr/bin" } });
+  const result = await side.run();
+  assert.equal(result.scheme, "light", "the primary session's result");
+  assert.equal(result.runStatus, "partial");
+  const bundle = await side.bundle();
+  assert.deepEqual(Object.keys(bundle.images), ["home"]);
+  assert.equal(bundle.outcomes["home@dark"].status, "failed");
+  assert.equal(bundle.outcomes["home@dark"].error.code, "CAPTURE_SESSION_FAILED");
+  assert.doesNotMatch(JSON.stringify(bundle), /expo-secret-token|gh-secret/, "the session's error is stored without any secret the environment holds");
+  assert.ok(side.progress.some(line => /^head: the dark session failed \(CAPTURE_SESSION_FAILED: install: argent run list-devices failed/.test(line)
+    && line.endsWith("keeping the light captures, and the report marks every dark frame failed")), side.progress.join("\n"));
+});
+
+test("a side whose light session fails still fails, whatever the dark session did", async () => {
+  const light = new CiError({ ...DARK_FAILURE, code: "CAPTURE_INSTALL_FAILED" });
+  await assert.rejects((await sideInSessions({ light })).run(), { code: "CAPTURE_INSTALL_FAILED" });
+  await assert.rejects((await sideInSessions({ light, dark: new CiError({ ...DARK_FAILURE }) })).run(), { code: "CAPTURE_INSTALL_FAILED" });
+});
+
+test("a dark session not proven stopped fails the side, so a running session is never hidden behind a partial report", async () => {
+  const cleanup = new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup", message: "The exact EAS session could not be confirmed stopped.",
+    nextAction: "Stop EAS Simulator session 01a15b61 and verify its status.", retryable: false });
+  await assert.rejects((await sideInSessions({ dark: cleanup })).run(), { code: "SESSION_CLEANUP_FAILED" });
+  await assert.rejects((await sideInSessions({ light: new CiError({ ...DARK_FAILURE, code: "CAPTURE_INSTALL_FAILED" }), dark: cleanup })).run(), { code: "SESSION_CLEANUP_FAILED" },
+    "the leaked session is reported before the light session's own failure");
+  const handoff = new CiError({ code: "SESSION_HANDOFF_UNVERIFIED", stage: "session", message: "EAS did not provide an exact verifiable simulator session.",
+    nextAction: "Verify a session's exact ID and ownership before cleanup." });
+  await assert.rejects((await sideInSessions({ dark: handoff })).run(), { code: "SESSION_HANDOFF_UNVERIFIED" });
+  const unverified = new CiError({ code: "SIMULATOR_START_FAILED", stage: "session", message: "EAS simulator:start failed before a session identity could be verified.",
+    nextAction: "Verify a session's exact ID and ownership before cleanup.", details: { allocation: "unknown" } });
+  await assert.rejects((await sideInSessions({ dark: unverified })).run(), { code: "SIMULATOR_START_FAILED" });
+  // A worker that died before its capture's own cleanup ran: it exited, or failed with a raw error.
+  const exited = new CiError({ code: "CAPTURE_WORKER_EXITED", stage: "capture-head", message: "The capture worker for the head side exited with code 1 before it reported a result.",
+    nextAction: "Inspect the job log for the worker's failure, then rerun Explore." });
+  await assert.rejects((await sideInSessions({ dark: exited })).run(), { code: "CAPTURE_WORKER_EXITED" });
+  await assert.rejects((await sideInSessions({ dark: new Error("Worker terminated due to reaching memory limit: JS heap out of memory") })).run(), /memory limit/);
+  // Any failure that left the session's file behind: the session was never confirmed stopped.
+  await assert.rejects((await sideInSessions({ dark: new CiError({ ...DARK_FAILURE }), leftSessionFile: true })).run(), { code: "CAPTURE_SESSION_FAILED" });
+});
+
+test("a dark session whose checkout changed, whose evidence failed its checks, or whose review was stopped fails the side", async () => {
+  for (const code of ["SOURCE_CHECKOUT_CHANGED", "CHECKOUT_MODIFIED", "CAPTURE_INCOMPLETE", "CAPTURE_IMAGE_BINDING_INVALID", "EXPLORE_FAILED"]) {
+    await assert.rejects((await sideInSessions({ dark: new CiError({ ...DARK_FAILURE, code }) })).run(), { code }, code);
+  }
+  const stop = new AbortController(); stop.abort(new CiError({ code: "LOCAL_REVIEW_INTERRUPTED", stage: "capture", message: "Interrupted.", nextAction: "Rerun." }));
+  await assert.rejects((await sideInSessions({ dark: new CiError({ ...DARK_FAILURE }), signal: stop.signal })).run(), { code: "CAPTURE_SESSION_FAILED" });
 });

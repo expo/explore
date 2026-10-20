@@ -740,6 +740,29 @@ test("a planned screen whose capture failed is unavailable, with the report's re
   assert.equal(isChangedStatus(screen.status), false);
 });
 
+test("a dark frame whose session failed is unavailable with the session's error, and its light frame is unaffected", () => {
+  // brentvatne/euxy's main baseline run 39506374824: the light session captured every route, the dark session's install failed.
+  const review = navigationReview();
+  const scan = review.surfaces.find(surface => surface.id === "scan-mood");
+  const error = { code: "CAPTURE_SESSION_FAILED", stage: "session", message: "install: argent run list-devices failed: GET /tools failed: 404 Not Found",
+    nextAction: "Rerun the capture on a new session.", retryable: true };
+  scan.colorScheme = "light";
+  review.surfaces.push({ id: "scan-mood@dark", status: "unchanged", colorScheme: "dark",
+    base: entry("scan-mood@dark", scan.base.route, "mood"), head: entry("scan-mood@dark", scan.head.route, "mood"),
+    baseImage: { ...scan.baseImage, url: `${scan.baseImage.url}-dark`, sha256: "f".repeat(64) }, baseOutcome: { status: "captured", attempts: 1, landing: "verified" },
+    headOutcome: { status: "failed", attempts: 0, landing: "unverified", reason: error.message, error } });
+  verifyImages(review);
+  const diff = diffFor(review);
+  const dark = diff.screens.get("scan-mood@dark");
+  assert.equal(dark.status, "unavailable");
+  assert.match(dark.captureNotes.after, /^Capture failed: install: argent run list-devices failed: GET \/tools failed: 404 Not Found/);
+  assert.equal(dark.afterScreenshot, undefined);
+  assert.notEqual(diff.screens.get("scan-mood").status, "unavailable", "the light frame keeps its own verdict");
+  const capture = publicReviewProjection(review).runtimeEvidence["public:scan-mood@dark"].current.groups.capture;
+  assert.equal(capture.find(row => row.label === "Capture error").value, `CAPTURE_SESSION_FAILED: ${error.message}`);
+  assert.equal(capture.find(row => row.label === "Next action").value, error.nextAction);
+});
+
 test("source navigation names routes, so a route whose only base frame is a secondary appearance stays known on base", () => {
   const review = navigationReview();
   const scan = review.surfaces.find(surface => surface.id === "scan-mood");

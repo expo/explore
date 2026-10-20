@@ -9,7 +9,9 @@ import { AGENT_DEVICE_VERSION, EAS_CLI_VERSION } from "../../dist/capture/run.js
 import { readExportedMap } from "../../dist/review/evidence-assessment.js";
 import { ExploreStore, recordObservation } from "../../dist/map/store.js";
 
-const { captureRecipeConfig, restoreCaptureArtifactCache, writeCaptureArtifactCache } = await tsImport("../../src/ci/artifact-cache.ts", import.meta.url);
+const { captureRecipeConfig, incompleteCaptureReason, restoreCaptureArtifactCache, validateEvidence, writeCaptureArtifactCache } = await tsImport("../../src/ci/artifact-cache.ts", import.meta.url);
+const { mergeCaptureExports } = await tsImport("../../src/ci/export-merge.ts", import.meta.url);
+const { captureHealthIssues, partitionCaptureHealthIssues } = await tsImport("../../src/capture/health.ts", import.meta.url);
 const { readCaptureBundle } = await tsImport("../../src/review/capture-review.ts", import.meta.url);
 const { CAPTURE_OBSERVER_HASH } = await tsImport("../../src/capture/observer.ts", import.meta.url);
 const { AGENT_ACCEPTANCE_POLICY } = await tsImport("../../src/contracts/capture.ts", import.meta.url);
@@ -36,7 +38,7 @@ function acceptedFrames(bundle) {
   }])) };
 }
 
-async function fixture(t, { missingAccessibility = false, partial = false } = {}) {
+async function fixture(t, { missingAccessibility = false, partial = false, appearances = false, darkFrames = appearances } = {}) {
   const root = await mkdtemp(join(tmpdir(), "explore-capture-artifact-cache-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const store = new ExploreStore(join(root, "active"));
@@ -47,7 +49,7 @@ async function fixture(t, { missingAccessibility = false, partial = false } = {}
       id: "capture-run", name: "Cache evidence", platform: "ios", controller: "agent-device", status: "draft",
       createdAt: timestamp, updatedAt: timestamp,
       build: { id: "eas-build", gitCommit: COMMIT, source: "eas" },
-      environment: { ...RUNTIME, authState: "logged-out" },
+      environment: { ...RUNTIME, authState: "logged-out", ...(appearances ? { colorSchemes: ["light", "dark"] } : {}) },
       limits: { maxScreens: 20, maxActions: 100, maxDurationMinutes: 60 },
     },
     screens: [], variants: [], observations: [], elements: [], artifacts: [],
@@ -58,7 +60,7 @@ async function fixture(t, { missingAccessibility = false, partial = false } = {}
   const snapshotPath = join(root, "sample.json");
   await writeFile(screenshotPath, PNG);
   const images = {};
-  for (const id of ["home", "settings"]) {
+  for (const id of darkFrames ? ["home", "settings", "home@dark", "settings@dark"] : ["home", "settings"]) {
     const snapshotText = JSON.stringify({ nodes: [{ type: "text", label: id }] });
     await writeFile(snapshotPath, snapshotText);
     const result = await recordObservation({
@@ -81,15 +83,17 @@ async function fixture(t, { missingAccessibility = false, partial = false } = {}
   await store.exportTo(sourceDirectory, map);
   const bundle = {
     contract: "explore.bundle", side: "head", gitCommit: COMMIT,
-    easBuildId: "eas-build", easProjectId: "eas-project", profile: RECIPE.profile, runtimeProfile: RUNTIME,
+    easBuildId: "eas-build", easProjectId: "eas-project", profile: RECIPE.profile, runtimeProfile: appearances ? { ...RUNTIME, colorSchemes: "light,dark" } : RUNTIME,
     selectedSurfaceIds: ["home", "settings"], images,
-    outcomes: Object.fromEntries(Object.entries(images).map(([id, image]) => [id, { status: "captured", attempts: 1, landing: "verified", screenshotSha256: image.sha256 }])),
+    // A dark frame verified beside its light one has no outcome of its own, as the passes merge them.
+    outcomes: Object.fromEntries(Object.entries(images).filter(([id]) => !id.endsWith("@dark"))
+      .map(([id, image]) => [id, { status: "captured", attempts: 1, landing: "verified", screenshotSha256: image.sha256 }])),
   };
   await writeFile(join(sourceDirectory, "bundle.json"), JSON.stringify(bundle));
   await writeFile(join(sourceDirectory, "execution.json"), JSON.stringify(EXECUTION));
   // Construct actual exported, validated evidence; this fixture cannot pass with stub JSON maps.
-  assert.equal((await readExportedMap(sourceDirectory)).observations.length, 2);
-  const options = { ...RECIPE, sourceDirectory, directory: join(root, "restored"), commit: COMMIT, selectedIds: ["home", "settings"], runtimeProfile: RUNTIME };
+  assert.equal((await readExportedMap(sourceDirectory)).observations.length, darkFrames ? 4 : 2);
+  const options = { ...RECIPE, sourceDirectory, directory: join(root, "restored"), commit: COMMIT, selectedIds: ["home", "settings"], runtimeProfile: bundle.runtimeProfile };
   return { root, sourceDirectory, map, bundle, options };
 }
 
@@ -300,6 +304,62 @@ test("partial captures reuse only the screens with complete successful evidence"
   assert.equal(restored.outcomes.home.status, "captured");
   assert.deepEqual(await readExportedMap(f.options.directory), f.map);
   assert.equal(await restoreCaptureArtifactCache({ ...f.options, directory: join(f.root, "failed-only"), selectedIds: ["settings"] }), false);
+});
+
+test("a baseline whose dark session failed is cached, and a review captures the routes without a dark frame itself", async t => {
+  // brentvatne/euxy's main baseline run 39506374824: the light session captured every route and the dark session failed.
+  const failedDark = { status: "failed", attempts: 0, landing: "unverified", reason: "install: argent run list-devices failed: GET /tools failed: 404 Not Found",
+    error: { code: "CAPTURE_SESSION_FAILED", stage: "session", message: "install: argent run list-devices failed: GET /tools failed: 404 Not Found", nextAction: "Rerun the capture.", retryable: false } };
+  const f = await fixture(t, { partial: true, appearances: true });
+  const complete = structuredClone(f.bundle);
+  assert.equal(await writeCaptureArtifactCache(f.sourceDirectory, RECIPE), true);
+  assert.equal(await restoreCaptureArtifactCache(f.options), true, "a baseline with every appearance is reused whole");
+  assert.deepEqual(Object.keys((await readCaptureBundle(f.options.directory)).images).sort(), ["home", "home@dark", "settings", "settings@dark"]);
+
+  for (const id of ["home", "settings"]) { delete f.bundle.images[`${id}@dark`]; f.bundle.outcomes[`${id}@dark`] = failedDark; }
+  f.bundle.sessionFailures = [{ scheme: "dark", error: failedDark.error }];
+  await writeFile(join(f.sourceDirectory, "bundle.json"), JSON.stringify(f.bundle));
+  // No route has its dark frame: offering it would make a review wait for it and capture its sides in turn, only to
+  // capture every route of the base itself.
+  assert.equal(await writeCaptureArtifactCache(f.sourceDirectory, RECIPE), false, "a baseline with nothing to reuse is not offered");
+  assert.equal(await restoreCaptureArtifactCache({ ...f.options, directory: join(f.root, "no-dark") }), false);
+  assert.equal(await incompleteCaptureReason(f.sourceDirectory, COMMIT), "its dark session failed, so no route has every appearance");
+  assert.equal(await incompleteCaptureReason(f.sourceDirectory, "b".repeat(40)), undefined, "another commit's baseline is the usual miss");
+
+  const mixed = structuredClone(complete);
+  delete mixed.images["settings@dark"]; mixed.outcomes["settings@dark"] = failedDark; delete mixed.sessionFailures;
+  await writeFile(join(f.sourceDirectory, "bundle.json"), JSON.stringify(mixed));
+  assert.equal(await writeCaptureArtifactCache(f.sourceDirectory, RECIPE), true);
+  assert.equal(await restoreCaptureArtifactCache({ ...f.options, directory: join(f.root, "mixed") }), true);
+  const restored = await readCaptureBundle(join(f.root, "mixed"));
+  assert.deepEqual(restored.selectedSurfaceIds, ["home"], "settings has no dark frame, so the review's base captures it in both appearances");
+  assert.deepEqual(Object.keys(restored.images).sort(), ["home", "home@dark"]);
+  assert.deepEqual(Object.keys(restored.outcomes), ["home"]);
+});
+
+test("a light session's real export merged with a failed dark session is valid evidence, a valid map, and healthy but for dark", async t => {
+  // The light session of a side split over sessions: it renders light and dark, and took light alone.
+  const f = await fixture(t, { appearances: true, darkFrames: false });
+  const error = { code: "CAPTURE_SESSION_FAILED", stage: "session", message: "install: argent run list-devices failed: GET /tools failed: 404 Not Found",
+    nextAction: "Rerun the capture.", retryable: true };
+  // The light session lost /settings.
+  delete f.bundle.images.settings;
+  f.bundle.outcomes.settings = { status: "failed", attempts: 2, landing: "unverified", reason: "The route observer never answered." };
+  await writeFile(join(f.sourceDirectory, "bundle.json"), JSON.stringify(f.bundle));
+  await mergeCaptureExports(f.sourceDirectory, [{ scheme: "dark", error }]);
+  const map = await readExportedMap(f.sourceDirectory);
+  assert.equal(map.run.status, "partial");
+  assert.equal(map.run.stopReason, `The dark session failed (CAPTURE_SESSION_FAILED): ${error.message}.`);
+  const bundle = await readCaptureBundle(f.sourceDirectory);
+  assert.deepEqual(Object.keys(bundle.outcomes).sort(), ["home", "home@dark", "settings", "settings@dark"]);
+  // Each dark frame carries the dark session's reason, the one light lost too: the review shows it, not light's.
+  assert.equal(bundle.outcomes["settings@dark"].reason, error.message);
+  assert.equal(bundle.outcomes.settings.reason, "The route observer never answered.");
+  await validateEvidence(f.sourceDirectory, bundle);
+  const issues = partitionCaptureHealthIssues(captureHealthIssues(bundle, ["home", "settings"]));
+  assert.deepEqual(issues.integrity, []);
+  assert.deepEqual(issues.unavailable.map(issue => [issue.surfaceId, issue.code]), [["home@dark", "CAPTURE_SESSION_FAILED"], ["settings", "CAPTURE_FAILED"]]);
+  assert.equal(await writeCaptureArtifactCache(f.sourceDirectory, RECIPE), false, "valid, but nothing in it a review could reuse");
 });
 
 test("partial caches retain verified targets without restoring captured but unverified screenshots", async t => {
