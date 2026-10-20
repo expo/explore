@@ -216,6 +216,21 @@ const KEYBOARD_DISMISS_LABELS = ["Hide keyboard", "Dismiss keyboard", "Done"];
 const KEYBOARD_TOP = 0.4;
 const ALERT_PREFERRED_BUTTONS = ["Open", "OK", "Allow", "Allow While Using App", "Continue"];
 const READ_TOOLS = new Set(["ui-tree", "list-devices", "screenshot", "foreground-app", "await-screen-idle", "describe"]);
+/**
+ * Argent 0.29's answer when a service a tool depends on (the device's simulator-server, its accessibility service) did
+ * not start: the registry resolves a tool's services before it calls the tool, and wraps a start failure as
+ * "[Tool:<id>] Service dependency failed: …", so the tool itself never ran and resending it is safe, a UI action too.
+ * The tools the bridge sends that resolve a service while they run (keyboard, fill, restart-app, screen-recording-start)
+ * resolve it before they act, and run-sequence answers a step's failure in its result rather than raising it. A failed
+ * start leaves the service in the registry's ERROR state, so the next call starts it afresh.
+ */
+const SERVICE_DEPENDENCY_FAILED = "Service dependency failed:";
+/**
+ * In brentvatne/euxy#172 (review run 39348956443) capture restarted SpringBoard and folded the iPhone Duo open again 8 s
+ * later; that fold's simulator-server did not become ready within Argent's 30 s, and the whole target failed. The resend
+ * comes after a pause, so a device still coming back from the restart has the time it needs.
+ */
+const DEPENDENCY_RETRY_DELAYS_MS = [3_000, 6_000] as const;
 const SPRINGBOARD = "com.apple.springboard";
 const ANDROID_SYSTEM_UI = "com.android.systemui";
 const OPEN_IN_APP_PROMPT = /^Open in “.+”\?$/;
@@ -299,14 +314,23 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
   const { positional, flags } = parseCommand(rest);
   const bundleFlag = typeof flags["bundle-id"] === "string" ? flags["bundle-id"] : context.bundleId;
 
-  /** Reads are resent after a transport failure (they change nothing); a UI action is sent once, after a health check. */
+  /**
+   * Reads are resent after a transport failure (they change nothing); a UI action is sent once, after a health check.
+   * Any tool, a UI action too, is resent when Argent could not start a service it depends on, which it raises before
+   * the tool runs (see SERVICE_DEPENDENCY_FAILED).
+   */
   const call = async (tool: string, args: Record<string, unknown> = {}, options?: { out?: string }): Promise<Record<string, unknown>> => {
     // Tools that name devices their own way (or none) take no udid.
     const withDevice = tool === "list-devices" || tool === "stop-all-simulator-servers" ? args : { udid: state.udid, ...args };
-    for (let attempt = 0; ; attempt++) {
+    for (let readRetry = 0, dependencyRetry = 0; ;) {
       try { return record(await context.call(tool, withDevice, options)); }
       catch (error) {
-        if (READ_TOOLS.has(tool) && attempt < 2) { await context.sleep(1_000 * (attempt + 1)); continue; }
+        if (error instanceof ArgentCallError && error.message.includes(`[Tool:${tool}] ${SERVICE_DEPENDENCY_FAILED}`)
+          && dependencyRetry < DEPENDENCY_RETRY_DELAYS_MS.length) {
+          await context.sleep(DEPENDENCY_RETRY_DELAYS_MS[dependencyRetry++]!);
+          continue;
+        }
+        if (READ_TOOLS.has(tool) && readRetry < 2) { await context.sleep(1_000 * ++readRetry); continue; }
         throw error;
       }
     }

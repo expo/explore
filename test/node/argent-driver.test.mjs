@@ -439,6 +439,42 @@ test("a reader stuck on the dark panel after a fold is reset once more before th
   assert.equal(stuck.calls.filter(call => call.tool === "stop-all-simulator-servers").length, 2, "before the fold and once after, not in a loop");
 });
 
+// brentvatne/euxy#172, review run 39348956443: the fold after capture restarted SpringBoard failed with this, before it ran.
+const DEPENDENCY_FAILED = "argent run fold failed: [Tool:fold] Service dependency failed: [SimulatorServer:74195B53-4DBC-4EAA-9991-F98E5BB86BA8] Timed out waiting for simulator-server to become ready";
+
+test("a fold whose simulator-server did not start is sent again after a pause, and then folds", async () => {
+  const lit = { activeScreen: 3, screen: { id: 3, panel: "inner panel", width: 2007, height: 2853 }, posture: "open", hingeAngle: 180 };
+  const { run, calls, context } = harness("ios", { "list-devices": DUO_DEVICES, "ui-tree": DUO_OPEN_EDIT_LANE, "stop-all-simulator-servers": { stopped: [] },
+    fold: [new ArgentCallError(DEPENDENCY_FAILED, true), lit] });
+  const pauses = [];
+  context.sleep = async milliseconds => { pauses.push(milliseconds); };
+  assert.deepEqual((await run(["fold", "open", ...flags("ios")])).json.data, { action: "fold", pose: "open" });
+  assert.equal(calls.filter(call => call.tool === "fold").length, 2);
+  assert.deepEqual(pauses, [3_000], "one pause before the fold is sent again");
+});
+
+test("a fold whose simulator-server never starts fails as it did before, after two more tries", async () => {
+  const { run, calls, context } = harness("ios", { "list-devices": DUO_DEVICES, "ui-tree": DUO_OPEN_EDIT_LANE, "stop-all-simulator-servers": { stopped: [] },
+    fold: new ArgentCallError(DEPENDENCY_FAILED, true) });
+  const pauses = [];
+  context.sleep = async milliseconds => { pauses.push(milliseconds); };
+  const failed = await run(["fold", "open", ...flags("ios")]);
+  assert.deepEqual(failed.json.error, { code: "ARGENT_TOOL_FAILED", message: DEPENDENCY_FAILED });
+  assert.equal(calls.filter(call => call.tool === "fold").length, 3);
+  assert.deepEqual(pauses, [3_000, 6_000]);
+});
+
+test("a UI action that failed for another reason is still sent once, even when its message mentions a dependency", async () => {
+  // Only the tool's own wrap counts: a nested tool's dependency failure is not this tool failing to start.
+  for (const message of ["argent run gesture-tap failed: [Tool:gesture-tap] simulator-server answered 500",
+    "argent run gesture-tap failed: [Tool:gesture-tap] [Tool:keyboard] Service dependency failed: [SimulatorServer:x] Timed out"]) {
+    const { run, calls } = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": IOS_HOME, "gesture-tap": new ArgentCallError(message, true) });
+    const pressed = await run(["press", "10", "10", ...flags("ios")]);
+    assert.deepEqual(pressed.json.error, { code: "ARGENT_TOOL_FAILED", message });
+    assert.equal(calls.filter(call => call.tool === "gesture-tap").length, 1, message);
+  }
+});
+
 test("an alert that is not the link prompt is left for capture to answer", async () => {
   const other = { ...IOS_HOME, alertVisible: true, foregroundApp: "com.apple.springboard",
     roots: [{ type: "Alert", label: "Delete all data?", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.2 }, children: [
