@@ -107,6 +107,11 @@ export type PlatformRecord = {
   changes?: { id: string; route: string; group: ChangeGroup; description: string; scheme?: string }[];
   /** Screens whose source changed and whose captures were verified, but that got no verdict: the comparison did not run or failed. */
   notCompared?: number;
+  /**
+   * Screens whose own source changed but whose compared captures show nothing of it, neither in the accessibility tree
+   * nor in the pixels: the change can be there and out of sight, so another target's row says "not visible" here.
+   */
+  notVisible?: string[];
   /** Differences stated once rather than per screen (variants, app-wide source changes). */
   context?: string[];
   navigation?: CommentNavigation;
@@ -282,6 +287,10 @@ export function parsePlatformRecord(value: unknown): PlatformRecord | undefined 
       ? [{ ...(isSide(entry.side) ? { side: entry.side } : {}), route: entry.route, code: entry.code, message: entry.message, nextAction: entry.nextAction }] : []).slice(0, 20);
   }
   if (isCount(value.notCompared) && value.notCompared > 0) record.notCompared = value.notCompared;
+  if (Array.isArray(value.notVisible)) {
+    const ids = value.notVisible.filter((entry): entry is string => isString(entry, 220));
+    if (ids.length && ids.length <= 2000) record.notVisible = ids;
+  }
   if (isCount(value.diagnosticCount)) record.diagnosticCount = value.diagnosticCount;
   if (isRecord(value.failure) && isString(value.failure.step, 200) && isString(value.failure.message)) record.failure = { step: value.failure.step, message: value.failure.message };
   if (value.superseded === true) record.superseded = true;

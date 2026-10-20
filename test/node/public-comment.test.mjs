@@ -639,11 +639,12 @@ test('a screen accessibility-only on iOS and visibly modified on Android is list
   const ios = renderPublicComment(state({ review: settings('unchanged'), artifactOnly: true }));
   assert.match(ios, /\n- \[`\/settings`\]\(<[^>]+>\) · [^\n]+ · accessibility only\n/, 'iOS alone: the screenshots match');
   const both = platformSectionMerge(androidState({ review: settings('modified'), links: androidLinks }), 'android').merge(ios);
-  assert.match(both, /\n- \[`\/settings`\]\(<[^>]+artifact=7700&view=compare&screen=settings>\) · Changed button title from “Share” to “Share Example”\n/, 'the link opens Android, where it changed visibly');
+  // The tree has the change where the screenshots match: it is there, past the edge of the screen.
+  assert.match(both, /\n- \[`\/settings`\]\(<[^>]+artifact=7700&view=compare&screen=settings>\) · Changed button title from “Share” to “Share Example” · off-screen on iOS\n/, 'the link opens Android, where it changed visibly');
   assert.doesNotMatch(both, /accessibility only/);
   const androidFirst = platformSectionMerge(state({ review: settings('unchanged'), artifactOnly: true }), 'ios')
     .merge(platformSectionMerge(androidState({ review: settings('modified'), links: androidLinks }), 'android').merge(undefined));
-  assert.match(androidFirst, /\n- \[`\/settings`\]\(<[^>]+artifact=7700&view=compare&screen=settings>\) · Changed button title from “Share” to “Share Example”\n/);
+  assert.match(androidFirst, /\n- \[`\/settings`\]\(<[^>]+artifact=7700&view=compare&screen=settings>\) · Changed button title from “Share” to “Share Example” · off-screen on iOS\n/);
 });
 
 test('screens whose comparison did not run are counted as not compared, never as a green "no change"', () => {
@@ -677,6 +678,72 @@ test('a config without targets writes the same records and comment as before tar
   // A writer that knows its target only from the CLI flag (the state names none) keys its record the same way.
   assert.equal(platformSectionMerge(state({ artifactOnly: true }), 'ios').merge(undefined), renderPublicComment(state({ artifactOnly: true, target: perPlatform[0] })));
   assert.deepEqual(Object.keys(readCommentRecords(after).current), ['ios', 'android']);
+});
+
+/**
+ * brentvatne/euxy#172, review run 39362642343: five targets, two strings changed. Tempo's footnote sits low in a
+ * scrolling sheet: on the closed iPhone Duo the accessibility tree has it but the screenshots match (it is below the fold),
+ * and on the half-open and opened Duo neither shows it, though the screen's own source changed. Android captures no
+ * dark appearance.
+ */
+const euxyTargets = [{ id: 'iphone', platform: 'ios', label: 'iPhone 17' }, { id: 'duo-closed', platform: 'ios', label: 'iPhone Duo (closed)' },
+  { id: 'duo-half-open', platform: 'ios', label: 'iPhone Duo (half-open)' }, { id: 'duo-open', platform: 'ios', label: 'iPhone Duo (open)' },
+  { id: 'android', platform: 'android', label: 'Android' }];
+const footnote = 'Added text “Changes apply live while playing. Base resolution sets the step grid for lanes you add next.”.';
+function euxyReview(target) {
+  const own = { sourceImpact: ['own'], sourceScope: 'screen' };
+  const changed = (description, mismatchPercentage) => ({ ...own,
+    review: { status: 'modified', description, facts: [{ category: 'element', templateId: 'element.added', bullet: description }] },
+    visual: { verdict: 'modified', reason: 'repeated-cross-build-delta', mismatchPercentage, threshold: 0.1, tool: 'agent-device@0.21.29' } });
+  const inTreeOnly = description => ({ ...changed(description, 0), visual: { verdict: 'unchanged', reason: 'matched', mismatchPercentage: 0, threshold: 0.1, tool: 'agent-device@0.21.29' } });
+  const unseen = { ...own, review: { status: 'unchanged', description: 'No visible change' },
+    visual: { verdict: 'unchanged', reason: 'matched', mismatchPercentage: 0, threshold: 0.1, tool: 'agent-device@0.21.29' } };
+  const tempo = target === 'duo-closed' ? inTreeOnly(footnote) : ['duo-half-open', 'duo-open'].includes(target) ? unseen : changed(footnote, 0.11);
+  const rename = changed('Added text “Pattern name”.', 0.16);
+  const schemes = target === 'android' ? [''] : ['', '@dark'];
+  return review(schemes.flatMap(scheme => [
+    surface(`tempo${scheme}`, 'modified', { route: '/tempo', extra: tempo }),
+    surface(`rename-pattern${scheme}`, 'modified', { route: '/rename-pattern', extra: rename }),
+  ]));
+}
+async function euxyComment(reviewOf = euxyReview) {
+  const { platformSectionMerge } = await import('../../dist/report/pr-comment-body.js');
+  let body;
+  for (const target of euxyTargets) body = platformSectionMerge(state({ artifactOnly: true, target, targets: euxyTargets, review: reviewOf(target.id),
+    build: { ...state().build, platform: target.platform }, runtime: { ...state().runtime, platform: target.platform, deviceModel: target.label } }), target.id).merge(body);
+  return body;
+}
+
+test('a change out of sight on a device is named off-screen or not visible there, not as missing (euxy#172)', async () => {
+  const body = await euxyComment();
+  const rows = listOf(body).map(line => line.replace(/\(<[^>]+>\)/, ''));
+  const notVisible = 'not visible on iPhone Duo \\(half\\-open\\), iPhone Duo \\(open\\)';
+  const text = 'Added text “Changes apply live while playing\\. Base resolution sets the step grid for lanes you add next\\.”';
+  assert.deepEqual(rows, [
+    `- [\`/tempo\`] · ${text} · off-screen on iPhone Duo \\(closed\\) · ${notVisible}`,
+    `- [\`/rename-pattern\`] · Added text “Pattern name”`,
+    `- [\`/tempo\`] (dark) · ${text} · off-screen on iPhone Duo \\(closed\\) · ${notVisible} · not on Android`,
+    `- [\`/rename-pattern\`] (dark) · Added text “Pattern name” · not on Android`,
+  ]);
+  const { readCommentRecords } = await import('../../dist/report/pr-comment-body.js');
+  const records = readCommentRecords(body).current;
+  assert.deepEqual(records['duo-open'].notVisible, ['tempo', 'tempo@dark'], 'the screens out of sight survive the comment round trip');
+  assert.equal(records.iphone.notVisible, undefined);
+});
+
+test('a device without the change keeps "not on" and "only": a screen it lacks, or one a shared change did not reach', async () => {
+  // Tempo's change came through a shared component on the Duo, not its own source: nothing says it should show there.
+  const shared = target => {
+    const reviewed = euxyReview(target);
+    for (const entry of reviewed.surfaces) if (['duo-half-open', 'duo-open'].includes(target) && entry.id.startsWith('tempo')) entry.sourceImpact = ['dependency'];
+    if (target === 'duo-closed') reviewed.surfaces = reviewed.surfaces.filter(entry => !entry.id.startsWith('tempo'));
+    return reviewed;
+  };
+  const rows = listOf(await euxyComment(shared)).map(line => line.replace(/\(<[^>]+>\)/, ''));
+  assert.match(rows[0], /^- \[`\/tempo`\] · Added text [^\n]+ · iPhone 17, Android only$/);
+  assert.match(rows[2], /^- \[`\/tempo`\] \(dark\) · Added text [^\n]+ · iPhone 17 only$/);
+  assert.equal(rows[3], '- [`/rename-pattern`] (dark) · Added text “Pattern name” · not on Android', 'Android captures no dark appearance');
+  assert.doesNotMatch(rows.join('\n'), /off-screen|not visible/);
 });
 
 test('several targets share a comment: named in config order in the subtitle, each linking its report, keyed by id in the records and history', async () => {

@@ -143,6 +143,17 @@ function notComparedChange(surface: Surface): boolean {
   return verified && (!surface.review || surface.visual?.reason === "diff-failed");
 }
 
+/**
+ * A screen whose own source changed, whose captures were compared, and that reads and looks the same: the change is not
+ * in what this target captured. It can still be on the screen, out of sight: in brentvatne/euxy#172 (review run
+ * 39362642343) Tempo's changed footnote sat below the fold of its scrolling sheet on the opened and half-open iPhone Duo.
+ */
+function changeOutOfSight(surface: Surface): boolean {
+  if (surface.status !== "modified" || !surface.sourceImpact?.includes("own") || surface.review?.status !== "unchanged") return false;
+  return (["base", "head"] as const).every(side => surface[`${side}Image`]
+    && surface[`${side}Outcome`]?.status === "captured" && surface[`${side}Outcome`]?.landing === "verified");
+}
+
 function routeOf(surface: Surface): string {
   return plainText(surface.head?.route || surface.base?.route || surface.id, MAX_ROUTE_LENGTH);
 }
@@ -308,6 +319,8 @@ export function platformRecordOf(state: PublicCommentState, target?: CommentTarg
     if (navigation) record.navigation = navigation;
     const notCompared = state.review.surfaces.filter(notComparedChange).length;
     if (notCompared) record.notCompared = notCompared;
+    const notVisible = state.review.surfaces.filter(surface => !omitted.has(surface.id) && changeOutOfSight(surface)).map(surface => surface.id);
+    if (notVisible.length) record.notVisible = notVisible;
     record.context = splashLines(state.review);
     const diagnostics = [...(state.evidence?.diagnostics ?? [])];
     for (const surface of state.review.surfaces) {
@@ -562,10 +575,33 @@ function renderChangeRow(row: ChangeRow, ready: PlatformRecord[]): string {
     text = `${route} · ${description}`;
   }
   const tag = row.group === "accessibility-only" ? "accessibility only" : row.group === "needs-review" ? "needs review" : undefined;
-  // A target with screens it has no verdict on may have changed this one too: name where it changed, not where it did not.
-  const where = ready.some(record => !row.targets.includes(record) && gaps(record).length)
-    ? `on ${row.targets.map(labelOf).join(", ")}` : targetsNote(row.targets, ready);
-  return `- ${[text, tag, where].filter(Boolean).join(" · ")}`;
+  return `- ${[text, tag, ...whereNote(row, ready)].filter(Boolean).join(" · ")}`;
+}
+
+/**
+ * Where a screen's change shows. A target can have it out of sight rather than not at all, so those are named apart from
+ * the targets it is not on: "off-screen" where the accessibility tree has the change but the screenshots match (it is
+ * past the edge of the screen, as Tempo's footnote below the fold of its sheet on the closed iPhone Duo in
+ * brentvatne/euxy#172), and "not visible" where the screen's own source changed but neither its tree nor its pixels
+ * show it. "not on" stays for a target that does not have the screen's change, or does not capture that appearance.
+ */
+function whereNote(row: ChangeRow, ready: PlatformRecord[]): string[] {
+  const offScreen = row.group === "modified"
+    ? row.targets.filter(record => record.changes?.some(change => change.id === row.id && change.group === "accessibility-only")) : [];
+  const notVisible = row.group === "added" || row.group === "removed" ? []
+    : ready.filter(record => !row.targets.includes(record) && record.notVisible?.includes(row.id));
+  const shown = row.targets.filter(record => !offScreen.includes(record));
+  const unsure = ready.some(record => !row.targets.includes(record) && gaps(record).length);
+  if (!offScreen.length && !notVisible.length) {
+    // A target with screens it has no verdict on may have changed this one too: name where it changed, not where it did not.
+    const note = unsure ? `on ${row.targets.map(labelOf).join(", ")}` : targetsNote(row.targets, ready);
+    return note ? [note] : [];
+  }
+  const absent = ready.filter(record => !row.targets.includes(record) && !notVisible.includes(record));
+  return [unsure ? `on ${shown.map(labelOf).join(", ")}` : undefined,
+    offScreen.length ? `off-screen on ${offScreen.map(labelOf).join(", ")}` : undefined,
+    notVisible.length ? `not visible on ${notVisible.map(labelOf).join(", ")}` : undefined,
+    !unsure && absent.length ? `not on ${absent.map(labelOf).join(", ")}` : undefined].filter((part): part is string => Boolean(part));
 }
 
 /** "Android only" / "not on Android": the targets a screen changed on, when not all of them, named the shorter way. */
