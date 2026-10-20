@@ -133,3 +133,21 @@ test("a recording runs per command, and a screenshot is taken only from a file t
   assert.match(failed.error.message, /did not write/);
   await assert.rejects(readFile(join(root, "out", "two.png")), { code: "ENOENT" });
 });
+
+test("the thread's lines about a tool-server still starting reach the capture's log with the command's answer", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "explore-argent-bridge-")); t.after(() => rm(root, { recursive: true, force: true }));
+  // Argent's client asks GET /tools before each call; the first one is answered 404, as on euxy's main baseline run 39506374824.
+  const clientModule = await fakeClient(root, `
+    if (name === "list-devices" && calls.filter(call => call.name === "list-devices").length === 1) throw new Error("GET /tools failed: 404 Not Found");
+    if (name === "list-devices") return { data: { devices: [{ udid: "UDID-1", name: "iPhone 17", state: "Booted", platform: "ios", runtime: "iOS 26.0" }] } };
+    if (name === "await-screen-idle") return { data: { settled: true } };
+    throw new Error("unexpected tool " + name);`);
+  const messages = [];
+  const environment = { EXPLORE_ARGENT_STATE: join(root, "state.json"), EXPLORE_ARGENT_PLATFORM: "ios", ARGENT_TOOLS_URL: "http://127.0.0.1:9/tools", HOME: root, PATH: process.env.PATH };
+  const bridge = startArgentBridgeRunner({ command: "/opt/argent-controller", environment, clientModule, progress: message => messages.push(message),
+    fallback: () => assert.fail("the thread serves every command") });
+  t.after(() => bridge.close());
+  const waited = JSON.parse(bridge.runner({ command: "/opt/argent-controller", args: ["wait", "stable", "--session", "explore", "--platform", "ios", "--json"], cwd: root, environment, timeoutMs: 20_000 }).stdout);
+  assert.deepEqual(waited, { success: true, data: { stable: true } });
+  assert.deepEqual(messages, ["Argent's tool-server is not serving its tools yet (argent run list-devices failed: GET /tools failed: 404 Not Found); sending list-devices again in 1 s (1/10)"]);
+});

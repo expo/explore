@@ -31,6 +31,8 @@ export type ArgentBridgeState = {
   /** iOS asks "Open in “<app>”?" for the first custom-scheme link of a session; later links open directly. */
   deepLinkPromptAccepted?: boolean;
   recording?: string;
+  /** The tool-server has answered a call this session, so a GET /tools it fails is no longer taken for it still starting. */
+  toolsServed?: boolean;
 };
 
 export type ArgentBridgeContext = {
@@ -57,6 +59,8 @@ export type ArgentBridgeContext = {
   landscape?: boolean;
   /** Turns a portrait screen recording a quarter clockwise, to the landscape UI it shows. */
   orientVideo?: (path: string) => Promise<void>;
+  /** A line for the capture's log: the bridge waiting on a tool-server that is still starting. */
+  progress?: (message: string) => void;
 };
 
 export type BridgeResult = { exitCode: number; stdout: string };
@@ -259,6 +263,17 @@ const SERVICE_DEPENDENCY_FAILED = "Service dependency failed:";
  * comes after a pause, so a device still coming back from the restart has the time it needs.
  */
 const DEPENDENCY_RETRY_DELAYS_MS = [3_000, 6_000] as const;
+/**
+ * A tool-server that is not serving its tools yet. Argent's client asks GET /tools before every tool call and stops with
+ * "GET /tools failed: <status>" when that is not answered, so the tool itself was never sent; a refused connection
+ * reached nothing at all. Either is safe to send again, a UI action too. In brentvatne/euxy's main baseline run
+ * 39506374824 a replacement EAS session's tool-server answered 404 to /tools for the first list-devices of its install,
+ * and the whole target failed. An unknown tool's 404 comes from POST /tools/<name> instead, and still fails at once.
+ */
+const TOOLS_NOT_SERVED = /GET \/tools failed: (?:404|503)\b|ECONNREFUSED/;
+/** How long a tool-server that has not answered yet gets to start serving its tools: about 75 s in all. */
+const STARTUP_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 10_000, 10_000, 10_000, 10_000, 10_000, 10_000] as const;
+const STARTUP_WINDOW_SECONDS = STARTUP_RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0) / 1_000;
 const SPRINGBOARD = "com.apple.springboard";
 const ANDROID_SYSTEM_UI = "com.android.systemui";
 const OPEN_IN_APP_PROMPT = /^Open in “.+”\?$/;
@@ -345,14 +360,28 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
   /**
    * Reads are resent after a transport failure (they change nothing); a UI action is sent once, after a health check.
    * Any tool, a UI action too, is resent when Argent could not start a service it depends on, which it raises before
-   * the tool runs (see SERVICE_DEPENDENCY_FAILED).
+   * the tool runs (see SERVICE_DEPENDENCY_FAILED), and while a tool-server that has not answered yet is still starting
+   * (see TOOLS_NOT_SERVED).
    */
   const call = async (tool: string, args: Record<string, unknown> = {}, options?: { out?: string }): Promise<Record<string, unknown>> => {
     // Tools that name devices their own way (or none) take no udid.
     const withDevice = tool === "list-devices" || tool === "stop-all-simulator-servers" ? args : { udid: state.udid, ...args };
-    for (let readRetry = 0, dependencyRetry = 0; ;) {
-      try { return record(await context.call(tool, withDevice, options)); }
-      catch (error) {
+    for (let readRetry = 0, dependencyRetry = 0, startupRetry = 0; ;) {
+      try {
+        const answer = record(await context.call(tool, withDevice, options));
+        state.toolsServed = true;
+        return answer;
+      } catch (error) {
+        // Until the session's tool-server has answered once, a GET /tools it does not serve is it still starting.
+        if (!state.toolsServed && error instanceof ArgentCallError && TOOLS_NOT_SERVED.test(error.message)) {
+          if (startupRetry >= STARTUP_RETRY_DELAYS_MS.length) {
+            throw new BridgeFailure("TOOL_SERVER_NOT_READY", `Argent's tool-server did not start serving its tools within ${STARTUP_WINDOW_SECONDS} s: ${error.message}`);
+          }
+          const delay = STARTUP_RETRY_DELAYS_MS[startupRetry++]!;
+          context.progress?.(`Argent's tool-server is not serving its tools yet (${error.message}); sending ${tool} again in ${delay / 1_000} s (${startupRetry}/${STARTUP_RETRY_DELAYS_MS.length})`);
+          await context.sleep(delay);
+          continue;
+        }
         if (error instanceof ArgentCallError && error.message.includes(`[Tool:${tool}] ${SERVICE_DEPENDENCY_FAILED}`)
           && dependencyRetry < DEPENDENCY_RETRY_DELAYS_MS.length) {
           await context.sleep(DEPENDENCY_RETRY_DELAYS_MS[dependencyRetry++]!);
@@ -417,8 +446,9 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
     return target;
   };
   /**
-   * A UI action is only sent when the tool-server answers first, so a failure after this point is never resent. A
-   * session's tool-server can still be starting when EAS reports the session ready, so it is given about 25 s to answer.
+   * A UI action is only sent when the tool-server answers first, so a failure after this point is never resent unless
+   * the tool provably never ran (see call). A session's tool-server can still be starting when EAS reports the session
+   * ready, so it is given about 25 s to answer.
    */
   const beforeAction = async () => {
     for (const delay of [1_000, 2_000, 3_000, 4_000, 5_000, 5_000, 5_000]) {

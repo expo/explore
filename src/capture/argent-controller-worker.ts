@@ -39,7 +39,11 @@ async function main(): Promise<number> {
       { env: environment, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: ARGENT_CALL_TIMEOUT_MS });
     if (run.error) throw new ArgentCallError(`argent run ${tool}: ${run.error.message}`, true);
     if (run.status !== 0) {
-      const detail = `${run.stderr ?? ""}\n${run.stdout ?? ""}`.trim().split("\n").filter(Boolean).slice(-4).join(" | ").slice(0, 800);
+      const lines = `${run.stderr ?? ""}\n${run.stdout ?? ""}`.trim().split("\n").filter(Boolean);
+      // A stack trace can follow the line that says the tool-server is not serving its tools yet, which the bridge waits
+      // out (argent-driver's TOOLS_NOT_SERVED), so that line is kept ahead of the last ones.
+      const notServed = lines.find(line => /GET \/tools failed: \d{3}|ECONNREFUSED/.test(line));
+      const detail = [...new Set([...(notServed ? [notServed] : []), ...lines.slice(-4)])].join(" | ").slice(0, 800);
       throw new ArgentCallError(`argent run ${tool} failed: ${detail}`, true);
     }
     // With --out the client saves the tool's file and prints where ("Wrote: <path>"), not the tool's JSON.
@@ -53,6 +57,7 @@ async function main(): Promise<number> {
   };
 
   const result = await createArgentBridge(settings, callArgent, "process").run(argv);
+  for (const note of result.notes ?? []) process.stderr.write(`[explore] ${note}\n`);
   process.stdout.write(result.stdout);
   return result.exitCode;
 }

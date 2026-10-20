@@ -302,6 +302,59 @@ test("an unreachable tool-server before a UI action is the retryable 'Remote dae
   assert.ok(!calls.some(call => call.tool === "gesture-tap"));
 });
 
+// brentvatne/euxy's main baseline run 39506374824: a replacement session's tool-server answered 404 to /tools for the
+// first list-devices of its install, before it served its tools.
+const TOOLS_404 = "argent run list-devices failed: GET /tools failed: 404 Not Found";
+
+test("a tool-server that does not serve /tools yet is asked again, with a log line, until it does", async () => {
+  const { run, calls, context } = harness("ios", { "list-devices": [new ArgentCallError(TOOLS_404, true), new ArgentCallError(TOOLS_404, true), IOS_DEVICES], "reinstall-app": {} }, { bundleId: BUNDLE });
+  const pauses = [], lines = [];
+  context.sleep = async milliseconds => { pauses.push(milliseconds); };
+  context.progress = line => lines.push(line);
+  assert.deepEqual((await run(["install", "/work/bundle/euxy.app", ...flags("ios")])).json.data, { installed: true, appBundleId: BUNDLE });
+  assert.equal(calls.filter(call => call.tool === "list-devices").length, 3);
+  assert.deepEqual(pauses, [1_000, 2_000]);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /^Argent's tool-server is not serving its tools yet \(argent run list-devices failed: GET \/tools failed: 404 Not Found\); sending list-devices again in 1 s \(1\/10\)$/);
+  assert.equal(context.state.toolsServed, true);
+});
+
+test("a refused connection or a 503 from /tools is the tool-server still starting too", async () => {
+  for (const failure of ["fetch failed: connect ECONNREFUSED 127.0.0.1:9", "GET /tools failed: 503 Service Unavailable"]) {
+    const starting = new ArgentCallError(`argent run list-devices failed: ${failure}`, true);
+    const { run, calls } = harness("ios", { "list-devices": [starting, starting, starting, IOS_DEVICES], "ui-tree": IOS_HOME });
+    assert.equal((await run(["snapshot", ...flags("ios")])).exitCode, 0, failure);
+    assert.equal(calls.filter(call => call.tool === "list-devices").length, 4, "asked past the two read retries");
+  }
+});
+
+test("a tool-server that never serves /tools fails with a clear error after about 75 s", async () => {
+  const { run, calls, context } = harness("ios", { "list-devices": new ArgentCallError(TOOLS_404, true), "reinstall-app": {} }, { bundleId: BUNDLE });
+  const pauses = [];
+  context.sleep = async milliseconds => { pauses.push(milliseconds); };
+  const failed = await run(["install", "/work/bundle/euxy.app", ...flags("ios")]);
+  assert.deepEqual(failed.json.error, { code: "TOOL_SERVER_NOT_READY", message: `Argent's tool-server did not start serving its tools within 75 s: ${TOOLS_404}` });
+  assert.equal(pauses.reduce((sum, pause) => sum + pause, 0), 75_000);
+  assert.equal(calls.filter(call => call.tool === "list-devices").length, 11);
+  assert.ok(!calls.some(call => call.tool === "reinstall-app"));
+});
+
+test("an unknown tool's 404 after the tool-server is up fails at once, and a later /tools 404 keeps only the read retries", async () => {
+  const unknown = 'argent run gesture-tap failed: Tool "gesture-tap" not found';
+  const { run, calls, context } = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": IOS_HOME, "gesture-tap": new ArgentCallError(unknown, true) });
+  const pauses = [];
+  context.sleep = async milliseconds => { pauses.push(milliseconds); };
+  assert.deepEqual((await run(["press", "10", "10", ...flags("ios")])).json.error, { code: "ARGENT_TOOL_FAILED", message: unknown });
+  assert.equal(calls.filter(call => call.tool === "gesture-tap").length, 1);
+  assert.deepEqual(pauses, []);
+  const served = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": new ArgentCallError("argent run ui-tree failed: GET /tools failed: 404 Not Found", true) },
+    { state: { generation: 0, udid: UDID, toolsServed: true } });
+  served.context.sleep = async milliseconds => { pauses.push(milliseconds); };
+  assert.equal((await served.run(["snapshot", ...flags("ios")])).json.error.code, "ARGENT_TOOL_FAILED");
+  assert.equal(served.calls.filter(call => call.tool === "ui-tree").length, 3);
+  assert.deepEqual(pauses, [1_000, 2_000]);
+});
+
 test("a UI action whose answer is lost is reported once and never retried", async () => {
   const { run, calls } = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": IOS_HOME, "gesture-tap": new ArgentCallError("argent run gesture-tap failed: socket hang up", true) });
   const pressed = await run(["press", "10", "10", ...flags("ios")]);

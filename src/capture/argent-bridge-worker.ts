@@ -61,6 +61,12 @@ async function materializedFile(data: unknown): Promise<string | undefined> {
   return undefined;
 }
 
+/** An error's message with its cause's, as Argent's client words a failed fetch: "fetch failed: connect ECONNREFUSED …". */
+function failureText(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  return error.cause instanceof Error ? `${error.message}: ${error.cause.message}` : error.message;
+}
+
 async function loadClient(environment: NodeJS.ProcessEnv, clientModule?: string): Promise<ArgentClient> {
   const module = clientModule ?? join(dirname(await ensureController("argent", { environment })), "client.js");
   const loaded = await import(pathToFileURL(module).href) as { createArgentClient?: () => ArgentClient };
@@ -75,7 +81,7 @@ export function argentClientCall(client: ArgentClient, signal: () => AbortSignal
     if (active.aborted) throw new ArgentCallError(`argent run ${tool} was not sent: the command was given up.`, false);
     let answer: { data: unknown };
     try { answer = await client.callTool(tool, args, { signal: AbortSignal.any([active, AbortSignal.timeout(ARGENT_CALL_TIMEOUT_MS)]) }); }
-    catch (error) { throw new ArgentCallError(`argent run ${tool} failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 800)}`, true); }
+    catch (error) { throw new ArgentCallError(`argent run ${tool} failed: ${failureText(error).slice(0, 800)}`, true); }
     if (!options?.out) return answer.data;
     const file = await materializedFile(answer.data);
     if (!file) {

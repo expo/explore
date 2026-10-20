@@ -92,7 +92,9 @@ export function startArgentBridgeRunner(options: {
       stop(`the Argent bridge thread is unavailable (${text}); running the bridge per command`);
       return options.fallback(request);
     }
-    const result = JSON.parse(text) as { exitCode: number; stdout: string };
+    const result = JSON.parse(text) as { exitCode: number; stdout: string; notes?: string[] };
+    // The thread cannot reach the capture's log while this one waits for it, so its lines come with the answer.
+    for (const note of result.notes ?? []) options.progress?.(note);
     return commandOutcome(request, { status: result.exitCode, stdout: result.stdout, stderr: "" });
   };
   return { runner, get active() { return worker !== undefined; }, close: () => { if (worker) { void worker.terminate(); worker = undefined; } } };
