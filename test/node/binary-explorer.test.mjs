@@ -8,7 +8,8 @@ import { tsImport } from "tsx/esm/api";
 const { runBlackBoxExploration, screenEvidenceKey, elementsOf, fieldName, systemDialogTitle } = await tsImport("../../src/binary/explorer.ts", import.meta.url);
 const { ExploreStore, validateMap } = await tsImport("../../src/map/store.ts", import.meta.url);
 const { CONTRACT } = await tsImport("../../src/types.ts", import.meta.url);
-const { assertAppUrl, describeForeground, foreignNode, guardPositionals, leftForeground, retryWhileBusy } = await tsImport("../../src/binary/run.ts", import.meta.url);
+const tsRun = await tsImport("../../src/binary/run.ts", import.meta.url);
+const { assertAppUrl, describeForeground, foreignNode, guardPositionals, leftForeground, retryWhileBusy } = tsRun;
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 const SCREENS = {
@@ -925,4 +926,27 @@ test("an opened Duo's frame shows the same pixels as a screen already seen once 
   assert.equal(map.screens.length, 2, "the second read of the playlist did not mint a screen");
   assert.equal(map.observations.filter(item => item.screenId === map.screens[1].id).length, 2, "both reads are observations of the one playlist screen");
   assert.equal(map.artifacts.filter(item => item.kind === "screenshot").length, 2);
+});
+
+test("only an opened Duo's frame on its inner panel's portrait axes is turned upright", () => {
+  const { duoScreenshotTurn } = tsRun;
+  const root = (width, height) => ({ type: "Application", label: "Expo Go", rect: { x: 0, y: 0, width, height } });
+  const frame = (deviceModel, nodes, width, height, platform = "ios") => duoScreenshotTurn({ platform, deviceModel, nodes, width, height });
+  const cases = [
+    ["Duo open", frame("iPhone Duo", [root(669, 951)], 2007, 2853), "turn"],
+    ["Duo half-open", frame("iPhone Duo", [root(669, 951), { type: "Button", label: "Home", rect: { x: 20, y: 40, width: 44, height: 44 } }], 2007, 2853), "turn"],
+    ["Duo closed", frame("iPhone Duo", [root(466, 678)], 1398, 2034), "keep"],
+    ["iPhone 17 Pro", frame("iPhone 17 Pro", [root(402, 874)], 1206, 2622), "keep"],
+    ["an iPhone in landscape", frame("iPhone 17 Pro", [root(874, 402)], 2622, 1206), "keep"],
+    ["iPad", frame("iPad Pro 13-inch (M5)", [root(1032, 1376)], 2064, 2752), "keep"],
+    ["Android", frame("Pixel 9", [root(669, 951)], 2007, 2853, "android"), "keep"],
+    ["an empty tree", frame("iPhone Duo", [], 2007, 2853), "keep"],
+    ["a first node that isn't the Application", frame("iPhone Duo", [{ type: "Window", rect: { x: 0, y: 0, width: 300, height: 200 } }, root(669, 951)], 2007, 2853), "turn"],
+    ["a root off by a fraction of a point", frame("iPhone Duo", [root(669.33, 951)], 2008, 2853), "turn"],
+    ["an already-landscape image", frame("iPhone Duo", [root(669, 951)], 2853, 2007), "keep"],
+    ["the inner panel on its own axes", frame("iPhone Duo", [root(951, 669)], 2853, 2007), "keep"],
+    ["a Duo root on neither panel", frame("iPhone Duo", [root(700, 1000)], 2100, 3000), "unmatched"],
+    ["a Duo root the image does not show", frame("iPhone Duo", [root(669, 951)], 2000, 2000), "unmatched"],
+  ];
+  for (const [name, actual, expected] of cases) assert.equal(actual, expected, name);
 });

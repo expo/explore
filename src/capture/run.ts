@@ -825,6 +825,9 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         // can leave the panel it lights black, as it does for Argent: the controller then reads the old panel and a
         // relaunch draws nothing. The display is the check, through the controller's own screenshot: in the pose's shape
         // and drawn. If it is not, SpringBoard is restarted, the app reopened and the device folded again, once.
+        // The open pose's shape is taken to be landscape. That is unverified for agent-device on EAS: local agent-device
+        // runs returned the opened inner panel on its portrait axes (2007×2853), as explore:binary turns it from; the
+        // landscape shots seen on EAS (2853×2007) were Argent's, taken with its LandscapeRight rotation.
         const open = (relaunch: boolean) => runner({ command: controllerCommand, args: ["open", options.bundleId, ...(relaunch ? ["--relaunch"] : []), "--session", CONTROLLER_SESSION,
           ...target, "--platform", options.platform, "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 15 * 60_000 });
         const shown = async () => {

@@ -16,6 +16,7 @@ import { agentDeviceLauncher, ensureArgentToolServer, ensureController } from ".
 import { agentDeviceClaims, approveLinkScheme, createLocalSimulator, deleteLocalEmulator, deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, startLocalArgentServer,
   startLocalEmulator, stopLocalAgentDevice, stopLocalArgentServer, waitForLocalEmulator, waitForLocalSimulator, type LocalArgentServer } from "../capture/local-simulator.js";
 import { openLocalCaptureRecord, sweepLocalCaptures } from "../capture/local-registry.js";
+import { screenSpace } from "../capture/route-capture.js";
 import { approveSessionUrlSchemes, simulatorControlActions, type EasCommand } from "../capture/simulator-control.js";
 import { DEFAULT_ANDROID_DEVICE } from "../config/explore-config.js";
 import { DUO_PANELS } from "../contracts/capture.js";
@@ -375,11 +376,19 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
     catch { return undefined; }
   };
   const foregroundElsewhere = (): boolean => { const state = foregroundState(); return state ? leftForeground(state, bundleId) : false; };
-  // An opened iPhone Duo's tree and taps stay on its inner panel's portrait axes, and so does agent-device's screenshot.
+  let unmatchedPanel = false;
+  /** Whether the frame is an opened Duo's, to be stored turned upright; the run then records the landscape it shows. */
   const landscapeOnPortrait = (nodes: readonly Record<string, unknown>[], png: Buffer): boolean => {
-    const root = nodes[0]?.rect && typeof nodes[0].rect === "object" ? nodes[0].rect as Record<string, unknown> : undefined;
-    return platform === "ios" && /\bduo\b/i.test(runtime.deviceModel) && root?.width === DUO_PANELS.inner.height && root?.height === DUO_PANELS.inner.width
-      && png.readUInt32BE(16) < png.readUInt32BE(20);
+    const width = png.readUInt32BE(16), height = png.readUInt32BE(20);
+    const turn = duoScreenshotTurn({ platform, deviceModel: runtime.deviceModel, nodes, width, height });
+    if (turn === "unmatched" && !unmatchedPanel) {
+      unmatchedPanel = true;
+      const root = nodes.find(node => node.type === "Application")?.rect as { width?: unknown; height?: unknown } | undefined;
+      say(`an iPhone Duo frame (${width}×${height} px, root ${root ? `${String(root.width)}×${String(root.height)} pt` : "missing"}) shows neither of its panels; its screenshot is stored as taken, which may be sideways`);
+    }
+    if (turn !== "turn") return false;
+    if (runtime.orientation !== "landscape") { runtime.orientation = "landscape"; if (map.run.environment) map.run.environment.orientation = "landscape"; }
+    return true;
   };
   const observe = async (includeImage: boolean): Promise<BlackBoxFrame> => {
     let nodes: Record<string, unknown>[];
@@ -877,6 +886,27 @@ export function guardPositionals(args: readonly string[]): string[] {
 }
 
 const KEYBOARD_RETURN_KEY = /^(return|next|done|go|continue|join)$/i;
+
+/**
+ * How a frame's screenshot is stored. An opened (or half-open) iPhone Duo lights its inner panel, whose native axes are
+ * portrait, and shows a landscape UI on it: the tree and taps stay on the portrait axes (a 669×951 pt root, the transpose
+ * of `DUO_PANELS.inner`), and a screenshot on those axes is sideways to a person, so it is turned ("turn"). Local
+ * agent-device runs returned exactly that (2007×2853 px). Capture's Argent screenshots on EAS, taken with Argent's
+ * LandscapeRight rotation, came back upright (2853×2007); an image that is already the root's transpose is left as it is.
+ * The root is the full-screen Application node capture takes its coordinate space from, matched to within a pixel and a
+ * point. A Duo frame on neither panel is "unmatched": it is stored as taken, and the caller says so. An empty tree, read
+ * mid-draw, has nothing to judge.
+ */
+export function duoScreenshotTurn(frame: { platform: Platform; deviceModel: string; nodes: readonly Record<string, unknown>[]; width: number; height: number }): "turn" | "keep" | "unmatched" {
+  if (frame.platform !== "ios" || !/\bduo\b/i.test(frame.deviceModel) || !frame.nodes.length) return "keep";
+  const space = screenSpace(frame.nodes, frame, 1);
+  if (!space) return "unmatched";
+  const near = (value: number, points: number) => Math.abs(value - points) < 1;
+  const portraitAxes = near(space.width, DUO_PANELS.inner.height) && near(space.height, DUO_PANELS.inner.width);
+  if (portraitAxes && !space.transposed && frame.width < frame.height) return "turn";
+  const panel = Object.values(DUO_PANELS).some(({ width, height }) => (near(space.width, width) && near(space.height, height)) || (near(space.width, height) && near(space.height, width)));
+  return panel ? "keep" : "unmatched";
+}
 
 /** A node that is not the app's UI: another package drew it (Android's system UI over the app), or it is Explore's own route marker, which an app
  * instrumented for PR runs renders as a 2x2 hidden text. */
