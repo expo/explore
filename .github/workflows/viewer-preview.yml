@@ -67,9 +67,12 @@ jobs:
         shell: bash
         env:
           COMMENT_ID: ${{ steps.comment.outputs.id }}
+          # How long an alias can keep serving the previous push: EAS Hosting caches it for about five minutes after
+          # it was last requested (FIXTURE_ALIAS_WAIT_MS in src/report/preview-deploy.ts).
+          ALIAS_CATCH_UP: 5 minutes
         run: |
           set -euo pipefail
-          jq -r --arg marker "$MARKER" --arg sha "${SHA:0:7}" --arg run "$RUN_URL" '
+          jq -r --arg marker "$MARKER" --arg sha "${SHA:0:7}" --arg run "$RUN_URL" --arg catchup "$ALIAS_CATCH_UP" '
             .previewUrl as $url
             | ([.reports[] | select(.platform == "android")] + [.reports[] | select(.platform != "android")]) as $reports
             | ($reports[0].source // "") as $source
@@ -85,6 +88,8 @@ jobs:
                  | ((.label // (if .platform == "ios" then "iOS" else "Android" end)) | gsub("\\|"; "\\\\|")) as $name
                  | "| \($name)\(if .device then " · \(.device)" else "" end) | \(.changes // "–") | [Map](\($url)?\($query)) · [Screens](\($url)?\($query)#/screens) · [Compare](\($url)?\($query)&view=compare) |"),
                "",
+               # The alias still served the previous push when the deploy stopped waiting for it: say so, and link the new deployment.
+               (if .aliasBehind then "> **Going live:** this link can take up to \($catchup) to show \($sha); until then it shows the previous push, or nothing on a new pull request. [This push'"'"'s deployment](\(.deploymentUrl)/p/\($url | split("/p/")[1])) is live now.\n" else empty end),
                "The link stays the same on every push. [Deploy run](\($run))"]
             | join("\n")' "$RUNNER_TEMP/preview.json" > "$RUNNER_TEMP/comment.md"
           if [[ -n "$COMMENT_ID" ]]; then
