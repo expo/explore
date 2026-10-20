@@ -7,7 +7,7 @@ import test from "node:test";
 import { prepareCaptureReview } from "../../dist/review/capture-review.js";
 import { createSourceCapturePlan } from "../../dist/source/capture-plan.js";
 import { writeCiReportInput, exportCiReport } from "../../dist/report/artifact.js";
-import { collectPlatformReports, deployExplorationReport, deployFixturePreview, deployLocalReports, fixtureReports, deployPreview, previewProjectSlug, readReportZip, whoamiAccounts, zipReportDirectory } from "../../dist/report/preview-deploy.js";
+import { collectPlatformReports, deployExplorationReport, deployFixturePreview, deployLocalReports, FIXTURE_ALIAS_WAIT_MS, fixtureReports, deployPreview, previewProjectSlug, readReportZip, whoamiAccounts, zipReportDirectory } from "../../dist/report/preview-deploy.js";
 import { spawnSync } from "node:child_process";
 import { ZipReader, Uint8ArrayReader, TextWriter, configure } from "@zip.js/zip.js";
 import { viewerLinks } from "../../dist/report/viewer-links.js";
@@ -492,6 +492,20 @@ test("a standalone report deploys to a fixed alias with a fixed token, verifies 
   assert.match(plain.previewUrl, /^https:\/\/acme-explore--1lcbdcpwn3\.expo\.app\/p\/[a-z2-7]{32}$/);
   assert.notEqual(plain.previewUrl, result.previewUrl, "without a fixed token the link is random");
 
+  // A standalone report's alias that is still behind after the whole budget: its link is the deployment, which
+  // serves this run, and nothing says the alias is behind (only a fixture preview's comment explains a lagging link).
+  const behind = easFixture({ aliasServes: false });
+  let clock = now;
+  const quiet = process.stderr.write.bind(process.stderr);
+  process.stderr.write = () => true;
+  let fallback;
+  try {
+    fallback = await deployExplorationReport({ reportPath, project: "acme-explore", owner: "brent-org", exportPath, alias: "bluesky", token,
+      environment: deployEnvironment, transport: behind.transport, run: behind.run, now: () => (clock += 31_000), verifyTimeoutMs: 60_000 });
+  } finally { process.stderr.write = quiet; }
+  assert.equal(fallback.previewUrl, `https://acme-explore--1lcbdcpwn3.expo.app/p/${token}`);
+  assert.equal(fallback.aliasBehind, undefined);
+
   await assert.rejects(deployExplorationReport({ reportPath, project: "acme-explore", owner: "brent-org", exportPath, alias: "Blue Sky",
     environment: deployEnvironment, transport: eas.transport, run: eas.run, verifyTimeoutMs: 1 }), error => error.code === "PREVIEW_ALIAS_INVALID");
   await assert.rejects(deployExplorationReport({ reportPath, project: "acme-explore", owner: "brent-org", exportPath, token: "short",
@@ -523,21 +537,28 @@ test("a fixture preview seals each platform's ZIP as is behind one alias and lis
   const served = eas.requests.filter(request => request.url.pathname === `/p/${token}/manifest.json`).map(request => request.url.searchParams.get("platform"));
   assert.deepEqual([...new Set(served)].sort(), ["android", "ios"], "both platforms' manifests are verified");
 
-  // The alias lagging the deployment past the budget is not a failed deployment: the deployment is verified, so the
-  // link is the deployment's own origin and the job log carries a warning (every 2026-10-14 "HTTP 404" failure was this).
+  // The alias lagging the deployment is not a failed deployment (every 2026-10-14 "HTTP 404" failure was this): the
+  // deployment is verified, so after FIXTURE_ALIAS_WAIT_MS, not the whole verification budget, the pull request links
+  // the alias anyway, says it is behind, and the job log carries a warning.
   const behind = easFixture({ aliasOrigin: "https://explore-viewer-pr--pr-12.expo.app", aliasServes: false });
-  let clock = now; const ticking = () => (clock += 31_000);
+  // Each poll really waits 3 s, so the clock moves 7 s a reading: the 20 s wait is three polls, not twenty.
+  let clock = now; const ticking = () => (clock += 7_000);
   const quiet = process.stderr.write.bind(process.stderr); const logged = [];
   process.stderr.write = chunk => { logged.push(String(chunk)); return true; };
   let linked;
   try {
     linked = await deployFixturePreview({ reports: [{ platform: "ios", zipPath: join(root, "ios.zip") }], project: "explore-viewer-pr", owner: "brent-org", alias: "pr-12", token,
-      exportPath, environment: deployEnvironment, transport: behind.transport, run: behind.run, now: ticking, verifyTimeoutMs: 60_000 });
+      exportPath, environment: deployEnvironment, transport: behind.transport, run: behind.run, now: ticking, verifyTimeoutMs: 180_000 });
   } finally { process.stderr.write = quiet; }
-  assert.equal(linked.previewUrl, `https://acme-explore--1lcbdcpwn3.expo.app/p/${token}`);
+  assert.equal(linked.previewUrl, `https://explore-viewer-pr--pr-12.expo.app/p/${token}`);
   assert.equal(linked.aliasUrl, "https://explore-viewer-pr--pr-12.expo.app");
+  assert.equal(linked.aliasBehind, true);
+  assert.equal(linked.deploymentUrl, "https://acme-explore--1lcbdcpwn3.expo.app", "the comment links the verified deployment beside the alias");
   assert.equal(logged.filter(line => /^Deployment https:\/\/acme-explore--1lcbdcpwn3\.expo\.app serves this run's report \(\d+ s after eas deploy returned\)\./.test(line)).length, 1);
-  assert.equal(logged.filter(line => /^::warning::The alias https:\/\/explore-viewer-pr--pr-12\.expo\.app still answers HTTP 404 \d+ s after eas deploy returned\. The pull request links the deployment https:\/\/acme-explore--1lcbdcpwn3\.expo\.app instead\./.test(line)).length, 1);
+  const warning = logged.find(line => /^::warning::The alias https:\/\/explore-viewer-pr--pr-12\.expo\.app still answers HTTP 404 \d+ s after eas deploy returned\. The pull request links it anyway, until it catches up, beside the deployment https:\/\/acme-explore--1lcbdcpwn3\.expo\.app\./.test(line));
+  assert.ok(warning, logged.join(""));
+  const waited = Number(/HTTP 404 (\d+) s/.exec(warning)[1]);
+  assert.ok(waited >= FIXTURE_ALIAS_WAIT_MS / 1000 && waited < FIXTURE_ALIAS_WAIT_MS / 1000 + 15, `gave up on the alias after ${waited} s, not the 180 s budget`);
   assert.ok(behind.requests.some(request => request.url.origin === "https://explore-viewer-pr--pr-12.expo.app"), "the alias was polled");
 
   // The example report keeps one token and the same fixtures, so an alias still on the previous deployment serves the
@@ -549,7 +570,8 @@ test("a fixture preview seals each platform's ZIP as is behind one alias and lis
     linked = await deployFixturePreview({ reports: [{ platform: "ios", zipPath: join(root, "ios.zip") }], project: "explore-viewer-pr", owner: "brent-org", alias: "pr-12", token,
       exportPath, environment: deployEnvironment, transport: stale.transport, run: stale.run, now: ticking, verifyTimeoutMs: 60_000 });
   } finally { process.stderr.write = quiet; }
-  assert.equal(linked.previewUrl, `https://acme-explore--1lcbdcpwn3.expo.app/p/${token}`);
+  assert.equal(linked.previewUrl, `https://explore-viewer-pr--pr-12.expo.app/p/${token}`);
+  assert.equal(linked.aliasBehind, true);
   assert.equal(logged.filter(line => /^::warning::The alias https:\/\/explore-viewer-pr--pr-12\.expo\.app still serves an earlier deployment \d+ s after eas deploy returned\./.test(line)).length, 1);
 
   await assert.rejects(deployFixturePreview({ reports: [{ platform: "ios", zipPath: join(root, "ios.zip") }, { platform: "ios", zipPath: join(root, "ios.zip") }],

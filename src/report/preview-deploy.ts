@@ -436,7 +436,9 @@ async function writeCompareSummary(environment: NodeJS.ProcessEnv, comparison: C
 }
 
 type HostedReportInput = { zip: Uint8Array; sha256: string; file: string; query: string };
-export type HostedDeployment = { previewUrl: string; expiresAt: string | null; deploymentId: string; deploymentUrl: string; aliasUrl?: string; project: string; owner: string };
+export type HostedDeployment = { previewUrl: string; expiresAt: string | null; deploymentId: string; deploymentUrl: string; aliasUrl?: string;
+  /** The link is the alias, which still served an earlier deployment when the wait for it ran out. */
+  aliasBehind?: true; project: string; owner: string };
 
 /** EAS Hosting alias names: lowercase slugs, as `eas deploy --alias` normalises them. */
 export const HOSTING_ALIAS = /^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$/;
@@ -496,6 +498,13 @@ async function deployReports(options: {
   alias?: string;
   /** A caller-chosen `/p/<token>`; with `alias`, the hosted link is identical from one run to the next. */
   token?: string;
+  /** How long the alias has to serve this deployment once the deployment does; `verifyTimeoutMs` by default. */
+  aliasWaitMs?: number;
+  /**
+   * Link the alias even when it still serves an earlier deployment after `aliasWaitMs`, for a link whose readers are
+   * told it can lag, rather than the deployment's own host.
+   */
+  linkBehindAlias?: boolean;
   sleep?: (milliseconds: number) => Promise<void>;
 }): Promise<HostedDeployment> {
   const { reports, project, environment, run, transport, now, random } = options;
@@ -572,7 +581,8 @@ async function deployReports(options: {
       throw deployError("PREVIEW_DEPLOY_FAILED", `EAS Hosting deployed ${deploymentUrl.origin} but did not report the alias ${options.alias}.`,
         "Check the deployment's aliases in the EAS Hosting dashboard and rerun.", { retryable: true, details: { project, owner, alias: options.alias } });
     }
-    const verify = (origin: string, alias = false) => verifyDeployment({ origin, token, transport, now, timeoutMs: options.verifyTimeoutMs, alias,
+    const verify = (origin: string, alias = false) => verifyDeployment({ origin, token, transport, now, alias,
+      timeoutMs: alias ? options.aliasWaitMs ?? options.verifyTimeoutMs : options.verifyTimeoutMs,
       reports: reports.map((report, index) => ({ query: report.query, ...written[index]! })),
       ...(listing ? { listing: JSON.stringify(listing.map(({ path: _path, ...rest }) => rest)) } : {}) });
     const seconds = (milliseconds: number) => `${Math.round(milliseconds / 1000)} s after eas deploy returned`;
@@ -582,7 +592,9 @@ async function deployReports(options: {
     // taken longer than the whole budget (every verification failure of 2026-10-14 was the alias, with the deployment
     // serving in 1 s). The deployment is verified and immutable, so when the alias is still behind the pull request
     // links the deployment instead of failing the job; the alias catches up on its own and the next push relinks it.
+    // With `linkBehindAlias` it links the alias anyway, and its readers are told the link can lag.
     let linkOrigin = deploymentUrl.origin;
+    let aliasBehind = false;
     if (aliasUrl) {
       try {
         const alias = await verify(aliasUrl.origin, true);
@@ -590,12 +602,16 @@ async function deployReports(options: {
         linkOrigin = aliasUrl.origin;
       } catch (error) {
         if ((error as { code?: string }).code !== "PREVIEW_ALIAS_BEHIND") throw error;
-        process.stderr.write(`::warning::${(error as Error).message} The pull request links the deployment ${deploymentUrl.origin} instead.\n`);
+        aliasBehind = Boolean(options.linkBehindAlias);
+        if (aliasBehind) linkOrigin = aliasUrl.origin;
+        process.stderr.write(`::warning::${(error as Error).message} ${aliasBehind
+          ? `The pull request links it anyway, until it catches up, beside the deployment ${deploymentUrl.origin}.`
+          : `The pull request links the deployment ${deploymentUrl.origin} instead.`}\n`);
       }
     }
     const previewUrl = `${linkOrigin}/p/${token}`;
     return { previewUrl, expiresAt: null, deploymentId: deployment.identifier!, deploymentUrl: deploymentUrl.origin,
-      ...(aliasUrl ? { aliasUrl: aliasUrl.origin } : {}), project, owner };
+      ...(aliasUrl ? { aliasUrl: aliasUrl.origin } : {}), ...(aliasBehind ? { aliasBehind: true as const } : {}), project, owner };
   } finally {
     await rm(work, { recursive: true, force: true });
   }
@@ -669,7 +685,19 @@ export type FixturePreviewOptions = {
   random?: (bytes: number) => Uint8Array;
   onSecret?: (secret: string) => void;
   verifyTimeoutMs?: number;
+  /** How long the alias has to serve the new deployment before the link is the alias anyway; FIXTURE_ALIAS_WAIT_MS by default. */
+  aliasWaitMs?: number;
 };
+
+/**
+ * How long a fixture preview waits for its alias. An edge of EAS Hosting that served an alias keeps serving the
+ * deployment it named for about five minutes (307–314 s, measured 2026-10-19 redeploying back to back from one machine),
+ * so a deploy whose check reaches an edge that served the alias in the last five minutes, to the previous deploy's check
+ * or to a reviewer, finds it behind; otherwise it has moved within seconds. Waiting the whole verification budget for
+ * that held a third of the pull requests' deploy jobs for three minutes, only to link the deployment instead. The pull
+ * request's comment says when the alias is behind.
+ */
+export const FIXTURE_ALIAS_WAIT_MS = 20_000;
 
 /**
  * Host fixed reports behind a fixed alias with this checkout's Viewer: the Explore repository's own pull requests
@@ -698,6 +726,7 @@ export async function deployFixturePreview(options: FixturePreviewOptions): Prom
     projectHint: "Give EXPO_TOKEN's account permission to create projects, or pass --project with an existing slug.",
     exportPath, environment, run: options.run ?? defaultRun, ...(options.sleep ? { sleep: options.sleep } : {}), transport: options.transport ?? fetch, now: options.now ?? Date.now, random,
     ...(options.onSecret ? { onSecret: options.onSecret } : {}), verifyTimeoutMs: options.verifyTimeoutMs ?? 180_000, alias: options.alias,
+    aliasWaitMs: options.aliasWaitMs ?? FIXTURE_ALIAS_WAIT_MS, linkBehindAlias: true,
     ...(options.token ? { token: options.token } : {}) });
 }
 
