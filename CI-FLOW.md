@@ -104,10 +104,72 @@ Head capture is never delayed. When the baseline arrives while head captures, ba
 | 1 | cache | If a reuse directory exists, its bundle and map are validated and copied. With no routes left, skip straight to export. |
 | 2 | `configuration` | `eas config --profile` confirms the app identity and scheme, `ios.simulator: true` and the bundle ID; `eas simulator:availability`. |
 | 3 | `build` | `eas fingerprint:generate`; a finished simulator build with the same fingerprint is reused, otherwise `eas build --wait` (up to 45 minutes). |
-| 4 | `instrumentation` | A hosted EAS `repack` workflow job (`eas workflow:run --wait --json` from a staged copy of the checkout) rebundles the current JavaScript with a read-only navigation observer (the same observer on both sides), and the repacked app is downloaded and installed into the session; `capture.repack: local` (the default with `capture.simulator: local`) runs `@expo/repack-app` on the runner, and its app is installed without an upload. Generated files stay outside the checkout. |
+| 4 | `instrumentation` | A hosted EAS `repack` workflow job (`eas workflow:run --json` from a staged copy of the checkout, then its run read until it ends) rebundles the current JavaScript with a read-only navigation observer (the same observer on both sides), and the repacked app is downloaded and installed into the session; `capture.repack: local` (the default with `capture.simulator: local`) runs `@expo/repack-app` on the runner, and its app is installed without an upload. Generated files stay outside the checkout. Preparing the app has one 30-minute budget, a failed hosted repack starts again, and a run attempt's matrix jobs make one repack of each commit between them (§4.1). |
 | 5 | `session` | `eas simulator:start`; the session ID is written to `<side>-session`; the app is installed. |
 | 6 | route capture | Mode-specific (§5). `agent-device` drives the simulator and records a screenshot plus the accessibility tree. A capture is accepted only when the observer's reported destination matches the requested route. |
 | 7 | `export` / `cleanup` | Validate the map, write `<side>-export/` (`bundle.json`, `execution.json`, PNGs, `capture-diagnostics/`), stop the session. |
+
+### 4.1 The hosted repack: one budget, retries, and one repack per commit for a run's jobs
+
+`prepareHostedRepack` (`src/capture/eas-build.ts`) runs the repack job. Three things keep it from failing a target, running long, or repeating work.
+
+**One budget.** Preparing the app gets 30 minutes (`HOSTED_REPACK_BUDGET_MS`), counted from the moment the EAS session starts beside the repack. That covers waiting for another job's repack, following it, and every repack this job starts, including each run's wait. Before this, each run had a 30-minute wait of its own, so a share wait plus retries could prepare for over an hour. The rules:
+
+- A repack starts only when at least 5 minutes of the budget are left.
+- A run still going at the end of the budget is cancelled, and the target fails with `EAS_REPACK_FAILED` (`failure: timeout`).
+- The session was asked for the capture's minutes plus a 20-minute allowance (`SESSION_PREPARATION_MINUTES`). If the app took longer than the allowance, the session is stopped and a fresh one started before the install, so the capture keeps all its minutes. This counts as one of the session's replacements.
+
+**Explore waits on the run itself.** `workflow:run` runs without `--wait`. Explore reads the run's id from the JSON, or from the "See logs:" link if the JSON is missing, then reads `eas workflow:view <id> --json` every 20 s. It does not use `--wait` because eas-cli 25.2.0's `--wait` exits with code 13 after six failed status reads and leaves the run going, and Explore then started another one beside it. Now:
+
+- A run whose state stays unreadable six times in a row is cancelled (`eas workflow:cancel`). So is a run that outlasts the budget, or whose capture is stopped. None of them is replaced.
+- If the start times out, `defaultRunner` keeps what it printed. When that names the run, Explore waits on it. When it doesn't, Explore starts no other, because one may be running.
+- `capture:review` and `capture:baseline` turn the runner's SIGINT and SIGTERM, which GitHub sends to a cancelled job, into an abort. The capture then stops its session and cancels the run it waits on. A second signal quits at once.
+
+**A failed repack starts again.** In brentvatne/euxy#176 (review run 39506405687), EAS ended a repack's build while its "Upload artifact" step was saving the app ("Turtle build is not in progress", reported as `Failed to upload application archive.`), and the target failed with `EAS_REPACK_FAILED`. Only a run EAS reports finished can be followed by another. `hostedRepackFailure` reads the build's error, the job's errors, the failed step's logs (`eas workflow:logs <job> --json`) and the CLI's output, in this order:
+
+| Failure | Read from | Fresh repacks |
+| --- | --- | --- |
+| `canceled` | a run someone cancelled | 0 |
+| `configuration` | `Not logged in`, `Unauthorized`, `not authorized`, `E401`/`E403`, `401 Unauthorized`/`403 Forbidden` (a private registry's included) | 0 |
+| `infrastructure` | a file of EAS's worker missing (`'/opt/eas/…'`) | 2 |
+| `app` | the `Repack` / `Repack app` step failed, or Metro, Babel or Expo named the app's code or files: `Unable to resolve`, `SyntaxError`, `TransformError`, `Cannot find module`, `could not read ./…` | 0 |
+| `timeout` | `EAS_BUILD_TIMEOUT_ERROR`: a rerun would run out its time again (a bundling hang, say) | 0 |
+| `infrastructure` | a failed `Spin up…`, `Set up…`, `Download…` or `Upload…` step; EAS's or eas-cli's exact words (`Turtle build is not in progress`, `Failed to upload application archive`, `SERVER_ERROR`, `Failed to upload project sources`, `Failed to start the workflow with the API`, `Unexpected response from server (5xx)`, `ECONNRESET`, `ETIMEDOUT`, `ENOTFOUND`, `EAI_AGAIN`, `socket hang up`, `fetch failed`) | 2 |
+| `unknown` | nothing above | 1 |
+
+Each new start logs the failed run's link and reason, for example `the hosted EAS repack https://expo.dev/…/workflows/<id> failed (…); starting another repack (1/2)`. The session is started once, beside the first repack, and installs whichever repack succeeds.
+
+**One repack per commit for a run attempt's matrix jobs.** Captures that run in one process already share a build in a directory (`src/capture/shared-build.ts`): the appearance passes of one side, which run in worker threads, and the targets of a local review. The first to claim a key builds and repacks, and the others wait for its `result.json` ("using the build another capture of this run is preparing for this commit"). A GitHub matrix job is a runner of its own, with no directory in common, so in #176 the four iOS jobs each logged `reusing EAS build a81d5d80 … repacking it with this commit's JavaScript` and made four identical repacks. The jobs of one run attempt meet on EAS instead:
+
+1. `hostedRepackPeers` lists, in config order, the targets that repack the same app on EAS: one platform, EAS profile and bundle id. `capture:review`, `capture:review --compare` and `capture:baseline` pass them on.
+   - A capture gets a `RepackShare` when it has two or more peers and `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT` and `GITHUB_REPOSITORY` are set. Its scope is the run attempt, its leader is the first peer, and its rank is its place among the peers.
+   - A single target, a local review, `capture.repack: local`, and a native build this job made itself behave as before. Nobody else's key can match a native build this job made.
+2. The build to repack is the newest finished build with the fingerprint that Explore did not repack itself (`existingBuild`, from 20 builds). If repacks carry their source's fingerprint, every job still picks the same build.
+3. Once the copy is staged, the capture takes a key (`hostedRepackShareKey`) from:
+   - the run attempt, the platform and the native build id;
+   - the EAS profile and environment name;
+   - a snapshot of the environment's variables: `eas env:list --format long` for the project and the account, which names each variable with its value (masked when sensitive or secret) and when it was last updated;
+   - the Explore release;
+   - a digest of every staged file with its path, executable bit and content (`stagedProjectDigest`), which covers the commit's JavaScript and the generated observer.
+
+   If either variable list fails, the capture repacks without sharing. Its own repack's message ends with `[explore share <key>]`.
+4. It reads the platform's 50 most recent builds (`eas build:list --limit 50 --json`, a single page) for one whose message ends with that marker, and joins any it finds, whichever job started it. A finished one is downloaded instead of repacking. A queued or running one is then read by its id (`eas build:view <id> --json`) every 30 s, so newer builds on a busy project cannot push it off the list.
+5. How long a capture looks is staggered (`sharedRepackWaitMs`). The leader looks once and repacks if it finds nothing. The next target looks every 15 s for 3 minutes, and each target after it a minute longer. When the leader makes no repack (its baseline covered every route, or `max-parallel` kept it out of the first jobs), the next target's repack appears before the one after it would start another, so they all join one. In a re-run attempt, which runs only the jobs it re-runs, the stagger starts at once (1, 2, 3 minutes).
+6. When the repack it follows fails, is cancelled or loses the key, the capture looks for another with the same key for 60 s, staggered the same way, before it repacks itself. That catches the leader's retry, which starts at once (#176).
+7. It also repacks itself, with the retries above, when nothing appears in its wait, or when EAS fails to answer three times in a row. Looking stops while the budget still has 5 minutes for a repack of its own. A followed repack that does not finish within the budget fails the target. No capture waits on a job that cannot answer, and none waits past its budget.
+
+Only a build whose marker is this capture's own key is used, and every input to the key is what this capture would itself have uploaded and built with. So two jobs share a repack only when their uploads, native build, profile, environment variables and Explore release are the same, in the same run attempt. The run attempt is in the scope, and a review's or a first attempt's repacks are never used by another run or attempt. That covers the baseline workflow, whose artifacts later reviews reuse, and "Re-run failed jobs" after an `EXPO_PUBLIC_*` value was fixed, which rebundles with the new value.
+
+What the key does not protect against: every input to it is public or predictable, and the pull request's head code runs in the capture job with `EXPO_TOKEN` (`app.config.*` under `eas config` and `eas fingerprint:generate`, and the app's build code on EAS). Head code could therefore make a build whose message carries the base side's marker, and base captures of the same run attempt in other matrix jobs would install it. That is within the trust the capture already gives EAS: the same credentials could publish a simulator build with a reused fingerprint, which every capture already reuses by fingerprint (the `build` stage above), and head code in one job can already tamper with that job's own base side on the runner. The run attempt in the scope keeps such a build out of every other run, including the baseline. Requiring the build's `initiatingActor` to be this job's own credentials would not exclude head code, which runs with the same token. Explore cannot tell offline which actor EAS records for a workflow's repack build, so it does not check it.
+
+Cost, per side and job:
+
+- The leader makes 1 `build:list` and 2 `env:list`.
+- A follower makes up to 13 `build:list` while the next target waits, plus 4 more per target after it.
+- About 2 `build:view` a minute while it follows a repack: about 10 for a 5-minute repack.
+- Each repack this job runs reads its run every 20 s: about 15 `workflow:view` for 5 minutes, and one `workflow:logs` if it fails.
+
+In #176's run that is about 20 calls per side for each of the three iOS targets that would otherwise have repacked, in place of three repacks. A follower whose leader and earlier peers make no repack of this side loses its wait, 3 to 5 minutes, before it repacks itself. Native builds are not shared across jobs: a fingerprint EAS has no build for is built by every job that needs it.
 
 ## 5. Deterministic and agent modes
 
