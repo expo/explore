@@ -68,7 +68,20 @@ export const normalizeSelector = (input?: string): string | undefined => {
   return input.replace(/\s+/g, " ").trim() || undefined;
 };
 
-const VOLATILE_SNAPSHOT_NODE_KEYS = new Set(["ref"]);
+/** A ref names a node within one read; which field has the focus can change between two reads of one screen. */
+const VOLATILE_SNAPSHOT_NODE_KEYS = new Set(["ref", "focused"]);
+
+/**
+ * The accessibility fingerprint's algorithm, written as its prefix. Version 2 leaves the system keyboard and the focus out
+ * of the tree; a hash from before carries no prefix. Two fingerprints of different versions say nothing about whether the
+ * trees differ, so a comparison treats them as not comparable rather than changed (see accessibilityFingerprintsComparable).
+ */
+const ACCESSIBILITY_FINGERPRINT_VERSION = "a2";
+
+export function accessibilityFingerprintsComparable(left: string, right: string): boolean {
+  const version = (hash: string) => /^(a\d+):/.exec(hash)?.[1] ?? "a1";
+  return version(left) === version(right);
+}
 
 /** Canonical JSON of the node tree only: controller wrappers carry per-session diagnostics and
  * ref generations that would otherwise make identical screens fingerprint differently, and Android
@@ -123,7 +136,7 @@ export async function fingerprintState(options: {
   snapshotText?: string;
 }): Promise<ObservationFingerprints> {
   const accessibility = options.snapshotText
-    ? sha256(`snapshot\0${normalizeSnapshot(options.snapshotText)}`)
+    ? `${ACCESSIBILITY_FINGERPRINT_VERSION}:${sha256(`snapshot\0${normalizeSnapshot(options.snapshotText)}`)}`
     : undefined;
   const screenshot = options.screenshotPath ? await readFile(options.screenshotPath) : undefined;
   const visual = screenshot ? sha256(Buffer.concat([Buffer.from("visual\0"), screenshot])) : undefined;

@@ -97,3 +97,16 @@ test("accessibility fingerprints ignore Android system UI nodes", async () => {
   assert.equal(sameApp.accessibility, base.accessibility);
   assert.notEqual(changedApp.accessibility, base.accessibility);
 });
+
+test("accessibility fingerprints are versioned, and leave out the system keyboard and which field has the focus", async () => {
+  const snapshot = (focused, keyboard) => JSON.stringify({ success: true, data: { nodes: [
+    { index: 0, type: "Application", label: "euxy", rect: { x: 0, y: 0, width: 402, height: 874 } },
+    { index: 1, parentIndex: 0, type: "TextField", label: "Pattern name", ...(focused ? { focused: true } : {}), rect: { x: 23, y: 386, width: 355, height: 50 } },
+    ...(keyboard ? [{ index: 2, parentIndex: 0, type: "Keyboard", rect: { x: 0, y: 583, width: 402, height: 233 } },
+      { index: 3, parentIndex: 2, type: "Key", label: "Q", rect: { x: 5, y: 590, width: 39, height: 54 } }] : []),
+  ] } });
+  const resting = await fingerprintState({ snapshotText: snapshot(false, false) });
+  assert.match(resting.accessibility, /^a2:[0-9a-f]{64}$/);
+  assert.equal((await fingerprintState({ snapshotText: snapshot(true, false) })).accessibility, resting.accessibility, "focus alone does not change the tree");
+  assert.equal((await fingerprintState({ snapshotText: snapshot(true, true) })).accessibility, resting.accessibility, "nor does the keyboard");
+});

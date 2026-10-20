@@ -6,6 +6,7 @@ import {
   type Observation,
   type Screen,
 } from "../types.js";
+import { accessibilityFingerprintsComparable } from "./store.js";
 
 /**
  * Cross-run screen matching for PR-style comparisons (baseline = base branch map,
@@ -253,7 +254,8 @@ function matchEntry(match: Match): { entry: BuildComparisonEntry; review: Compar
   // captured on both sides) hide a real change to the primary content.
   const baselineHash = match.baseline.representative.fingerprints.accessibility;
   const currentHash = match.current.representative.fingerprints.accessibility;
-  const verdict = baselineHash && currentHash
+  // Hashes from different fingerprint versions (an older Explore's map) say nothing about whether the trees differ.
+  const verdict = baselineHash && currentHash && accessibilityFingerprintsComparable(baselineHash, currentHash)
     ? (baselineHash === currentHash ? "unchanged" : "modified")
     : "unknown";
   const unchanged = verdict === "unchanged";
@@ -262,7 +264,9 @@ function matchEntry(match: Match): { entry: BuildComparisonEntry; review: Compar
     ? `Matched by ${signals}; the representative captures share an accessibility fingerprint, so the rendered tree is unchanged.`
     : verdict === "modified"
       ? `Matched by ${signals}; the representative captures have different accessibility fingerprints, so the rendered tree changed.`
-      : `Matched by ${signals}; accessibility fingerprints are unavailable on at least one side, so the change state could not be verified from fingerprints.`;
+      : baselineHash && currentHash
+        ? `Matched by ${signals}; the representative captures were fingerprinted by different Explore versions, so the change state could not be verified from fingerprints.`
+        : `Matched by ${signals}; accessibility fingerprints are unavailable on at least one side, so the change state could not be verified from fingerprints.`;
   const entry: BuildComparisonEntry = {
     id: `match-${match.current.screen.id}`,
     relationship: "one-to-one",
