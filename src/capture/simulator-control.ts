@@ -43,6 +43,8 @@ export function simulatorControl(eas: EasCommand, sessionId: string, action: str
     catch (error) {
       const delayMs = SIMULATOR_CONTROL_RETRY_DELAYS_MS[retry];
       if (delayMs === undefined) throw error;
+      // A resend that succeeds would otherwise leave no trace of the failure in the job log.
+      process.stderr.write(`simulator:control ${action} failed (${firstLine(error)}); sending it again in ${delayMs / 1000} s\n`);
       sleep(delayMs);
     }
   }
@@ -62,4 +64,9 @@ export function approveSessionUrlSchemes(eas: EasCommand, sessionId: string, act
     approved.push(scheme);
   }
   return approved;
+}
+
+/** The first line of a failure, for a log line. */
+function firstLine(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).split("\n", 1)[0]!.slice(0, 300);
 }

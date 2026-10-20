@@ -17,6 +17,8 @@ export async function retryGitHubLookup<T>(lookup: () => Promise<T>, transient: 
     catch (error) {
       const delayMs = GITHUB_LOOKUP_RETRY_DELAYS_MS[retry];
       if (delayMs === undefined || !transient(error)) throw error;
+      // A lookup that succeeds later would otherwise leave no trace of the failure in the job log.
+      process.stderr.write(`GitHub lookup failed (${(error instanceof Error ? error.message : String(error)).split("\n", 1)[0]}); trying again in ${delayMs / 1000} s\n`);
       await sleep(delayMs);
     }
   }
