@@ -17,6 +17,7 @@ import { type CaptureSetupSnapshot, credentialSavePromptDecline, describeSetupAc
 import { silentProgress } from "../shared/progress.js";
 import type { CaptureSetupReady } from "../config/explore-config.js";
 import { READINESS_POLL_MS, defaultReadinessSeconds } from "./readiness.js";
+import { focusedTextInput, keyboardBounds } from "./keyboard.js";
 import { CAPTURE_OBSERVER_IDENTIFIER, captureObserverMarkers, parseCaptureDestination, captureDestinationMatches } from "./observer.js";
 import { type CiAgentRuntimeOptions, runCiAgentNavigation, assertAgentCaptureContext } from "./agent/runtime.js";
 import { createExplorationInputs } from "../config/exploration-inputs.js";
@@ -32,6 +33,14 @@ export function deviceArgs(runtime: Pick<ActiveSimulatorRuntime, "platform" | "d
   if (runtime.provider === "local-simulator" && runtime.controllerDeviceId) return [runtime.platform === "android" ? "--serial" : "--udid", runtime.controllerDeviceId];
   return runtime.platform === "android" ? [] : ["--device", runtime.deviceModel];
 }
+
+/**
+ * How long a screen whose text field has the focus gets to raise the software keyboard, and how often it is read while
+ * it does. A sheet that focuses its field when it opens raises the keyboard a moment after the sheet itself has settled;
+ * a field that raises none (a hardware keyboard, a custom input view) is captured once this has passed.
+ */
+const KEYBOARD_WAIT_MS = 1_000;
+const KEYBOARD_POLL_MS = 250;
 
 /** agent-device defers its XCTest snapshot tiers for 120 s; wait a little longer, polling every 5 s. */
 const UNREADABLE_SURFACE_WAIT_MS = 130_000;
@@ -507,6 +516,37 @@ export async function capturePlannedRoutes(options: {
     .sort());
   /** The controller's own quiescence gate; a timeout is reported by the snapshot comparison below. */
   const settle = () => { controller(["wait", "stable", "500", "8000", "--level", "full", "--json"], true); };
+  /**
+   * A screen that focused a text field shows the keyboard that field raises, as its users see it. The keyboard rises
+   * after the screen has settled, so the controller's quiescence gate can pass in between: in brentvatne/euxy#172
+   * (review run 39362642343) the rename sheet's base was captured with its cursor showing and no keyboard, its head with
+   * the keyboard up, and the 48% mismatch was the keyboard. This reads the screen again until the keyboard is up and
+   * in the same place twice running, within KEYBOARD_WAIT_MS; a keyboard that never comes is not waited for longer. A
+   * keyboard already up when the destination was read has finished rising: the quiescence gate waited for it to stop.
+   */
+  const awaitKeyboard = (route: SourceRoute, nodes: readonly Record<string, unknown>[]): readonly Record<string, unknown>[] => {
+    if (!focusedTextInput(nodes) || keyboardBounds(nodes)) return nodes;
+    const startedAt = clock();
+    let current = nodes, polls = 0, previous: string | undefined, outcome = "absent", pollStartedAt = startedAt;
+    // A snapshot counts for at least one poll interval, so a clock that stands still (a fake controller) still expires.
+    const elapsed = () => Math.max(clock() - startedAt, polls * KEYBOARD_POLL_MS);
+    while (elapsed() < KEYBOARD_WAIT_MS) {
+      (capture.sleep ?? pause)(KEYBOARD_POLL_MS - (clock() - pollStartedAt));
+      pollStartedAt = clock();
+      current = snapshot().nodes;
+      polls += 1;
+      const bounds = keyboardBounds(current);
+      const position = bounds && JSON.stringify(bounds);
+      if (position && position === previous) { outcome = "shown"; break; }
+      if (position) outcome = "moving";
+      previous = position;
+    }
+    const diagnostics = join(store.root, "capture-diagnostics");
+    mkdirSync(diagnostics, { recursive: true, mode: 0o700 });
+    appendFileSync(join(diagnostics, "keyboard.jsonl"), `${JSON.stringify({ route: route.id, outcome, polls, elapsedMs: elapsed(),
+      at: new Date(clock()).toISOString() })}\n`, { mode: 0o600 });
+    return current;
+  };
   const attempted = new Set<string>();
   const captureCurrent = async (route: SourceRoute, attempt: number, before?: readonly Record<string, unknown>[],
     unattributed?: NonNullable<CaptureBundle["outcomes"][string]["observed"]> & { message: string }) => {
@@ -514,9 +554,11 @@ export async function capturePlannedRoutes(options: {
     attempted.add(route.id);
     const temporary = await mkdtemp(join(store.root, ".capture-"));
     try {
-      const accepted = before ?? waitForDestination(route, () => resolveDeepLinkConfirmation());
-      if (unattributed) assertNoAlert({ route, nodes: accepted });
-      else landing(accepted, route, inventory);
+      const arrived = before ?? waitForDestination(route, () => resolveDeepLinkConfirmation());
+      if (unattributed) assertNoAlert({ route, nodes: arrived });
+      else landing(arrived, route, inventory);
+      const accepted = unattributed ? arrived : awaitKeyboard(route, arrived);
+      if (accepted !== arrived) landing(accepted, route, inventory);
       assertSafeScreenshot(accepted);
       const screenshot = join(temporary, "screen.png");
       await writeFile(screenshot, "", { flag: "wx", mode: 0o600 });
