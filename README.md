@@ -223,11 +223,13 @@ npx @expo/explore explore:session --replay steps.json   # an iPhone Duo pose, or
 }
 ```
 
-- An action is one of `tap` or `fill` (with `label` or `identifier`), `type`, `scroll` (`direction`), `wait` (`milliseconds`), `open` (`url`), `back`, and `dismiss-keyboard`, as in the model's own tools. The same safety rules apply: destructive or app-leaving taps are refused.
-- `{ "capture": "Title" }` photographs the current screen under that title; add `"state"` for another state of a screen already captured.
-- `"platforms": ["ios"]` limits a step to those platforms, for screens one platform does not have. `"optional": true` skips an action that fails (a one-time dialog) instead of stopping.
+- An action is one of `tap` or `fill` (with `label` or `identifier`), `type`, `scroll` (`direction`), `wait` (`milliseconds`), `open` (`url`), `back`, and `dismiss-keyboard`, as in the model's own tools. The same safety rules apply: destructive or app-leaving taps are refused. A step takes only the fields listed here; any other field (a typo such as `platform`) is an error.
+- `{ "capture": "Title" }` photographs the current screen under that title; add `"state"` for another state of a screen already captured. A capture of a screen the plan already captured under another title is reported as looking the same, and the screen keeps its first title.
+- `"platforms": ["ios"]` limits a step to those platforms, for screens one platform does not have. `"optional": true` skips an action that fails (a one-time dialog) instead of stopping; the summary lists the steps it skipped.
+- A `fill` or `type` text can be a `{{secret:NAME}}`, as in `--hints`: Explore types the value of the environment variable `NAME`, and a variable that is not set fails before a device starts.
 - If a required action fails, the run stops there and the report still shows what was captured, with a gap naming the step and the screens it did not reach.
-- The screen and action budgets still apply; raise `--max-screens` and `--max-actions` for a long plan.
+- The screen and action budgets still apply. A plan with more captures or actions than they allow is refused before a device starts, as is one with no steps for the platform; raise `--max-screens` and `--max-actions` for a long plan. If a budget still runs out (each screen the plan reaches also counts), the gap names the planned screens not reached.
+- `--provider`, `--model` and `--hints` only steer a model, so they cannot be combined with `--replay`.
 
 </details>
 
