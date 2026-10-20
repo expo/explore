@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { ExploreStore } from "./map/store.js";
 import { QUERY_CONTRACT } from "./types.js";
 import { EXPLORE_VERSION } from "./shared/package-paths.js";
+import { isTargetId } from "./config/explore-config.js";
 import { command, resultContract, argumentError, validateCommandArguments, flag, has, setStore } from "./cli/args.js";
 import { help } from "./cli/help.js";
 import { listScreens, getScreen, listElements, listObservations, getObservation, nextFrontier, listAttempts, getAttempt, listTransitions, getTransition, neighbors, pathQuery, listJourneys, getJourney, listFrontier, listGaps, summary, search, status, validate, exportArtifacts } from "./cli/map-commands.js";
@@ -81,8 +82,11 @@ try {
   await handler();
 } catch (error) {
   if (command.startsWith("capture:") || command.startsWith("source:") || command.startsWith("ci:") || command.startsWith("config:")) {
+    // The failure comment names the target from this: a capture, report or publication of one matrix target.
+    const target = (() => { try { return flag("target"); } catch { return undefined; } })();
     const diagnostic = await reportCiError(ciErrorForCommand(error, command), {
       ...(process.env.RUNNER_TEMP ? { diagnosticsPath: resolve(process.env.RUNNER_TEMP, "explore-diagnostics", "error.json") } : {}),
+      ...(isTargetId(target) ? { target } : {}),
       ...(has("json") ? { write: (line: string) => { if (process.env.GITHUB_ACTIONS === "true") console.log(line); } } : {}),
     });
     if (has("json")) console.error(JSON.stringify({ contract: resultContract, command, ok: false, error: diagnostic.message, diagnostic }));

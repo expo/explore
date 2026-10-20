@@ -67,7 +67,7 @@ test("baseline restore rejects foreign workflows, revisions, branches, and unfin
     event: "push", head_repository: { full_name: "acme/app" } };
   const mutations = [
     { workflow_id: 99 }, { head_sha: "b".repeat(40) }, { head_branch: "feature" },
-    { conclusion: null }, { head_repository: { full_name: "fork/app" } }, { event: "pull_request_target" },
+    { conclusion: null }, { conclusion: "cancelled" }, { head_repository: { full_name: "fork/app" } }, { event: "pull_request_target" },
   ];
   const runs = Object.fromEntries(mutations.map((mutation, i) => [i + 30, { ...valid, ...mutation, id: i + 30 }]));
   runs[20] = valid;
@@ -88,6 +88,20 @@ test("baseline restore rejects foreign workflows, revisions, branches, and unfin
   };
   assert.deepEqual(await findBaselineArtifact({ sha: "a".repeat(40), platform: "ios", environment, transport }), { id: 20, run: 20 });
   assert.deepEqual(names, [`explore-baseline-${"a".repeat(40)}-ios`, `explore-baseline-${"a".repeat(40)}`], "iOS also accepts the unsuffixed name older baselines used");
+});
+
+test("a target's baseline from a run another target's baseline failed in is still reused (brentvatne/euxy#172)", async () => {
+  // The baseline job uploads its artifact only after its own steps passed, so the run's failure is another target's.
+  const run = { id: 20, workflow_id: 77, conclusion: "failure", head_sha: "a".repeat(40), head_branch: "main", event: "push", head_repository: { full_name: "acme/app" } };
+  const transport = async input => {
+    const url = new URL(input);
+    if (url.pathname === "/repos/acme/app") return Response.json({ default_branch: "main" });
+    if (url.pathname === "/repos/acme/app/actions/workflows/explore-baseline.yml") return Response.json({ id: 77 });
+    if (url.pathname === "/repos/acme/app/actions/artifacts") return Response.json({ artifacts: [{ id: 20, workflow_run: { id: 20 }, expired: false }] });
+    if (url.pathname === "/repos/acme/app/actions/runs/20") return Response.json(run);
+    throw new Error(`unexpected request ${url}`);
+  };
+  assert.deepEqual(await findBaselineArtifact({ sha: "a".repeat(40), target: "iphone", environment, transport }), { id: 20, run: 20 });
 });
 
 test("a target's baseline is named after its id; only target ios also reuses the unsuffixed name", async () => {
@@ -145,10 +159,19 @@ async function reportFailure(t, { capture, report, comments = [], pr = samplePr(
     const url = new URL(input);
     assert.equal(init.headers?.authorization, "Bearer test-token");
     if (url.pathname === "/repos/acme/app/pulls/91") return Response.json(pr);
+    // The comments as GitHub holds them, so a second write merges into the first.
     if (url.pathname === "/repos/acme/app/issues/91/comments" && (init.method ?? "GET") === "GET") return Response.json(comments);
-    if (url.pathname === "/repos/acme/app/issues/91/comments" && init.method === "POST") { writes.push({ action: "create", body: JSON.parse(init.body).body }); return Response.json({ id: 100 }); }
+    if (url.pathname === "/repos/acme/app/issues/91/comments" && init.method === "POST") {
+      const body = JSON.parse(init.body).body;
+      writes.push({ action: "create", body }); comments = [...comments, { id: 100, user: { login: "github-actions[bot]" }, body }];
+      return Response.json({ id: 100 });
+    }
     const update = /^\/repos\/acme\/app\/issues\/comments\/(\d+)$/.exec(url.pathname);
-    if (update && init.method === "PATCH") { writes.push({ action: "update", comment_id: Number(update[1]), body: JSON.parse(init.body).body }); return Response.json({ id: Number(update[1]) }); }
+    if (update && init.method === "PATCH") {
+      const body = JSON.parse(init.body).body;
+      writes.push({ action: "update", comment_id: Number(update[1]), body }); comments = comments.map(comment => comment.id === Number(update[1]) ? { ...comment, body } : comment);
+      return Response.json({ id: Number(update[1]) });
+    }
     throw new Error(`unexpected request ${init.method ?? "GET"} ${url}`);
   };
   const result = await publishFailureComment({ repository: "acme/app", pullNumber: 91, headSha: head, baseSha: base, runId: "1234", runAttempt: "1",
@@ -294,6 +317,51 @@ test("a failed target is named by its artifact and keeps the label and config or
   assert.equal(located.target, "pixel-7");
   assert.equal(located.platform, undefined);
   assert.equal(located.diagnostic.code, "APP_INPUT_MISSING");
+});
+
+test("a lone failed job's diagnostics, which download-artifact extracts without its artifact's directory, still name the target (euxy#172 attempt 1)", async t => {
+  // Run 39348956443 attempt 1: only duo-closed's report job failed (ci:publish's artifact lookup answered 404), so the
+  // failure job's pattern matched one artifact, extracted into report/ itself, and the comment said "iOS failed".
+  const report = { ...sampleDiagnostic(), code: "GITHUB_RESOURCE_NOT_FOUND", stage: "publication", message: "Report publication GitHub check failed (404)", target: "duo-closed" };
+  const [write] = await reportFailure(t, { mutateFiles: async directory => {
+    await mkdir(join(directory, "explore-failure", "report"), { recursive: true });
+    await writeFile(join(directory, "explore-failure", "report", "error.json"), JSON.stringify(report));
+  } });
+  assert.match(write.body, /^<!-- expo-explore-record:duo-closed:/m);
+  assert.match(write.body, /^\*\*duo\\-closed failed\*\* · publication · GITHUB\\_RESOURCE\\_NOT\\_FOUND/m);
+  assert.doesNotMatch(write.body, /iOS failed/);
+  // A capture diagnostics artifact on its own keeps its explore-diagnostics directory; a target id the file names is checked.
+  const [capture] = await reportFailure(t, { mutateFiles: async directory => {
+    await mkdir(join(directory, "explore-failure", "capture", "explore-diagnostics"), { recursive: true });
+    await writeFile(join(directory, "explore-failure", "capture", "explore-diagnostics", "error.json"), JSON.stringify({ ...sampleDiagnostic(), target: "duo-open" }));
+  } });
+  assert.match(capture.body, /^\*\*duo\\-open failed\*\* · capture\\-head · APP\\_INPUT\\_MISSING/m);
+  const [invalid] = await reportFailure(t, { mutateFiles: async directory => {
+    await mkdir(join(directory, "explore-failure", "report"), { recursive: true });
+    await writeFile(join(directory, "explore-failure", "report", "error.json"), JSON.stringify({ ...report, target: "../ios" }));
+  } });
+  assert.match(invalid.body, /^<!-- expo-explore-record:ios:/m, "an invalid target id is no target: the record falls back to ios, as before targets");
+});
+
+test("every failed target of a run gets its own failed record, and a target's report failure outranks its capture's", async t => {
+  const { locateFailureDiagnostics } = await import("../../dist/report/failure-comment.js");
+  const writes = await reportFailure(t, { mutateFiles: async directory => {
+    const root = join(directory, "explore-failure");
+    // Every capture leg uploads diagnostics; only the failed ones hold an error.json.
+    for (const target of ["iphone", "duo-closed", "duo-open", "android"]) await mkdir(join(root, "capture", `explore-diagnostics-1234-1-${target}`, "explore-diagnostics"), { recursive: true });
+    await writeFile(join(root, "capture", "explore-diagnostics-1234-1-duo-open", "explore-diagnostics", "error.json"), JSON.stringify({ ...sampleDiagnostic(), code: "CONTROLLER_READER_STUCK", stage: "session" }));
+    await writeFile(join(root, "capture", "explore-diagnostics-1234-1-android", "explore-diagnostics", "error.json"), JSON.stringify(sampleDiagnostic()));
+    await mkdir(join(root, "report", "explore-report-diagnostics-1234-1-android"), { recursive: true });
+    await writeFile(join(root, "report", "explore-report-diagnostics-1234-1-android", "error.json"), JSON.stringify({ ...sampleDiagnostic(), code: "REPORT_EXPORT_FAILED", stage: "export" }));
+    const located = await locateFailureDiagnostics(root);
+    assert.deepEqual(located.map(failure => [failure.target, failure.diagnostic.code]), [["android", "REPORT_EXPORT_FAILED"], ["duo-open", "CONTROLLER_READER_STUCK"]]);
+  } });
+  assert.equal(writes.length, 2);
+  assert.equal(writes[1].action, "update", "the second failure merges into the comment the first created");
+  assert.match(writes[1].body, /^\*\*Android failed\*\* · export · REPORT\\_EXPORT\\_FAILED/m);
+  assert.match(writes[1].body, /^\*\*duo\\-open failed\*\* · session · CONTROLLER\\_READER\\_STUCK/m);
+  assert.doesNotMatch(writes[1].body, /APP\\_INPUT\\_MISSING/);
+  assert.deepEqual(writes.result, { posted: true });
 });
 
 test("ci.trustedAuthors on the default branch admits listed authors without write access, nobody else", async t => {

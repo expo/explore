@@ -293,7 +293,7 @@ test("action rejects unsupported Node versions before installing tools", async t
 test("the deploy job is the only post-capture job that holds EXPO_TOKEN, and it runs only for a requested hosted preview", () => {
   const deploy = review.jobs.deploy;
   assert.deepEqual(deploy.needs, ["targets", "capture", "report"]);
-  assert.equal(deploy.if, "needs.capture.outputs.preview == 'eas'");
+  assert.equal(deploy.if, "needs.report.outputs.published == 'true' && needs.capture.outputs.preview == 'eas' && !cancelled()");
   assert.deepEqual(deploy.permissions, { contents: "read", actions: "read", "pull-requests": "write" });
   const step = deploy.steps.find(step => step.name === "Deploy the hosted preview and publish its Explore report links");
   assert.equal(step.env.EXPO_TOKEN, "${{ secrets.EXPO_TOKEN }}");
@@ -305,13 +305,56 @@ test("the deploy job is the only post-capture job that holds EXPO_TOKEN, and it 
   assert.deepEqual(downloads.map(step => step.with.pattern), ["explore-capture-${{ github.run_id }}-${{ github.run_attempt }}-*", "explore-review-${{ github.run_id }}-${{ github.run_attempt }}-*"]);
   assert.ok(downloads.every(step => step.with.name === undefined && step.with["merge-multiple"] === undefined));
   assert.doesNotMatch(JSON.stringify(deploy), /OPENAI_API_KEY|ANTHROPIC_API_KEY/);
-  assert.equal(review.jobs.report.outputs, undefined);
+  // A report job hands forward only whether it published; its artifact URL is looked up again (matrix outputs keep one leg's value).
+  assert.deepEqual(review.jobs.report.outputs, { published: "${{ steps.publish.outputs.published }}" });
   // capture:review writes preview=<hosting> to the step outputs from the reviewed config.
   assert.equal(review.jobs.capture.outputs.preview, "${{ steps.capture.outputs.preview }}");
   assert.match(review.jobs.capture.steps.find(step => step.id === "capture").run, /capture:review/);
   assert.deepEqual(review.jobs.failure.needs, ["targets", "capture", "report", "deploy"]);
   assert.match(review.jobs.failure.if, /needs\.targets\.result == 'failure'/);
   assert.match(review.jobs.failure.if, /needs\.deploy\.result == 'failure'/);
+});
+
+test("one target's failed capture keeps neither the other targets' reports nor the preview off the PR (brentvatne/euxy#172)", async t => {
+  for (const workflow of [review, compare]) {
+    const report = workflow.jobs.report;
+    // A plain needs: [capture] skips every report once one capture leg fails; !cancelled() runs them, except in a cancelled run.
+    assert.equal(report.if, "needs.targets.result == 'success' && !cancelled()");
+    assert.deepEqual(report.needs, ["targets", "capture"]);
+    const [download, check] = report.steps;
+    assert.ok(download.uses.startsWith("actions/download-artifact@"));
+    // A pattern without a wildcard names this leg's artifact alone, and matching nothing is not a failure, as a name is.
+    assert.deepEqual(download.with, { pattern: "explore-capture-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}", path: "${{ runner.temp }}/explore-review" });
+    assert.equal(download["continue-on-error"], undefined, "a download that went wrong still fails the leg");
+    assert.equal(check.id, "captured");
+    const explore = report.steps.filter(step => /cli\.js" ci:(report|publish)/.test(step.run ?? "") || step.uses?.startsWith("actions/upload-artifact@") && step.if !== "always()");
+    assert.equal(explore.length, 3);
+    for (const step of explore) assert.equal(step.if, "steps.captured.outputs.found == 'true'", step.name);
+    const publish = report.steps.find(step => step.id === "publish");
+    assert.match(publish.run, /ci:publish[^\n]*\n\s*echo "published=true" >> "\$GITHUB_OUTPUT"/, "published only once ci:publish succeeded");
+    assert.deepEqual(report.outputs, { published: "${{ steps.publish.outputs.published }}" });
+    assert.equal(workflow.jobs.deploy.if, "needs.report.outputs.published == 'true' && needs.capture.outputs.preview == 'eas' && !cancelled()");
+    assert.deepEqual(workflow.jobs.deploy.needs, ["targets", "capture", "report"]);
+    // The check reads what the download left: this target's report input, or nothing.
+    const root = await mkdtemp(join(tmpdir(), "explore-report-check-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const runCheck = async () => {
+      const output = join(root, "output"); await writeFile(output, "");
+      const result = spawnSync("bash", ["-c", check.run], { encoding: "utf8", env: { ...process.env, RUNNER_TEMP: root, GITHUB_OUTPUT: output, TARGET: "duo-open" } });
+      assert.equal(result.status, 0, result.stderr);
+      return { output: await readFile(output, "utf8"), stdout: result.stdout };
+    };
+    const failed = await runCheck();
+    assert.equal(failed.output, "");
+    assert.match(failed.stdout, /The duo-open capture uploaded no review: its capture job failed/);
+    await mkdir(join(root, "explore-review"), { recursive: true });
+    await writeFile(join(root, "explore-review", "report-input.json"), "{}");
+    assert.equal((await runCheck()).output, "found=true\n");
+  }
+  // The failure job still runs when a capture leg failed, and names that target from its diagnostics.
+  const failure = review.jobs.failure;
+  assert.match(failure.if, /^always\(\) && \(.*needs\.capture\.result == 'failure'.*needs\.report\.result == 'failure'/);
+  for (const step of failure.steps.filter(step => step.uses?.startsWith("actions/download-artifact@"))) assert.equal(step["continue-on-error"], true, step.name);
 });
 
 test("closing a pull request runs nothing: hosted previews stay until a developer deletes them", () => {

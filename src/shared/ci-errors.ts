@@ -148,6 +148,12 @@ export async function reportCiError(error: unknown, options: {
   env?: NodeJS.ProcessEnv;
   secrets?: readonly string[];
   diagnosticsPath?: string;
+  /**
+   * The matrix target the failed command ran for, written into the diagnostics file. actions/download-artifact puts an
+   * artifact in a directory named after it only when a pattern matches several, so the failure job cannot always read
+   * the target from where the file lands.
+   */
+  target?: string;
   write?: (value: string) => void;
 } = {}): Promise<CiErrorData> {
   const env = options.env ?? process.env;
@@ -166,7 +172,7 @@ export async function reportCiError(error: unknown, options: {
   if (env.GITHUB_STEP_SUMMARY) outputs.push({ label: "job summary", operation: appendFile(env.GITHUB_STEP_SUMMARY, `${renderCiErrorSummary(error, renderOptions)}\n`) });
   if (options.diagnosticsPath) outputs.push({ label: "diagnostics file", operation: (async () => {
     await mkdir(dirname(options.diagnosticsPath!), { recursive: true });
-    await writeFile(options.diagnosticsPath!, `${JSON.stringify(diagnostic, null, 2)}\n`);
+    await writeFile(options.diagnosticsPath!, `${JSON.stringify(options.target ? { ...diagnostic, target: options.target } : diagnostic, null, 2)}\n`);
   })() });
   const results = await Promise.allSettled(outputs.map(output => output.operation));
   for (const [index, result] of results.entries()) {
