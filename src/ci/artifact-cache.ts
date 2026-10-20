@@ -1,4 +1,4 @@
-import { routeIdOfScreen } from "../capture/appearance.js";
+import { bundleColorSchemes, routeIdOfScreen, schemeScreenId } from "../capture/appearance.js";
 import { createHash } from "node:crypto";
 import { cp, lstat, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -181,7 +181,13 @@ export async function restoreCaptureArtifactCache(options: Recipe & {
     stage = await mkdtemp(`${options.directory}.cache-`);
     const stagedEvidence = join(stage, "evidence");
     await cp(source, stagedEvidence, { recursive: true, force: false, errorOnExist: true });
-    const available = options.selectedIds.filter(id => hasVerifiedCapture(bundle, id)
+    // A route is reused only with every appearance the baseline renders. A baseline whose dark session failed (brentvatne/
+    // euxy's main baseline run 39506374824) holds its light frames and a failed `<route>@dark`; reusing the light frame
+    // alone would leave the review's base with no dark frame, and dark would read as unavailable because of the base. Such
+    // a route is captured by the review's base instead, in every appearance.
+    const secondarySchemes = bundleColorSchemes(bundle).slice(1);
+    const everyAppearance = (id: string) => secondarySchemes.every(scheme => bundle.images[schemeScreenId(id, scheme)] && bundle.outcomes[schemeScreenId(id, scheme)] === undefined);
+    const available = options.selectedIds.filter(id => hasVerifiedCapture(bundle, id) && everyAppearance(id)
       && (!options.captureContexts || options.captureContexts[id] && bundle.captureContexts?.[id]
         && canonicalJson(options.captureContexts[id]) === canonicalJson(bundle.captureContexts[id])));
     if (!available.length) return false;

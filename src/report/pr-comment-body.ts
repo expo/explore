@@ -333,7 +333,10 @@ export function platformRecordOf(state: PublicCommentState, target?: CommentTarg
     if (diagnostics.length) {
       record.diagnostics = diagnostics.slice(0, 20).map(diagnostic => {
         const surface = state.review!.surfaces.find(surface => surface.id === diagnostic.surfaceId);
-        return { ...(diagnostic.side ? { side: diagnostic.side } : {}), route: surface ? routeOf(surface) : diagnostic.surfaceId, code: diagnostic.code, message: diagnostic.message, nextAction: diagnostic.nextAction };
+        // A secondary appearance's issue names its appearance, as its change row does: its light frame may be fine.
+        const scheme = schemeOf(diagnostic.surfaceId);
+        return { ...(diagnostic.side ? { side: diagnostic.side } : {}), route: `${surface ? routeOf(surface) : diagnostic.surfaceId}${surface && scheme ? ` (${scheme})` : ""}`,
+          code: diagnostic.code, message: diagnostic.message, nextAction: diagnostic.nextAction };
       });
       record.diagnosticCount = diagnostics.length;
     }

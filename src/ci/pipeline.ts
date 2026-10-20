@@ -11,7 +11,7 @@ import { runCiMap, type CiMapOptions, type CommandRunner } from "../capture/run.
 import { resolveColorSchemes, routeIdOfScreen, type ColorScheme } from "../capture/appearance.js";
 import { baseEnvironment } from "../capture/common.js";
 import { DEFAULT_MAX_SESSIONS, planSideSessions, sessionShare } from "./session-plan.js";
-import { mergeCaptureExports } from "./export-merge.js";
+import { mergeCaptureExports, type SecondaryCaptureExport } from "./export-merge.js";
 import { abandonSharedBuilds } from "../capture/shared-build.js";
 import { prepareCaptureReview, readCaptureBundle } from "../review/capture-review.js";
 import { quarantineReviewContract } from "../contracts/review-validation.js";
@@ -115,13 +115,26 @@ async function expectedColorSchemes(config: ExploreConfig, project: string, envi
 }
 
 /**
+ * A failure that must fail the side even when only a secondary appearance session had it: a session that may still be
+ * running (one Explore could not confirm stopped, or whose identity it could not verify) must never be hidden behind a
+ * partial report.
+ */
+function leavesSessionUnaccounted(error: unknown): boolean {
+  const failure = toCiError(error);
+  return failure.code === "SESSION_CLEANUP_FAILED" || failure.code === "SESSION_HANDOFF_UNVERIFIED"
+    || (failure.details as { allocation?: unknown } | undefined)?.allocation === "unknown";
+}
+
+/**
  * Run one side's capture: in one session, or when `passes` splits its appearances, one worker session per pass. The
  * primary pass exports to `mapOptions.outputDirectory`; the others beside it, named by their appearances, then merge.
+ * `runPass` replaces the worker capture of each pass (tests).
  */
-async function captureSideInSessions(mapOptions: CiMapOptions, passes: readonly (readonly ColorScheme[])[] | undefined,
-  progress: Progress, signal: AbortSignal | undefined, worker: boolean): Promise<Awaited<ReturnType<typeof runCiMap>>> {
-  const runOnWorker = (passOptions: CiMapOptions) =>
-    runCiMapOnWorker((({ progress: _progress, runner: _runner, agent: _agent, signal: _signal, ...rest }) => rest)(passOptions), progress, signal);
+export async function captureSideInSessions(mapOptions: CiMapOptions, passes: readonly (readonly ColorScheme[])[] | undefined,
+  progress: Progress, signal: AbortSignal | undefined, worker: boolean,
+  runPass?: (passOptions: CiMapOptions) => Promise<Awaited<ReturnType<typeof runCiMap>>>): Promise<Awaited<ReturnType<typeof runCiMap>>> {
+  const runOnWorker = runPass ?? ((passOptions: CiMapOptions) =>
+    runCiMapOnWorker((({ progress: _progress, runner: _runner, agent: _agent, signal: _signal, ...rest }) => rest)(passOptions), progress, signal));
   if (!passes || passes.length <= 1) return worker ? runOnWorker(mapOptions) : runCiMap(mapOptions);
   const schemes = passes.flat();
   progress(`${mapOptions.side}: capturing ${passes.map(pass => pass.join("+")).join(" and ")} in separate sessions`);
@@ -142,9 +155,24 @@ async function captureSideInSessions(mapOptions: CiMapOptions, passes: readonly 
   }));
   // The build folder holds the repacked app, which the sessions have installed.
   if (ownBuildShare) await rm(ownBuildShare, { recursive: true, force: true });
-  for (const outcome of settled) if (outcome.status === "rejected") throw outcome.reason;
-  await mergeCaptureExports(mapOptions.outputDirectory, passes.slice(1).map(pass => ({ directory: `${mapOptions.outputDirectory}-${pass.join("-")}`, scheme: pass[0]! })));
-  return (settled[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof runCiMap>>>).value;
+  // Only the primary appearance's session fails the side, besides a session left unaccounted for or a stopped review. In
+  // brentvatne/euxy's main baseline run 39506374824 the light session captured 16 of 16 routes and the dark session's
+  // install failed, which failed the whole target and lost its baseline. A secondary session's failure is kept in the
+  // report instead: every frame of its appearance is failed with its error, and the run is partial.
+  for (const outcome of settled) if (outcome.status === "rejected" && leavesSessionUnaccounted(outcome.reason)) throw outcome.reason;
+  const primary = settled[0]!;
+  if (primary.status === "rejected") throw primary.reason;
+  for (const outcome of settled) if (outcome.status === "rejected" && signal?.aborted) throw outcome.reason;
+  const secondaries = passes.slice(1).map((pass, index): SecondaryCaptureExport => {
+    const outcome = settled[index + 1]!;
+    if (outcome.status === "fulfilled") return { directory: `${mapOptions.outputDirectory}-${pass.join("-")}`, scheme: pass[0]! };
+    const error = serializeCiError(outcome.reason, { secrets: [mapOptions.expoToken] });
+    progress(`${mapOptions.side}: the ${pass.join("+")} session failed (${error.code}: ${error.message}); keeping the ${passes[0]!.join("+")} captures, and the report marks every ${pass.join("+")} frame failed`);
+    return { scheme: pass[0]!, error: { code: error.code, stage: error.stage, message: error.message, nextAction: error.nextAction, retryable: error.retryable } };
+  });
+  await mergeCaptureExports(mapOptions.outputDirectory, secondaries);
+  const result = primary.value;
+  return secondaries.some(secondary => "error" in secondary) ? { ...result, runStatus: "partial" } : result;
 }
 
 /**

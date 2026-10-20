@@ -268,6 +268,24 @@ test('capture problems are counted on the target\'s line and listed, collapsed, 
   assert.doesNotMatch(body, /needs review|Modified|old capture|old destination|token=private|\*\*iOS\*\*|Validation/);
 });
 
+test('a target whose dark session failed reads as ready, counts its dark frames unavailable, and names each one with the session\'s error', () => {
+  // brentvatne/euxy's main baseline run 39506374824: the light session captured every route, the dark session's install failed.
+  const error = { code: 'CAPTURE_SESSION_FAILED', stage: 'session', message: 'install: argent run list-devices failed: GET /tools failed: 404 Not Found',
+    nextAction: 'Rerun the capture on a new session.', retryable: true };
+  const unchanged = { review: { status: 'unchanged', description: 'No visible change' }, visual: { verdict: 'unchanged', reason: 'matched', mismatchPercentage: 0, threshold: 0.1, tool: 'agent-device@0.20.2' } };
+  const light = surface('settings', 'modified', { extra: { colorScheme: 'light', ...unchanged } });
+  const dark = surface('settings@dark', 'modified', { route: '/settings', extra: { colorScheme: 'dark',
+    headOutcome: { status: 'failed', attempts: 0, landing: 'unverified', reason: error.message, error } } });
+  delete dark.headImage;
+  const body = renderPublicComment(state({ review: review([light, dark]), evidence: undefined, capture: { planned: { base: 1, head: 1 }, done: { base: 1, head: 1 }, baseFromCache: true } }));
+  assert.doesNotMatch(body, /failed\*\*|capture failed|🟥/, 'one appearance missing is not a failed review');
+  assert.equal(statusOf(body, 'iOS'), `iOS · 1 capture unavailable · ${runLink}`);
+  assert.deepEqual(summaries(body), ['Capture issues (1)']);
+  assert.match(titleOf(body), /^### No compared screens changed · /);
+  assert.match(body, /\n- Head · \/settings \\\(dark\\\) · CAPTURE\\_SESSION\\_FAILED: install\\: argent run list\\-devices failed\\: GET \/tools failed\\: 404 Not Found Next action: Rerun the capture on a new session\\\.\n/);
+  assert.doesNotMatch(body, /\n- Head · \/settings · /, 'the light frame is not the one that failed');
+});
+
 test('zero eligible pairs are counted as unattributed instead of successful comparisons', () => {
   const flagged = evidenceReview();
   for (const surface of flagged.surfaces) {
