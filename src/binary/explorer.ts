@@ -27,7 +27,7 @@ export type BlackBoxAction = CaptureSetupAction | { action: "back" } | { action:
   | { action: "tap"; frameId: string; x: number; y: number };
 
 export type BlackBoxExplorerOptions = {
-  session: CiAgentSession;
+  session: Pick<CiAgentSession, "run">;
   store: ExploreStore;
   map: ExploreMap;
   app: { name: string; bundleId: string; platform: "ios" | "android"; version?: string };

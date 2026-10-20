@@ -199,6 +199,39 @@ npx @expo/explore explore:session <session-id> --env-file path/.env.eas-simulato
 </details>
 
 <details>
+<summary><strong>Take the same steps on every run and device</strong></summary>
+
+A model picks its own path, so two runs (or an iPhone and an Android phone) can reach different screens. To get the same screens every time, write the steps down once, for example after a model run showed you the app, and pass them with `--replay`. No model login or API key is needed.
+
+```sh
+npx @expo/explore explore:binary ./my-app.app --replay steps.json
+npx @expo/explore explore:session --replay steps.json   # an iPhone Duo pose, or any session you set up by hand
+```
+
+```json
+{
+  "steps": [
+    { "capture": "Home" },
+    { "action": "tap", "label": "Settings" },
+    { "capture": "Settings" },
+    { "action": "tap", "label": "Dark" },
+    { "capture": "Settings", "state": "dark" },
+    { "action": "tap", "label": "Learn", "platforms": ["ios"] },
+    { "capture": "Learn", "platforms": ["ios"] },
+    { "action": "tap", "label": "Got it", "optional": true }
+  ]
+}
+```
+
+- An action is one of `tap` or `fill` (with `label` or `identifier`), `type`, `scroll` (`direction`), `wait` (`milliseconds`), `open` (`url`), `back`, and `dismiss-keyboard`, as in the model's own tools. The same safety rules apply: destructive or app-leaving taps are refused.
+- `{ "capture": "Title" }` photographs the current screen under that title; add `"state"` for another state of a screen already captured.
+- `"platforms": ["ios"]` limits a step to those platforms, for screens one platform does not have. `"optional": true` skips an action that fails (a one-time dialog) instead of stopping.
+- If a required action fails, the run stops there and the report still shows what was captured, with a gap naming the step and the screens it did not reach.
+- The screen and action budgets still apply; raise `--max-screens` and `--max-actions` for a long plan.
+
+</details>
+
+<details>
 <summary><strong>What a run without source shows</strong></summary>
 
 One card per screen the run reached, laid out by how many taps it took, with the tapped control on each edge. There is no before and after; that needs the app's source: [`capture`](#quick-start) on your machine, or [CI](#set-up-ci).

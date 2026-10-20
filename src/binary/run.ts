@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createCiAgentSession, type CiAgentSession, type CiAgentSessionConfig } from "../capture/agent/session.js";
 import { createLocalCiAgentSession } from "../capture/agent/session-local.js";
 import type { CiAgentProviderName } from "../capture/agent/provider.js";
+import { createReplaySession, type ReplayPlan } from "./replay.js";
 import { CONTROLLER_SESSION, baseEnvironment, isRecord } from "../capture/common.js";
 import { controllerData, defaultRunner, openedSimulatorDevice } from "../capture/controller.js";
 import type { CommandRequest, CommandResult } from "../capture/run.js";
@@ -57,6 +58,8 @@ export type BinaryExploreOptions = {
   simulator?: "eas" | "local";
   environment?: NodeJS.ProcessEnv;
   runner?: typeof defaultRunner;
+  /** Fixed steps to take instead of a model's; no model access is needed. */
+  replay?: ReplayPlan;
   createSession?: (config: CiAgentSessionConfig, options: { env: NodeJS.ProcessEnv; auth: ModelAuth }) => CiAgentSession;
   progress?: (message: string) => void;
   now?: () => number;
@@ -68,7 +71,7 @@ export type BinaryExploreResult = {
   archive: Omit<InspectedArchive, "path"> & { path: string };
   session: { id: string; platform: Platform; device: string; owner: string; project: string };
   runtime: ActiveSimulatorRuntime;
-  model: { provider: CiAgentProviderName; model: string; auth: "local-login" | "api-key" };
+  model: { provider: CiAgentProviderName | "replay"; model: string; auth: "local-login" | "api-key" | "none" };
   exploration: BlackBoxExplorerResult;
   durationMs: number;
 };
@@ -194,6 +197,11 @@ function modelSession(provider: CiAgentProviderName, auth: ModelAuth, options: M
   return { session, provider, model: config.model, auth };
 }
 
+/** A replay plan takes the model's place: no model access is checked or used. */
+function replayModel(options: Pick<BinaryExploreOptions, "replay">, platform: Platform) {
+  return options.replay ? { session: createReplaySession(options.replay, platform), provider: "replay" as const, model: "replay plan", auth: "none" as const } : undefined;
+}
+
 /** Local `claude`/`codex` login unless an API key is present; preflight proves access before a simulator is paid for. */
 export function selectModelSession(options: ModelSessionOptions, environment: NodeJS.ProcessEnv) {
   const provider: CiAgentProviderName = options.provider ?? (environment.OPENAI_API_KEY?.trim() && !environment.ANTHROPIC_API_KEY?.trim() ? "openai" : "anthropic");
@@ -260,7 +268,7 @@ export type ConnectedSessionExploration = {
   limits: { maxDurationMinutes: number; maxScreens: number; maxActions: number };
   store: ExploreStore;
   map: ExploreMap;
-  model: { session: CiAgentSession };
+  model: { session: Pick<CiAgentSession, "run"> };
   /** `eas simulator:get --json` for the attached session; descriptive (OS version) only. */
   sessionJson: () => string;
   /** agent-device session name on the daemon; explore:session reuses the caller's session so the device is not "in use" by another. */
@@ -572,7 +580,7 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
     map.run.environment = { deviceModel: device };
     session = { id: connection.sessionId, platform, device, name: info.name, ...(info.deviceRunSessionUrl ? { url: info.deviceRunSessionUrl } : {}) };
 
-    const model = await preflightModelSession(options, environment, say);
+    const model = replayModel(options, platform) ?? await preflightModelSession(options, environment, say);
     const outputDirectory = await realpath(await mkdir(options.output, { recursive: true }).then(() => options.output));
     const store = new ExploreStore(outputDirectory);
     if (await store.exists()) throw binaryError("OUTPUT_NOT_EMPTY", `${outputDirectory} already holds an Explore map.`, "Pass an empty --output directory.");
@@ -682,7 +690,7 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
   say(`${archive.appName} ${archive.version ?? ""} (${bundleId}, ${platform}, ${(archive.bytes / 1048576).toFixed(0)} MB, sha256 ${archive.sha256.slice(0, 12)})`);
   if (archive.missingLibs?.length && emulatorAbi === "x86_64") say(`warning: lib/x86_64 lacks ${archive.missingLibs.slice(0, 4).join(", ")}${archive.missingLibs.length > 4 ? ` and ${archive.missingLibs.length - 4} more` : ""} that another ABI ships; the app may stop with UnsatisfiedLinkError on the emulator`);
 
-  const model = await preflightModelSession(options, environment, say);
+  const model = replayModel(options, platform) ?? await preflightModelSession(options, environment, say);
 
   const outputDirectory = await realpath(await mkdir(options.output, { recursive: true }).then(() => options.output));
   const store = new ExploreStore(outputDirectory);
