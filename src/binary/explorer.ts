@@ -22,7 +22,7 @@ export type BlackBoxFrame = {
   imageUnavailable?: { code: string; message: string };
   /** The foreground app differed from the explored one; the host already brought it back. */
   leftApp?: boolean;
-  /** The image is on a portrait panel's axes under a landscape UI (an opened iPhone Duo); the report turns it upright. */
+  /** The image is on a portrait panel's axes under a landscape UI (an opened iPhone Duo), as the tree is; the report stores it turned upright. */
   landscape?: boolean;
 };
 
@@ -440,8 +440,22 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
     if (currentScreenId === from.id) currentScreenId = into.id;
   };
 
-  const screenWithImage = (png: Buffer, except: Screen): Screen | undefined => {
-    const sha = createHash("sha256").update(png).digest("hex");
+  /**
+   * The bytes a frame's screenshot is stored as, and their digest: an opened Duo's frame is turned upright once, however
+   * often the frame is looked up or recorded. Keyed by the image, which every copy of the frame shares.
+   */
+  const storedImages = new WeakMap<Buffer, { png: Buffer; sha256: string }>();
+  const storedImage = (image: Buffer, landscape: boolean): { png: Buffer; sha256: string } => {
+    let stored = storedImages.get(image);
+    if (!stored) {
+      const png = landscape ? turnedClockwise(image) : image;
+      stored = { png, sha256: createHash("sha256").update(png).digest("hex") };
+      storedImages.set(image, stored);
+    }
+    return stored;
+  };
+
+  const screenWithImage = (sha: string, except: Screen): Screen | undefined => {
     const artifact = map.artifacts.find(item => item.kind === "screenshot" && item.sha256 === sha);
     if (!artifact) return undefined;
     const controls = structural(evidence.get(except.id)?.parts ?? new Set());
@@ -532,7 +546,7 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
     let screenshotArtifactId: string | undefined;
     if (withImage && frame.png) {
       // Hashed here rather than trusting the daemon's digest: the report validates artifacts against their bytes.
-      const png = frame.landscape ? turnedClockwise(frame.png) : frame.png, sha = createHash("sha256").update(png).digest("hex");
+      const { png, sha256: sha } = storedImage(frame.png, frame.landscape === true);
       let artifact = map.artifacts.find(item => item.kind === "screenshot" && item.sha256 === sha);
       if (!artifact) {
         artifact = { id: `art_${randomUUID().slice(0, 12)}`, kind: "screenshot" as const, path: `artifacts/screenshots/${sha}.png`, sha256: sha,
@@ -602,7 +616,7 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
     // The same pixels as a screen already seen, with the same controls, is that screen: a tree read while Android was
     // still exposing a text node (AudioScape's playlist title missing from one read of two identical frames) is not new.
     if (created && latest.png) {
-      const twin = screenWithImage(latest.png, screen);
+      const twin = screenWithImage(storedImage(latest.png, latest.landscape === true).sha256, screen);
       if (twin) { mergeScreens(screen, twin); screen = twin; created = false; }
     }
     // Every screen gets an observation the moment it is seen, so elements and action attempts always point at a

@@ -897,3 +897,32 @@ test("a landscape frame on a portrait panel (an opened iPhone Duo) is stored upr
   // The panel's top (red) is the UI's right-hand side once turned a quarter clockwise.
   assert.deepEqual([...stored.data], [0, 0, 255, 255, 255, 0, 0, 255]);
 });
+
+/** A PNG of `width` × `height` RGBA pixels, each given as [r, g, b, a] row by row. */
+async function pngOf(width, height, pixels) {
+  const { createRequire } = await import("node:module");
+  const { PNG: Png } = createRequire(import.meta.url)("pngjs");
+  const image = new Png({ width, height });
+  image.data.set(pixels.flat());
+  return Png.sync.write(image);
+}
+
+test("an opened Duo's frame shows the same pixels as a screen already seen once turned, so it is that screen (AudioScape's playlist title, rotated)", async () => {
+  const tabs = [{ type: "Button", label: "Home", hittable: true }, { type: "Button", label: "Library", hittable: true }];
+  const library = [{ type: "StaticText", label: "Library" }, { type: "Button", label: "My Playlist", hittable: true }, ...tabs];
+  const trees = { library, titled: [{ type: "StaticText", label: "My Playlist" }, ...tabs], untitled: [...tabs] };
+  const images = { library: await pngOf(1, 2, [[255, 0, 0, 255], [0, 0, 255, 255]]), playlist: await pngOf(1, 2, [[0, 255, 0, 255], [0, 0, 255, 255]]) };
+  let visits = 0; let frames = 0; let where = "library";
+  const { map } = await harness([
+    ["observe", { includeImage: true }], ["capture", { frameId: "frame-0", title: "Library" }],
+    ["act", { action: "tap", label: "My Playlist" }], ["observe", { includeImage: true }],
+    ["act", { action: "back" }], ["observe", { includeImage: true }],
+    ["act", { action: "tap", label: "My Playlist" }], ["observe", { includeImage: true }],
+    ["finish", { summary: "Done." }],
+  ], { observe: async includeImage => ({ nodes: trees[where], capturedAt: new Date().toISOString(),
+      ...(includeImage ? { frameId: `frame-${frames++}`, png: Buffer.from(images[where === "library" ? "library" : "playlist"]), width: 1, height: 2, landscape: true } : {}) }),
+    act: async action => { if (action.action === "back") where = "library"; else where = visits++ === 0 ? "titled" : "untitled"; } });
+  assert.equal(map.screens.length, 2, "the second read of the playlist did not mint a screen");
+  assert.equal(map.observations.filter(item => item.screenId === map.screens[1].id).length, 2, "both reads are observations of the one playlist screen");
+  assert.equal(map.artifacts.filter(item => item.kind === "screenshot").length, 2);
+});
