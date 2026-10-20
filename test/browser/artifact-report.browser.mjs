@@ -196,7 +196,7 @@ test("the pill shows the app's own icon when the report has one, and the Expo ma
   report.review.runtime.appIcon = { url: `https://artifact.expo-explore.invalid/${iconSha}.png`, sha256: iconSha, width: 4, height: 4 };
   report.assets.push({ sha256: iconSha, path: iconPath });
   const withIcon = await harness(t, await archive(report, [{ name: iconPath, bytes: iconBytes }]), { app: true });
-  const logo = withIcon.page.locator(".left-panel-collapsed-pill").getByRole("button", { name: "Map", exact: true });
+  const logo = withIcon.page.locator(".left-panel-collapsed-pill").getByRole("button", { name: "Map of Fixture", exact: true });
   await expect(logo.locator("img.panel-app-icon")).toHaveJSProperty("naturalWidth", 4);
   await expect(logo.locator(".expo-mark")).toHaveCount(0);
   // The tab shows it too, from a Blob URL: the ZIP's own reference is not one the browser can load.
@@ -206,7 +206,7 @@ test("the pill shows the app's own icon when the report has one, and the Expo ma
   assert.deepEqual(withIcon.errors, []);
 
   const withoutIcon = await harness(t, await archive(), { app: true });
-  const mark = withoutIcon.page.locator(".left-panel-collapsed-pill").getByRole("button", { name: "Map", exact: true });
+  const mark = withoutIcon.page.locator(".left-panel-collapsed-pill").getByRole("button", { name: "Map of Fixture", exact: true });
   await expect(mark.locator(".expo-mark")).toHaveCount(1);
   await expect(mark.locator("img")).toHaveCount(0);
   assert.deepEqual(withoutIcon.errors, []);
@@ -644,6 +644,259 @@ test("a switch to a target whose screenshots have another shape lays the map out
   await page.getByRole("menu", { name: "Device" }).getByRole("menuitemradio").nth(0).click();
   await expect(page.locator(".collapsed-platform").first()).toHaveText("iPhone 17");
   await expect.poll(layout, { timeout: 10_000 }).toEqual({ overlaps: 0, shape: 2.3 });
+  assert.deepEqual(errors, []);
+});
+
+/**
+ * The phone header as drawn, once a resize's fit has run. Its shown controls, each of the row's clipped at the row's
+ * edges: how many pairs overlap, how many run past the row's end (past the window on a desktop, whose row does not
+ * clip), and the page's overflow; the target label's parts cut without a fade or faded though whole; the room around
+ * the row's first and last controls for a focus ring; and the name's width against its text's and its minimum.
+ */
+function phoneHeader(page) {
+  return page.locator(".left-panel-collapsed-pill").evaluate(async pill => {
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const row = pill.querySelector(".collapsed-app-identity");
+    const clip = row.getBoundingClientRect();
+    const end = getComputedStyle(row).overflowX === "clip" ? clip.right - parseFloat(getComputedStyle(row).paddingRight) : innerWidth;
+    const shown = [...pill.querySelectorAll(".panel-logo-button, .collapsed-app-identity > strong, .collapsed-platform, .collapsed-pr, .collapsed-search")]
+      .filter(node => node.checkVisibility({ visibilityProperty: true }));
+    const boxes = shown.map(node => {
+      const box = node.getBoundingClientRect();
+      return row.contains(node) ? { left: Math.max(box.left, clip.left), right: Math.min(box.right, clip.right) } : box;
+    });
+    let overlaps = 0;
+    for (const [index, a] of boxes.entries()) for (const b of boxes.slice(index + 1)) if (a.left < b.right - 1 && b.left < a.right - 1) overlaps += 1;
+    const items = shown.filter(node => row.contains(node));
+    const past = items.filter(node => node.getBoundingClientRect().right > end + 1).length;
+    const parts = [...row.querySelectorAll(".collapsed-target .collapsed-platform-label, .collapsed-target .collapsed-platform-label-text, .collapsed-target .collapsed-platform-label-suffix")];
+    const cut = node => node.scrollWidth > node.offsetWidth;
+    const faded = node => getComputedStyle(node).maskImage !== "none";
+    const controls = items.filter(node => node.matches(".collapsed-platform, .collapsed-pr"));
+    const ring = controls.length ? Math.floor(Math.min(controls[0].getBoundingClientRect().left - clip.left, clip.right - controls.at(-1).getBoundingClientRect().right)) : 4;
+    const name = row.querySelector(":scope > strong");
+    const minimum = parseFloat(getComputedStyle(row).getPropertyValue("--collapsed-name-min")) || 64;
+    return {
+      overlaps, past, overflow: document.documentElement.scrollWidth - innerWidth,
+      unfaded: parts.filter(node => cut(node) && !faded(node)).length, fadedWhole: parts.filter(node => faded(node) && !cut(node)).length,
+      ring, targetCut: parts.some(cut),
+      name: name.checkVisibility({ visibilityProperty: true }) ? { width: name.getBoundingClientRect().width, text: name.scrollWidth, minimum: Math.min(minimum, name.scrollWidth) } : undefined,
+    };
+  });
+}
+
+/** What a header that fits shows: nothing overlaps or runs past the row, and a label fades exactly where it is cut. */
+const FITS = { overlaps: 0, past: 0, overflow: 0, unfaded: 0, fadedWhole: 0 };
+const fitOf = ({ overlaps, past, overflow, unfaded, fadedWhole }) => ({ overlaps, past, overflow, unfaded, fadedWhole });
+
+/**
+ * A report of two targets, `label` the shown one's, for the phone header: `icon` adds the app's icon (`"broken"`, one
+ * whose bytes are no image), `appearances` a second chip, and the pull request is #1234.
+ */
+async function phoneReport({ label, appName = "Acme Super Long Application Name", icon = false, appearances = false }) {
+  const targets = [{ id: "shown", platform: "ios", label }, { id: "other", platform: "ios", label: "iPhone 17" }];
+  const report = reportFixture();
+  report.review.runtime = { ...report.review.runtime, appName, platform: "ios", platforms: ["ios"], target: targets[0], targets,
+    ...(appearances ? { colorSchemes: ["light", "dark"] } : {}) };
+  report.review.pullRequest.number = 1234;
+  const extra = [];
+  if (icon) {
+    const image = new PNG({ width: 4, height: 4 });
+    image.data.fill(180);
+    const bytes = icon === "broken" ? new TextEncoder().encode("not an image") : PNG.sync.write(image);
+    const sha = createHash("sha256").update(bytes).digest("hex");
+    report.review.runtime.appIcon = { url: `https://artifact.expo-explore.invalid/${sha}.png`, sha256: sha, width: 4, height: 4 };
+    report.assets.push({ sha256: sha, path: `assets/${sha}.png` });
+    extra.push({ name: `assets/${sha}.png`, bytes });
+  }
+  return archive(report, extra);
+}
+
+test("at a phone's width the header leaves out the app's name, then the pull request link, then fades the target's device; nothing overlaps", { timeout: 60_000 }, async t => {
+  const targets = [{ id: "iphone", platform: "ios", label: "iPhone 17" }, { id: "duo-half", platform: "ios", label: "iPhone 17 Pro Max Duo (half-open, outer)" }];
+  const icon = new PNG({ width: 4, height: 4 });
+  icon.data.fill(180);
+  const iconBytes = PNG.sync.write(icon);
+  const iconSha = createHash("sha256").update(iconBytes).digest("hex");
+  const report = reportFixture();
+  // An icon to name the app once its name is left out; two appearances for the second chip; the longest target.
+  report.review.runtime = {
+    ...report.review.runtime, platform: "ios", platforms: ["ios"], target: targets[1], targets, colorSchemes: ["light", "dark"],
+    appIcon: { url: `https://artifact.expo-explore.invalid/${iconSha}.png`, sha256: iconSha, width: 4, height: 4 },
+  };
+  report.assets.push({ sha256: iconSha, path: `assets/${iconSha}.png` });
+  report.review.pullRequest.number = 1234;
+  const { page, errors } = await harness(t, await archive(report, [{ name: `assets/${iconSha}.png`, bytes: iconBytes }]), { app: true });
+  const pill = page.locator(".left-panel-collapsed-pill");
+  const name = pill.locator(".collapsed-app-identity > strong");
+  const target = pill.locator(".collapsed-target");
+  const device = target.locator(".collapsed-platform-label-text");
+  const pose = target.locator(".collapsed-platform-label-suffix");
+  const pr = pill.locator(".collapsed-pr");
+  const layout = async () => fitOf(await phoneHeader(page));
+  const clipped = locator => locator.evaluate(node => node.scrollWidth - node.offsetWidth > 1);
+  const whole = async () => ({ device: !await clipped(device), pose: !await clipped(pose) });
+  const dropped = () => pill.locator(".collapsed-app-identity").evaluate(node => node.dataset.drop ?? "");
+  // The fit measures text: the Viewer's font must be in before the row's widths mean anything.
+  await page.evaluate(() => document.fonts.ready);
+
+  // A desktop window's pill is sized by its content and shows the whole row.
+  await page.setViewportSize({ width: 1180, height: 820 });
+  await expect(name).toBeVisible();
+  await expect(target).toHaveText("iPhone 17 Pro Max Duo (half-open, outer)");
+  await expect(pr).toHaveText("PR #1234");
+  await expect(pr).toBeVisible();
+  expect(await whole()).toEqual({ device: true, pose: true });
+  expect(await dropped()).toBe("");
+  await expect.poll(layout).toEqual(FITS);
+
+  // A small tablet has no room for the name beside Search: the row leaves it out (the icon still names the app) and
+  // keeps the whole target and a shorter link.
+  await page.setViewportSize({ width: 560, height: 932 });
+  await expect(name).toBeHidden();
+  await expect(pr).toHaveText("#1234");
+  await expect(pr).toBeVisible();
+  await expect(target).toHaveText("iPhone 17 Pro Max Duo (half-open, outer)");
+  expect(await whole()).toEqual({ device: true, pose: true });
+  await expect.poll(layout).toEqual(FITS);
+  const search = pill.getByRole("button", { name: "Search", exact: true });
+  const finger = await search.boundingBox();
+  assert.ok(finger.width >= 44 && finger.height >= 44, `Search is ${finger.width}×${finger.height}`);
+
+  // A large phone's width leaves out the link too (Search keeps "Open pull request") before it touches the target.
+  await page.setViewportSize({ width: 500, height: 844 });
+  await expect(pr).toBeHidden();
+  await expect(target).toHaveText("iPhone 17 Pro Max Duo (half-open, outer)");
+  expect(await whole()).toEqual({ device: true, pose: true });
+  await expect.poll(layout).toEqual(FITS);
+  await page.keyboard.press("ControlOrMeta+KeyK");
+  const palette = page.getByRole("dialog", { name: "Search Explore" });
+  await palette.getByRole("combobox", { name: "Search screens and commands" }).fill("pull request");
+  await expect(palette.getByRole("option", { name: /^Open pull request #1234 on GitHub/ })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(palette).toBeHidden();
+
+  // An iPhone's width fades the device's name; the pose stays whole and nothing overlaps.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(pill.locator(".collapsed-app-identity")).toHaveAttribute("data-drop", /squeeze/);
+  await expect(pill.locator(".collapsed-app-identity")).not.toHaveAttribute("data-drop", /pose/);
+  expect(await whole()).toEqual({ device: false, pose: true });
+  await expect.poll(layout).toEqual(FITS);
+
+  // Narrower than the pose beside two chips: the pose fades too, inside its chip, never over the appearance chip.
+  await page.setViewportSize({ width: 320, height: 568 });
+  await expect(pill.locator(".collapsed-app-identity")).toHaveAttribute("data-drop", /pose/);
+  await expect(pill.locator(".collapsed-platform").nth(1)).toHaveText("Light");
+  await expect.poll(layout).toEqual(FITS);
+
+  // Widened again, the row takes everything back: the desktop's pill is sized by its content and leaves nothing out
+  // (its own width rule ellipsizes the name beside so long a target; the fit does not touch it).
+  await page.setViewportSize({ width: 1180, height: 820 });
+  await expect(name).toHaveCSS("visibility", "visible");
+  await expect(name).toHaveCSS("position", "static");
+  await expect(pr).toHaveText("PR #1234");
+  await expect(pr).toBeVisible();
+  expect(await whole()).toEqual({ device: true, pose: true });
+  expect(await dropped()).toBe("");
+  assert.deepEqual(errors, []);
+});
+
+test("a phone's row without the app's icon cuts the name down to its minimum before it squeezes the target, and fades a label only where it is cut", { timeout: 90_000 }, async t => {
+  const { page, errors } = await harness(t, await phoneReport({ label: "iPhone 16 Pro (open)" }), { app: true });
+  const row = page.locator(".left-panel-collapsed-pill .collapsed-app-identity");
+  await expect(row.locator(".collapsed-target")).toHaveText("iPhone 16 Pro (open)");
+  await page.evaluate(() => document.fonts.ready);
+
+  // An iPhone's width has room for the whole target beside a cut name: the name gives way, the target keeps its label.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(row).not.toHaveAttribute("data-drop", /squeeze/);
+  const iphone = await phoneHeader(page);
+  assert.equal(iphone.targetCut, false);
+  assert.ok(iphone.name && iphone.name.width > iphone.name.minimum + 1 && iphone.name.width < iphone.name.text, `the name is ${JSON.stringify(iphone.name)}`);
+
+  // At every phone width, the target is cut only once the name is at its minimum, and only what is cut fades.
+  for (const width of [320, 340, 360, 375, 390, 414, 430, 460, 480, 560, 700]) {
+    await page.setViewportSize({ width, height: 844 });
+    const header = await phoneHeader(page);
+    assert.deepEqual(fitOf(header), FITS, `at ${width}px`);
+    if (header.name) assert.ok(header.name.width >= header.name.minimum - 1, `at ${width}px the name is ${JSON.stringify(header.name)}`);
+    if (header.targetCut && header.name) assert.ok(header.name.width <= header.name.minimum + 1, `at ${width}px the target is cut beside ${JSON.stringify(header.name)}`);
+  }
+  assert.deepEqual(errors, []);
+});
+
+test("a phone's header with Hand off fits its row at an iPhone's widths, with or without the app's icon", { timeout: 120_000 }, async t => {
+  // The hosted preview's header: Hand off sits before Search, so the row has less room than at /r.
+  const reports = [
+    { label: "iPhone 16 Pro (open)", icon: false, appearances: true },
+    { label: "iPhone 16 Pro (open)", icon: true, appearances: true },
+    { label: "iOS", icon: false, appearances: true },
+  ];
+  for (const [index, options] of reports.entries()) {
+    const preview = { token: `${"qrstuvwxyz234567234567234567".slice(0, 28)}${"abcd".slice(index, index + 1)}bcd` };
+    const { page, errors } = await harness(t, await phoneReport(options), { app: true, reportIdentity: null, preview, query: "" });
+    const pill = page.locator(".left-panel-collapsed-pill");
+    await expect(pill.locator(".collapsed-target")).toHaveText(options.label);
+    await page.evaluate(() => document.fonts.ready);
+    for (const width of [320, 360, 390, 430, 460]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(pill.getByRole("button", { name: "Hand off to AI" })).toBeVisible();
+      const header = await phoneHeader(page);
+      const where = `${JSON.stringify(options)} at ${width}px`;
+      assert.deepEqual(fitOf(header), FITS, where);
+      // The row's end chip has room for its focus ring (2px, 2px out) and its key hint.
+      assert.ok(header.ring >= 4, `${where}: ${header.ring}px around the row's controls`);
+      // A name the row keeps is readable; one it leaves out is still the Map button's.
+      if (header.name) assert.ok(header.name.width >= header.name.minimum - 1, `${where}: the name is ${JSON.stringify(header.name)}`);
+      else await expect(pill.getByRole("button", { name: "Map of Acme Super Long Application Name", exact: true })).toBeVisible();
+      // A short label is no squeeze's to give: it shows whole.
+      if (options.label === "iOS") assert.equal(header.targetCut, false, where);
+    }
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+});
+
+test("a phone's row keeps the app's name when its icon cannot be read and the Expo mark stands in", { timeout: 60_000 }, async t => {
+  const { page, errors } = await harness(t, await phoneReport({ label: "iPhone 17 Pro Max Duo (half-open, outer)", icon: "broken", appearances: true }), { app: true });
+  const pill = page.locator(".left-panel-collapsed-pill");
+  await expect(pill.locator(".panel-logo-button .expo-mark")).toHaveCount(1);
+  await expect(pill.locator(".panel-logo-button img")).toHaveCount(0);
+  await page.evaluate(() => document.fonts.ready);
+  // With the icon, this width leaves the name out; the Expo mark does not name the app, so the name stays, cut.
+  await page.setViewportSize({ width: 560, height: 932 });
+  await expect(pill.locator(".collapsed-app-identity > strong")).toBeVisible();
+  const header = await phoneHeader(page);
+  assert.deepEqual(fitOf(header), FITS);
+  assert.ok(header.name && header.name.width >= header.name.minimum - 1, `the name is ${JSON.stringify(header.name)}`);
+  assert.deepEqual(errors, []);
+});
+
+test("a phone's fit that waits on the fonts does nothing once the window is a desktop's", { timeout: 60_000 }, async t => {
+  // The fonts arrive only when the test says, after the window has crossed to the desktop layout.
+  const fault = () => {
+    let release;
+    const ready = new Promise(resolve => { release = () => resolve(document.fonts); });
+    Object.defineProperty(document.fonts, "ready", { configurable: true, get: () => ready });
+    window.releaseFonts = release;
+  };
+  const bytes = await phoneReport({ label: "iPhone 16 Pro (open)", icon: true, appearances: true });
+  const { page, errors } = await harness(t, bytes, { app: true, open: false, fault });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await chooseFile(page, bytes);
+  const pill = page.locator(".left-panel-collapsed-pill");
+  const row = pill.locator(".collapsed-app-identity");
+  await expect(row).toHaveAttribute("data-drop", /name/);
+
+  await page.setViewportSize({ width: 1180, height: 820 });
+  await expect(pill.locator(".collapsed-pr")).toHaveText("PR #1234");
+  await page.evaluate(async () => {
+    window.releaseFonts();
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+  await expect(row).not.toHaveAttribute("data-drop");
+  await expect(pill.locator(".collapsed-pr")).toBeVisible();
+  await expect(pill.locator(".collapsed-app-identity > strong")).toBeVisible();
   assert.deepEqual(errors, []);
 });
 
