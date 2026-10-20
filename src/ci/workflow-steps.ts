@@ -30,7 +30,7 @@ export async function writeCaptureOutputs(inputPath: string, environment: Enviro
   await writeStepOutputs(environment, { preview: (await readCiReportInput(inputPath)).preview?.hosting ?? "" });
 }
 
-function githubContext(environment: Environment) {
+export function githubContext(environment: Environment) {
   const repository = environment.GITHUB_REPOSITORY ?? "";
   const token = environment.GITHUB_TOKEN?.trim();
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new CiError({ code: "CI_RUN_IDENTITY_MISSING", stage: "preflight",
@@ -41,7 +41,7 @@ function githubContext(environment: Environment) {
 }
 
 /** One GitHub REST read; 404 is an answer (undefined), every other failure stops the step with what to do. */
-async function githubGet<T>(path: string, context: { token: string }, transport: typeof fetch): Promise<T | undefined> {
+export async function githubGet<T>(path: string, context: { token: string }, transport: typeof fetch): Promise<T | undefined> {
   let response: Response;
   try {
     response = await transport(`https://api.github.com/${path}`, { redirect: "error", signal: AbortSignal.timeout(30_000),
@@ -102,59 +102,108 @@ async function trustedAuthors(context: { repository: string; token: string }, tr
   catch (error) { return { logins: [], invalid: error instanceof Error ? error.message : String(error) }; }
 }
 
-type GithubArtifact = { id: number; expired: boolean; workflow_run?: { id?: number } };
-type GithubRun = { conclusion: string | null; workflow_id: number; head_sha: string; head_branch: string; event: string; head_repository?: { full_name?: string } };
+export type GithubArtifact = { id: number; name?: string; expired: boolean; workflow_run?: { id?: number } };
+export type GithubRun = { id: number; status?: string; conclusion: string | null; workflow_id: number; head_sha: string; head_branch: string; event: string;
+  head_repository?: { full_name?: string } };
 
 /**
- * `ci:find-baseline`: the newest baseline-workflow artifact of exactly this commit, uploaded from the default branch of
- * this repository by a finished run. Its id and run go to the step outputs for actions/download-artifact. A run that
- * failed counts: a target's baseline job uploads its artifact only after every step before it passed, so another
- * target's failure (one flaky simulator session, as in brentvatne/euxy#172) does not make this target's baseline
- * unusable. A run still in progress or cancelled does not.
+ * What every baseline lookup starts from: the GitHub context, a checked commit and target, the default branch and the
+ * baseline workflow's id, and the artifact names a baseline of this target may carry. Undefined when the repository
+ * has no baseline workflow.
  */
-export async function findBaselineArtifact(options: { sha: string; target?: string;
-  /** What callers from before targets pass: a platform is the id of its default target. */ platform?: string; environment?: Environment; transport?: typeof fetch }): Promise<{ id: number; run: number } | undefined> {
+export async function baselineLookup(options: { sha: string; target?: string; platform?: string; environment?: Environment; transport?: typeof fetch;
+  /** Wraps each read, as a wait that polls for minutes retries GitHub's transient failures. */ retry?: <T>(read: () => Promise<T>) => Promise<T> }) {
   const environment = options.environment ?? process.env; const transport = options.transport ?? fetch;
   const context = githubContext(environment);
   if (!SHA.test(options.sha)) throw new CiError({ code: "SHA_INVALID", stage: "preflight", message: "The base commit must be a full SHA.", nextAction: "Pass --sha with a 40-character commit SHA." });
   const target = options.target ?? options.platform ?? "ios";
   if (!isTargetId(target)) throw new CiError({ code: "TARGET_INVALID", stage: "preflight", message: `${target} is not a target id.`,
     nextAction: "Pass --target with an id from targets: in .expo-explore/config.yaml (ios or android without targets:)." });
-  const repository = await githubGet<{ default_branch: string }>(`repos/${context.repository}`, context, transport);
-  const workflow = await githubGet<{ id: number }>(`repos/${context.repository}/actions/workflows/explore-baseline.yml`, context, transport);
+  const read = <T>(path: string) => githubGet<T>(path, context, transport);
+  const get = <T>(path: string) => options.retry ? options.retry(() => read<T>(path)) : read<T>(path);
+  const repository = await get<{ default_branch: string }>(`repos/${context.repository}`);
+  const workflow = await get<{ id: number }>(`repos/${context.repository}/actions/workflows/explore-baseline.yml`);
   if (!repository || !workflow) return undefined;
   // Baselines carry the target suffix; target ios also accepts the unsuffixed name older single-platform baseline workflows uploaded.
   const names = [`explore-baseline-${options.sha}-${target}`, ...(target === "ios" ? [`explore-baseline-${options.sha}`] : [])];
+  return { context, get, target, sha: options.sha, defaultBranch: repository.default_branch, workflow: workflow.id, names };
+}
+
+/**
+ * Whether a run may supply this commit's baseline: a run of the baseline workflow for exactly this commit, on the
+ * default branch of this repository, started by a push or a manual dispatch. A finished run's artifact is reused, and
+ * a run still capturing is waited for, only when it passes this check; nothing from a pull request's head selects it.
+ */
+export function trustedBaselineRun(run: GithubRun | undefined, lookup: { workflow: number; sha: string; defaultBranch: string; context: { repository: string } }): run is GithubRun {
+  return !!run && run.workflow_id === lookup.workflow && run.head_sha === lookup.sha && run.head_branch === lookup.defaultBranch
+    && ["push", "workflow_dispatch"].includes(run.event) && run.head_repository?.full_name === lookup.context.repository;
+}
+
+/**
+ * `ci:find-baseline`: the newest baseline-workflow artifact of exactly this commit, uploaded from the default branch of
+ * this repository by a finished run. Its id and run go to the step outputs for actions/download-artifact. A run that
+ * failed counts: a target's baseline job uploads its artifact only after every step before it passed, so another
+ * target's failure (one flaky simulator session, as in brentvatne/euxy#172) does not make this target's baseline
+ * unusable. A run still in progress or cancelled does not; findPendingBaselineRun finds one still capturing.
+ */
+export async function findBaselineArtifact(options: { sha: string; target?: string;
+  /** What callers from before targets pass: a platform is the id of its default target. */ platform?: string; environment?: Environment; transport?: typeof fetch }): Promise<{ id: number; run: number } | undefined> {
+  const lookup = await baselineLookup(options);
+  if (!lookup) return undefined;
+  const { context, get } = lookup;
   const artifacts: GithubArtifact[] = [];
-  for (const name of names) for (let page = 1; page <= 10; page++) {
-    const listed = await githubGet<{ artifacts: GithubArtifact[] }>(`repos/${context.repository}/actions/artifacts?name=${encodeURIComponent(name)}&per_page=100&page=${page}`, context, transport);
+  for (const name of lookup.names) for (let page = 1; page <= 10; page++) {
+    const listed = await get<{ artifacts: GithubArtifact[] }>(`repos/${context.repository}/actions/artifacts?name=${encodeURIComponent(name)}&per_page=100&page=${page}`);
     artifacts.push(...listed?.artifacts ?? []);
     if ((listed?.artifacts.length ?? 0) < 100) break;
   }
   for (const artifact of artifacts.filter(candidate => !candidate.expired).sort((a, b) => b.id - a.id)) {
     if (!artifact.workflow_run?.id) continue;
-    const run = await githubGet<GithubRun>(`repos/${context.repository}/actions/runs/${artifact.workflow_run.id}`, context, transport);
-    if (!run || (run.conclusion !== "success" && run.conclusion !== "failure") || run.workflow_id !== workflow.id || run.head_sha !== options.sha
-      || run.head_branch !== repository.default_branch || !["push", "workflow_dispatch"].includes(run.event)
-      || run.head_repository?.full_name !== context.repository) continue;
+    const run = await get<GithubRun>(`repos/${context.repository}/actions/runs/${artifact.workflow_run.id}`);
+    if (!trustedBaselineRun(run, lookup) || (run.conclusion !== "success" && run.conclusion !== "failure")) continue;
     return { id: artifact.id, run: artifact.workflow_run.id };
   }
   return undefined;
 }
 
 /**
+ * A baseline run of exactly this commit that has not finished yet (queued, waiting or in progress), passing the same
+ * trust check as a finished one. In brentvatne/euxy's review run 39348956443 main's baseline of the base commit had
+ * started 15 s before the review, so no artifact existed yet. A run already capturing is preferred to one queued
+ * behind it in the baseline's concurrency group, since it finishes first; then the newest.
+ */
+export async function findPendingBaselineRun(options: Parameters<typeof baselineLookup>[0]): Promise<{ run: number } | undefined> {
+  const lookup = await baselineLookup(options);
+  if (!lookup) return undefined;
+  const listed = await lookup.get<{ workflow_runs?: GithubRun[] }>(`repos/${lookup.context.repository}/actions/workflows/${lookup.workflow}/runs?head_sha=${lookup.sha}`
+    + `&branch=${encodeURIComponent(lookup.defaultBranch)}&per_page=100`);
+  const pending = (listed?.workflow_runs ?? []).filter(run => run.status !== "completed" && Number.isSafeInteger(run.id) && run.id > 0 && trustedBaselineRun(run, lookup))
+    .sort((a, b) => Number(b.status === "in_progress") - Number(a.status === "in_progress") || b.id - a.id);
+  return pending[0] ? { run: pending[0].id } : undefined;
+}
+
+/**
  * `ci:find-baseline` as the workflow runs it: a baseline is optional, so a lookup that fails (a GitHub 5xx, a rate
  * limit) is a warning and no baseline, never an error. A `ci:*` error would write explore-diagnostics/error.json,
  * which the failure comment would then report as the cause of an unrelated failure, possibly on another target.
+ * With no finished baseline, it names a trusted baseline run still capturing the commit as `pending`, which
+ * `capture:review` waits for alongside head.
  */
 export async function findOptionalBaseline(options: Parameters<typeof findBaselineArtifact>[0]):
-  Promise<{ baseline?: { id: number; run: number }; warning?: { code: string; message: string } }> {
+  Promise<{ baseline?: { id: number; run: number }; pending?: { run: number }; warning?: { code: string; message: string } }> {
   try {
     const baseline = await findBaselineArtifact(options);
-    return baseline ? { baseline } : {};
+    if (baseline) return { baseline };
   } catch (error) {
     return { warning: { code: error instanceof CiError ? error.code : "BASELINE_LOOKUP_FAILED",
       message: `No baseline is reused, so capture captures the base too: ${error instanceof Error ? error.message : String(error)}` } };
+  }
+  try {
+    const pending = await findPendingBaselineRun(options);
+    return pending ? { pending } : {};
+  } catch (error) {
+    return { warning: { code: error instanceof CiError ? error.code : "BASELINE_LOOKUP_FAILED",
+      message: `No baseline run in progress is waited for, so capture captures the base too: ${error instanceof Error ? error.message : String(error)}` } };
   }
 }
 

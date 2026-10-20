@@ -133,6 +133,10 @@ jobs:
           set -euo pipefail
           npm ci --ignore-scripts --prefix "app-base/$APP_INSTALL_DIR"
           npm ci --ignore-scripts --prefix "app-head/$APP_INSTALL_DIR"
+      # A finished baseline of the base commit is downloaded here. With none, ci:find-baseline names a baseline run still
+      # capturing it (pending): right after a merge the next review starts while main's baseline runs. Capture review
+      # checks that run again (this repository's baseline workflow, the default branch, a push or manual dispatch, exactly
+      # the base commit) and waits for its artifact while head captures, for up to capture.baselineWaitMinutes.
       - name: Find optional exact-base evidence
         id: cache
         continue-on-error: true
@@ -161,6 +165,7 @@ jobs:
           ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
           # App-test secrets: one NAME: line per {{secret:NAME}} input in .expo-explore (expo-explore setup adds them).
           EXPLORE_CAPTURE_CACHE: ${{ runner.temp }}/explore-cache
+          EXPLORE_BASELINE_RUN: ${{ steps.cache.outputs.pending }}
         shell: bash
         run: |
           set -euo pipefail

@@ -18,6 +18,7 @@ import { quarantineReviewContract } from "../contracts/review-validation.js";
 import { agentCaptureConstraints } from "../capture/agent/source-context.js";
 import { captureArtifactCacheMayMatch, captureRecipeConfig, restoreCaptureArtifactCache, writeCaptureArtifactCache } from "./artifact-cache.js";
 import { runCiMapOnWorker } from "./capture-worker.js";
+import { DEFAULT_BASELINE_WAIT_MINUTES, awaitPendingBaseline } from "./baseline-wait.js";
 import { writeCiReportInput, readAppDirectory } from "../report/artifact.js";
 import { assessPublicEvidence, readExportedMap, type PublicEvidenceSide } from "../review/evidence-assessment.js";
 import { parseRuntimeExecutionContext } from "../review/runtime-adapter.js";
@@ -173,6 +174,24 @@ export async function sideAppearancePasses(config: ExploreConfig, environment: N
   return passes.length > 1 ? passes.map(pass => [...pass]) : undefined;
 }
 
+/**
+ * Base's start in a review that waits for a baseline still being captured; head has already started. Base captures as
+ * soon as the wait gives up, beside head when the sides capture concurrently, and a downloaded baseline is restored
+ * once head finishes, since restoring checks it against head's runtime profile. A head that fails ends the wait, and
+ * base is never started for a review that has already failed.
+ */
+export async function captureBaseAfterWait(input: { waited: Promise<string | undefined> | undefined; head: Promise<void>; stopWaiting: () => void;
+  captureBase: (cacheDirectory?: string) => Promise<void> }): Promise<void> {
+  if (!input.waited) return input.captureBase();
+  let headFailed = false;
+  input.head.catch(() => { headFailed = true; input.stopWaiting(); });
+  const waited = await input.waited;
+  if (headFailed) return;
+  if (!waited) return input.captureBase();
+  await input.head;
+  return input.captureBase(waited);
+}
+
 export function captureSidesConcurrently(input: { plan: SourceCapturePlan; agent: boolean; injectedRunner: boolean; baselineMayExist: boolean }): boolean {
   return !input.agent && !input.injectedRunner && !input.baselineMayExist
     && input.plan.headCaptureSurfaceIds.length > 0 && input.plan.baseCaptureSurfaceIds.length > 0;
@@ -208,8 +227,29 @@ export type PublicCiOptions = {
   runner?: CommandRunner;
   /** Internal dependency injection; configuration cannot replace the authenticated CLI session. */
   agentSessionFactory?: PrepareCiExplorationOptions["createSession"];
+  /** Internal dependency injection for tests: replaces the wait for a baseline run that EXPLORE_BASELINE_RUN names. */
+  awaitBaseline?: BaselineWait;
   progress?: Progress;
 };
+
+/** Waits for a baseline of the base commit still being captured: its downloaded export's directory, or undefined. */
+type BaselineWait = (signal: AbortSignal) => Promise<string | undefined>;
+
+/**
+ * The wait for a baseline still capturing the base commit: for the run `ci:find-baseline` named in
+ * EXPLORE_BASELINE_RUN, which the wait checks again by the same trust rules, for up to capture.baselineWaitMinutes. A
+ * workflow that names no run, or a config that sets 0, captures the base as before.
+ */
+function pendingBaselineWait(options: Pick<PublicCiOptions, "awaitBaseline" | "config" | "target" | "platform" | "output" | "progress">,
+  environment: NodeJS.ProcessEnv, transport: typeof fetch, baseSha: string): BaselineWait | undefined {
+  if (options.awaitBaseline) return options.awaitBaseline;
+  const run = Number(environment.EXPLORE_BASELINE_RUN);
+  const minutes = options.config.capture.baselineWaitMinutes ?? DEFAULT_BASELINE_WAIT_MINUTES;
+  if (!Number.isSafeInteger(run) || run <= 0 || minutes === 0) return undefined;
+  const target = options.target ?? options.platform ?? options.config.target?.id ?? "ios";
+  return signal => awaitPendingBaseline({ run, sha: baseSha, target, timeoutMs: minutes * 60_000, directory: join(resolve(options.output), "baseline-download"),
+    environment, transport, signal, ...(options.progress ? { progress: options.progress } : {}) });
+}
 
 function assertRunIdentity(environment: NodeJS.ProcessEnv): void {
   if (!/^[1-9][0-9]*$/.test(environment.GITHUB_RUN_ID ?? "") || !/^[1-9][0-9]*$/.test(environment.GITHUB_RUN_ATTEMPT ?? "")) {
@@ -247,13 +287,14 @@ async function prepareCiRun(options: Pick<PublicCiOptions, "baseProject" | "head
 }
 
 /** A review of any two commits (`capture:review --compare FILE`): the same capture as a PR's, with no PR to verify or comment on. */
-export async function runCompareCi(options: Omit<PublicCiOptions, "pullRequestPath" | "transport" | "onComment"> & { comparePath: string }) {
+export async function runCompareCi(options: Omit<PublicCiOptions, "pullRequestPath" | "onComment"> & { comparePath: string }) {
   const environment = options.environment ?? process.env;
   assertRunIdentity(environment);
   const comparison = projectComparePresentation(JSON.parse(await readFile(options.comparePath, "utf8")));
   const { projects, output, state } = await prepareCiRun(options, environment, comparison);
   const assertCurrentHead = async () => { for (const side of ["base", "head"] as const) assertCheckout(projects[side], comparison[side].sha); };
-  return runCiReview({ ...options, projects, output, state, presentation: comparison,
+  const awaitBaseline = pendingBaselineWait(options, environment, options.transport ?? fetch, comparison.base.sha);
+  return runCiReview({ ...options, projects, output, state, presentation: comparison, ...(awaitBaseline ? { awaitBaseline } : {}),
     environment, runId: environment.GITHUB_RUN_ID!, runAttempt: environment.GITHUB_RUN_ATTEMPT!,
     assertCurrentHead, postComment: async () => {} });
 }
@@ -324,7 +365,8 @@ export async function runPublicCi(options: PublicCiOptions) {
     for (const side of ["base", "head"] as const) assertCheckout(projects[side], pr[side].sha);
     await assertCurrentPr();
   };
-  return runCiReview({ ...options, projects, output, state, presentation: pr,
+  const awaitBaseline = pendingBaselineWait(options, environment, transport, pr.base.sha);
+  return runCiReview({ ...options, projects, output, state, presentation: pr, ...(awaitBaseline ? { awaitBaseline } : {}),
     environment, runId: environment.GITHUB_RUN_ID!, runAttempt: environment.GITHUB_RUN_ATTEMPT!,
     assertCurrentHead, postComment, canPublish: () => !prVerificationFailed });
 }
@@ -354,6 +396,11 @@ export async function runCiReview(options: {
   now?: () => number; sleep?: (milliseconds: number) => void; runner?: CommandRunner; subscription?: boolean; useLocalEasSession?: boolean;
   agentSessionFactory?: PrepareCiExplorationOptions["createSession"];
   prepareCapture?: () => Promise<void>;
+  /**
+   * Waits for a baseline of the base commit that is still being captured, when no downloaded baseline matches. It runs
+   * alongside head, and base waits for it only where base would start capturing.
+   */
+  awaitBaseline?: BaselineWait;
   progress?: Progress;
   /** Stops the captures between steps; model requests take it through agentSessionFactory. */
   signal?: AbortSignal;
@@ -371,6 +418,8 @@ export async function runCiReview(options: {
   let usagePhase: AgentUsagePhase = "preflight";
   let preserveReport: (() => Promise<void>) | undefined;
   let reportWritten = false;
+  // Stops a baseline wait still polling once the review no longer needs it: done, failed, or stopped.
+  const stopWaiting = new AbortController();
   try {
     progress(`planning the review of ${pr.head.sha.slice(0, 8)} against base ${pr.base.sha.slice(0, 8)} (scope ${config.exploration.scope})`);
     const plan = await buildVerifiedPlan({ baseProject: projects.base, headProject: projects.head,
@@ -401,6 +450,10 @@ export async function runCiReview(options: {
     // A baseline that may be restored needs the head runtime profile first; otherwise both sides capture at once.
     const baselineMayExist = plan.baseCaptureSurfaceIds.length > 0 && await captureArtifactCacheMayMatch({ ...cacheRecipes.base,
       ...(environment.EXPLORE_CAPTURE_CACHE ? { sourceDirectory: environment.EXPLORE_CAPTURE_CACHE } : {}), commit: pr.base.sha });
+    // With no finished baseline to reuse, one still being captured is waited for: from now, alongside head, and base
+    // waits for it only where it would start. Head is never delayed by it (brentvatne/euxy's review run 39348956443).
+    const waitedBaseline = !baselineMayExist && plan.baseCaptureSurfaceIds.length > 0 && options.awaitBaseline
+      ? options.awaitBaseline(options.signal ? AbortSignal.any([stopWaiting.signal, options.signal]) : stopWaiting.signal).catch(() => undefined) : undefined;
     const share = targetSessionShare(config, options.targets, options.posedTargets);
     // A share of one session captures the sides in turn.
     const concurrent = captureSidesConcurrently({ plan, agent: !!exploration.agent, injectedRunner: !!options.runner, baselineMayExist }) && share >= 2;
@@ -415,13 +468,13 @@ export async function runCiReview(options: {
     progress(`sessions: ${share} of ${config.capture.maxSessions ?? DEFAULT_MAX_SESSIONS} for this target; `
       + (split.length ? `${split.join(" and ")} ${split.length === 1 ? "captures its" : "capture their"} appearances in separate sessions`
         : concurrent ? "one session per side" : "the sides in turn"));
-    const captureSide = async (side: "head" | "base") => {
+    const captureSide = async (side: "head" | "base", cacheDirectory = environment.EXPLORE_CAPTURE_CACHE) => {
       const directory = join(output, `${side}-export`);
       const selectedIds = plan[`${side}CaptureSurfaceIds`];
       const cacheRecipe = cacheRecipes[side];
       let reuseDirectory: string | undefined;
-      if (side === "base" && selectedIds.length && runtimeProfile && environment.EXPLORE_CAPTURE_CACHE) {
-        const restored = await restoreCaptureArtifactCache({ ...cacheRecipe, sourceDirectory: environment.EXPLORE_CAPTURE_CACHE,
+      if (side === "base" && selectedIds.length && runtimeProfile && cacheDirectory) {
+        const restored = await restoreCaptureArtifactCache({ ...cacheRecipe, sourceDirectory: cacheDirectory,
           commit: pr.base.sha, selectedIds, directory: join(output, "base-cache"), runtimeProfile,
           ...(exploration.agent ? { captureContexts: exploration.agent.contexts } : {}) });
         if (restored) reuseDirectory = join(output, "base-cache");
@@ -453,12 +506,17 @@ export async function runCiReview(options: {
       }
       await writeCaptureArtifactCache(directory, cacheRecipe);
     };
+    const captureBase = (head: Promise<void>) => captureBaseAfterWait({ waited: waitedBaseline, head, stopWaiting: () => stopWaiting.abort(),
+      captureBase: cacheDirectory => captureSide("base", cacheDirectory) });
+    if (waitedBaseline) progress(`base waits for the baseline run of ${pr.base.sha.slice(0, 8)} still being captured; head captures meanwhile`);
     if (concurrent) {
       stage = "capture-head"; state.phase = "capturing"; state.capture.current = "head"; usagePhase = "capture-head";
-      progress("capturing head and base at the same time in two simulator sessions");
+      progress(waitedBaseline ? "capturing head; base captures in a second simulator session if the baseline cannot be reused"
+        : "capturing head and base at the same time in two simulator sessions");
       await postComment();
       // Let both sides finish or fail on their own so every started session is stopped by its owner.
-      const settled = await Promise.allSettled([captureSide("head"), captureSide("base")]);
+      const head = captureSide("head");
+      const settled = await Promise.allSettled([head, captureBase(head)]);
       for (const [index, outcome] of settled.entries()) {
         if (outcome.status === "rejected") { stage = index === 0 ? "capture-head" : "capture-base"; throw outcome.reason; }
       }
@@ -467,7 +525,7 @@ export async function runCiReview(options: {
         stage = `capture-${side}`; state.phase = "capturing"; state.capture.current = side;
         usagePhase = `capture-${side}`;
         await postComment();
-        await captureSide(side);
+        await (side === "head" ? captureSide("head") : captureBase(Promise.resolve()));
       }
     }
     delete state.capture.current;
@@ -564,6 +622,8 @@ export async function runCiReview(options: {
       try { await postComment(); } catch { /* A stale PR or inaccessible GitHub must not replace the original failure. */ }
     }
     throw error;
+  } finally {
+    stopWaiting.abort();
   }
 }
 

@@ -492,7 +492,7 @@ jobs:
 - The run summary links each target's report (**Open** and **zip**, like a PR comment) and, with hosting, the hosted report.
 - `setup --workflows` installs it from 0.19.0; `npx @expo/explore@latest setup --workflows` adds it to an existing setup. The caller grants `contents: read` and `actions: read`; `secrets: inherit` passes `EXPO_TOKEN` and any app-test secrets.
 - Call it once per workflow run. A called workflow runs inside its caller's run, so a second call in the same run would reuse the first one's artifact names; use separate workflows instead.
-- When the baseline workflow captured `base` in the last 30 days, with the same config and Explore version, that capture is reused and only `head` is captured. The report artifact is kept 30 days; a hosted link lasts as long as its EAS Hosting deployment (an aliased one until the alias moves).
+- When the baseline workflow captured `base` in the last 30 days, with the same config and Explore version, that capture is reused and only `head` is captured. When it is still capturing `base` (right after a merge), the review waits for it while `head` captures, up to `capture.baselineWaitMinutes` (15 by default). The report artifact is kept 30 days; a hosted link lasts as long as its EAS Hosting deployment (an aliased one until the alias moves).
 
 </details>
 
