@@ -102,8 +102,11 @@ export function createReplaySession(plan: ReplayPlan, platform: ReplayPlatform):
         const result = await request.callTool(name, input, signal);
         const text = result.content.find(block => block.type === "text");
         const value = text && "text" in text ? JSON.parse(text.text) as Record<string, unknown> : {};
+        if (typeof value.screenId === "string" && !reached.has(value.screenId)) reached.set(value.screenId, String(value.title ?? ""));
         return { failed: Boolean(result.isError) || value.ok === false, value };
       };
+      const reached = new Map<string, string>();
+      const planned = new Map<string, string>();
       const steps = plan.steps.filter(step => !step.platforms || step.platforms.includes(platform));
       const missed: string[] = [];
       const title = (step: ReplayCapture) => step.state ? `${step.capture} (${step.state})` : step.capture;
@@ -114,7 +117,11 @@ export function createReplaySession(plan: ReplayPlan, platform: ReplayPlatform):
             const frameId = typeof seen.value.frameId === "string" ? seen.value.frameId : undefined;
             const captured = frameId && !seen.failed ? await call("capture", { frameId, title: step.capture,
               ...(step.state ? { state: step.state } : {}), ...(step.description ? { description: step.description } : {}) }) : undefined;
-            if (!captured || captured.failed) missed.push(title(step));
+            const screenId = typeof captured?.value.screenId === "string" ? captured.value.screenId : undefined;
+            const earlier = screenId ? planned.get(screenId) : undefined;
+            if (!captured || captured.failed || !screenId) missed.push(title(step));
+            else if (captured.value.duplicate && earlier && earlier !== step.capture) missed.push(`${title(step)} (looked the same as ${earlier})`);
+            else if (!earlier) planned.set(screenId, step.capture);
             continue;
           }
           const { platforms: _platforms, optional, ...action } = step;
@@ -127,8 +134,10 @@ export function createReplaySession(plan: ReplayPlan, platform: ReplayPlatform):
             + (notCaptured.length ? `. Not captured: ${notCaptured.join(", ")}`.slice(0, 390) : "") });
           return { inputTokens: 0, outputTokens: 0 };
         }
+        const unplanned = [...reached].filter(([id]) => !planned.has(id)).map(([, name]) => name || "untitled");
         await call("finish", { summary: `Replayed ${steps.length} planned steps on ${platform}.`
-          + (missed.length ? ` Not captured: ${missed.join(", ")}.` : " Every planned screen was captured.") });
+          + (missed.length ? ` Not captured: ${missed.join(", ")}.` : " Every planned screen was captured.")
+          + (unplanned.length ? ` Also reached, not in the plan: ${unplanned.join(", ")}.` : "") });
       } catch (error) {
         if (signal.aborted) return { inputTokens: 0, outputTokens: 0 };
         throw error;

@@ -936,3 +936,13 @@ test("a replay plan is checked before any device starts", () => {
   assert.throws(() => parseReplayPlan({ steps: [{ capture: "Home", platforms: ["web"] }] }), /platforms must list ios and\/or android/);
   assert.deepEqual(parseReplayPlan({ steps: [{ capture: "Home" }] }).steps, [{ capture: "Home" }]);
 });
+
+test("a replay names planned screens that looked like another and screens it reached that the plan does not capture", async () => {
+  const plan = parseReplayPlan({ steps: [
+    { capture: "Home" }, { capture: "Start" }, { action: "tap", label: "Settings" }, { action: "back" },
+  ] });
+  const device = replayDevice();
+  const { result } = await harness([], { session: createReplaySession(plan, "ios"), ...device.options });
+  assert.equal(result.stopReason, "finished");
+  assert.match(result.summary, /Not captured: Start \(looked the same as Home\)\. Also reached, not in the plan: .+\.$/);
+});
