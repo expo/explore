@@ -928,6 +928,25 @@ test("an opened Duo's frame shows the same pixels as a screen already seen once 
   assert.equal(map.artifacts.filter(item => item.kind === "screenshot").length, 2);
 });
 
+test("a coordinate tap on an opened Duo is named by where it shows in the upright screenshot", async () => {
+  // The inner panel's portrait axes: a button near the portrait top right is at the upright bottom right.
+  const home = [
+    { type: "Application", label: "", rect: { x: 0, y: 0, width: 669, height: 951 } },
+    { type: "Button", label: "", hittable: true, rect: { x: 600, y: 40, width: 44, height: 44 } },
+  ];
+  let frames = 0; let tapped = false;
+  // The look without an image carries no landscape flag; the screen's stored screenshot still says it was turned.
+  const { map } = await harness([
+    ["observe", { includeImage: true }], ["capture", { frameId: "frame-0", title: "Home" }], ["observe", { includeImage: false }],
+    ["act", { action: "tap", frameId: "frame-0", x: 622 / 669, y: 62 / 951 }],
+    ["finish", { summary: "Done." }],
+  ], { observe: async includeImage => ({ nodes: tapped ? SCREENS.settings : home, capturedAt: new Date().toISOString(),
+      ...(includeImage ? { frameId: `frame-${frames++}`, png: await pngOf(1, 2, [[255, 0, 0, 255], [0, 0, 255, 255]]), width: 1, height: 2, landscape: true } : {}) }),
+    act: async () => { tapped = true; } });
+  assert.equal(map.actionAttempts.find(item => item.action.kind === "press").action.label, "icon button, bottom right");
+  assert.deepEqual(map.artifacts.find(item => item.kind === "screenshot").turned, { width: 669, height: 951 });
+});
+
 test("only an opened Duo's frame on its inner panel's portrait axes is turned upright", () => {
   const { duoScreenshotTurn } = tsRun;
   const root = (width, height) => ({ type: "Application", label: "Expo Go", rect: { x: 0, y: 0, width, height } });
@@ -949,4 +968,17 @@ test("only an opened Duo's frame on its inner panel's portrait axes is turned up
     ["a Duo root the image does not show", frame("iPhone Duo", [root(669, 951)], 2000, 2000), "unmatched"],
   ];
   for (const [name, actual, expected] of cases) assert.equal(actual, expected, name);
+});
+
+test("the agent API lists a turned screenshot's element bounds on its upright axes", async () => {
+  const { agentApiReply } = await tsImport("../../src/report/agent-api.ts", import.meta.url);
+  const sha = "a".repeat(64);
+  const map = { screens: [{ id: "scr_home", title: "Home", observationIds: ["obs_1"] }], observations: [{ id: "obs_1", screenshotArtifactId: "art_1" }],
+    artifacts: [{ id: "art_1", kind: "screenshot", sha256: sha, width: 2853, height: 2007, turned: { width: 669, height: 951 } }],
+    elements: [{ id: "el_1", screenId: "scr_home", label: "Settings", role: "button", bounds: { x: 600, y: 40, width: 44, height: 30, unit: "points" } }], transitions: [], variants: [], gaps: [] };
+  const loaded = { kind: "exploration", file: "exploration.json", raw: new Uint8Array(), json: { map }, entries: new Map(), read: async () => undefined };
+  const reply = await agentApiReply({ pageUrl: "https://example.test/p/token", platforms: ["ios"], expiresAt: null }, loaded, "/screens/scr_home", new URLSearchParams(), "application/json");
+  const body = JSON.parse(await new Response(reply.body).text());
+  // Portrait (600, 40) on a 951-point-tall screen shows at (951 - 40 - 30, 600) upright, near the bottom right.
+  assert.deepEqual(body.elements[0].bounds, { x: 881, y: 600, width: 30, height: 44, unit: "points" });
 });

@@ -121,6 +121,12 @@ export type Artifact = {
   mimeType: string;
   width?: number;
   height?: number;
+  /**
+   * A screenshot stored turned a quarter clockwise from its accessibility tree's axes (an opened iPhone Duo's landscape UI
+   * on its inner panel's portrait axes): the tree's screen, `width` × `height` points. Element bounds stay on the tree's
+   * axes, where the portrait point (x, y) shows at (height - y, x).
+   */
+  turned?: { width: number; height: number };
   createdAt: string;
 };
 

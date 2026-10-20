@@ -107,7 +107,7 @@ test("an opened iPhone Duo's screenshots are stored upright, and the run records
   const { readFile } = await import("node:fs/promises");
   const map = JSON.parse(await readFile(result.mapPath, "utf8"));
   const artifact = map.artifacts.find(item => item.kind === "screenshot");
-  assert.deepEqual([artifact.width, artifact.height], [951, 669]);
+  assert.deepEqual([artifact.width, artifact.height, artifact.turned], [951, 669, { width: 669, height: 951 }]);
   const stored = Png.sync.read(await readFile(join(result.outputDirectory, artifact.path)));
   assert.deepEqual([stored.width, stored.height], [951, 669]);
   // The panel's top row (red) is the right-hand column once turned.

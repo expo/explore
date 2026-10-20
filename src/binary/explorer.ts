@@ -547,10 +547,12 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
     if (withImage && frame.png) {
       // Hashed here rather than trusting the daemon's digest: the report validates artifacts against their bytes.
       const { png, sha256: sha } = storedImage(frame.png, frame.landscape === true);
+      const extent = frame.landscape ? frameExtent(frame.nodes) : undefined;
       let artifact = map.artifacts.find(item => item.kind === "screenshot" && item.sha256 === sha);
       if (!artifact) {
         artifact = { id: `art_${randomUUID().slice(0, 12)}`, kind: "screenshot" as const, path: `artifacts/screenshots/${sha}.png`, sha256: sha,
-          bytes: png.length, mimeType: "image/png", ...(frame.width && frame.height ? frame.landscape ? { width: frame.height, height: frame.width } : { width: frame.width, height: frame.height } : {}), createdAt: frame.capturedAt };
+          bytes: png.length, mimeType: "image/png", ...(frame.width && frame.height ? frame.landscape ? { width: frame.height, height: frame.width } : { width: frame.width, height: frame.height } : {}),
+          ...(extent ? { turned: extent } : {}), createdAt: frame.capturedAt };
         map.artifacts.push(artifact); prepared.push({ artifact, bytes: png, destination: join(store.root, artifact.path) });
       }
       screenshotArtifactId = artifact.id;
@@ -724,8 +726,12 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
     const role = roleOf(under);
     const label = str(under.label) ?? "";
     const what = role === "field" ? "field" : role === "button" || role === "tab" || role === "link" ? (cleanLabel(label) ? role : `icon ${role}`) : /\p{L}/u.test(cleanLabel(label)) ? "item" : "icon";
-    const row = point.y < 1 / 3 ? "top" : point.y < 2 / 3 ? "" : "bottom";
-    const column = point.x < 1 / 3 ? "left" : point.x < 2 / 3 ? "" : "right";
+    // The place is read off the screen's stored screenshot, which an opened Duo's frames are turned upright for: there the
+    // portrait point (x, y) shows at (1 - y, x). A frame read without an image says nothing, so the screen's screenshot is asked.
+    const turned = latest!.landscape || map.observations.some(item => item.screenId === currentScreenId && map.artifacts.find(artifact => artifact.id === item.screenshotArtifactId)?.turned);
+    const shown = turned ? { x: 1 - point.y, y: point.x } : point;
+    const row = shown.y < 1 / 3 ? "top" : shown.y < 2 / 3 ? "" : "bottom";
+    const column = shown.x < 1 / 3 ? "left" : shown.x < 2 / 3 ? "" : "right";
     const where = [row, column].filter(Boolean).join(" ") || "centre";
     return `${what}, ${where}`;
   };

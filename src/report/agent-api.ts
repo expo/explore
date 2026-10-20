@@ -254,24 +254,39 @@ function explorationScreenItem(context: AgentContext, map: Json, screen: Json): 
     viewerUrl: ID.test(id) ? viewerUrl(context, { screen: id }) : undefined,
   });
 }
-function screenshotUrl(context: AgentContext, map: Json, screen: Json): string | undefined {
+/** The screenshot a screen is shown by: its latest observation's. */
+function screenshotArtifact(map: Json, screen: Json): Json | undefined {
   const observationId = strings(screen.observationIds).at(-1);
   const observation = arr(map.observations).map(rec).find(o => o.id === observationId);
-  const artifact = arr(map.artifacts).map(rec).find(a => a.id === observation?.screenshotArtifactId);
-  const sha = str(artifact?.sha256);
+  return arr(map.artifacts).map(rec).find(a => a.id === observation?.screenshotArtifactId);
+}
+function screenshotUrl(context: AgentContext, map: Json, screen: Json): string | undefined {
+  const sha = str(screenshotArtifact(map, screen)?.sha256);
   return sha && SHA256.test(sha) ? withPlatform(context, apiUrl(context, `/assets/${sha}`)) : undefined;
 }
-const elementItem = (element: Json): Json => defined({
-  id: str(element.id ?? element.elementId), label: str(element.label), role: str(element.role), value: str(element.value), identifier: str(element.identifier),
-  bounds: element.bounds === undefined ? undefined : rec(element.bounds), actions: strings(element.actions), risk: str(element.risk), actionable: bool(element.actionable), enabled: bool(element.enabled), visible: bool(element.visible),
-});
+/**
+ * One element, its bounds on the axes of the screenshot it is listed beside. A screenshot stored turned a quarter
+ * clockwise (an opened iPhone Duo's) is `turnedHeight` points tall on the tree's axes, where the map keeps the bounds:
+ * there the portrait point (x, y) shows at (H - y, x).
+ */
+const elementItem = (element: Json, turnedHeight?: number): Json => {
+  const bounds = element.bounds === undefined ? undefined : rec(element.bounds);
+  const [x, y, width, height] = [num(bounds?.x), num(bounds?.y), num(bounds?.width), num(bounds?.height)];
+  const shown = bounds && turnedHeight !== undefined && bounds.unit === "points" && x !== undefined && y !== undefined && width !== undefined && height !== undefined
+    ? { x: turnedHeight - y - height, y: x, width: height, height: width, unit: "points" } : bounds;
+  return defined({
+    id: str(element.id ?? element.elementId), label: str(element.label), role: str(element.role), value: str(element.value), identifier: str(element.identifier),
+    bounds: shown, actions: strings(element.actions), risk: str(element.risk), actionable: bool(element.actionable), enabled: bool(element.enabled), visible: bool(element.visible),
+  });
+};
 const transitionItem = (transition: Json): Json => defined({
   id: str(transition.id), from: str(transition.fromScreenId), to: str(transition.toScreenId), actionKind: str(transition.actionKind), elementId: str(transition.elementId), attempts: strings(transition.attemptIds).length,
 });
 function explorationScreenDetail(context: AgentContext, map: Json, screen: Json): Json {
   const id = str(screen.id);
   const transitions = arr(map.transitions).map(rec);
-  const elements = arr(map.elements).map(rec).filter(element => element.screenId === id).map(elementItem);
+  const turnedHeight = num(rec(screenshotArtifact(map, screen)?.turned).height);
+  const elements = arr(map.elements).map(rec).filter(element => element.screenId === id).map(element => elementItem(element, turnedHeight));
   const variants = arr(map.variants).map(rec).filter(variant => variant.screenId === id).map(variant => defined({ id: str(variant.id), key: str(variant.key), name: str(variant.name), observations: strings(variant.observationIds).length }));
   const gaps = arr(map.gaps).map(rec).filter(gap => gap.screenId === id).map(gapItem);
   return defined({
