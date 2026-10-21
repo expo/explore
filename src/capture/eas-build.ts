@@ -897,7 +897,7 @@ async function prepareHostedRepack(options: {
     const environment = options.repackProfile.easEnvironment;
     const variables = easEnvironmentSnapshot(scope => {
       try {
-        const listedVariables = options.runner({ command: options.easCommand, args: ["env:list", "--environment", environment, "--scope", scope, "--format", "long", "--non-interactive"],
+        const listedVariables = options.runner({ command: options.easCommand, args: ["env:list", "--environment", environment, "--scope", scope, "--format", "long"],
           cwd: options.project, environment: privateEnvironment, timeoutMs: 2 * 60_000 });
         return listedVariables.stdout;
       } catch { return undefined; }
