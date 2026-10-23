@@ -47,8 +47,10 @@ import {
   type MapDirection,
   type Route,
   type RouteContext,
+  type ScreensLayout,
   type ThemePreference,
 } from "./utils/navigation";
+import { readScreensLayout, writeScreensLayout } from "./utils/screens-layout";
 import {
   CANVAS_NUMBER_KEYS,
   matchesShortcut,
@@ -897,6 +899,12 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
   // Every canvas starts with the Inspector closed; selecting a screenshot opens the Inspector on
   // demand. A peer canvas is a fresh inventory, so a screen selection never travels with the reader
   // into the destination view.
+  // The report Screens' layout is remembered for: the loaded one, however it was loaded.
+  const runId = payload?.map.run.id;
+  /** Screens opens in the layout the reader last left it in for this report; phones have only their list. */
+  const rememberedScreensLayout = useCallback((canvas: CanvasView): Partial<Route> => (
+    canvas === "screens" && routeRef.current.canvas !== "screens" && !phoneRef.current ? { layout: readScreensLayout(runId) } : {}
+  ), [runId]);
   const commitCanvasSelection = useCallback((canvas: CanvasView) => {
     const current = routeRef.current;
     if (canvas === "compare") {
@@ -928,9 +936,22 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
       } : {
         canvas,
         ...clearedCanvasSelection,
+        ...rememberedScreensLayout(canvas),
       },
     );
-  }, [applyCanvasPanelDefaults, navigate]);
+  }, [applyCanvasPanelDefaults, navigate, rememberedScreensLayout]);
+  // Only a switch the reader makes is remembered as the grid: landing on Screens in the grid (from Search, Back or a
+  // link) leaves a remembered filmstrip alone. The selection and its focus request carry over, so the Screens page
+  // does not read the switch as a new pick that Changed or a find hides.
+  const changeScreensLayout = useCallback((layout: ScreensLayout) => {
+    writeScreensLayout(runId, layout);
+    // A change of view, not a move: Back leaves Screens rather than undoing it, as the change filter's does.
+    navigate({ layout: layout === "filmstrip" ? "filmstrip" : undefined }, { replace: true, preserveFocus: true });
+  }, [navigate, runId]);
+  // A link that opens the filmstrip is remembered as a switch to it is.
+  useEffect(() => {
+    if (route.canvas === "screens" && route.layout === "filmstrip" && !phone) writeScreensLayout(runId, "filmstrip");
+  }, [phone, route.canvas, route.layout, runId]);
 
   // The logo returns to the Map root, the equivalent of the "/map" URL.
   const openMapHome = useCallback(() => {
@@ -1010,6 +1031,13 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
       if (event.key === "Escape") {
         if (routeRef.current.canvas === "compare") return;
         if (rightCollapsedRef.current) {
+          // The filmstrip is a screen opened from the grid: Esc steps back out to the grid, keeping the selection.
+          if (routeRef.current.canvas === "screens" && routeRef.current.layout === "filmstrip" && !phoneRef.current) {
+            setTimeout(() => {
+              if (!event.defaultPrevented) changeScreensLayout("grid");
+            }, 0);
+            return;
+          }
           if (!resolveScreenId(routeRef.current, contextRef.current)) return;
           setTimeout(() => {
             if (!event.defaultPrevented) clearSelectedScreen();
@@ -1056,6 +1084,9 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
         setChangesOpen((open) => !open);
       } else if (matchesShortcut(event, SHORTCUTS.panel.right)) {
         toggleRightPanel();
+      } else if (matchesShortcut(event, SHORTCUTS.screens.grid) || matchesShortcut(event, SHORTCUTS.screens.filmstrip)) {
+        if (routeRef.current.canvas !== "screens" || phoneRef.current) return;
+        changeScreensLayout(matchesShortcut(event, SHORTCUTS.screens.grid) ? "grid" : "filmstrip");
       } else {
         const canvas = CANVAS_KEYS.find(([, shortcut]) => matchesShortcut(event, shortcut));
         if (!canvas) return;
@@ -1067,7 +1098,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [chooseAppearance, clearSelectedScreen, flipTheme, navigate, searchOpen, selectCanvas, toggleFullscreen, toggleRightPanel]);
+  }, [changeScreensLayout, chooseAppearance, clearSelectedScreen, flipTheme, navigate, searchOpen, selectCanvas, toggleFullscreen, toggleRightPanel]);
 
   // A side-panel row or a deep link is a "go to": the camera fits that screen and the step is
   // kept. Screens inventory clicks only select in place; Map clicks also focus the chosen screen. Repeating a selected target refits it without adding history.
@@ -1134,10 +1165,11 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
       canvas: "screens",
       ...screenPatch(screenId),
       expandedGroups: [],
+      ...rememberedScreensLayout("screens"),
     }, {
       resetCamera: true,
     });
-  }, [applyCanvasPanelDefaults, navigate, screenPatch]);
+  }, [applyCanvasPanelDefaults, navigate, rememberedScreensLayout, screenPatch]);
   // Following a row inside the inspector is the exception: a transition or changed screen is
   // read from a view the reader chose, and landing somewhere new is no
   // reason to close it. The panel stays where it was and only its subject changes.
@@ -1656,6 +1688,8 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
               onSelectScreen={selectScreenOnCanvas}
               onPickScreen={pickScreenInPlace}
               onClearSelection={clearSelectedScreen}
+              layout={route.layout ?? "grid"}
+              onChangeLayout={changeScreensLayout}
             />
           ) : null}
           {comparing && phone && diff && selectedScreenId && comparePicker ? (
@@ -1707,7 +1741,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
             />
           )}
         </div>
-        {/* Top right holds the camera only, so only the Map has anything there. */}
+        {/* Top right holds the Map's camera; Screens puts its layout switch there itself. */}
         {phone || route.canvas !== "map" ? null : <CanvasCameraControls />}
         {phone ? (
           <PhoneTabBar

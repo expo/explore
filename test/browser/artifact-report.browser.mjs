@@ -2342,6 +2342,18 @@ test("on a phone, a Screens card's screenshot keeps its height while it loads an
   assert.deepEqual(errors, []);
 });
 
+test("the Screens filmstrip shows a downloaded report's screenshots, resolved as the grid's are", { timeout: 60_000 }, async t => {
+  const { bytes } = await changedScreensArchive(3);
+  const { page, errors } = await harness(t, bytes, { app: true, open: false });
+  await chooseFile(page, bytes);
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await page.goto(`${page.url().split("#")[0]}#/screens?layout=filmstrip`);
+  const middle = page.locator(".screens-strip-frame.focused img");
+  await expect(middle).toHaveAttribute("data-screenshot-state", "ready");
+  assert.match(await middle.getAttribute("src"), /^blob:/);
+  assert.deepEqual(errors, []);
+});
+
 test("a target switch blanks every card whose screenshot differs, never showing the other target's picture, and switching back reuses the kept pictures", { timeout: 90_000 }, async t => {
   const runtime = { platform: "android", platforms: ["ios", "android"] };
   const android = await changedScreensArchive(3, { seed: 1, runtime });

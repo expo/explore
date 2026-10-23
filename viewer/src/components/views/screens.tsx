@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, ListTree, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, GalleryHorizontal, LayoutGrid, ListTree, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { artifactUrl, isLaunchScreen, type ExploreMap, type MapIndex, type Screen } from "../../utils/model";
 import { primaryScreenshotForScreen, screenshotSize, typicalScreenshotSize, type ScreenshotSize } from "../../utils/screen-images";
 import { diffClass, type BuildDiff, type DiffStatus } from "../../utils/build-diff";
@@ -7,8 +7,8 @@ import { focusStatusOf, isCapturedChange } from "../../utils/changed-screens";
 import { displayPathForScreen, screenLabel } from "../../utils/screen-path";
 import { screenTree, treeIndex, treeNodeKey, treeScreenOrder, type ScreenTree, type ScreenTreeNode } from "../../utils/screen-tree";
 import type { Appearance } from "../../utils/appearance";
-import type { FocusRequest, FocusStatus } from "../../utils/navigation";
-import { shortcutsLive } from "../../utils/shortcuts";
+import type { FocusRequest, FocusStatus, ScreensLayout } from "../../utils/navigation";
+import { formatShortcut, SHORTCUTS, shortcutsLive } from "../../utils/shortcuts";
 import { normalizeSearchText } from "../../utils/search";
 import { createKeyHold } from "../../utils/key-hold";
 import { placeholderScreen } from "../../utils/map-frame";
@@ -19,6 +19,7 @@ import { useCanvasVisibleFrame } from "../canvas/visible-frame-provider";
 import { PhoneSheet } from "../phone/phone-chrome";
 import { PanelSearch } from "../shared/panel-search";
 import { Tooltip } from "../shared/tooltip";
+import { ScreensFilmstrip } from "./screens-filmstrip";
 import "./screens.css";
 
 /** The statuses a tree dot marks. The Changed filter keeps only the screens whose captures differ (isCapturedChange). */
@@ -52,6 +53,10 @@ export type ScreensViewProps = {
   onPickScreen?: ((id: string) => void) | undefined;
   /** A click on the page around the cards clears the selection, as a click on a canvas's pane does. */
   onClearSelection?: (() => void) | undefined;
+  /** Desktop only: every card in a grid, or one screen at a time in a filmstrip. */
+  layout?: ScreensLayout | undefined;
+  /** A double-click on a card opens it in the filmstrip. */
+  onChangeLayout?: ((layout: ScreensLayout) => void) | undefined;
 };
 
 function statusOf(diff: BuildDiff | undefined, id: string): DiffStatus | undefined {
@@ -83,6 +88,27 @@ function writeFolded(key: string, folded: ReadonlySet<string>): void {
     if (folded.size) localStorage.setItem(key, JSON.stringify([...folded]));
     else localStorage.removeItem(key);
   } catch { /* Folds last for this visit only. */ }
+}
+
+/**
+ * The canvas widths below which the layout switch drops its labels, and below which it is hidden: the pill at the top
+ * left grows to 420px (`--left-collapsed-pill-width`), and the switch keeps clear of it, labelled or not.
+ */
+const SWITCH_LABELLED_FRAME_WIDTH = 640;
+const SWITCH_MINIMUM_FRAME_WIDTH = 540;
+
+/** How soon, and how near, a second click follows the first to make a double-click that opens a card in the filmstrip. */
+const DOUBLE_CLICK_MS = 500;
+const DOUBLE_CLICK_SLOP_PX = 8;
+
+/** A shown screen to stand for `selected`: itself, or the nearest shown screen after it in the tree, else before it. */
+function nearestShown(selected: string | undefined, shown: readonly string[], tree: readonly string[]): string | undefined {
+  if (!selected) return undefined;
+  if (shown.includes(selected)) return selected;
+  const at = tree.indexOf(selected);
+  if (at < 0) return undefined;
+  const set = new Set(shown);
+  return tree.slice(at + 1).find(id => set.has(id)) ?? tree.slice(0, at).reverse().find(id => set.has(id));
 }
 
 /** The key that opens the find field: a character, not a key position, so it is read from the layout like "?". */
@@ -159,7 +185,7 @@ function ScreenCell(props: {
   typicalSize?: ScreenshotSize | undefined;
   /** A phone's cell, whose screenshot is its own frame: no well frames it while it loads. */
   phone?: boolean | undefined;
-  onSelect: () => void;
+  onSelect: (event: ReactMouseEvent) => void;
 }) {
   const artifact = primaryScreenshotForScreen(props.screen, props.index);
   const url = artifactUrl(artifact);
@@ -272,8 +298,9 @@ function Legend(props: { others: Appearance[] }) {
 }
 
 /**
- * Screens as a page that scrolls. On desktop, one grid of every screen in the order of the tree beside it; on a
- * phone, a section per route folder (or per tab, when there are no route files), with the tree behind a Tree button.
+ * Screens as a page that scrolls. On desktop, one grid of every screen in the order of the tree beside it, or the same
+ * screens one at a time in a filmstrip (screens-filmstrip.tsx); on a phone, a section per route folder (or per tab,
+ * when there are no route files), with the tree behind a Tree button.
  */
 export function ScreensView(props: ScreensViewProps) {
   // The report's screens, as the Map draws them: a public report's routes it never captured are not among them.
@@ -295,10 +322,9 @@ export function ScreensView(props: ScreensViewProps) {
   const [filter, setFilter] = useState<Filter>(props.phone && changedIds.size > 0 ? "changed" : "all");
   const [treeOpen, setTreeOpen] = useState(false);
   // Find: a query narrows the tree and the grid to the screens whose route or title contains it, inside Changed or All.
-  const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
   // The phone layout has no field to show or clear a query, so a query typed on desktop does not narrow it.
-  const findQuery = findOpen && !props.phone ? query : "";
+  const findQuery = props.phone ? "" : query;
   const matches = useMemo(() => findMatches(screens, props.index, findQuery), [props.index, screens, findQuery]);
   const inChanged = filter === "changed" && changedIds.size > 0;
   const inFilter = inChanged ? changedIds : new Set(screens.map(screen => screen.id));
@@ -310,6 +336,23 @@ export function ScreensView(props: ScreensViewProps) {
   const treeOrder = useMemo(() => treeScreenOrder(tree), [tree]);
   const order = props.phone ? sections.flatMap(section => section.screenIds) : treeOrder.filter(id => shown.has(id));
   const others = [...new Set([...(props.changedElsewhere?.values() ?? [])].flat())];
+  const filmstrip = !props.phone && props.layout === "filmstrip";
+  // The filmstrip always has a screen in the middle: the selection when it is shown; else, when Changed or a find hides
+  // it, the nearest shown screen after it in the tree (before it, at the end), as the grid's arrows step from it; else
+  // the first screen.
+  const stripFocus = filmstrip ? nearestShown(props.selectedScreenId, order, treeOrder) ?? order[0] : undefined;
+  // The sidebar folds away to give the screens its width. Each switch of layout starts over: the filmstrip with the
+  // sidebar folded, the grid with it open. A find's query lives only in the sidebar's field, so the sidebar stays open
+  // while one narrows the screens. Changed folds away with it, and the button left in its place says it is on.
+  const [side, setSide] = useState({ filmstrip, collapsed: filmstrip && !findQuery });
+  if (side.filmstrip !== filmstrip) setSide({ filmstrip, collapsed: filmstrip && !findQuery });
+  const sideCollapsed = side.filmstrip === filmstrip ? side.collapsed : filmstrip && !findQuery;
+  const setSideCollapsed = (collapsed: boolean) => setSide({ filmstrip, collapsed });
+  // A button that folds or opens the sidebar is replaced by the other one; the keyboard moves to it.
+  const toggleSide = (collapsed: boolean) => {
+    setSideCollapsed(collapsed);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(".screens-side .screens-side-toggle")?.focus());
+  };
 
   // Folding. All keeps the reader's folds and remembers them per report. Changed folds separately, starting
   // each time with only the rows that hold no change folded, so trying Changed never disturbs the folds in All.
@@ -363,49 +406,54 @@ export function ScreensView(props: ScreensViewProps) {
     setTreeOpen(false);
     if (!inFilter.has(id)) setFilter("all");
     (props.onPickScreen ?? props.onSelectScreen)(id);
-    requestAnimationFrame(() => document.getElementById(cardId(id))?.scrollIntoView({ block: "center", behavior: "smooth" }));
+    // The filmstrip brings the screen to its middle itself.
+    if (!filmstrip) requestAnimationFrame(() => document.getElementById(cardId(id))?.scrollIntoView({ block: "center", behavior: "smooth" }));
   };
 
   const findField = useRef<HTMLDivElement>(null);
   const focusFind = () => findField.current?.querySelector("input")?.focus();
+  // `/` focuses the field, deferred a frame so the key itself is not typed into it. A folded sidebar opens first.
+  const findOnOpen = useRef(false);
   const openFind = () => {
-    setFindOpen(true);
-    requestAnimationFrame(focusFind);
+    if (!sideCollapsed) {
+      requestAnimationFrame(focusFind);
+      return;
+    }
+    findOnOpen.current = true;
+    setSideCollapsed(false);
   };
+  useEffect(() => {
+    if (sideCollapsed || !findOnOpen.current) return;
+    findOnOpen.current = false;
+    requestAnimationFrame(focusFind);
+  }, [sideCollapsed]);
   const closeFind = () => {
     setQuery("");
-    setFindOpen(false);
     // The field took the keyboard; hand it back to the page so its arrows work again.
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   };
-  // `/` from another canvas lands here with the field open.
+  // `/` from another canvas lands here with the field focused.
   useEffect(() => {
     if (props.findRequest === undefined) return;
     if (!props.phone) openFind();
     props.onFindRequestDone?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new request opens it once
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new request focuses it once
   }, [props.findRequest]);
-  const findButton = props.phone ? null : (
-    <Tooltip label="Find a screen" shortcut={FIND_KEY} placement="bottom">
-      <button type="button" className="screens-tree-find" aria-label="Find a screen" onClick={openFind}>
-        <Search aria-hidden="true" />
-      </button>
-    </Tooltip>
-  );
-  const findSearch = findOpen ? (
+  // The find field heads the tree on desktop.
+  const findSearch = props.phone ? null : (
     <div ref={findField} className="screens-find">
       <PanelSearch
         value={query}
-        placeholder="Find…"
+        placeholder="Search"
         ariaLabel="Find screens"
         clearLabel="Clear find query"
         name="screens-find"
-        autoFocus
+        hint={<kbd className="screens-find-key" aria-hidden="true">{FIND_KEY}</kbd>}
         onEscape={() => (query ? setQuery("") : closeFind())}
         onChange={setQuery}
       />
     </div>
-  ) : null;
+  );
   const filterChips = changedIds.size > 0 ? (
     <div className="screens-filter" role="group" aria-label="Show">
       {(["changed", "all"] as const).map((value) => (
@@ -424,6 +472,7 @@ export function ScreensView(props: ScreensViewProps) {
   // A selection made elsewhere (search, the map, the Inspector) scrolls its card to the middle of
   // the page, as a pick in the tree does; a card already in view stays put.
   const scroller = useRef<HTMLElement>(null);
+  const cardClick = useRef<{ id: string; at: number; x: number; y: number } | undefined>(undefined);
   const selected = props.selectedScreenId;
   const focusKey = props.focusRequest?.id === selected ? props.focusRequest?.key : undefined;
   const selectedShown = selected !== undefined && shown.has(selected);
@@ -445,13 +494,13 @@ export function ScreensView(props: ScreensViewProps) {
     setFoldedChanged(unfold);
   }, [selected, focusKey, shape]);
   useEffect(() => {
-    if (!selected || !selectedShown) return;
+    if (!selected || !selectedShown || filmstrip) return;
     const card = document.getElementById(cardId(selected));
     if (!card || !scroller.current) return;
     const bounds = card.getBoundingClientRect();
     const view = scroller.current.getBoundingClientRect();
     if (bounds.top < view.top || bounds.bottom > view.bottom) card.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [selected, selectedShown, focusKey]);
+  }, [selected, selectedShown, focusKey, filmstrip]);
 
   // On desktop the arrow keys move through the cards: ← and → in their order on the page (`order`), as the arrows step
   // through screens in Compare, and ↑ and ↓ to the card above or below, by where the cards sit, so they follow the grid
@@ -459,13 +508,17 @@ export function ScreensView(props: ScreensViewProps) {
   // nothing picked, → and ↓ start at the first card, and a pick that Changed hides steps from where it sits in the tree.
   // The tree's rows keep their arrow keys, and so do the Inspector's controls. Phones are left as they were.
   // Held, an arrow keeps stepping as Compare's do (key-hold.ts). Return opens the picked screen in the Inspector, as a
-  // click on its card does; on the card itself the button already does.
+  // click on its card does; on the card itself the button already does. In the filmstrip, ← and → step from the screen
+  // in the middle and Return opens it.
   const orderRef = useRef(order);
   orderRef.current = order;
   const treeOrderRef = useRef(treeOrder);
   treeOrderRef.current = treeOrder;
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  // In the filmstrip the arrows step from the screen in the middle, which is the pick once there is one.
+  const stripFocusRef = useRef(stripFocus);
+  stripFocusRef.current = stripFocus;
   const pickRef = useRef(props.onPickScreen ?? props.onSelectScreen);
   pickRef.current = props.onPickScreen ?? props.onSelectScreen;
   const openRef = useRef(props.onSelectScreen);
@@ -479,6 +532,8 @@ export function ScreensView(props: ScreensViewProps) {
       const ids = orderRef.current;
       const vertical = code === "ArrowUp" || code === "ArrowDown";
       const forward = code === "ArrowRight" || code === "ArrowDown";
+      // The filmstrip is one row.
+      if (vertical && stripFocusRef.current !== undefined) return undefined;
       if (from && ids.includes(from)) return vertical ? cardInNextRow(from, ids, forward) : ids[ids.indexOf(from) + (forward ? 1 : -1)];
       if (from && treeOrderRef.current.includes(from)) {
         // Picked, but hidden by Changed: the nearest shown card past it in the tree's order.
@@ -491,7 +546,7 @@ export function ScreensView(props: ScreensViewProps) {
     };
     const go = (id: string) => {
       pickRef.current(id);
-      requestAnimationFrame(() => document.getElementById(cardId(id))?.querySelector<HTMLElement>(".screen-screenshot-target")?.focus({ preventScroll: true }));
+      requestAnimationFrame(() => document.getElementById(cardId(id))?.querySelector<HTMLElement>(".screen-screenshot-target, .screens-strip-target")?.focus({ preventScroll: true }));
     };
     // A held arrow keeps stepping from the card the last step landed on, not the lagging pick.
     const hold = createKeyHold();
@@ -520,13 +575,15 @@ export function ScreensView(props: ScreensViewProps) {
       if (event.target instanceof Element && event.target.matches(".screens-find input")) {
         if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.code === "ArrowLeft" || event.code === "ArrowRight") return;
         const ids = orderRef.current;
-        const picked = selectedRef.current && ids.includes(selectedRef.current) ? selectedRef.current : undefined;
+        // In the filmstrip they step from the screen in the middle, as the page's arrows do.
+        const picked = stripFocusRef.current ?? (selectedRef.current && ids.includes(selectedRef.current) ? selectedRef.current : undefined);
         const id = !arrow ? picked ?? ids[0] : next(event.code === "ArrowDown" ? "ArrowRight" : "ArrowLeft", picked);
         if (!id) return;
         event.preventDefault();
         if (!arrow) { openRef.current(id); return; }
         pickRef.current(id);
-        requestAnimationFrame(() => document.getElementById(cardId(id))?.scrollIntoView({ block: "nearest" }));
+        // The filmstrip brings the screen to its middle itself; scrolling its frame would move the page under it.
+        if (stripFocusRef.current === undefined) requestAnimationFrame(() => document.getElementById(cardId(id))?.scrollIntoView({ block: "nearest" }));
         return;
       }
       // The browser's own repeat of a held arrow would scroll the page under the hold.
@@ -535,17 +592,18 @@ export function ScreensView(props: ScreensViewProps) {
       const target = event.target instanceof Element ? event.target : null;
       if (!arrow) {
         // Return on a button or a link presses it; elsewhere on the page it opens the pick.
-        const selectedId = selectedRef.current;
+        const selectedId = stripFocusRef.current ?? selectedRef.current;
         if (target?.closest("button, a, [role=\"button\"]") || !target?.closest("body") || !selectedId || !orderRef.current.includes(selectedId)) return;
         if (target !== document.body && !target.closest(".screens-page")) return;
         event.preventDefault();
         openRef.current(selectedId);
         return;
       }
-      // The page, or the bottom toolbar that Screens was just opened from; its buttons have no arrow keys of their own.
-      const onPage = !target || target === document.body || target.closest(".screens-page, .canvas-toolbar") !== null;
+      // The page, or the bottom toolbar that Screens was just opened from, or the layout switch just used; their buttons
+      // have no arrow keys of their own.
+      const onPage = !target || target === document.body || target.closest(".screens-page, .canvas-toolbar, .screens-layout-switch") !== null;
       if (!onPage || target?.closest(".screens-tree-list")) return;
-      const id = next(event.code, selectedRef.current);
+      const id = next(event.code, stripFocusRef.current ?? selectedRef.current);
       if (!id) return;
       event.preventDefault();
       go(id);
@@ -566,6 +624,28 @@ export function ScreensView(props: ScreensViewProps) {
     };
   }, [props.phone]);
 
+  // A double-click on a card's screenshot opens that screen in the filmstrip. The first click selects it and opens the
+  // Inspector, which narrows the grid and can slide over the card, so the second click may land on another card or on
+  // the Inspector: the double-click is heard on the whole document, and the screen opened is the one the first click
+  // picked. The route under a screenshot copies a link and is no click on the card.
+  const openFilmstripRef = useRef<((id: string) => void) | undefined>(undefined);
+  openFilmstripRef.current = !props.phone && !filmstrip && props.onChangeLayout ? (id: string) => {
+    (props.onPickScreen ?? props.onSelectScreen)(id);
+    props.onChangeLayout!("filmstrip");
+  } : undefined;
+  useEffect(() => {
+    const onDoubleClick = (event: MouseEvent) => {
+      const first = cardClick.current;
+      // A double-click elsewhere, or later, is not this card's.
+      if (!first || event.timeStamp - first.at > DOUBLE_CLICK_MS
+        || Math.hypot(event.clientX - first.x, event.clientY - first.y) > DOUBLE_CLICK_SLOP_PX) return;
+      cardClick.current = undefined;
+      openFilmstripRef.current?.(first.id);
+    };
+    document.addEventListener("dblclick", onDoubleClick);
+    return () => document.removeEventListener("dblclick", onDoubleClick);
+  }, []);
+
   // The Inspector floats over the right edge; the page keeps its content clear of it.
   const { visibleFrame } = useCanvasVisibleFrame();
   const style = !props.phone && visibleFrame
@@ -574,6 +654,30 @@ export function ScreensView(props: ScreensViewProps) {
 
   if (screens.length === 0) return <NoScreens map={props.map} />;
 
+  // Grid or Filmstrip, in words, at the top right where the Map keeps its camera: outside the page, so it stays put
+  // as the grid scrolls, and clear of the Inspector.
+  // A canvas narrowed by the Inspector keeps the switch's icons only, clear of the pill; one too narrow for even those
+  // hides it, as the Map's camera hides (camera-controls.tsx). Esc, a double-click and closing the Inspector remain.
+  const frameWidth = visibleFrame?.width ?? Infinity;
+  const layoutSwitch = !props.phone && props.onChangeLayout && frameWidth >= SWITCH_MINIMUM_FRAME_WIDTH ? (
+    <div className={`screens-layout-switch${frameWidth < SWITCH_LABELLED_FRAME_WIDTH ? " compact" : ""}`} role="group" aria-label="Screens layout"
+      style={visibleFrame ? ({ "--screens-switch-right": `calc(100% - ${visibleFrame.x + visibleFrame.width}px)` } as CSSProperties) : undefined}>
+      {([
+        ["grid", "Grid", <LayoutGrid key="grid" aria-hidden="true" />, SHORTCUTS.screens.grid],
+        ["filmstrip", "Filmstrip", <GalleryHorizontal key="filmstrip" aria-hidden="true" />, SHORTCUTS.screens.filmstrip],
+      ] as const)
+        .map(([value, label, icon, shortcut]) => (
+          <Tooltip key={value} label={label} shortcut={formatShortcut(shortcut)} placement="bottom">
+            <button type="button" aria-label={label} aria-pressed={(filmstrip ? "filmstrip" : "grid") === value}
+              onClick={() => props.onChangeLayout!(value)}>
+              {icon}<span aria-hidden="true">{label}</span>
+            </button>
+          </Tooltip>
+        ))}
+    </div>
+  ) : null;
+
+  const dimmed = (id: string) => Boolean(props.focus?.length) && !props.focus!.some((state) => state === focusStatusOf(props.diff?.screens.get(id)));
   const cell = (id: string) => {
     const screen = props.index.screens.get(id);
     return screen ? (
@@ -583,8 +687,14 @@ export function ScreensView(props: ScreensViewProps) {
         typicalSize={typicalSize}
         phone={props.phone}
         selected={props.selectedScreenId === id}
-        dimmed={Boolean(props.focus?.length) && !props.focus!.some((state) => state === focusStatusOf(props.diff?.screens.get(id)))}
-        onSelect={() => props.onSelectScreen(id)} />
+        dimmed={dimmed(id)}
+        onSelect={(event) => {
+          // The second click of a double-click selects nothing: it may land on another card the first click's Inspector
+          // moved under the pointer. The first click is kept with its place, for the double-click that follows.
+          if (event.detail >= 2) return;
+          cardClick.current = { id, at: event.timeStamp, x: event.clientX, y: event.clientY };
+          props.onSelectScreen(id);
+        }} />
     ) : null;
   };
 
@@ -601,9 +711,12 @@ export function ScreensView(props: ScreensViewProps) {
   );
 
   return (
-    <main ref={scroller} className={`screens-page${props.phone ? " phone" : ""}`} aria-label="Screens" style={style}
+    <>
+    {layoutSwitch}
+    <main ref={scroller} className={`screens-page${props.phone ? " phone" : ""}${filmstrip ? " filmstrip" : ""}`} aria-label="Screens" style={style}
       onClick={(event) => {
-        if (!props.onClearSelection || !props.selectedScreenId) return;
+        // The filmstrip always shows a screen; clearing the pick there would only jump it back to the first.
+        if (!props.onClearSelection || !props.selectedScreenId || filmstrip) return;
         if ((event.target as Element).closest("button, a, input, .screens-cell, .screens-side")) return;
         props.onClearSelection();
       }}>
@@ -632,12 +745,29 @@ export function ScreensView(props: ScreensViewProps) {
       ) : null}
 
       <div className="screens-body">
-        {props.phone ? null : (
+        {props.phone ? null : sideCollapsed ? (
+          <aside className="screens-side collapsed">
+            <button type="button" className={`screens-side-toggle${inChanged ? " narrowed" : ""}`} aria-expanded={false}
+              aria-label={inChanged ? "Show sidebar, showing changed screens only" : "Show sidebar"}
+              title={inChanged ? "Show sidebar · Changed only" : "Show sidebar"}
+              onClick={() => toggleSide(false)}>
+              <PanelLeftOpen aria-hidden="true" />
+            </button>
+          </aside>
+        ) : (
           <aside className="screens-side">
             <nav className="screens-tree" aria-label={tree.mode === "source" ? "Route files" : "Navigation"}>
-              {findSearch ? <div className="screens-tree-head searching">{findSearch}</div>
-                : filterChips || foldAll || findButton ? <div className="screens-tree-head">{filterChips}{findButton}{foldAll}</div> : null}
-              <h2>{tree.mode === "source" ? "app/" : "Explored app"}</h2>
+              {/* The find field heads the tree with fold-all and the sidebar's own fold beside it, so a report without
+                  changes has no empty row; Changed / All follows under it, the whole width, when there are changes. */}
+              <div className="screens-tree-head">
+                {findSearch}{foldAll}
+                {/* Folding the sidebar away clears its find, which would otherwise narrow the screens out of sight. */}
+                <button type="button" className="screens-side-toggle" aria-label="Hide sidebar" title="Hide sidebar" aria-expanded
+                  onClick={() => { setQuery(""); toggleSide(true); }}>
+                  <PanelLeftClose aria-hidden="true" />
+                </button>
+              </div>
+              {filterChips}
               {matches && order.length === 0
                 ? <p className="screens-find-empty" role="status">{noMatch}</p>
                 : treeRows}
@@ -664,6 +794,13 @@ export function ScreensView(props: ScreensViewProps) {
                   <button type="button" className="screens-empty-all" onPointerDown={(event) => event.preventDefault()}
                     onClick={() => { setFilter("all"); focusFind(); }}>Show all</button></p>
                 : <p>Try part of a route, or press Esc to show every {inChanged ? "changed " : ""}screen.</p>}</div>
+              : stripFocus ? (
+                <ScreensFilmstrip order={order} focusedId={stripFocus} selectedId={props.selectedScreenId}
+                  index={props.index} diff={props.diff} tree={tree} shape={shape}
+                  typicalSize={typicalSize} frameId={cardId} dimmed={dimmed}
+                  dot={(id) => dotClass(props.diff, props.changedElsewhere, id)}
+                  onPick={props.onPickScreen ?? props.onSelectScreen} onOpen={props.onSelectScreen} />
+              )
               : <div className="screens-grid">{order.map(cell)}</div>
           )}
         </div>
@@ -678,5 +815,6 @@ export function ScreensView(props: ScreensViewProps) {
         </PhoneSheet>
       ) : null}
     </main>
+    </>
   );
 }

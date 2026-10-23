@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import { Search, X } from "lucide-react";
 import "./panel-search.css";
 
@@ -9,6 +9,8 @@ type PanelSearchProps = {
   clearLabel: string;
   name?: string;
   autoFocus?: boolean;
+  /** Shown at the field's end while it is empty, such as the key that focuses it. */
+  hint?: ReactNode;
   onEscape?: () => void;
   onChange: (value: string) => void;
 };
@@ -36,6 +38,7 @@ export function PanelSearch(props: PanelSearchProps) {
         }}
         onChange={(event) => props.onChange(event.target.value)}
       />
+      {props.value ? null : props.hint}
       {props.value && (
         <button
           type="button"

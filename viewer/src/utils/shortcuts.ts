@@ -116,6 +116,11 @@ export const SHORTCUTS = {
     screens: ctrl("Digit2", "2"),
     compare: ctrl("Digit3", "3"),
   },
+  /** Screens only, on desktop: G for the grid and E for the filmstrip, as Lightroom's Library switches Grid and Loupe. */
+  screens: {
+    grid: plain("KeyG", "G"),
+    filmstrip: plain("KeyE", "E"),
+  },
   /** Compare only. The arrows walk changed screens; J and K walk the changed areas of one. */
   compare: {
     previousScreen: plain("ArrowLeft", "←"),
