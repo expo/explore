@@ -57,6 +57,8 @@ export type ScreensViewProps = {
   layout?: ScreensLayout | undefined;
   /** A double-click on a card opens it in the filmstrip. */
   onChangeLayout?: ((layout: ScreensLayout) => void) | undefined;
+  /** Closes the Inspector the first click of a double-click opened; in the filmstrip a click on its middle screen opens it. */
+  onCloseInspector?: (() => void) | undefined;
 };
 
 function statusOf(diff: BuildDiff | undefined, id: string): DiffStatus | undefined {
@@ -631,6 +633,7 @@ export function ScreensView(props: ScreensViewProps) {
   const openFilmstripRef = useRef<((id: string) => void) | undefined>(undefined);
   openFilmstripRef.current = !props.phone && !filmstrip && props.onChangeLayout ? (id: string) => {
     (props.onPickScreen ?? props.onSelectScreen)(id);
+    props.onCloseInspector?.();
     props.onChangeLayout!("filmstrip");
   } : undefined;
   useEffect(() => {
@@ -713,7 +716,7 @@ export function ScreensView(props: ScreensViewProps) {
   return (
     <>
     {layoutSwitch}
-    <main ref={scroller} className={`screens-page${props.phone ? " phone" : ""}${filmstrip ? " filmstrip" : ""}`} aria-label="Screens" style={style}
+    <main ref={scroller} className={`screens-page${props.phone ? " phone" : ""}${filmstrip ? " filmstrip" : ""}${filmstrip && sideCollapsed ? " side-folded" : ""}`} aria-label="Screens" style={style}
       onClick={(event) => {
         // The filmstrip always shows a screen; clearing the pick there would only jump it back to the first.
         if (!props.onClearSelection || !props.selectedScreenId || filmstrip) return;

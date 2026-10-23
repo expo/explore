@@ -888,6 +888,8 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
     if (!rightCollapsedRef.current) inspectorDismissedRef.current = true;
     setRightCollapsed((current) => !current);
   }, []);
+  // A double-click that opens the filmstrip closes the Inspector its first click opened; it is not the reader dismissing it.
+  const closeInspector = useCallback(() => setRightCollapsed(true), []);
 
   // Every canvas opens with the panel showing and the Inspector out of the way.
   // The sidebar keeps whatever state the reader gave it; only the Inspector closes, because a
@@ -1690,6 +1692,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
               onClearSelection={clearSelectedScreen}
               layout={route.layout ?? "grid"}
               onChangeLayout={changeScreensLayout}
+              onCloseInspector={closeInspector}
             />
           ) : null}
           {comparing && phone && diff && selectedScreenId && comparePicker ? (

@@ -1493,8 +1493,29 @@ test("Screens' filmstrip: switched from the corner switch, stepped with the arro
   await page.mouse.down({ clickCount: 2 });
   await page.mouse.up({ clickCount: 2 });
   await expect(middle).toHaveAttribute("data-screen-id", last);
+  // In the filmstrip the Inspector opens only from a click on the middle screen, so the one the first click opened closes.
+  await expect(inspector).toBeHidden();
+
+  // With the sidebar folded, the middle screen is at the centre of the canvas.
+  await expect(view.getByRole("button", { name: "Show sidebar" })).toBeVisible();
+  const centre = await middle.evaluate(element => { const box = element.getBoundingClientRect(); return box.left + box.width / 2; });
+  expect(Math.abs(centre - page.viewportSize()!.width / 2)).toBeLessThan(2);
+
+  // A sideways trackpad swipe, or a wheel notch, steps the strip; a short twitch does not.
+  const lastAt = ids.indexOf(last);
+  await middle.hover();
+  await page.mouse.wheel(40, 0);
+  await page.waitForTimeout(300);
+  await expect(middle).toHaveAttribute("data-screen-id", last);
+  await page.mouse.wheel(0, -100);
+  await expect(middle).toHaveAttribute("data-screen-id", ids[lastAt - 1]!);
+  await page.waitForTimeout(300);
+  await page.mouse.wheel(100, 0);
+  await expect(middle).toHaveAttribute("data-screen-id", last);
+
+  // A click on the middle screen opens the Inspector; Esc closes it first, then steps back out to the grid.
+  await middle.locator(".screens-strip-target").click();
   await expect(inspector).toBeVisible();
-  // Esc closes the Inspector first, then steps back out to the grid with the screen still picked.
   await page.keyboard.press("Escape");
   await expect(inspector).toBeHidden();
   await expect(strip).toBeVisible();

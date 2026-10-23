@@ -383,6 +383,17 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 /* ── Filmstrip: one screen at a time, its neighbours smaller and fainter on either side ── */
 /* The page stops scrolling; the strip fills the height between the pill and the bottom toolbar. */
 .screens-page.filmstrip { overflow: hidden; padding-bottom: calc(84px * var(--ui-scale)); }
+/* With the sidebar folded, its button floats where the sidebar starts and the strip takes the page's width, with the same
+   gap either side, so the middle screen sits at the centre of the canvas (beside an open Inspector, of what it leaves). */
+.screens-page.filmstrip.side-folded { padding-left: 28px; }
+.screens-page.filmstrip.side-folded .screens-side.collapsed {
+  position: absolute;
+  z-index: 3;
+  top: calc(var(--chrome-top) + var(--chrome-height) + 20px);
+  left: var(--canvas-chrome-inline-inset);
+}
+/* A sideways swipe steps the strip; it must not also take the browser back a page. */
+html:has(.screens-page.filmstrip) { overscroll-behavior-x: none; }
 .screens-page.filmstrip .screens-body { height: 100%; }
 .screens-page.filmstrip .screens-side { max-height: 100%; }
 .screens-page.filmstrip .screens-sections { display: flex; height: 100%; flex-wrap: nowrap; align-items: stretch; }
@@ -410,7 +421,16 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-strip-crumb.current > .screens-tree-dot[class*="diff-"] { background: var(--diff); }
 .screens-strip-crumb-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .screens-strip-crumb-label.path { font-size: 12px; }
-.screens-strip-stage { position: relative; width: 100%; min-height: 0; flex: 1; overflow: hidden; overflow: clip; }
+.screens-strip-stage {
+  position: relative;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  overflow: clip;
+  /* The outer frames fade out towards the edges rather than being cut off. */
+  mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+}
 .screens-strip-frame {
   position: absolute;
   top: 50%;

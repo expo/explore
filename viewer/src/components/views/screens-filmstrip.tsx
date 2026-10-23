@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import { ChevronRight } from "lucide-react";
 import { artifactUrl, isLaunchScreen, type MapIndex, type Screen } from "../../utils/model";
 import { primaryScreenshotForScreen, screenshotSize, type ScreenshotSize } from "../../utils/screen-images";
@@ -11,6 +11,9 @@ import { ScreenshotImage } from "../shared/screenshot-image";
 const SCALES = [1, 0.74, 0.54, 0.4];
 const OPACITIES = [1, 0.9, 0.6, 0.3];
 const GAP = 32;
+/** A trackpad swipe or a mouse wheel steps the strip by a screen for every this much travel; a pause starts the count again. */
+const WHEEL_STEP_PX = 100;
+const WHEEL_PAUSE_MS = 250;
 /** An iPhone's portrait shape, for a run with no screenshot sizes at all. */
 const FALLBACK_SIZE: ScreenshotSize = { imageWidth: 390, imageHeight: 844 };
 
@@ -64,6 +67,8 @@ function useSize(): [(element: HTMLDivElement | null) => void, { width: number; 
 export function ScreensFilmstrip(props: ScreensFilmstripProps) {
   const [stageRef, stage] = useSize();
   const at = props.order.indexOf(props.focusedId);
+  // The wheel's travel since its last pause, and the screen it has stepped to, which can run ahead of the render.
+  const wheel = useRef({ travel: 0, last: 0, index: -1 });
   const focused = props.index.screens.get(props.focusedId);
 
   // A row of the tree by its fold key, as the path above the frame names it.
@@ -115,12 +120,29 @@ export function ScreensFilmstrip(props: ScreensFilmstripProps) {
     }
   }
 
+  // A swipe along either axis steps, so a mouse wheel works as well as a trackpad; a longer swipe steps further.
+  const onWheel = (event: WheelEvent) => {
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    const pixels = event.deltaMode === 1 ? delta * 16 : event.deltaMode === 2 ? delta * stage.width : delta;
+    const state = wheel.current;
+    if (event.timeStamp - state.last > WHEEL_PAUSE_MS) { state.travel = 0; state.index = at; }
+    state.last = event.timeStamp;
+    state.travel += pixels;
+    const steps = Math.trunc(state.travel / WHEEL_STEP_PX);
+    if (!steps) return;
+    state.travel -= steps * WHEEL_STEP_PX;
+    const index = Math.max(0, Math.min(props.order.length - 1, state.index + steps));
+    if (index === state.index) return;
+    state.index = index;
+    props.onPick(props.order[index]!);
+  };
+
   const path = (props.shape.ancestors.get(props.focusedId) ?? []).flatMap(key => rowLabels.get(key) ?? []);
   const plain = props.index.plainTitles || isLaunchScreen(focused);
   const dot = props.dot(props.focusedId);
 
   return (
-    <section className="screens-strip" aria-label="Filmstrip">
+    <section className="screens-strip" aria-label="Filmstrip" onWheel={onWheel}>
       <div className="screens-strip-path">
         {path.map((label, position) => (
           <span key={position} className="screens-strip-crumb" title={label}>
