@@ -90,24 +90,27 @@ export function ScreensFilmstrip(props: ScreensFilmstripProps) {
     const size = sizeOf(screen);
     return size.imageWidth / size.imageHeight;
   };
-  // The middle frame fills the stage's height, short of a landscape capture growing wider than half the stage.
-  const height = Math.max(0, Math.min(stage.height - 16, (stage.width * 0.5) / aspect(focused)));
-  // Each frame is laid out at the middle frame's height and scaled down around its centre; the centres are spaced so
-  // the scaled frames sit a gap apart, the gap shrinking with them.
-  const middleWidth = height * aspect(focused);
-  const frames: { id: string; screen: Screen; distance: number; x: number; width: number }[] = [
-    { id: props.focusedId, screen: focused, distance: 0, x: 0, width: middleWidth },
+  // Every frame is laid out as the middle one would be, filling the stage's height short of growing wider than half
+  // the stage, so a landscape capture beside portrait ones is as wide as it may be rather than as tall; then it is scaled
+  // down around its centre, and the centres are spaced so the scaled frames sit a gap apart, the gap shrinking with them.
+  const frameSize = (screen: Screen) => {
+    const height = Math.max(0, Math.min(stage.height - 16, (stage.width * 0.5) / aspect(screen)));
+    return { width: height * aspect(screen), height };
+  };
+  const middle = frameSize(focused);
+  const frames: { id: string; screen: Screen; distance: number; x: number; width: number; height: number }[] = [
+    { id: props.focusedId, screen: focused, distance: 0, x: 0, ...middle },
   ];
   for (const direction of [-1, 1]) {
-    let edge = middleWidth / 2;
+    let edge = middle.width / 2;
     for (let distance = 1; distance < SCALES.length; distance++) {
       const id = props.order[at + direction * distance];
       const screen = id ? props.index.screens.get(id) : undefined;
       if (!id || !screen) break;
-      const width = height * aspect(screen);
-      const scaled = width * SCALES[distance]!;
+      const size = frameSize(screen);
+      const scaled = size.width * SCALES[distance]!;
       const centre = edge + GAP * SCALES[distance]! + scaled / 2;
-      frames.push({ id, screen, distance, x: direction * centre, width });
+      frames.push({ id, screen, distance, x: direction * centre, ...size });
       edge = centre + scaled / 2;
     }
   }
@@ -132,7 +135,7 @@ export function ScreensFilmstrip(props: ScreensFilmstripProps) {
       </div>
 
       <div ref={stageRef} className="screens-strip-stage">
-        {stage.width > 0 ? frames.map(({ id, screen, distance, x, width }) => {
+        {stage.width > 0 ? frames.map(({ id, screen, distance, x, width, height }) => {
           const artifact = primaryScreenshotForScreen(screen, props.index);
           const url = artifactUrl(artifact);
           const size = screenshotSize(artifact);

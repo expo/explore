@@ -97,8 +97,19 @@ function writeFolded(key: string, folded: ReadonlySet<string>): void {
 const SWITCH_LABELLED_FRAME_WIDTH = 640;
 const SWITCH_MINIMUM_FRAME_WIDTH = 540;
 
-/** How soon a second click follows the first to make a double-click that opens a card in the filmstrip. */
+/** How soon, and how near, a second click follows the first to make a double-click that opens a card in the filmstrip. */
 const DOUBLE_CLICK_MS = 500;
+const DOUBLE_CLICK_SLOP_PX = 8;
+
+/** A shown screen to stand for `selected`: itself, or the nearest shown screen after it in the tree, else before it. */
+function nearestShown(selected: string | undefined, shown: readonly string[], tree: readonly string[]): string | undefined {
+  if (!selected) return undefined;
+  if (shown.includes(selected)) return selected;
+  const at = tree.indexOf(selected);
+  if (at < 0) return undefined;
+  const set = new Set(shown);
+  return tree.slice(at + 1).find(id => set.has(id)) ?? tree.slice(0, at).reverse().find(id => set.has(id));
+}
 
 /** The key that opens the find field: a character, not a key position, so it is read from the layout like "?". */
 export const FIND_KEY = "/";
@@ -326,15 +337,22 @@ export function ScreensView(props: ScreensViewProps) {
   const order = props.phone ? sections.flatMap(section => section.screenIds) : treeOrder.filter(id => shown.has(id));
   const others = [...new Set([...(props.changedElsewhere?.values() ?? [])].flat())];
   const filmstrip = !props.phone && props.layout === "filmstrip";
-  // The filmstrip always has a screen in the middle: the selection when it is shown, else the first screen.
-  const stripFocus = filmstrip ? (props.selectedScreenId && order.includes(props.selectedScreenId) ? props.selectedScreenId : order[0]) : undefined;
+  // The filmstrip always has a screen in the middle: the selection when it is shown; else, when Changed or a find hides
+  // it, the nearest shown screen after it in the tree (before it, at the end), as the grid's arrows step from it; else
+  // the first screen.
+  const stripFocus = filmstrip ? nearestShown(props.selectedScreenId, order, treeOrder) ?? order[0] : undefined;
   // The sidebar folds away to give the screens its width. Each switch of layout starts over: the filmstrip with the
-  // sidebar folded, the grid with it open. A find narrows the screens, so the sidebar that shows its query stays open
-  // while there is one.
+  // sidebar folded, the grid with it open. A find's query lives only in the sidebar's field, so the sidebar stays open
+  // while one narrows the screens. Changed folds away with it, and the button left in its place says it is on.
   const [side, setSide] = useState({ filmstrip, collapsed: filmstrip && !findQuery });
   if (side.filmstrip !== filmstrip) setSide({ filmstrip, collapsed: filmstrip && !findQuery });
   const sideCollapsed = side.filmstrip === filmstrip ? side.collapsed : filmstrip && !findQuery;
   const setSideCollapsed = (collapsed: boolean) => setSide({ filmstrip, collapsed });
+  // A button that folds or opens the sidebar is replaced by the other one; the keyboard moves to it.
+  const toggleSide = (collapsed: boolean) => {
+    setSideCollapsed(collapsed);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(".screens-side .screens-side-toggle")?.focus());
+  };
 
   // Folding. All keeps the reader's folds and remembers them per report. Changed folds separately, starting
   // each time with only the rows that hold no change folded, so trying Changed never disturbs the folds in All.
@@ -454,7 +472,7 @@ export function ScreensView(props: ScreensViewProps) {
   // A selection made elsewhere (search, the map, the Inspector) scrolls its card to the middle of
   // the page, as a pick in the tree does; a card already in view stays put.
   const scroller = useRef<HTMLElement>(null);
-  const cardClick = useRef<{ id: string; at: number } | undefined>(undefined);
+  const cardClick = useRef<{ id: string; at: number; x: number; y: number } | undefined>(undefined);
   const selected = props.selectedScreenId;
   const focusKey = props.focusRequest?.id === selected ? props.focusRequest?.key : undefined;
   const selectedShown = selected !== undefined && shown.has(selected);
@@ -618,7 +636,9 @@ export function ScreensView(props: ScreensViewProps) {
   useEffect(() => {
     const onDoubleClick = (event: MouseEvent) => {
       const first = cardClick.current;
-      if (!first || event.timeStamp - first.at > DOUBLE_CLICK_MS) return;
+      // A double-click elsewhere, or later, is not this card's.
+      if (!first || event.timeStamp - first.at > DOUBLE_CLICK_MS
+        || Math.hypot(event.clientX - first.x, event.clientY - first.y) > DOUBLE_CLICK_SLOP_PX) return;
       cardClick.current = undefined;
       openFilmstripRef.current?.(first.id);
     };
@@ -669,8 +689,10 @@ export function ScreensView(props: ScreensViewProps) {
         selected={props.selectedScreenId === id}
         dimmed={dimmed(id)}
         onSelect={(event) => {
-          // The first click of a pair, which a double-click opens in the filmstrip (see the page's onDoubleClick).
-          if (!cardClick.current || event.timeStamp - cardClick.current.at > DOUBLE_CLICK_MS) cardClick.current = { id, at: event.timeStamp };
+          // The second click of a double-click selects nothing: it may land on another card the first click's Inspector
+          // moved under the pointer. The first click is kept with its place, for the double-click that follows.
+          if (event.detail >= 2) return;
+          cardClick.current = { id, at: event.timeStamp, x: event.clientX, y: event.clientY };
           props.onSelectScreen(id);
         }} />
     ) : null;
@@ -725,8 +747,10 @@ export function ScreensView(props: ScreensViewProps) {
       <div className="screens-body">
         {props.phone ? null : sideCollapsed ? (
           <aside className="screens-side collapsed">
-            <button type="button" className="screens-side-toggle" aria-label="Show sidebar" title="Show sidebar"
-              onClick={() => setSideCollapsed(false)}>
+            <button type="button" className={`screens-side-toggle${inChanged ? " narrowed" : ""}`} aria-expanded={false}
+              aria-label={inChanged ? "Show sidebar, showing changed screens only" : "Show sidebar"}
+              title={inChanged ? "Show sidebar · Changed only" : "Show sidebar"}
+              onClick={() => toggleSide(false)}>
               <PanelLeftOpen aria-hidden="true" />
             </button>
           </aside>
@@ -738,8 +762,8 @@ export function ScreensView(props: ScreensViewProps) {
               <div className="screens-tree-head">
                 {findSearch}{foldAll}
                 {/* Folding the sidebar away clears its find, which would otherwise narrow the screens out of sight. */}
-                <button type="button" className="screens-side-toggle" aria-label="Hide sidebar" title="Hide sidebar"
-                  onClick={() => { setQuery(""); setSideCollapsed(true); }}>
+                <button type="button" className="screens-side-toggle" aria-label="Hide sidebar" title="Hide sidebar" aria-expanded
+                  onClick={() => { setQuery(""); toggleSide(true); }}>
                   <PanelLeftClose aria-hidden="true" />
                 </button>
               </div>

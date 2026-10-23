@@ -1489,7 +1489,9 @@ test("Screens' filmstrip: switched from the corner switch, stepped with the arro
   const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   await page.mouse.click(at.x, at.y);
   await expect(inspector).toBeVisible();
-  await page.mouse.click(at.x, at.y, { clickCount: 2 });
+  // The second click of the pair, where the pointer still is.
+  await page.mouse.down({ clickCount: 2 });
+  await page.mouse.up({ clickCount: 2 });
   await expect(middle).toHaveAttribute("data-screen-id", last);
   await expect(inspector).toBeVisible();
   // Esc closes the Inspector first, then steps back out to the grid with the screen still picked.
@@ -1521,8 +1523,15 @@ test("Screens' filmstrip keeps Changed across a layout switch, opens only from a
   await view.getByRole("button", { name: /^All/ }).click();
   await cells.nth(1).locator(".screen-node-title").dblclick();
   await expect(strip).toHaveCount(0);
+  // A click on one card and then a quick double-click on another opens the other.
+  const [firstId, secondId] = await ids();
+  await view.locator(`.screens-cell[data-screen-id="${firstId}"] .screen-screenshot-target`).click();
+  await view.locator(`.screens-cell[data-screen-id="${secondId}"] .screen-screenshot-target`).dblclick();
+  await expect(strip.locator(".screens-strip-frame.focused")).toHaveAttribute("data-screen-id", secondId!);
+  await layouts.getByRole("button", { name: "Grid" }).click();
+  await page.keyboard.press("Escape");
 
-  // A pick that Changed hides stays picked across a switch, and Changed stays on: the middle is the first changed screen.
+  // A pick that Changed hides stays picked across a switch, and Changed stays on.
   const all = await ids();
   await view.getByRole("button", { name: /^Changed/ }).click();
   const changed = await ids();
@@ -1533,12 +1542,23 @@ test("Screens' filmstrip keeps Changed across a layout switch, opens only from a
   await page.keyboard.press("Escape");
   await view.getByRole("button", { name: /^Changed/ }).click();
   await layouts.getByRole("button", { name: "Filmstrip" }).click();
-  await view.getByRole("button", { name: "Show sidebar" }).click();
+  // The sidebar folds away with Changed in it; the button left in its place says the screens are narrowed, and Changed
+  // is still on behind it.
+  const show = view.getByRole("button", { name: "Show sidebar, showing changed screens only" });
+  await expect(show).toBeVisible();
+  await show.click();
+  await expect(view.getByRole("button", { name: "Hide sidebar" })).toBeFocused();
   await expect(view.getByRole("button", { name: /^Changed/ })).toHaveAttribute("aria-pressed", "true");
-  await expect(strip.locator(".screens-strip-frame.focused")).toHaveAttribute("data-screen-id", changed[0]!);
+  // The middle is the nearest changed screen after the hidden pick in the tree, as the grid's arrows step from it.
+  const at = all.indexOf(hidden!);
+  const nearest = all.slice(at + 1).find(id => changed.includes(id)) ?? all.slice(0, at).reverse().find(id => changed.includes(id));
+  await expect(strip.locator(".screens-strip-frame.focused")).toHaveAttribute("data-screen-id", nearest!);
   // A click on the page around the strip keeps the screen in the middle.
   await view.click({ position: { x: 600, y: 4 } });
-  await expect(strip.locator(".screens-strip-frame.focused")).toHaveAttribute("data-screen-id", changed[0]!);
+  await expect(strip.locator(".screens-strip-frame.focused")).toHaveAttribute("data-screen-id", nearest!);
+  // Folded again by hand, the keyboard moves to the button left in its place.
+  await view.getByRole("button", { name: "Hide sidebar" }).click();
+  await expect(show).toBeFocused();
 
   // Search opens Screens in the remembered layout, and landing there does not forget it.
   await chooseCanvasView(page, "Map");
