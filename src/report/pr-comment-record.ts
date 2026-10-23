@@ -96,7 +96,8 @@ export type PlatformRecord = {
   device?: string;
   app?: { name?: string; version?: string; build?: string };
   links: { run: string; report?: string; download?: string; artifacts: string; config: string; expiresAt?: number | null; deploying?: true };
-  capture?: { planned: { base: number; head: number }; done: { base: number; head: number }; baseFromCache: boolean; current?: "base" | "head" };
+  capture?: { planned: { base: number; head: number }; done: { base: number; head: number }; baseFromCache: boolean; current?: "base" | "head";
+    waiting?: { on: "baseline"; step?: string } };
   health?: { base: SideHealth; head: SideHealth };
   validation?: {
     visual?: { compared: number; threshold: number; eligible?: number; skipped?: number; failed: number };
@@ -252,7 +253,9 @@ export function parsePlatformRecord(value: unknown): PlatformRecord | undefined 
   }
   if (isRecord(value.capture) && pair(value.capture.planned) && pair(value.capture.done) && typeof value.capture.baseFromCache === "boolean") {
     record.capture = { planned: { base: value.capture.planned.base, head: value.capture.planned.head }, done: { base: value.capture.done.base, head: value.capture.done.head },
-      baseFromCache: value.capture.baseFromCache, ...(isSide(value.capture.current) ? { current: value.capture.current } : {}) };
+      baseFromCache: value.capture.baseFromCache, ...(isSide(value.capture.current) ? { current: value.capture.current } : {}),
+      ...(isRecord(value.capture.waiting) && value.capture.waiting.on === "baseline"
+        ? { waiting: { on: "baseline" as const, ...(isString(value.capture.waiting.step, 80) ? { step: value.capture.waiting.step } : {}) } } : {}) };
   }
   if (isRecord(value.health) && health(value.health.base) && health(value.health.head)) {
     const pick = (side: SideHealth): SideHealth => ({ planned: side.planned, captured: side.captured, verified: side.verified, unverified: side.unverified, unavailable: side.unavailable });

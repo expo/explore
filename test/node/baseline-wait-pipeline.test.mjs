@@ -83,6 +83,42 @@ test('head capture starts while the review waits for the baseline, and the waite
   assert.equal(waitSignal.aborted, true, 'the wait is told to stop once the review is done');
 });
 
+test('while base waits for the baseline, the comment names the step the baseline job is in, and the run records its phases', async t => {
+  const f = await fixture(t, 'expo-router');
+  t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
+  const baseline = await runBaselineCi({ project: f.baseProject, sha: f.baseSha, output: join(f.root, 'baseline'), config: f.config, environment: f.environment,
+    runner: f.runner, now: f.now, sleep: f.sleep, timingsPath: join(f.root, 'baseline-timings.jsonl') });
+  const finished = deferred();
+  const bodies = [];
+  const timingsPath = join(f.root, 'timings.jsonl');
+  const runner = request => {
+    if (request.args[0] === 'simulator:start') setImmediate(() => finished.resolve(baseline.directory));
+    return f.runner(request);
+  };
+  await runPublicCi({ baseProject: f.baseProject, headProject: f.headProject, pullRequestPath: f.pullRequestPath, output: join(f.root, 'review'), config: f.config,
+    environment: f.environment, transport: f.transport, runner, now: f.now, sleep: f.sleep, timingsPath, onComment: (_state, body) => bodies.push(body),
+    awaitBaseline: (_signal, watch) => {
+      watch.onUpdate({ state: 'in progress', step: 'Install the launch recording decoder', stepSince: 0, waitedMs: 0 });
+      return finished.promise;
+    } });
+  const waiting = bodies.filter(body => body.includes("base waits for the default branch's baseline (in “Install the launch recording decoder”)"));
+  assert.ok(waiting.length >= 1, bodies.join('\n---\n'));
+  assert.equal(bodies.at(-1).includes('base waits for'), false, 'the comment stops saying so once the wait is over');
+  const events = (await readFile(timingsPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(events[0].type, 'run');
+  assert.deepEqual(events.at(-1), { ...events.at(-1), type: 'finish', outcome: 'ok' });
+  const ended = events.filter(event => event.type === 'end');
+  const started = events.filter(event => event.type === 'start');
+  assert.deepEqual(started.map(event => event.id).sort(), ended.map(event => event.id).sort(), 'every span the review opened, it closed');
+  const phases = new Set(ended.map(event => `${event.phase}${event.side ? `:${event.side}` : ''}`));
+  for (const phase of ['plan', 'preflight', 'capture', 'compare', 'report', 'baseline-blocked', 'pass:head', 'configuration:head', 'session-start:head', 'route:head']) {
+    assert.ok(phases.has(phase), `${phase} in ${[...phases].join(', ')}`);
+  }
+  const baselineEvents = (await readFile(join(f.root, 'baseline-timings.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(baselineEvents.some(event => event.type === 'end' && event.phase === 'pass' && event.side === 'baseline'));
+  assert.deepEqual(baselineEvents.at(-1), { ...baselineEvents.at(-1), type: 'finish', outcome: 'ok' });
+});
+
 test('capture:review waits for the baseline run ci:find-baseline named, downloads its artifact, and restores base from it', async t => {
   const f = await fixture(t, 'expo-router');
   t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));

@@ -21,6 +21,7 @@ import { lstatIfExists, isWithin, temporaryCaptureDirectory, absoluteContractFil
 import { loadAppIcon, loadCachedAppIcon, storeAppIcon } from "./app-icon.js";
 import { defaultRunner, runAgentControllerCommand } from "./controller.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
+import { blockingCall, createTimings, phaseSequence, type BlockingNotice, type Timings } from "../shared/timings.js";
 import { assertCaptureEasProfile, assertSimulatorAvailable, fingerprintFrom, hasEasEnvironmentFetchFailure, nativeBuildFrom, existingBuild, repackProfileFrom, prepareExactSourceBuild, HOSTED_REPACK_BUDGET_MS, type RepackMode, type RepackShare } from "./eas-build.js";
 import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, endedOwnSimulatorSession, liveSimulatorSessionsNamed, simulatorSessionName, simulatorStartFailure, readSimulatorDotenvHandoff, assertSimulatorSessionIdentity, assertSimulatorStopped, collectRuntime, controllerVersion, simulatorOsVersion, type ActiveSimulatorRuntime, type SimulatorConnection } from "./simulator.js";
 import { argentControllerInvocation } from "./controller-invocation.js";
@@ -91,6 +92,11 @@ export type CiMapOptions = {
   readinessSeconds?: number;
   /** Reports each step as it starts; capture output stays in the map and bundle. */
   progress?: Progress;
+  /** Where this capture appends its timings (timings.jsonl), labelled with `timingsSide` or else `side`. A path crosses to a worker thread; a recorder could not. */
+  timingsPath?: string;
+  timingsSide?: string;
+  /** Told before a synchronous call blocks this thread for minutes: a worker's parent prints while it is (runCiMapOnWorker). */
+  onBlocking?: BlockingNotice;
   /** Stops the capture between steps (before the build, the session and each route); a session it started is still stopped. */
   signal?: AbortSignal;
 };
@@ -191,16 +197,20 @@ export function revisionSetup(setup: readonly CaptureSetupStep[], plan: SourceCa
 /** Source-plan capture. App state is observed as it runs; optional agents cannot change the inventory. */
 export async function runCiMap(input: Omit<CiMapOptions, "platform"> & { platform?: Platform }): Promise<CiMapResult> {
   const options: CiMapOptions = { ...input, platform: input.platform ?? "ios" };
+  const timings = createTimings({ path: options.timingsPath, labels: { side: options.timingsSide ?? options.side, pass: options.appearancePass?.capture.join("+") },
+    secrets: [options.expoToken, ...environmentSecrets(options.environment ?? process.env)] });
   let stage = "preflight";
-  try { return await executeCiMap(options, value => { stage = value; }); }
-  catch (error) {
-    throw toCiError(error, { code: `CAPTURE_${stage.toUpperCase().replace(/-/g, "_")}_FAILED`, stage,
-      nextAction: stage === "cleanup" ? "Stop the exact session identified in the session handoff, then retry."
-        : "Inspect the capture diagnostic, correct the failing prerequisite, and rerun Explore." });
-  }
+  return timings.measure("pass", async () => {
+    try { return await executeCiMap(options, value => { stage = value; }, timings); }
+    catch (error) {
+      throw toCiError(error, { code: `CAPTURE_${stage.toUpperCase().replace(/-/g, "_")}_FAILED`, stage,
+        nextAction: stage === "cleanup" ? "Stop the exact session identified in the session handoff, then retry."
+          : "Inspect the capture diagnostic, correct the failing prerequisite, and rerun Explore." });
+    }
+  });
 }
 
-async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => void): Promise<CiMapResult> {
+async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => void, timings: Timings): Promise<CiMapResult> {
   if (!options.confirmExternalRun || !options.confirmTrustedSource) throw new Error("EAS capture requires authorized external execution of the selected source commit.");
   positiveInteger(options.maxScreens, "maxScreens");
   positiveInteger(options.maxActions, "maxActions");
@@ -465,7 +475,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const controlOptions = { sleep: options.sleep };
   // What the EAS session's host can do through simulator:control (iOS sessions on serve-sim 0.10.0 or later).
   let controlActions = new Set<string>();
-  const configResult = eas(["config", "--platform", options.platform, "--profile", options.easProfile, "--json", "--non-interactive"]);
+  const configResult = timings.measure("configuration", () => eas(["config", "--platform", options.platform, "--profile", options.easProfile, "--json", "--non-interactive"]));
   const profile = repackProfileFrom(configResult.stdout);
   const configValue = parseJson(configResult.stdout, "eas config") as { appConfig: Record<string, unknown>; buildProfile: Record<string, unknown> };
   scheme ??= appScheme(configValue.appConfig.scheme);
@@ -570,6 +580,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     if (local || sessionStart) return;
     if (!retry) say(`starting an EAS Simulator session (${options.device}) while the app is repacked`);
     sessionStartedAt = (options.now ?? Date.now)();
+    // From the request to the session EAS hands over, beside the repack: the queue and boot time of the session.
+    const started = timings.span("session-start", { attempt: sessionRetries });
     const request = (minutes: number) => ({ command: options.easCommand, args: ["simulator:start", "--name", sessionName, "--platform", options.platform, "--device", options.device,
       "--type", controller, "--package-version", controllerVersion(controller), "--public-link",
       "--max-duration-minutes", String(minutes), "--out-config-type", "dotenv", "--non-interactive"], cwd: simulatorProject, environment: easEnvironment,
@@ -584,7 +596,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         say(`EAS allows ${limit}-minute sessions on this plan; starting the session again without the full repack allowance`);
         return start(Math.max(options.maxDurationMinutes, limit));
       }))
-      .then(() => undefined, (error: unknown) => error);
+      .then(() => undefined, (error: unknown) => error)
+      .then(error => { started(error ? "failed" : "ok"); return error; });
   };
   setStage("build");
   // The instrumented app stays on this machine: a local device installs it, and an EAS session gets it through the
@@ -596,17 +609,17 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   // What a hosted repack waits with and reports through: one deadline from the moment the session starts beside it, for
   // the wait for another job's repack and every repack of its own. The repack is shared with this run's other matrix
   // jobs only when it repacks a build EAS already had: a native build this job made is its own, so nobody else's key matches it.
-  const repackWaits = (shared: boolean) => ({ ...(shared ? { share: options.repackShare } : {}), progress: say, now: options.now, sleep: options.sleep,
+  const repackWaits = (shared: boolean) => ({ ...(shared ? { share: options.repackShare } : {}), progress: say, now: options.now, sleep: options.sleep, timings, onBlocking: options.onBlocking,
     signal: options.signal, deadline: (options.now ?? Date.now)() + HOSTED_REPACK_BUDGET_MS });
   // `repacking` tells the captures sharing this build that their sessions can start too (sharedBuild).
   const buildApp = async (keepApp: string, repacking?: () => Promise<void>): Promise<BuiltApp> => {
     options.signal?.throwIfAborted();
     say("computing the native fingerprint");
-    const fingerprintResult = eas(["fingerprint:generate", "--platform", options.platform, "--build-profile", options.easProfile, "--json", "--non-interactive"]);
+    const fingerprintResult = timings.measure("fingerprint", () => eas(["fingerprint:generate", "--platform", options.platform, "--build-profile", options.easProfile, "--json", "--non-interactive"]));
     const sourceFingerprint = fingerprintFrom(fingerprintResult.stdout);
     const reusable = options.forceFreshBuild || hasEasEnvironmentFetchFailure(configResult.stderr) || hasEasEnvironmentFetchFailure(fingerprintResult.stderr)
-      ? undefined : existingBuild(eas(["build:list", "--platform", options.platform, "--status", "finished", "--build-profile", options.easProfile,
-        "--fingerprint-hash", sourceFingerprint, ...(options.platform === "ios" ? ["--simulator"] : []), "--limit", "20", "--json", "--non-interactive"]).stdout);
+      ? undefined : existingBuild(timings.measure("build-lookup", () => eas(["build:list", "--platform", options.platform, "--status", "finished", "--build-profile", options.easProfile,
+        "--fingerprint-hash", sourceFingerprint, ...(options.platform === "ios" ? ["--simulator"] : []), "--limit", "20", "--json", "--non-interactive"])).stdout);
     if (reusable) {
       say(`reusing EAS build ${reusable.id} (fingerprint ${sourceFingerprint.slice(0, 12)}); repacking it with this commit's JavaScript and the route observer`);
       startSession(); await repacking?.();
@@ -619,9 +632,10 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         ...(reusable.appVersion ? { version: reusable.appVersion } : {}), ...(reusable.appBuildVersion ? { buildNumber: reusable.appBuildVersion } : {}) };
     }
     options.signal?.throwIfAborted();
-    say(options.forceFreshBuild ? "building on EAS (a fresh build was requested); waiting for it to finish"
-      : `no finished simulator build has fingerprint ${sourceFingerprint.slice(0, 12)}; building on EAS and waiting for it to finish`);
-    const built = nativeBuildFrom(eas(["build", "--platform", options.platform, "--profile", options.easProfile, "--wait", "--json", "--non-interactive"], 45 * 60_000).stdout);
+    say(options.forceFreshBuild ? "building on EAS (a fresh build was requested); waiting up to 45 minutes for it to finish"
+      : `no finished simulator build has fingerprint ${sourceFingerprint.slice(0, 12)}; building on EAS and waiting up to 45 minutes for it to finish`);
+    const built = nativeBuildFrom(blockingCall(timings, options.onBlocking, "native-build", 45 * 60_000,
+      () => eas(["build", "--platform", options.platform, "--profile", options.easProfile, "--wait", "--json", "--non-interactive"], 45 * 60_000)).stdout);
     say(`EAS build ${built.id} finished; repacking it with the route observer`);
     startSession(); await repacking?.();
     const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
@@ -674,8 +688,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   }
   let primaryError: unknown;
   let runtimeStage = "session";
+  // The session's handover and the app's install, in turn; the passes after them have spans of their own.
+  const runtimePhases = phaseSequence(timings);
   try {
     setStage(runtimeStage);
+    runtimePhases.enter("session-verify");
     let connection: SimulatorConnection | undefined;
     if (localApp && localEmulator && localEmulatorStart) {
       await assertLocalEmulatorCompatible(localApp, hostEmulatorAbi());
@@ -845,9 +862,10 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     }
     if (!local && localApp) {
       // The session started empty while the app was repacked; the controller installs it now.
-      say(`installing the app on session ${sessionId}`);
-      runner({ command: controllerCommand, args: ["install", localApp, "--session", CONTROLLER_SESSION, ...deviceArgs({ platform: options.platform, deviceModel: options.device }),
-        "--platform", options.platform, "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 15 * 60_000 });
+      say(`installing the app on session ${sessionId} (up to 15 minutes)`);
+      runtimePhases.end();
+      blockingCall(timings, options.onBlocking, "install", 15 * 60_000, () => runner({ command: controllerCommand, args: ["install", localApp, "--session", CONTROLLER_SESSION,
+        ...deviceArgs({ platform: options.platform, deviceModel: options.device }), "--platform", options.platform, "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 15 * 60_000 }));
       // Before any link opens, as a local capture does with simctl: the app's own links then open without the prompt.
       if (sessionId && scheme) {
         const approved = approveSessionUrlSchemes(sessionEas, sessionId, controlActions, options.bundleId, [scheme], controlOptions);
@@ -1008,6 +1026,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     const recordingTools = launchSetting === "off" ? undefined : options.recordingTools === undefined ? ffmpegRecordingTools() : options.recordingTools ?? undefined;
     const capturedSchemes = options.appearancePass ? colorSchemes.filter(scheme => options.appearancePass!.capture.includes(scheme)) : colorSchemes;
     const activeRuntime = runtime;
+    runtimePhases.end();
     for (const [index, colorScheme] of colorSchemes.entries()) {
       // A pass another session makes leaves its slot empty, so the passes stay aligned with the appearances they merge by.
       if (!capturedSchemes.includes(colorScheme)) { passes.push({}); continue; }
@@ -1027,11 +1046,12 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           say(`observing the app launch${colorSchemes.length > 1 ? ` (${colorScheme})` : ""}`);
           try {
             // A restored baseline's launch evidence is replaced only by a fresh observation.
-            const record = await captureLaunch({ bundleId: options.bundleId, keepVideo: launchSetting === "video", platform: options.platform,
+            const record = await timings.measure("launch", () => captureLaunch({ bundleId: options.bundleId, keepVideo: launchSetting === "video", platform: options.platform,
               directory: join(launchWorkDirectory, launchDirectory(colorScheme)), relativeDirectory: launchDirectory(colorScheme), ...(options.now ? { now: options.now } : {}),
               ...(recordingTools ? { recordingTools } : {}),
               controller: (args, controllerOptions) => runner({ command: controllerCommand, args: [...args, "--session", CONTROLLER_SESSION, ...deviceArgs(activeRuntime), "--platform", options.platform],
-                cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: controllerOptions?.timeoutMs ?? 60_000, ...(controllerOptions?.allowFailure ? { allowFailure: true } : {}) }) });
+                cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: controllerOptions?.timeoutMs ?? 60_000, ...(controllerOptions?.allowFailure ? { allowFailure: true } : {}) }) }),
+              { scheme: colorScheme });
             launch[colorScheme] = { root: launchWorkDirectory, record };
           } catch (error) {
             // The launch is supplementary evidence: a failure to observe it leaves the route capture intact.
@@ -1043,7 +1063,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         activeRuntime.colorScheme = colorScheme;
         if (colorSchemes.length > 1) say(`appearance ${colorScheme} (${index + 1}/${colorSchemes.length})`);
         return await capturePlannedRoutes({ capture: { ...options, ...(argentBridge && !options.agent ? { runner: argentBridge.runner } : {}), agentDeviceCommand: controllerCommand, setup, progress: say }, routes: missingRoutes, inventory, scheme, appName: app.name, runtime: activeRuntime,
-          connection, environment: controllerEnvironment, store, map, acceptedFrames, outcomes: passOutcomes,
+          connection, environment: controllerEnvironment, store, map, acceptedFrames, outcomes: passOutcomes, timings,
           ...(colorSchemes.length > 1 ? { appearance: { scheme: colorScheme, primary: index === 0 } } : {}) });
       };
       // A later pass of a session whose primary pass captured fails only its own appearance, as a secondary session does
@@ -1074,7 +1094,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       const pass = passes[colorSchemes.indexOf(failedScheme)] ?? {};
       for (const id of selectedIds) if (!pass[id]) outcomes[schemeScreenId(id, failedScheme)] = { status: "failed", attempts: 0, landing: "unverified", reason: error.message, error };
     }
-  } catch (error) { primaryError = toCiError(error, { code: `CAPTURE_${runtimeStage.toUpperCase()}_FAILED`, stage: runtimeStage,
+  } catch (error) { runtimePhases.end("failed"); primaryError = toCiError(error, { code: `CAPTURE_${runtimeStage.toUpperCase()}_FAILED`, stage: runtimeStage,
     nextAction: "Inspect the capture diagnostic, correct the failing prerequisite, and rerun Explore." }); }
   finally {
     if (appDirectory) await rm(appDirectory, { recursive: true, force: true });
@@ -1116,7 +1136,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       try {
         setStage("cleanup");
         say(`stopping simulator session ${sessionId}`);
-        assertSimulatorStopped(eas(["simulator:stop", "--id", sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout, sessionId);
+        const stopping = sessionId;
+        assertSimulatorStopped(timings.measure("session-stop", () => eas(["simulator:stop", "--id", stopping, "--json", "--non-interactive"], 2 * 60_000)).stdout, stopping);
         if (statePath) await rm(statePath, { force: true });
         await rm(simulatorProject, { recursive: true, force: true });
       } catch (error) { throw new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup",

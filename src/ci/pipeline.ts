@@ -19,7 +19,7 @@ import { quarantineReviewContract } from "../contracts/review-validation.js";
 import { agentCaptureConstraints } from "../capture/agent/source-context.js";
 import { captureArtifactCacheMayMatch, captureRecipeConfig, incompleteCaptureReason, restoreCaptureArtifactCache, writeCaptureArtifactCache } from "./artifact-cache.js";
 import { runCiMapOnWorker } from "./capture-worker.js";
-import { DEFAULT_BASELINE_WAIT_MINUTES, awaitPendingBaseline } from "./baseline-wait.js";
+import { DEFAULT_BASELINE_WAIT_MINUTES, awaitPendingBaseline, type BaselineWaitOptions } from "./baseline-wait.js";
 import { writeCiReportInput, readAppDirectory } from "../report/artifact.js";
 import { assessPublicEvidence, readExportedMap, type PublicEvidenceSide } from "../review/evidence-assessment.js";
 import { parseRuntimeExecutionContext } from "../review/runtime-adapter.js";
@@ -34,9 +34,10 @@ import { CiError, environmentSecrets, serializeCiError, toCiError } from "../sha
 import type { SourceCapturePlan } from "../source/capture-plan.js";
 import { createSourceChangeSummaries } from "../source/change-summary.js";
 import { assertNoCaptureHealthIssues, capturedEvidenceInDoubt, partitionCaptureHealthIssues, renderCaptureIssueAnnotation, renderComparisonDiagnosticAnnotation, renderNotesUnavailableAnnotation, renderReviewGapAnnotation, sortedCaptureHealthIssues } from "../capture/health.js";
-import { EXPLORE_PACKAGE, packageBin } from "../shared/package-paths.js";
+import { EXPLORE_PACKAGE, EXPLORE_VERSION, packageBin } from "../shared/package-paths.js";
 import { agentDeviceLauncher, ensureArgentToolServer, ensureController } from "../shared/controller-cache.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
+import { createTimings, phaseSequence, silentTimings, type RecordedEvent, type Timings } from "../shared/timings.js";
 
 
 function requireSecret(environment: NodeJS.ProcessEnv, name: string): string {
@@ -160,7 +161,7 @@ export async function captureSideInSessions(mapOptions: CiMapOptions, passes: re
   progress: Progress, signal: AbortSignal | undefined, worker: boolean,
   runPass?: (passOptions: CiMapOptions) => Promise<Awaited<ReturnType<typeof runCiMap>>>): Promise<Awaited<ReturnType<typeof runCiMap>>> {
   const runOnWorker = runPass ?? ((passOptions: CiMapOptions) =>
-    runCiMapOnWorker((({ progress: _progress, runner: _runner, agent: _agent, signal: _signal, ...rest }) => rest)(passOptions), progress, signal));
+    runCiMapOnWorker((({ progress: _progress, runner: _runner, agent: _agent, signal: _signal, onBlocking: _onBlocking, ...rest }) => rest)(passOptions), progress, signal));
   if (!passes || passes.length <= 1) return worker ? runOnWorker(mapOptions) : runCiMap(mapOptions);
   const schemes = passes.flat();
   progress(`${mapOptions.side}: capturing ${passes.map(pass => pass.join("+")).join(" and ")} in separate sessions`);
@@ -240,11 +241,14 @@ export async function sideAppearancePasses(config: ExploreConfig, environment: N
  * base is never started for a review that has already failed.
  */
 export async function captureBaseAfterWait(input: { waited: Promise<string | undefined> | undefined; head: Promise<void>; stopWaiting: () => void;
-  captureBase: (cacheDirectory?: string) => Promise<void> }): Promise<void> {
+  captureBase: (cacheDirectory?: string) => Promise<void>; timings?: Timings }): Promise<void> {
   if (!input.waited) return input.captureBase();
   let headFailed = false;
   input.head.catch(() => { headFailed = true; input.stopWaiting(); });
+  // What the wait cost: from where base would have started to the wait's end. The wait itself began beside head.
+  const blocked = (input.timings ?? silentTimings).span("baseline-blocked");
   const waited = await input.waited;
+  blocked(waited ? "ok" : "skipped");
   if (headFailed) return;
   if (!waited) return input.captureBase();
   await input.head;
@@ -291,12 +295,17 @@ export type PublicCiOptions = {
   /** Internal dependency injection for tests: replaces the wait for a baseline run that EXPLORE_BASELINE_RUN names. */
   awaitBaseline?: BaselineWait;
   progress?: Progress;
+  /** Where the run's timings are appended (`$RUNNER_TEMP/explore-diagnostics/timings.jsonl`); none are kept without it. */
+  timingsPath?: string;
   /** Stops the captures between steps (a cancelled job): a session is still stopped, and a hosted repack run cancelled. */
   signal?: AbortSignal;
 };
 
-/** Waits for a baseline of the base commit still being captured: its downloaded export's directory, or undefined. */
-type BaselineWait = (signal: AbortSignal) => Promise<string | undefined>;
+/**
+ * Waits for a baseline of the base commit still being captured: its downloaded export's directory, or undefined.
+ * `watch` hears what the baseline job is doing and records the wait.
+ */
+type BaselineWait = (signal: AbortSignal, watch?: Pick<BaselineWaitOptions, "onUpdate" | "timings">) => Promise<string | undefined>;
 
 /**
  * The wait for a baseline still capturing the base commit: for the run `ci:find-baseline` named in
@@ -310,8 +319,8 @@ function pendingBaselineWait(options: Pick<PublicCiOptions, "awaitBaseline" | "c
   const minutes = options.config.capture.baselineWaitMinutes ?? DEFAULT_BASELINE_WAIT_MINUTES;
   if (!Number.isSafeInteger(run) || run <= 0 || minutes === 0) return undefined;
   const target = options.target ?? options.platform ?? options.config.target?.id ?? "ios";
-  return signal => awaitPendingBaseline({ run, sha: baseSha, target, timeoutMs: minutes * 60_000, directory: join(resolve(options.output), "baseline-download"),
-    environment, transport, signal, ...(options.progress ? { progress: options.progress } : {}) });
+  return (signal, watch) => awaitPendingBaseline({ run, sha: baseSha, target, timeoutMs: minutes * 60_000, directory: join(resolve(options.output), "baseline-download"),
+    environment, transport, signal, ...(options.progress ? { progress: options.progress } : {}), ...watch });
 }
 
 function assertRunIdentity(environment: NodeJS.ProcessEnv): void {
@@ -359,7 +368,7 @@ export async function runCompareCi(options: Omit<PublicCiOptions, "pullRequestPa
   const awaitBaseline = pendingBaselineWait(options, environment, options.transport ?? fetch, comparison.base.sha);
   return runCiReview({ ...options, projects, output, state, presentation: comparison, ...(awaitBaseline ? { awaitBaseline } : {}),
     environment, runId: environment.GITHUB_RUN_ID!, runAttempt: environment.GITHUB_RUN_ATTEMPT!,
-    assertCurrentHead, postComment: async () => {} });
+    assertCurrentHead, postComment: async () => {}, postProgress: async () => {} });
 }
 
 export async function runPublicCi(options: PublicCiOptions) {
@@ -370,12 +379,14 @@ export async function runPublicCi(options: PublicCiOptions) {
   assertRunIdentity(environment);
   const pr = projectPullRequestPresentation(JSON.parse(await readFile(options.pullRequestPath, "utf8")));
   const { projects, output, state } = await prepareCiRun(options, environment, pr);
-  const postComment = async () => {
-    await assertCurrentPr();
+  const upsert = async () => {
     state.updatedAt = now(); const body = renderPublicComment(state); options.onComment?.(state, body);
     try { await upsertStickyComment({ repository: pr.repository, issueNumber: pr.number, body, ...platformSectionMerge(state, options.target ?? options.platform), token: githubToken, fetchImpl: transport }); }
     catch (error) { process.stderr.write(`Progress comment unavailable: ${serializeCiError(error).message}\n`); }
   };
+  const postComment = async () => { await assertCurrentPr(); await upsert(); };
+  // A status update between the phases' posts: it skips the PR check, whose failure would fail the review, and never throws.
+  const postProgress = async () => { if (!prVerificationFailed) await upsert().catch(() => undefined); };
   let prVerificationFailed = false;
   const assertCurrentPr = async () => {
     try {
@@ -431,7 +442,15 @@ export async function runPublicCi(options: PublicCiOptions) {
   const awaitBaseline = pendingBaselineWait(options, environment, transport, pr.base.sha);
   return runCiReview({ ...options, projects, output, state, presentation: pr, ...(awaitBaseline ? { awaitBaseline } : {}),
     environment, runId: environment.GITHUB_RUN_ID!, runAttempt: environment.GITHUB_RUN_ATTEMPT!,
-    assertCurrentHead, postComment, canPublish: () => !prVerificationFailed });
+    assertCurrentHead, postComment, postProgress, canPublish: () => !prVerificationFailed });
+}
+
+/** The run a timings file belongs to: the workflow, target, release, and run attempt, from the runner's variables. */
+function runHeader(environment: NodeJS.ProcessEnv, config: ExploreConfig): RecordedEvent {
+  return { type: "run", release: EXPLORE_VERSION, ...(config.target ? { target: config.target.id } : {}),
+    ...(environment.GITHUB_WORKFLOW ? { workflow: environment.GITHUB_WORKFLOW } : {}),
+    ...(/^\d+$/.test(environment.GITHUB_RUN_ID ?? "") ? { run: environment.GITHUB_RUN_ID! } : {}),
+    ...(/^\d+$/.test(environment.GITHUB_RUN_ATTEMPT ?? "") ? { attempt: environment.GITHUB_RUN_ATTEMPT! } : {}) };
 }
 
 function planSummary(plan: SourceCapturePlan, baseline = false): string {
@@ -458,6 +477,10 @@ export async function runCiReview(options: {
   measure?: Parameters<typeof assessPublicEvidence>[0]["measure"];
   state: PublicCommentState; environment: NodeJS.ProcessEnv;
   assertCurrentHead: () => Promise<void>; postComment: () => Promise<void>; canPublish?: () => boolean;
+  /** Posts the comment's state without verifying the PR first; best effort, for what changes between phases. */
+  postProgress?: () => Promise<void>;
+  /** Where the run's timings are appended; none are kept without it. */
+  timingsPath?: string;
   now?: () => number; sleep?: (milliseconds: number) => void; runner?: CommandRunner; subscription?: boolean; useLocalEasSession?: boolean;
   agentSessionFactory?: PrepareCiExplorationOptions["createSession"];
   prepareCapture?: () => Promise<void>;
@@ -472,10 +495,13 @@ export async function runCiReview(options: {
 }) {
   const { projects, output, config, environment, state, assertCurrentHead, postComment } = options;
   const progress = options.progress ?? silentProgress;
+  const timings = createTimings({ path: options.timingsPath, secrets: environmentSecrets(environment) });
+  timings.record(runHeader(environment, config));
+  const phases = phaseSequence(timings);
   // The controllers are fetched before any EAS work, so a blocked download fails before a session is paid for. agent-device
   // also compares the screenshots. An injected runner (tests) stands in for the controllers' calls, but not for that
   // comparison: it still runs the real agent-device, which fetches itself on first use.
-  if (!options.runner) await prefetchControllers(config, environment, progress);
+  if (!options.runner) await timings.measure("controllers", () => prefetchControllers(config, environment, progress));
   const pr = options.presentation;
   const now = options.now ?? Date.now;
   const secretValues = environmentSecrets(environment);
@@ -486,6 +512,7 @@ export async function runCiReview(options: {
   // Stops a baseline wait still polling once the review no longer needs it: done, failed, or stopped.
   const stopWaiting = new AbortController();
   try {
+    phases.enter("plan");
     progress(`planning the review of ${pr.head.sha.slice(0, 8)} against base ${pr.base.sha.slice(0, 8)} (scope ${config.exploration.scope})`);
     const plan = await buildVerifiedPlan({ baseProject: projects.base, headProject: projects.head,
       baseSha: pr.base.sha, headSha: pr.head.sha, config, output });
@@ -500,7 +527,7 @@ export async function runCiReview(options: {
     state.capture = { planned: { base: plan.baseCaptureSurfaceIds.length, head: plan.headCaptureSurfaceIds.length },
       done: { base: 0, head: 0 }, baseFromCache: false };
     await assertCurrentHead(); await postComment();
-    stage = "preflight";
+    stage = "preflight"; phases.enter("preflight");
     const active = plan.headCaptureSurfaceIds.length + plan.baseCaptureSurfaceIds.length > 0;
     if (active && !options.useLocalEasSession) requireSecret(environment, "EXPO_TOKEN");
     const exploration = await prepareCiExploration(config, projects.head, environment, active,
@@ -517,8 +544,16 @@ export async function runCiReview(options: {
       ...(environment.EXPLORE_CAPTURE_CACHE ? { sourceDirectory: environment.EXPLORE_CAPTURE_CACHE } : {}), commit: pr.base.sha });
     // With no finished baseline to reuse, one still being captured is waited for: from now, alongside head, and base
     // waits for it only where it would start. Head is never delayed by it (brentvatne/euxy's review run 39348956443).
+    // While it waits, the comment says so and names the step the baseline job is in; it changes only when that does.
+    const waitingFor = (step?: string) => {
+      if (step === undefined) delete state.capture!.waiting;
+      else state.capture!.waiting = { on: "baseline", ...(step ? { step } : {}) };
+      void options.postProgress?.();
+    };
     const waitedBaseline = !baselineMayExist && plan.baseCaptureSurfaceIds.length > 0 && options.awaitBaseline
-      ? options.awaitBaseline(options.signal ? AbortSignal.any([stopWaiting.signal, options.signal]) : stopWaiting.signal).catch(() => undefined) : undefined;
+      ? options.awaitBaseline(options.signal ? AbortSignal.any([stopWaiting.signal, options.signal]) : stopWaiting.signal,
+        { timings, onUpdate: update => waitingFor(update.step ?? "") }).catch(() => undefined)
+        .finally(() => { if (state.capture?.waiting) waitingFor(undefined); }) : undefined;
     const share = targetSessionShare(config, options.targets, options.posedTargets);
     // A share of one session captures the sides in turn.
     const concurrent = captureSidesConcurrently({ plan, agent: !!exploration.agent, injectedRunner: !!options.runner, baselineMayExist }) && share >= 2;
@@ -554,6 +589,7 @@ export async function runCiReview(options: {
         mapDirectory: join(output, `${side}-map`), outputDirectory: directory,
         name: config.app.name ?? pr.repository, buildId: pr.origin === "local" ? `local-${pr.runId}-${side}` : pr.origin === "compare" ? `compare-${options.runId}-${side}` : `pr-${pr.number}-${side}`, buildVersion: pr[side].sha.slice(0, 8), gitCommit: pr[side].sha,
         planPath: join(output, "execution-plan.json"), side, sessionStatePath: join(output, `${side}-session`), ...(options.buildShare ? { buildShare: options.buildShare } : {}),
+        ...(options.timingsPath ? { timingsPath: options.timingsPath } : {}),
         ...repackShareOption(config, environment, options.repackPeers),
         ...(reuseDirectory ? { reuseDirectory } : {}), ...(options.signal ? { signal: options.signal } : {}) };
       // A restored baseline already holds every appearance pass, so it never splits.
@@ -576,7 +612,8 @@ export async function runCiReview(options: {
       await writeCaptureArtifactCache(directory, cacheRecipe);
     };
     const captureBase = (head: Promise<void>) => captureBaseAfterWait({ waited: waitedBaseline, head, stopWaiting: () => stopWaiting.abort(),
-      captureBase: cacheDirectory => captureSide("base", cacheDirectory) });
+      captureBase: cacheDirectory => captureSide("base", cacheDirectory), timings });
+    phases.enter("capture");
     if (waitedBaseline) progress(`base waits for the baseline run of ${pr.base.sha.slice(0, 8)} still being captured; head captures meanwhile`);
     if (concurrent) {
       stage = "capture-head"; state.phase = "capturing"; state.capture.current = "head"; usagePhase = "capture-head";
@@ -598,7 +635,7 @@ export async function runCiReview(options: {
       }
     }
     delete state.capture.current;
-    stage = "compare";
+    stage = "compare"; phases.enter("compare");
     progress("comparing base and head captures");
     const sides = { base: await evidenceSide(join(output, "base-export")), head: await evidenceSide(join(output, "head-export")) };
     const system = systemRegions({ platform: config.app.platform, device: config.device.name, pose: config.device.pose });
@@ -655,7 +692,7 @@ export async function runCiReview(options: {
     for (const diagnostic of failedComparisons) progress(renderComparisonDiagnosticAnnotation(diagnostic));
     if (failedComparisons.length) progress(`${failedComparisons.length} comparison${failedComparisons.length === 1 ? "" : "s"} failed; the affected screens read as needing review`);
     if (exploration.agent) {
-      stage = "notes";
+      stage = "notes"; phases.enter("notes");
       usagePhase = "notes";
       try {
         const notes = await generateAgentChangeNotes({ review: result.review, assets: result.assets,
@@ -678,12 +715,18 @@ export async function runCiReview(options: {
         await writeFile(join(output, "agent-notes-diagnostics.json"), JSON.stringify({ error: serializeCiError(failure) }));
       }
     }
+    phases.enter("report");
     await preserveReport();
     progress(pr.origin === "compare" || pr.origin === "local" ? "writing the report" : "writing the report and updating the pull request comment");
     await assertCurrentHead(); await postComment();
+    phases.end();
+    timings.record({ type: "finish", outcome: "ok" });
     return { ...result, evidence, inputPath };
   } catch (error) {
     state.phase = "failed"; const diagnostic = serializeCiError(error, { secrets: secretValues });
+    const cancelled = diagnostic.code === "CAPTURE_CANCELLED";
+    phases.end(cancelled ? "cancelled" : "failed", diagnostic.code);
+    timings.record({ type: "finish", outcome: cancelled ? "cancelled" : "failed", code: diagnostic.code });
     state.failure = { step: stage, message: `${diagnostic.code}: ${diagnostic.message} ${diagnostic.nextAction}` };
     try { await preserveReport?.(); } catch { /* Retain the original failure if its report cannot be written. */ }
     // An exhausted verification already established that publication is unavailable; do not repeat its attempts.
@@ -710,10 +753,31 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
   /** Agent mode with the local claude or codex login instead of the provider's API key. */
   subscription?: boolean;
   /** Stops the capture between steps (a cancelled job): its session is still stopped, and a hosted repack run cancelled. */
-  signal?: AbortSignal }) {
+  signal?: AbortSignal;
+  /** Where the run's timings are appended; none are kept without it. */
+  timingsPath?: string }) {
   const environment = options.environment ?? process.env;
   assertCheckout(options.project, options.sha);
-  if (!options.runner) await prefetchControllers(options.config, environment, options.progress ?? silentProgress);
+  const timings = createTimings({ path: options.timingsPath, labels: { side: "baseline" }, secrets: environmentSecrets(environment) });
+  timings.record(runHeader(environment, options.config));
+  if (!options.runner) await timings.measure("controllers", () => prefetchControllers(options.config, environment, options.progress ?? silentProgress));
+  const phases = phaseSequence(timings);
+  try {
+    phases.enter("plan");
+    const baseline = await captureBaseline(options, environment, phases);
+    phases.end();
+    timings.record({ type: "finish", outcome: "ok" });
+    return baseline;
+  } catch (error) {
+    const code = toCiError(error).code;
+    const outcome = code === "CAPTURE_CANCELLED" ? "cancelled" : "failed";
+    phases.end(outcome, code);
+    timings.record({ type: "finish", outcome, code });
+    throw error;
+  }
+}
+
+async function captureBaseline(options: Parameters<typeof runBaselineCi>[0], environment: NodeJS.ProcessEnv, phases: ReturnType<typeof phaseSequence>) {
   const output = resolve(options.output);
   const relativeOutput = relative(await realpath(options.project), output);
   if (!relativeOutput.startsWith("..") || isAbsolute(relativeOutput)) throw new Error("Baseline output must be outside the source checkout");
@@ -723,6 +787,7 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
     baseSha: options.sha, headSha: options.sha, config: options.config, output, scope: "all" });
   progress(planSummary(plan, true));
   const active = plan.headCaptureSurfaceIds.length > 0;
+  phases.enter("preflight");
   if (active && !options.useLocalEasSession) requireSecret(environment, "EXPO_TOKEN");
   let usagePhase: AgentUsagePhase = "preflight";
   const exploration = await prepareCiExploration(options.config, options.project, environment, active,
@@ -736,6 +801,7 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
     mapDirectory: join(output, "baseline-map"), outputDirectory: directory, name: options.config.app.name ?? options.config.app.bundleId,
     buildId: `baseline-${options.sha.slice(0, 12)}`, buildVersion: options.sha.slice(0, 8), gitCommit: options.sha,
     side: "head", planPath: join(output, "execution-plan.json"), sessionStatePath: join(output, "baseline-session"),
+    ...(options.timingsPath ? { timingsPath: options.timingsPath, timingsSide: "baseline" } : {}),
     ...repackShareOption(options.config, environment, options.repackPeers), ...(options.signal ? { signal: options.signal } : {}) };
   const share = targetSessionShare(options.config, options.targets, options.posedTargets);
   // Passes on worker threads cannot take an injected runner or an agent session.
@@ -743,7 +809,9 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
     ? await sideAppearancePasses(options.config, environment, { share, sides: 1, routes: plan.headCaptureSurfaceIds.length, project: options.project }) : undefined;
   progress(`sessions: ${share} of ${options.config.capture.maxSessions ?? DEFAULT_MAX_SESSIONS} for this target; `
     + (passes ? `capturing ${passes.map(pass => pass.join("+")).join(" and ")} in separate sessions` : "one session"));
+  phases.enter("capture");
   const result = await captureSideInSessions(baselineOptions, passes, progress, options.signal, passes !== undefined);
+  phases.enter("report");
   const cacheRecipe = await recipe(options.config, plan, "head", environment, exploration.instructionsSha256);
   if (options.subscription) cacheRecipe.toolsCommit += ":local-subscription";
   const bundle = await readCaptureBundle(directory); bundle.profile = cacheRecipe.profile;

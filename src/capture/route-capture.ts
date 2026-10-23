@@ -15,6 +15,7 @@ import type { SourceRoute } from "../contracts/source-route.js";
 import { CiError, serializeCiError, toCiError } from "../shared/ci-errors.js";
 import { type CaptureSetupSnapshot, credentialSavePromptDecline, describeSetupAction, executeCaptureSetup, isUnreadableSystemSurface, setupReadinessHolds } from "./setup-actions.js";
 import { silentProgress } from "../shared/progress.js";
+import { silentTimings, type Timings } from "../shared/timings.js";
 import type { CaptureSetupReady } from "../config/explore-config.js";
 import { READINESS_POLL_MS, defaultReadinessSeconds } from "./readiness.js";
 import { KEYBOARD_POLL_MS, keyboardSettle, type KeyboardRead, type KeyboardSettle } from "./keyboard.js";
@@ -176,6 +177,8 @@ export async function capturePlannedRoutes(options: {
   outcomes?: CaptureBundle["outcomes"];
   /** Set when the review captures several appearances: the primary scheme keeps the route's screen id. */
   appearance?: { scheme: ColorScheme; primary: boolean };
+  /** Records each route's span, from its first open to its outcome. */
+  timings?: Timings;
 }): Promise<NonNullable<CaptureBundle["outcomes"]>> {
   const screenIdFor = (routeId: string) => schemeScreenId(routeId, options.appearance && !options.appearance.primary ? options.appearance.scheme : undefined);
   const colorScheme = options.appearance?.scheme;
@@ -1257,6 +1260,7 @@ export async function capturePlannedRoutes(options: {
       continue;
     }
     attempted.add(route.id);
+    const endRoute = (options.timings ?? silentTimings).span("route", { route: route.route });
     timingPhase = `route ${route.route}`;
     say(`route ${++opened}/${linked.length} ${route.route}: opening by app link`);
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -1305,6 +1309,7 @@ export async function capturePlannedRoutes(options: {
     }
     const outcome = outcomes[route.id];
     if (setupIncomplete && outcome?.status === "captured") outcomes[route.id] = { ...outcome, reason: outcome.reason ? `${outcome.reason} ${setupIncomplete}` : setupIncomplete };
+    endRoute(outcome?.status === "captured" ? "ok" : "failed", { status: outcome?.status ?? "none" });
     reportOutcome(route, "by app link");
   }
   return outcomes;

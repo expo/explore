@@ -107,6 +107,12 @@ test('a started run is known by its JSON or by the link it printed, and a start 
   assert.throws(() => hostedRepackRunStart('', 'Failed to upload project sources.\nError: socket hang up\n', 'ios'),
     error => error.code === 'EAS_REPACK_FAILED' && hostedRepackRetries(error) === 2 && /did not start the hosted ios repack/.test(error.message));
   assert.throws(() => hostedRepackRunStart('', 'Error: Not logged in\n', 'ios'), error => hostedRepackRetries(error) === 0);
+  // The link is written to logs and errors: only the page, never a query or fragment eas-cli appended to it.
+  assert.deepEqual(hostedRepackRunStart(JSON.stringify({ id: '01a15b61-c4a2-7c7b-b950-9f280edea954', url: `${url}?token=SECRET#frag` }), '', 'ios'),
+    { id: '01a15b61-c4a2-7c7b-b950-9f280edea954', url });
+  const failed = (() => { try { hostedRepackBuildId(JSON.stringify({ status: 'FAILURE', logURL: `${url}?sig=SECRET`, jobs: [{ key: 'repack', status: 'FAILURE' }] }), '', 'ios'); } catch (error) { return error; } })();
+  assert.equal(failed.details.logs, url);
+  assert.equal(JSON.stringify(failed).includes('SECRET') || failed.nextAction.includes('SECRET'), false);
 });
 
 test('the staged digest changes with any file, mode or link, and the share key with every input', async t => {

@@ -3,8 +3,9 @@ import { mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { BlobReader, Uint8ArrayWriter, ZipReader, configure } from "@zip.js/zip.js";
-import { CiError } from "../shared/ci-errors.js";
+import { CiError, environmentSecrets } from "../shared/ci-errors.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
+import { githubRunLink, safeText, silentTimings, type Timings } from "../shared/timings.js";
 import { retryGitHubLookup } from "../report/github-lookup.js";
 import { safeRelativePath } from "../binary/archive.js";
 import { CAPTURE_CACHE_MAX_BYTES, CAPTURE_CACHE_MAX_FILES } from "./artifact-cache.js";
@@ -26,7 +27,11 @@ const ARTIFACT_LISTING_GRACE_MS = 60_000;
 /** A zip of the largest capture cache, stored rather than deflated, plus its headers. */
 const MAX_ARTIFACT_ZIP_BYTES = CAPTURE_CACHE_MAX_BYTES + 16 * 1024 * 1024;
 
-type GithubJob = { name: string; status?: string; conclusion?: string | null };
+type GithubStep = { name?: string; number?: number; status?: string; conclusion?: string | null; started_at?: string | null; completed_at?: string | null };
+type GithubJob = { name: string; status?: string; conclusion?: string | null; steps?: GithubStep[] };
+
+/** What the review is waiting on, as it changes: the baseline job's state and the step it is in, from the same poll. */
+export type BaselineWaitUpdate = { state: string; step?: string; stepSince?: number; waitedMs: number };
 
 export type BaselineWaitOptions = {
   /** The baseline run `ci:find-baseline` named; it is checked again here, by the same trust rules. */
@@ -35,6 +40,10 @@ export type BaselineWaitOptions = {
   timeoutMs: number; pollMs?: number;
   environment?: NodeJS.ProcessEnv; transport?: typeof fetch; progress?: Progress; signal?: AbortSignal;
   now?: () => number; sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+  /** Called when the baseline job's state or step changes: the review's sticky comment says what it waits on. */
+  onUpdate?: (update: BaselineWaitUpdate) => void;
+  /** Records the wait, and the steps the baseline job finished (or was still in) while the review waited. */
+  timings?: Timings;
 };
 
 /** A failed GitHub read that may succeed later: no answer or a 5xx. A bad token or a missing permission is not. */
@@ -49,7 +58,26 @@ const statusText = (status: string | undefined) => (status ?? "queued").replaceA
  * the time limit, a missing permission and GitHub failures that outlast their retries. The reason says which.
  */
 export async function waitForBaselineArtifact(options: BaselineWaitOptions): Promise<{ artifact: { id: number; run: number } } | { reason: string }> {
+  const timings = options.timings ?? silentTimings;
   const now = options.now ?? Date.now;
+  const end = timings.span("baseline-wait", { run: options.run });
+  // The step the baseline job was last seen in: when the wait ends there, it is recorded with the time it had taken so far.
+  const watch: BaselineWatch = { recorded: new Set() };
+  const outcome = await pollBaselineArtifact(options, watch);
+  if (watch.current) timings.record({ type: "baseline-step", name: watch.current.name, ms: Math.max(0, now() - watch.current.since), conclusion: "still running" });
+  end("artifact" in outcome ? "ok" : "skipped", "artifact" in outcome ? { result: "artifact" } : { result: "gave up", reason: outcome.reason });
+  return outcome;
+}
+
+type BaselineWatch = { recorded: Set<number>; current?: { name: string; since: number } };
+
+/** A step's start or end as GitHub reports it, as a time on the wait's clock; GitHub's clock and the runner's agree to seconds. */
+const stepTime = (value: string | null | undefined) => { const time = Date.parse(value ?? ""); return Number.isFinite(time) ? time : undefined; };
+
+async function pollBaselineArtifact(options: BaselineWaitOptions, watch: BaselineWatch): Promise<{ artifact: { id: number; run: number } } | { reason: string }> {
+  const now = options.now ?? Date.now;
+  const timings = options.timings ?? silentTimings;
+  const secrets = environmentSecrets(options.environment ?? process.env);
   const sleep = options.sleep ?? ((milliseconds: number, signal?: AbortSignal) => delay(milliseconds, undefined, signal ? { signal } : {}));
   const progress = options.progress ?? silentProgress;
   const started = now();
@@ -64,9 +92,12 @@ export async function waitForBaselineArtifact(options: BaselineWaitOptions): Pro
     const jobNames = [`baseline (${target})`, ...(target === "ios" ? ["baseline"] : [])];
     let finishedAt: number | undefined;
     let logged = "";
+    let reported = "";
+    let link = githubRunLink(options.environment ?? process.env, options.run);
     for (;;) {
       const run = await get<GithubRun>(`repos/${context.repository}/actions/runs/${options.run}`);
       if (!trustedBaselineRun(run, lookup)) return { reason: `run ${options.run} is not a baseline run of ${short} on ${lookup.defaultBranch}` };
+      if (link) { progress(`waiting for ${lookup.defaultBranch}'s baseline run ${run.id} of ${short}: ${link}`); link = undefined; }
       for (const name of lookup.names) {
         const listed = await get<{ artifacts?: GithubArtifact[] }>(`repos/${context.repository}/actions/runs/${run.id}/artifacts?name=${encodeURIComponent(name)}&per_page=100`);
         const artifact = (listed?.artifacts ?? []).filter(candidate => !candidate.expired && (candidate.name ?? name) === name
@@ -75,6 +106,18 @@ export async function waitForBaselineArtifact(options: BaselineWaitOptions): Pro
       }
       const jobs = await get<{ jobs?: GithubJob[] }>(`repos/${context.repository}/actions/runs/${run.id}/jobs?per_page=100`);
       const job = jobs?.jobs?.find(candidate => jobNames.includes(candidate.name));
+      // The job's steps say where it is: in brentvatne/euxy#179 a baseline sat 19 minutes installing ffmpeg while the
+      // review's line said only "in progress". Each finished step is recorded once; the one running is named.
+      for (const step of job?.steps ?? []) {
+        const started = stepTime(step.started_at), completed = stepTime(step.completed_at);
+        if (step.status !== "completed" || typeof step.number !== "number" || watch.recorded.has(step.number) || started === undefined || completed === undefined) continue;
+        watch.recorded.add(step.number);
+        timings.record({ type: "baseline-step", name: step.name ?? "?", ms: Math.max(0, completed - started), conclusion: step.conclusion ?? "unknown" });
+      }
+      const running = job?.status === "in_progress" ? job.steps?.find(step => step.status === "in_progress" && step.name) : undefined;
+      const since = stepTime(running?.started_at);
+      if (running && since !== undefined) watch.current = { name: running.name!, since };
+      else delete watch.current;
       if (job?.status === "completed" && job.conclusion !== "success") {
         return { reason: `its ${target} job ${job.conclusion === "cancelled" ? "was cancelled" : job.conclusion === "failure" ? "failed" : `ended (${job.conclusion ?? "no conclusion"})`}` };
       }
@@ -86,8 +129,15 @@ export async function waitForBaselineArtifact(options: BaselineWaitOptions): Pro
       const waited = now() - started;
       const state = job ? statusText(job.status) : run.status === "completed" ? "finished" : "not started";
       if (waited >= options.timeoutMs) return { reason: `its ${target} job is still ${state} after ${Math.round(waited / 60_000)} min` };
+      const step = watch.current ? safeText(watch.current.name, secrets) : undefined;
+      const update = `${state}\0${step ?? ""}`;
+      if (update !== reported) {
+        reported = update;
+        options.onUpdate?.({ state, ...(step && watch.current ? { step, stepSince: watch.current.since } : {}), waitedMs: waited });
+      }
       // A line when the state changes and once a minute, not on every poll.
-      const line = `waiting for ${lookup.defaultBranch}'s baseline run ${run.id} of ${short} (${target}: ${state}, ${Math.floor(waited / 60_000)} min)`;
+      const where = step && watch.current ? `, in "${step}" for ${Math.max(0, Math.floor((now() - watch.current.since) / 60_000))} min` : "";
+      const line = `waiting for ${lookup.defaultBranch}'s baseline run ${run.id} of ${short} (${target}: ${state}${where}, ${Math.floor(waited / 60_000)} min)`;
       if (line !== logged) { progress(line); logged = line; }
       await sleep(Math.min(options.pollMs ?? POLL_MS, options.timeoutMs - waited), options.signal);
     }

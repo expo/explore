@@ -60,7 +60,8 @@ export function environmentSecrets(environment: NodeJS.ProcessEnv): string[] {
   return Object.entries(environment).filter(([key]) => /(?:TOKEN|SECRET|PASSWORD|API_KEY)/i.test(key)).flatMap(([, value]) => value ? [value] : []);
 }
 
-function redact(value: string, secrets: readonly string[]): string {
+/** Redacts secret values, bearer and provider tokens, credentials in URLs, and signed-URL parameters from any text Explore writes. */
+export function redactSecrets(value: string, secrets: readonly string[]): string {
   let result = value;
   // Controller failures may embed JSON or URLs inside their message rather than
   // returning the original input as a separate structured field.
@@ -77,12 +78,14 @@ function redact(value: string, secrets: readonly string[]): string {
   return result
     .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
     .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-(?:ant-)?[A-Za-z0-9_-]{12,})\b/g, "[REDACTED]")
-    .replace(/([?&](?:access_token|token|api_key|key|signature|sig)=)[^&#\s]*/gi, "$1[REDACTED]")
+    // In a query or a fragment: a simulator session's public preview link carries its token in the fragment, and an
+    // object store's signed link its credential and signature among the query's X-Amz- or X-Goog- parameters.
+    .replace(/([?&#](?:access_token|token|api_key|key|signature|sig|se|sv|x-(?:amz|goog)-(?:signature|credential|security-token))=)[^&#\s]*/gi, "$1[REDACTED]")
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[REDACTED]@");
 }
 
 function clean(value: unknown, secrets: readonly string[], seen = new Set<object>()): unknown {
-  if (typeof value === "string") return redact(value, secrets);
+  if (typeof value === "string") return redactSecrets(value, secrets);
   if (value === null || typeof value !== "object") return value;
   if (seen.has(value)) return "[Circular]";
   seen.add(value);
@@ -183,7 +186,7 @@ export async function reportCiError(error: unknown, options: {
   for (const [index, result] of results.entries()) {
     if (result.status === "rejected") {
       const code = (result.reason as NodeJS.ErrnoException | undefined)?.code;
-      const reason = typeof code === "string" ? ` (${redact(code, secrets)})` : "";
+      const reason = typeof code === "string" ? ` (${redactSecrets(code, secrets)})` : "";
       write(`::warning title=Explore diagnostics::${annotationData(`Could not write the ${outputs[index]!.label}${reason}. Check runner output permissions. The original failure above still applies.`)}`);
     }
   }

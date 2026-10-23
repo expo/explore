@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { SourceRoute } from "../contracts/source-route.js";
 import { CiError } from "../shared/ci-errors.js";
 import { EXPLORE_VERSION } from "../shared/package-paths.js";
+import { blockingCall, easPageLink, silentTimings, throttledProgress, type BlockingNotice, type Timings } from "../shared/timings.js";
 import { prepareCaptureObserver, captureObserverParameterKeys } from "./observer.js";
 import { isRecord, parseJson, nonEmpty } from "./common.js";
 import { isWithin } from "./fs-safety.js";
@@ -454,6 +455,8 @@ export function hostedRepackRetries(error: unknown): number {
 }
 
 const EXPO_URL = /^https:\/\/expo\.dev\/\S+$/;
+/** A workflow-run or build page eas-cli printed, rebuilt without any query or fragment it carried (easPageLink). */
+const easLogLink = (value: string | undefined) => easPageLink(value, "workflows") ?? easPageLink(value, "builds");
 const EAS_ID = /^[A-Za-z0-9-]{1,128}$/;
 
 /**
@@ -461,7 +464,7 @@ const EAS_ID = /^[A-Za-z0-9-]{1,128}$/;
  * error. `evidence` is the rest of what the run said: the CLI's stderr and the failed job's logs.
  */
 export function hostedRepackBuildId(stdout: string, evidence: string, platform: "ios" | "android"): string {
-  let logs = /See logs: (https:\/\/expo\.dev\/\S+)/.exec(evidence)?.[1];
+  let logs = easLogLink(/See logs: (https:\/\/expo\.dev\/\S+)/.exec(evidence)?.[1]);
   let value: unknown;
   try {
     value = parseJson(stdout, "eas workflow:run");
@@ -478,7 +481,7 @@ export function hostedRepackBuildId(stdout: string, evidence: string, platform: 
   }
   for (const field of ["url", "logURL"]) {
     const link = isRecord(value) ? value[field] : undefined;
-    if (typeof link === "string" && EXPO_URL.test(link)) logs = link;
+    if (typeof link === "string" && EXPO_URL.test(link)) logs = easLogLink(link) ?? logs;
   }
   const where = logs ? ` Logs: ${logs}` : "";
   const jobs = isRecord(value) && Array.isArray(value.jobs) ? value.jobs.filter(isRecord) : [];
@@ -517,8 +520,10 @@ export function hostedRepackRunStart(stdout: string, stderr: string, platform: "
   const printed = /See logs: (https:\/\/expo\.dev\/\S+)/.exec(stderr)?.[1];
   let value: unknown;
   try { value = JSON.parse(stdout); } catch { value = undefined; }
-  const url = isRecord(value) && typeof value.url === "string" && EXPO_URL.test(value.url) ? value.url : printed;
-  const id = isRecord(value) && typeof value.id === "string" ? value.id : url ? /\/workflows\/([^/?#\s]+)$/.exec(url)?.[1] : undefined;
+  const printedUrl = isRecord(value) && typeof value.url === "string" && EXPO_URL.test(value.url) ? value.url : printed;
+  const id = isRecord(value) && typeof value.id === "string" ? value.id : printedUrl ? /\/workflows\/([^/?#\s]+)$/.exec(printedUrl)?.[1] : undefined;
+  // The link goes into logs, error messages and their diagnostics: only the page itself, never what eas-cli appended to it.
+  const url = easPageLink(printedUrl, "workflows");
   if (id && EAS_ID.test(id)) return { id, ...(url ? { url } : {}) };
   const tail = stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 600);
   throw new CiError({ code: "EAS_REPACK_FAILED", stage: "instrumentation",
@@ -590,12 +595,17 @@ function printedBy(error: unknown): { stdout: string; stderr: string } {
  * followed by another. A start that timed out or was stopped is waited on when it printed its run, and otherwise
  * not replaced, since it may have started one.
  */
-async function hostedRepackRun(options: { eas: EasCall; staged: string; platform: "ios" | "android"; clock: RepackClock }): Promise<string> {
+async function hostedRepackRun(options: { eas: EasCall; staged: string; platform: "ios" | "android"; clock: RepackClock;
+  say: (message: string) => void; onBlocking?: BlockingNotice | undefined }): Promise<string> {
   const { clock, platform } = options;
   let started: { stdout: string; stderr: string };
   let startFailure: unknown;
-  try { started = options.eas(["workflow:run", HOSTED_REPACK_WORKFLOW, "--json", "--non-interactive"], Math.min(10 * 60_000, clock.deadline - clock.now()), { cwd: options.staged }); }
+  const startMs = Math.min(10 * 60_000, clock.deadline - clock.now());
+  options.say(`uploading the project and starting the hosted EAS repack (up to ${Math.ceil(startMs / 60_000)} minutes)`);
+  const uploaded = options.onBlocking?.("repack", startMs);
+  try { started = options.eas(["workflow:run", HOSTED_REPACK_WORKFLOW, "--json", "--non-interactive"], startMs, { cwd: options.staged }); }
   catch (error) { started = printedBy(error); startFailure = error; }
+  finally { uploaded?.(); }
   let run: { id: string; url?: string };
   try { run = hostedRepackRunStart(started.stdout, started.stderr, platform); }
   catch (error) {
@@ -608,6 +618,10 @@ async function hostedRepackRun(options: { eas: EasCall; staged: string; platform
   const cancel = (): boolean => {
     try { options.eas(["workflow:cancel", run.id, "--non-interactive"], 2 * 60_000, { strict: true }); return true; } catch { return false; }
   };
+  options.say(`waiting for the hosted EAS repack ${run.id}${run.url ? `: ${run.url}` : ""}`);
+  const waitedFrom = clock.now();
+  // Once a minute: the run's state, how long it has run and how long the capture still gives it.
+  const tick = throttledProgress(options.say, { now: clock.now });
   try {
     let unreadable = 0;
     for (;;) {
@@ -626,6 +640,8 @@ async function hostedRepackRun(options: { eas: EasCall; staged: string; platform
         }
         return hostedRepackBuildId(view.stdout, `${started.stderr}\n${logs}`, platform);
       }
+      tick(`hosted EAS repack ${run.id}: ${status && /^[A-Z_]{1,32}$/.test(status) ? status.toLowerCase().replaceAll("_", " ") : "state unreadable"}, `
+        + `${Math.floor((clock.now() - waitedFrom) / 60_000)} min, ${Math.max(0, Math.floor((clock.deadline - clock.now()) / 60_000))} min left`);
       unreadable = status ? 0 : unreadable + 1;
       if (unreadable >= HOSTED_REPACK_UNREADABLE_READS) {
         const cancelled = cancel();
@@ -782,6 +798,8 @@ async function sharedHostedRepack(options: { share: RepackShare; marker: string;
   const setAside = new Set<string>();
   let unreadable = 0;
   let announced = false;
+  // When the followed repack last had a line: one a minute while it runs, as the repack this job waits on has.
+  let beat = 0;
   for (;;) {
     clock.signal?.throwIfAborted();
     let read: ListedBuild[] | null | undefined;
@@ -810,6 +828,7 @@ async function sharedHostedRepack(options: { share: RepackShare; marker: string;
         lookUntil = Math.min(clock.now() + sharedRepackWaitMs(options.share, true), lookLatest);
       } else if (!followed && live) {
         followed = live.id;
+        beat = clock.now();
         say(`waiting for EAS build ${live.id}, the hosted repack of this commit another target of this run started, instead of repacking it again`);
       }
     }
@@ -826,6 +845,10 @@ async function sharedHostedRepack(options: { share: RepackShare; marker: string;
     if (!followed && !announced && firstWait) {
       announced = true;
       say(`waiting up to ${Math.round(firstWait / 60_000)} minutes for the hosted repack ${options.share.leader} or another target makes of this commit, instead of repacking it again`);
+    }
+    if (followed && now - beat >= 60_000) {
+      beat = now;
+      say(`waiting for EAS build ${followed}, the shared repack: ${Math.floor((now - start) / 60_000)} min, ${Math.max(0, Math.floor((clock.deadline - now) / 60_000))} min left`);
     }
     const until = followed ? clock.deadline : lookUntil;
     await pause(Math.max(0, Math.min(followed ? SHARED_REPACK_FOLLOW_POLL_MS : SHARED_REPACK_APPEAR_POLL_MS, until - now)), clock);
@@ -857,6 +880,8 @@ async function prepareHostedRepack(options: {
   share?: RepackShare | undefined;
   say: (message: string) => void;
   clock: RepackClock;
+  timings: Timings;
+  onBlocking?: BlockingNotice | undefined;
 }): Promise<string> {
   const { clock, platform } = options;
   const staged = join(options.root, "project");
@@ -907,9 +932,9 @@ async function prepareHostedRepack(options: {
       // The digest is taken before the workflow file is written: the file's message carries the key made from it.
       const marker = hostedRepackShareMarker(hostedRepackShareKey({ scope: options.share.scope, platform, nativeBuildId: options.nativeBuildId,
         easProfile: options.easProfile, environment, environmentVariables: variables, project: await stagedProjectDigest(staged) }));
-      const shared = await sharedHostedRepack({ share: options.share, marker, platform, say: options.say, clock,
+      const shared = await options.timings.measure("repack-share-wait", () => sharedHostedRepack({ share: options.share!, marker, platform, say: options.say, clock,
         list: () => eas(["build:list", "--platform", platform, "--limit", String(SHARED_REPACK_LIST_LIMIT), "--json", "--non-interactive"], 2 * 60_000).stdout,
-        view: id => eas(["build:view", id, "--json"], 2 * 60_000).stdout });
+        view: id => eas(["build:view", id, "--json"], 2 * 60_000).stdout }));
       if (shared) return shared;
       message = `${message} ${marker}`;
     }
@@ -922,7 +947,8 @@ async function prepareHostedRepack(options: {
   for (;;) {
     if (clock.deadline - clock.now() < HOSTED_REPACK_MIN_ATTEMPT_MS) throw timeoutError(platform, retries ? "too little time was left for another repack" : "too little time was left for a repack of its own");
     try {
-      return await hostedRepackRun({ eas, staged, platform, clock });
+      return await options.timings.measure("repack", () => hostedRepackRun({ eas, staged, platform, clock, say: options.say, onBlocking: options.onBlocking }),
+        { attempt: retries + 1 });
     } catch (error) {
       // Only a run EAS reported finished gets here with a failure that earns another (hostedRepackRun), so none is left beside it.
       const allowed = hostedRepackRetries(error);
@@ -969,6 +995,10 @@ export async function prepareExactSourceBuild(options: {
   now?: (() => number) | undefined;
   sleep?: ((milliseconds: number) => void) | undefined;
   signal?: AbortSignal | undefined;
+  /** Records the repack, the wait for another job's, and the download. */
+  timings?: Timings | undefined;
+  /** Told before a synchronous call blocks for minutes (CiMapOptions.onBlocking). */
+  onBlocking?: BlockingNotice | undefined;
 }): Promise<PreparedBuild | undefined> {
   const platform = options.platform ?? "ios";
   const root = await mkdtemp(join(tmpdir(), "expo-explore-repack-"));
@@ -985,12 +1015,14 @@ export async function prepareExactSourceBuild(options: {
         nativeBuildId: options.nativeBuildId, easProfile: options.easProfile, repackProfile: options.repackProfile,
         easEnvironment: options.easEnvironment, restrictedEnvironment: options.repackEnvironment, provider: providers[0]!,
         parameterKeys: captureObserverParameterKeys(options.routes), root, share: options.share, say: options.progress ?? (() => undefined),
+        timings: options.timings ?? silentTimings, onBlocking: options.onBlocking,
         clock: { deadline: options.deadline ?? (options.now ?? Date.now)() + HOSTED_REPACK_BUDGET_MS, now: options.now ?? Date.now, sleep: options.sleep, signal: options.signal } });
       {
         // The hosted job leaves its app on EAS; the capture installs a copy downloaded here.
-        const downloaded = await downloadedAppPath(options.runner({ command: options.easCommand,
+        options.progress?.(`downloading the repacked app, EAS build ${hosted} (up to 10 minutes)`);
+        const downloaded = await downloadedAppPath(blockingCall(options.timings ?? silentTimings, options.onBlocking, "build-download", 10 * 60_000, () => options.runner({ command: options.easCommand,
           args: ["build:download", "--build-id", hosted, "--json", "--non-interactive"], cwd: options.project,
-          environment: { ...options.easEnvironment, TMPDIR: root, TMP: root, TEMP: root }, timeoutMs: 10 * 60_000 }).stdout, root, platform);
+          environment: { ...options.easEnvironment, TMPDIR: root, TMP: root, TEMP: root }, timeoutMs: 10 * 60_000 })).stdout, root, platform);
         await rename(downloaded, options.keepApp);
         outcome = { buildId: hosted, app: options.keepApp };
       }
