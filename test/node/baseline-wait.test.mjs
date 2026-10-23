@@ -6,6 +6,7 @@ import test from "node:test";
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter, configure } from "@zip.js/zip.js";
 
 const { waitForBaselineArtifact, awaitPendingBaseline } = await import("../../dist/ci/baseline-wait.js");
+const { createTimings } = await import("../../dist/shared/timings.js");
 const { findPendingBaselineRun, findOptionalBaseline } = await import("../../dist/ci/workflow-steps.js");
 
 const sha = "a".repeat(40);
@@ -88,6 +89,7 @@ test("a baseline job in progress, then finished: the review reuses its artifact,
   assert.equal(await readFile(join(directory, "screenshots/home.png"), "utf8"), "png");
   assert.equal(github.polls(), 5);
   assert.deepEqual(lines, [
+    "waiting for main's baseline run 20 of aaaaaaaa: https://github.com/acme/app/actions/runs/20",
     "waiting for main's baseline run 20 of aaaaaaaa (iphone: not started, 0 min)",
     "waiting for main's baseline run 20 of aaaaaaaa (iphone: queued, 0 min)",
     "waiting for main's baseline run 20 of aaaaaaaa (iphone: in progress, 0 min)",
@@ -97,6 +99,44 @@ test("a baseline job in progress, then finished: the review reuses its artifact,
   assert.ok(github.requests.every(request => !request.startsWith("/repos/acme/app/actions/runs/") || request.startsWith("/repos/acme/app/actions/runs/20")),
     "only the run ci:find-baseline named is read");
   assert.deepEqual((await readdir(join(root, "review"))).sort(), ["baseline-download"], "the downloaded zip is removed once unpacked");
+});
+
+test("the wait names the step the baseline job is in, tells the review when it changes, and records the steps it took", async t => {
+  const root = await mkdtemp(join(tmpdir(), "explore-baseline-steps-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  // The clock starts at a real date so GitHub's step timestamps and the wait's clock agree, as they do on a runner.
+  let milliseconds = Date.parse("2026-10-23T21:53:00Z");
+  const time = { now: () => milliseconds, sleep: async pause => { milliseconds += pause; } };
+  const at = minutes => new Date(Date.parse("2026-10-23T21:53:00Z") + minutes * 60_000).toISOString();
+  const steps = (current) => [
+    { number: 1, name: "Set up job", status: "completed", conclusion: "success", started_at: at(0), completed_at: at(0.5) },
+    { number: 2, name: "Install the launch recording decoder https://mirror.example/?sig=SIG-CANARY", status: current === 2 ? "in_progress" : "completed",
+      conclusion: current === 2 ? null : "success", started_at: at(0.5), completed_at: current === 2 ? null : at(19) },
+    ...(current === 3 ? [{ number: 3, name: "Capture complete single-commit baseline", status: "in_progress", conclusion: null, started_at: at(19), completed_at: null }] : []),
+  ];
+  const states = [...Array(57).fill({ jobs: [{ ...job("in_progress"), steps: steps(2) }] }), { jobs: [{ ...job("in_progress"), steps: steps(3) }] }];
+  const github = fakeGitHub({ states });
+  const updates = []; const lines = [];
+  const path = join(root, "timings.jsonl");
+  const outcome = await waitForBaselineArtifact(waitOptions(github, time, { timeoutMs: 20 * 60_000, progress: line => lines.push(line),
+    onUpdate: update => updates.push(update), timings: createTimings({ path, now: time.now }) }));
+  assert.deepEqual(outcome, { reason: "its iphone job is still in progress after 20 min" });
+  assert.deepEqual(updates.map(update => [update.state, update.step]), [
+    ["in progress", "Install the launch recording decoder [link]"],
+    ["in progress", "Capture complete single-commit baseline"],
+  ]);
+  assert.equal(updates[0].stepSince, Date.parse(at(0.5)));
+  assert.ok(lines.includes("waiting for main's baseline run 20 of aaaaaaaa (iphone: in progress, in \"Install the launch recording decoder [link]\" for 9 min, 9 min)"), lines.join("\n"));
+  const events = (await readFile(path, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+  assert.deepEqual(events.filter(event => event.type === "baseline-step").map(event => [event.name, Math.round(event.ms / 1000), event.conclusion]), [
+    ["Set up job", 30, "success"],
+    ["Install the launch recording decoder [link]", 1110, "success"],
+    ["Capture complete single-commit baseline", 60, "still running"],
+  ]);
+  const wait = events.find(event => event.type === "end" && event.phase === "baseline-wait");
+  assert.equal(wait.outcome, "skipped");
+  assert.equal(wait.attributes.reason, "its iphone job is still in progress after 20 min");
+  assert.equal(JSON.stringify(events).includes("SIG-CANARY"), false);
 });
 
 test("this target's artifact is reused although another target's baseline job failed (#48)", async () => {
@@ -135,7 +175,7 @@ test("the wait gives up at its time limit, polling every 20 s", async () => {
   assert.deepEqual(await waitForBaselineArtifact(waitOptions(github, time, { progress: line => lines.push(line) })), { reason: "its iphone job is still in progress after 15 min" });
   assert.equal(time.elapsed(), 15 * 60_000);
   assert.equal(github.polls(), 15 * 3 + 1);
-  assert.equal(lines.length, 15, "one line a minute, not one a poll");
+  assert.equal(lines.length, 1 + 15, "the run's link once, then one line a minute, not one a poll");
   assert.deepEqual(await waitForBaselineArtifact(waitOptions(fakeGitHub({ states: [{ jobs: [job("in_progress")] }] }), clock(), { timeoutMs: 50_000, pollMs: 30_000 })),
     { reason: "its iphone job is still in progress after 1 min" }, "the last pause ends at the limit");
 });

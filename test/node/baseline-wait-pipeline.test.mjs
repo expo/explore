@@ -83,6 +83,89 @@ test('head capture starts while the review waits for the baseline, and the waite
   assert.equal(waitSignal.aborted, true, 'the wait is told to stop once the review is done');
 });
 
+test('while base waits for the baseline, the comment names the step the baseline job is in, and the run records its phases', async t => {
+  const f = await fixture(t, 'expo-router');
+  t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
+  const baseline = await runBaselineCi({ project: f.baseProject, sha: f.baseSha, output: join(f.root, 'baseline'), config: f.config, environment: f.environment,
+    runner: f.runner, now: f.now, sleep: f.sleep, timingsPath: join(f.root, 'baseline-timings.jsonl') });
+  const finished = deferred();
+  const bodies = [];
+  const timingsPath = join(f.root, 'timings.jsonl');
+  let watching;
+  // While head captures, the baseline job moves on to its capture step, then finishes.
+  const runner = request => {
+    if (request.args[0] === 'simulator:start' && watching) {
+      watching.onUpdate({ state: 'in progress', step: 'Capture complete single-commit baseline', stepSince: 0, waitedMs: 60_000 });
+      setImmediate(() => finished.resolve(baseline.directory));
+    }
+    return f.runner(request);
+  };
+  // The waiting status's write is slow: held until the final comment has landed (or 3 s, since serialized writes send
+  // the final one only after it), it must still land before the final comment, not after it.
+  let reviewRendered = false;
+  const finalLanded = deferred();
+  const transport = async (input, init = {}) => {
+    const waiting = init.method === 'PATCH' && String(init.body).includes('base waits for');
+    if (waiting) await Promise.race([finalLanded.promise, new Promise(resolve => setTimeout(resolve, 3000))]);
+    const response = await f.transport(input, init);
+    if (init.method === 'PATCH' && !waiting && reviewRendered) finalLanded.resolve();
+    return response;
+  };
+  await runPublicCi({ baseProject: f.baseProject, headProject: f.headProject, pullRequestPath: f.pullRequestPath, output: join(f.root, 'review'), config: f.config,
+    environment: f.environment, transport, runner, now: f.now, sleep: f.sleep, timingsPath, progressPostMs: 0,
+    onComment: (state, body) => { bodies.push(body); if (state.review) reviewRendered = true; },
+    awaitBaseline: (_signal, watch) => {
+      watching = watch;
+      watch.onUpdate({ state: 'in progress', step: 'Install the launch recording decoder', stepSince: 0, waitedMs: 0 });
+      return finished.promise;
+    } });
+  const waiting = bodies.filter(body => body.includes("base waits for the default branch's baseline (in “Install the launch recording decoder”)"));
+  assert.ok(waiting.length >= 1, bodies.join('\n---\n'));
+  assert.equal(bodies.at(-1).includes('base waits for'), false, 'the comment stops saying so once the wait is over');
+  assert.equal(f.comments.at(-1).includes('base waits for'), false, 'the slow waiting write did not land after the final comment');
+  const events = (await readFile(timingsPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(events[0].type, 'run');
+  assert.deepEqual(events.at(-1), { ...events.at(-1), type: 'finish', outcome: 'ok' });
+  const ended = events.filter(event => event.type === 'end');
+  const started = events.filter(event => event.type === 'start');
+  assert.deepEqual(started.map(event => event.id).sort(), ended.map(event => event.id).sort(), 'every span the review opened, it closed');
+  const phases = new Set(ended.map(event => `${event.phase}${event.side ? `:${event.side}` : ''}`));
+  for (const phase of ['plan', 'preflight', 'capture', 'compare', 'report', 'baseline-blocked', 'pass:head', 'configuration:head', 'session-start:head', 'route:head']) {
+    assert.ok(phases.has(phase), `${phase} in ${[...phases].join(', ')}`);
+  }
+  const baselineEvents = (await readFile(join(f.root, 'baseline-timings.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(baselineEvents.some(event => event.type === 'end' && event.phase === 'pass' && event.side === 'baseline'));
+  assert.deepEqual(baselineEvents.at(-1), { ...baselineEvents.at(-1), type: 'finish', outcome: 'ok' });
+});
+
+test('the waiting status is posted when the wait starts and ends, and a step change in between waits its turn', async t => {
+  const f = await fixture(t, 'expo-router');
+  t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
+  const baseline = await runBaselineCi({ project: f.baseProject, sha: f.baseSha, output: join(f.root, 'baseline'), config: f.config, environment: f.environment, runner: f.runner, now: f.now, sleep: f.sleep });
+  const finished = deferred();
+  let watching;
+  const runner = request => {
+    if (request.args[0] === 'simulator:start' && watching) {
+      watching.onUpdate({ state: 'in progress', step: 'Capture complete single-commit baseline', stepSince: 0, waitedMs: 60_000 });
+      setImmediate(() => finished.resolve(baseline.directory));
+    }
+    return f.runner(request);
+  };
+  const bodies = [];
+  await runPublicCi({ baseProject: f.baseProject, headProject: f.headProject, pullRequestPath: f.pullRequestPath, output: join(f.root, 'review'), config: f.config,
+    environment: f.environment, transport: f.transport, runner, now: f.now, sleep: f.sleep, onComment: (_state, body) => bodies.push(body),
+    awaitBaseline: (_signal, watch) => {
+      watching = watch;
+      watch.onUpdate({ state: 'in progress', step: 'Install the launch recording decoder', stepSince: 0, waitedMs: 0 });
+      return finished.promise;
+    } });
+  // The step change came moments after the first post, so the wait's end replaced it before its turn: every post
+  // rewrites the whole comment, which the other targets' jobs write too.
+  assert.ok(bodies.some(body => body.includes('Install the launch recording decoder')));
+  assert.equal(bodies.some(body => body.includes('Capture complete single-commit baseline')), false);
+  assert.equal(f.comments.at(-1).includes('base waits for'), false);
+});
+
 test('capture:review waits for the baseline run ci:find-baseline named, downloads its artifact, and restores base from it', async t => {
   const f = await fixture(t, 'expo-router');
   t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));

@@ -48,6 +48,8 @@ export type PublicCommentState = {
     baseFromCache: boolean;
     /** Which side is being captured right now, while `capturing`. */
     current?: "base" | "head";
+    /** Base waits for the default branch's baseline of its commit, still being captured; `step` is the baseline job's current step. */
+    waiting?: { on: "baseline"; step?: string };
   };
   review?: PublicReview;
   evidence?: PublicEvidenceSummary;
@@ -290,7 +292,8 @@ export function platformRecordOf(state: PublicCommentState, target?: CommentTarg
     record.app = { ...(state.build.appName ? { name: state.build.appName } : {}), ...(state.build.appVersion ? { version: state.build.appVersion } : {}),
       ...(state.build.appBuildNumber ? { build: state.build.appBuildNumber } : {}) };
   }
-  if (state.capture) record.capture = { planned: { ...state.capture.planned }, done: { ...state.capture.done }, baseFromCache: state.capture.baseFromCache, ...(state.capture.current ? { current: state.capture.current } : {}) };
+  if (state.capture) record.capture = { planned: { ...state.capture.planned }, done: { ...state.capture.done }, baseFromCache: state.capture.baseFromCache, ...(state.capture.current ? { current: state.capture.current } : {}),
+    ...(state.capture.waiting ? { waiting: { ...state.capture.waiting } } : {}) };
   const health = captureHealth(state);
   if (health && (state.phase === "ready" || state.phase === "failed")) record.health = { base: { ...health.base }, head: { ...health.head } };
   if (state.phase === "ready") {
@@ -515,6 +518,9 @@ function statusLine(record: PlatformRecord): string | undefined {
     case "capturing": {
       const capture = record.capture;
       if (!capture) return `${label} · capturing · ${run}`;
+      // Head goes on while base waits for the baseline; once head is done, the wait is all there is to say.
+      if (capture.waiting) return `${label} · head ${capture.done.head}/${capture.planned.head} · base waits for the default branch's baseline`
+        + `${capture.waiting.step ? ` (in “${inlineText(capture.waiting.step, 80)}”)` : ""} · ${run}`;
       const side = capture.current ?? (capture.done.head > 0 || capture.baseFromCache ? "head" : "base");
       return `${label} · capturing ${side} ${capture.done[side]}/${capture.planned[side]}${capture.baseFromCache && side === "head" ? " · base reused" : ""} · ${run}`;
     }

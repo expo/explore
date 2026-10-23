@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { tsImport } from "tsx/esm/api";
 
-const { CiError, toCiError, ciErrorForCommand, serializeCiError, renderCiErrorAnnotation, renderCiErrorSummary, reportCiError } =
+const { CiError, toCiError, ciErrorForCommand, serializeCiError, renderCiErrorAnnotation, renderCiErrorSummary, reportCiError, redactSecrets } =
   await tsImport("../../src/shared/ci-errors.ts", import.meta.url);
 const { executeCaptureSetup } = await tsImport("../../src/capture/setup-actions.ts", import.meta.url);
 const { createExplorationInputs } = await tsImport("../../src/config/exploration-inputs.ts", import.meta.url);
@@ -63,6 +63,20 @@ test("diagnostics redact explicit secrets, credential fields, bearer tokens, sig
   assert.match(rendered, /GITHUB_TOKEN/);
   assert.match(rendered, /\[REDACTED\]/);
   assert.equal("stack" in serializeCiError(error), false);
+});
+
+test("the redactor removes a session's fragment token and object-store signatures and credentials", () => {
+  const text = [
+    "https://expo.dev/accounts/a/projects/b/simulator-sessions/1#token=FRAGMENT-CANARY&x=1",
+    "https://bucket.s3.amazonaws.com/a?X-Amz-Credential=CREDENTIAL-CANARY&X-Amz-Signature=SIGNATURE-CANARY&X-Amz-Security-Token=SESSION-CANARY",
+    "https://storage.googleapis.com/a?X-Goog-Signature=GOOG-CANARY",
+    "https://blob.core.windows.net/a?sv=2024&se=EXPIRY-CANARY&sig=SIG-CANARY",
+  ].join(" ");
+  const redacted = redactSecrets(text, []);
+  for (const canary of ["FRAGMENT-CANARY", "CREDENTIAL-CANARY", "SIGNATURE-CANARY", "SESSION-CANARY", "GOOG-CANARY", "EXPIRY-CANARY", "SIG-CANARY"]) {
+    assert.equal(redacted.includes(canary), false, canary);
+  }
+  assert.match(redacted, /simulator-sessions\/1#token=\[REDACTED\]&x=1/);
 });
 
 test("diagnostics redact raw, JSON-escaped, and URL-encoded secret values throughout structured errors", () => {

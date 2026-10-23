@@ -32,7 +32,7 @@ This file describes the source layout and the rules that keep it in order.
 | `cli` | Argument parsing, help, and the command handlers. | `args.ts`, `help.ts`, `*-commands.ts` |
 | `map` | The local map store, build catalogs and comparisons, and the server for `expo-explore view`. | `store.ts`, `build-workspace.ts`, `compare.ts`, `viewer-server.ts` |
 | `contracts` | The modules that `viewer/src` imports from `src/`, by value or by type: data shapes, validators and projections that the CLI and the Viewer share. `capture.ts` also defines the review types that the Viewer reads, such as `PublicReview`, and `review-validation.ts` validates them. | `capture.ts`, `review.ts`, `review-validation.ts`, `source-validation.ts` |
-| `shared` | Small Node utilities that several folders use, and the pinned `agent-device` version that capture and review both check. | `ci-errors.ts`, `canonical-json.ts`, `bounded-bytes.ts`, `png-evidence.ts`, `agent-device-version.ts` |
+| `shared` | Small Node utilities that several folders use, and the pinned `agent-device` version that capture and review both check. | `ci-errors.ts`, `canonical-json.ts`, `bounded-bytes.ts`, `png-evidence.ts`, `agent-device-version.ts`, `timings.ts` (a capture job's timings and its summary, CI-FLOW §4.0) |
 
 ## Dependency rule
 

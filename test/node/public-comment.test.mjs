@@ -192,6 +192,20 @@ test('pending and capturing runs say what they are doing in the heading and a li
   assert.equal(progress('head', false), `iOS · capturing head 1/3 · ${runLink}`);
   assert.equal(progress('head', true), `iOS · capturing head 1/3 · base reused · ${runLink}`);
   assert.equal(progress(undefined, false), `iOS · capturing head 1/3 · ${runLink}`);
+  // Base waiting for the default branch's baseline says so, with the step that baseline job is in, until the wait ends.
+  const waitingState = step => state({ phase: 'capturing', links, review: undefined, evidence: undefined,
+    capture: { planned: { base: 3, head: 3 }, done: { base: 0, head: 3 }, baseFromCache: false, current: 'head', waiting: { on: 'baseline', ...(step ? { step } : {}) } } });
+  assert.equal(statusOf(renderPublicComment(waitingState('Install the launch recording decoder')), 'iOS'),
+    `iOS · head 3/3 · base waits for the default branch's baseline (in “Install the launch recording decoder”) · ${runLink}`);
+  assert.equal(statusOf(renderPublicComment(waitingState()), 'iOS'), `iOS · head 3/3 · base waits for the default branch's baseline · ${runLink}`);
+  assert.equal(statusOf(renderPublicComment(waitingState('a *bold* [link](x)')), 'iOS'),
+    `iOS · head 3/3 · base waits for the default branch's baseline (in “a \\*bold\\* \\[link\\]\\(x\\)”) · ${runLink}`, 'a step name is text, not Markdown');
+  // Another target's writer re-renders this record from the comment it read: the wait survives, and a record from
+  // before it existed still parses.
+  const record = parsePlatformRecord(JSON.parse(JSON.stringify(platformRecordOf(waitingState('Install the launch recording decoder')))));
+  assert.deepEqual(record.capture.waiting, { on: 'baseline', step: 'Install the launch recording decoder' });
+  const older = platformRecordOf(waitingState()); delete older.capture.waiting;
+  assert.equal(parsePlatformRecord(JSON.parse(JSON.stringify(older))).capture.waiting, undefined);
   assert.equal(titleOf(renderPublicComment(state({ phase: 'capturing', links, review: undefined, evidence: undefined }))), '### Explore review · capturing');
   const none = renderPublicComment(state({ review: review([surface('cats', 'modified', { extra: { review: { status: 'unchanged', description: 'No visible change' } } })]) }));
   assert.equal(titleOf(none), `### No screens changed · [Review in Explore](<${reportUrl}>)`, 'unchanged surfaces are no change');

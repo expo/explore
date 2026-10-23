@@ -21,6 +21,7 @@ import { help } from "./help.js";
 import { CiError } from "../shared/ci-errors.js";
 import { cleanupAfterCapture, findOptionalBaseline, resolveCompareRefs, resolvePullRequest, writeCaptureOutputs, writeStepOutputs } from "../ci/workflow-steps.js";
 import { stderrProgress } from "../shared/progress.js";
+import { appendTimingsSummary, timingsPathFor } from "../shared/timings.js";
 import { maxParallelTargets } from "../ci/session-plan.js";
 
 export async function doctor(): Promise<void> {
@@ -137,6 +138,8 @@ export async function ciCompareRefs(): Promise<void> {
 
 /** `ci:after-capture --output DIR --checkout DIR...`: stop recorded sessions and check the checkouts are untouched; fails after reporting every problem. */
 export async function ciAfterCapture(): Promise<void> {
+  // The timings table of a capture stopped before it could write one; a summary that cannot be written changes nothing here.
+  await appendTimingsSummary().catch(() => false);
   const result = await cleanupAfterCapture({ output: required("output"), checkouts: flags("checkout") });
   for (const failure of result.failures) console.error(`::error title=${failure.code}::${failure.message} ${failure.nextAction}`);
   output({ ok: result.failures.length === 0, ...result });
@@ -261,9 +264,13 @@ export async function captureReview(): Promise<void> {
   const common = { ...(named ? { target: config.target!.id } : {}), ...(selection.platform ? { platform: selection.platform } : {}),
     platforms: listPlatforms(rawConfig), targets: configTargets(rawConfig), posedTargets: posedTargets(rawConfig), repackPeers: hostedRepackPeers(rawConfig, config, overrides),
     baseProject: required("base-project"), headProject,
-    output: required("output"), config, configPath, progress: stderrProgress(), signal: ciInterrupt() };
-  const result = has("compare") ? await runCompareCi({ ...common, comparePath: required("compare") })
-    : await runPublicCi({ ...common, pullRequestPath: required("pull-request") });
+    output: required("output"), config, configPath, progress: stderrProgress(), signal: ciInterrupt(),
+    ...(timingsPathFor(process.env) ? { timingsPath: timingsPathFor(process.env)! } : {}) };
+  let result;
+  try {
+    result = has("compare") ? await runCompareCi({ ...common, comparePath: required("compare") })
+      : await runPublicCi({ ...common, pullRequestPath: required("pull-request") });
+  } finally { await appendTimingsSummary().catch(() => false); }
   // The deploy job runs only when the reviewed config asks for a hosted report.
   await writeCaptureOutputs(result.inputPath);
   output({ ok: true, inputPath: result.inputPath });
@@ -274,8 +281,11 @@ export async function captureBaseline(): Promise<void> {
   const rawConfig = await readExploreConfig(project, flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH);
   const overrides = { controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") };
   const config = withRunOverrides(resolveTargetConfig(rawConfig, targetSelection()), overrides);
-  output({ ok: true, ...await runBaselineCi({ platform: config.app.platform, project, sha: required("sha"), output: required("output"), config, targets: configTargets(rawConfig), posedTargets: posedTargets(rawConfig),
-    repackPeers: hostedRepackPeers(rawConfig, config, overrides), progress: stderrProgress(), signal: ciInterrupt() }) });
+  const timingsPath = timingsPathFor(process.env);
+  try {
+    output({ ok: true, ...await runBaselineCi({ platform: config.app.platform, project, sha: required("sha"), output: required("output"), config, targets: configTargets(rawConfig), posedTargets: posedTargets(rawConfig),
+      repackPeers: hostedRepackPeers(rawConfig, config, overrides), progress: stderrProgress(), signal: ciInterrupt(), ...(timingsPath ? { timingsPath } : {}) }) });
+  } finally { await appendTimingsSummary().catch(() => false); }
 }
 
 /** `capture` (or `capture:review`) `[--base REF] [--head REF | --committed]`: a local review, opened in the Viewer or hosted with --upload. */
