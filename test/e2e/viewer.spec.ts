@@ -1504,7 +1504,7 @@ test("Screens' filmstrip: switched from the corner switch, stepped with the arro
   // A sideways trackpad swipe moves the strip with it, and a short one springs back when it ends; a wheel notch steps.
   const lastAt = ids.indexOf(last);
   await middle.hover();
-  // Measured in the page two frames after the event: the swipe ends, and the strip settles, 140 ms after the last one.
+  // Measured in the page two frames after the event: the swipe ends, and the strip settles, 100 ms after the last one.
   const moved = await middle.evaluate(async element => {
     element.dispatchEvent(new WheelEvent("wheel", { deltaX: -40, bubbles: true, cancelable: true }));
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));

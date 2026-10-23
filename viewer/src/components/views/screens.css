@@ -457,6 +457,12 @@ html:has(.screens-page.filmstrip) { overscroll-behavior-x: none; }
 }
 /* During a swipe the frames follow the gesture directly; they ease only when it lets go and the strip settles. */
 .screens-strip-stage.swiping .screens-strip-frame { transition: none; }
+/* After it lets go, the strip eases home from rest: by then the gesture (and a trackpad's momentum) has slowed to
+   nearly nothing, and a curve that starts fast, as a step's does, would jerk it into motion. */
+.screens-strip-stage.settling .screens-strip-frame {
+  transition-duration: var(--strip-settle-ms);
+  transition-timing-function: cubic-bezier(0.45, 0, 0.2, 1);
+}
 @media (prefers-reduced-motion: reduce) { .screens-strip-frame { transition: none; } }
 .screens-strip-frame.dimmed:not(.focused) { opacity: calc(var(--dim-out) * 0.6) !important; }
 .screens-strip-target {

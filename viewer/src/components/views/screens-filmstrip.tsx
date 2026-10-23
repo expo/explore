@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type WheelEvent } from "react";
 import { ChevronRight } from "lucide-react";
 import { artifactUrl, isLaunchScreen, type MapIndex, type Screen } from "../../utils/model";
 import { primaryScreenshotForScreen, screenshotSize, type ScreenshotSize } from "../../utils/screen-images";
@@ -15,7 +15,7 @@ const SCALES = [1, 0.74, 0.54, 0.4, 0.3];
 const OPACITIES = [1, 0.9, 0.6, 0.3, 0];
 const GAP = 32;
 /** A swipe has ended once its wheel events (and the trackpad's momentum after it) stop for this long. */
-const SWIPE_END_MS = 140;
+const SWIPE_END_MS = 100;
 /**
  * At the end of a swipe the strip settles on the next screen in its direction once it has moved this far towards it,
  * so one wheel notch steps a screen and a twitch springs back.
@@ -25,6 +25,11 @@ const SWIPE_COMMIT = 0.2;
 const TAP_SLOP_PX = 8;
 /** How far ahead a flick's speed carries the strip when the finger lifts: its velocity times this. */
 const FLICK_MS = 160;
+/**
+ * How long the strip takes to settle after a gesture: longer the further it has left to go, so that a short way home
+ * is not crossed at the speed of a whole step and a long one does not snap.
+ */
+const settleMs = (distance: number) => Math.round(260 + 260 * Math.min(1, distance));
 /** An iPhone's portrait shape, for a run with no screenshot sizes at all. */
 const FALLBACK_SIZE: ScreenshotSize = { imageWidth: 390, imageHeight: 844 };
 
@@ -82,6 +87,9 @@ export function ScreensFilmstrip(props: ScreensFilmstripProps) {
   const at = props.order.indexOf(props.focusedId);
   // While a swipe lasts, the strip sits at a fractional position in `order`, following the gesture.
   const [swipe, setSwipe] = useState<{ position: number; direction: number } | null>(null);
+  // Once the gesture lets go, the strip eases the rest of the way on a timing of its own (settleMs).
+  const [settling, setSettling] = useState<number | null>(null);
+  const settled = useRef<ReturnType<typeof setTimeout>>(undefined);
   // The swipe's position as of the last wheel event, which can arrive before the render that shows the one before it.
   const live = useRef<number | null>(null);
   // A finger on the strip: where it went down, the strip's position then, and its latest speed in px/ms.
@@ -89,7 +97,7 @@ export function ScreensFilmstrip(props: ScreensFilmstripProps) {
   // A swipe ends with the finger lifting over a screen; the click that follows is not a tap on it.
   const swallowClick = useRef(false);
   const swipeEnd = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(swipeEnd.current), []);
+  useEffect(() => () => { clearTimeout(swipeEnd.current); clearTimeout(settled.current); }, []);
   const focused = props.index.screens.get(props.focusedId);
 
   // A row of the tree by its fold key, as the path above the frame names it.
@@ -149,7 +157,10 @@ export function ScreensFilmstrip(props: ScreensFilmstripProps) {
   const from = layout(base), to = fraction > 0 ? layout(base + 1) : from;
   const lerp = (a: number, b: number) => a + (b - a) * fraction;
   const last = SCALES.length - 1;
-  const frames = [...new Set([...from.keys(), ...to.keys()])].flatMap(id => {
+  // In the strip's order, so the frames' elements keep their order in the page as the middle changes: React moves an
+  // element that changes place among its siblings, and a moved element jumps instead of easing to where it goes.
+  const placeOf = new Map(props.order.map((id, place) => [id, place]));
+  const frames = [...new Set([...from.keys(), ...to.keys()])].sort((a, b) => placeOf.get(a)! - placeOf.get(b)!).flatMap(id => {
     const screen = props.index.screens.get(id);
     if (!screen) return [];
     const a = from.get(id), b = to.get(id);
@@ -175,6 +186,10 @@ export function ScreensFilmstrip(props: ScreensFilmstripProps) {
   const settle = (next: number, direction: number) => {
     const index = clamp(direction > 0 ? Math.floor(next + 1 - SWIPE_COMMIT) : direction < 0 ? Math.ceil(next - 1 + SWIPE_COMMIT) : Math.round(next));
     if (index !== Math.round(next)) props.onPick(props.order[index]!);
+    const ms = settleMs(Math.abs(index - next));
+    clearTimeout(settled.current);
+    setSettling(ms);
+    settled.current = setTimeout(() => setSettling(null), ms);
     live.current = null;
     setSwipe(null);
   };
@@ -245,7 +260,8 @@ export function ScreensFilmstrip(props: ScreensFilmstripProps) {
         </span>
       </div>
 
-      <div ref={stageRef} className={`screens-strip-stage${swipe ? " swiping" : ""}`}>
+      <div ref={stageRef} className={`screens-strip-stage${swipe ? " swiping" : settling ? " settling" : ""}`}
+        style={settling ? ({ "--strip-settle-ms": `${settling}ms` } as CSSProperties) : undefined}>
         {stage.width > 0 ? frames.map(({ id, screen, distance, x, scale, opacity, width, height }) => {
           const artifact = primaryScreenshotForScreen(screen, props.index);
           const url = artifactUrl(artifact);
