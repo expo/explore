@@ -899,6 +899,12 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
   // Every canvas starts with the Inspector closed; selecting a screenshot opens the Inspector on
   // demand. A peer canvas is a fresh inventory, so a screen selection never travels with the reader
   // into the destination view.
+  // The report Screens' layout is remembered for: the loaded one, however it was loaded.
+  const runId = payload?.map.run.id;
+  /** Screens opens in the layout the reader last left it in for this report; phones have only their list. */
+  const rememberedScreensLayout = useCallback((canvas: CanvasView): Partial<Route> => (
+    canvas === "screens" && routeRef.current.canvas !== "screens" && !phoneRef.current ? { layout: readScreensLayout(runId) } : {}
+  ), [runId]);
   const commitCanvasSelection = useCallback((canvas: CanvasView) => {
     const current = routeRef.current;
     if (canvas === "compare") {
@@ -930,17 +936,21 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
       } : {
         canvas,
         ...clearedCanvasSelection,
-        // Screens opens in the layout the reader last left it in for this report.
-        ...(canvas === "screens" && !phoneRef.current ? { layout: readScreensLayout(revisionRef.current?.runId) } : {}),
+        ...rememberedScreensLayout(canvas),
       },
     );
-  }, [applyCanvasPanelDefaults, navigate]);
+  }, [applyCanvasPanelDefaults, navigate, rememberedScreensLayout]);
+  // Only a switch the reader makes is remembered as the grid: landing on Screens in the grid (from Search, Back or a
+  // link) leaves a remembered filmstrip alone. The selection and its focus request carry over, so the Screens page
+  // does not read the switch as a new pick that Changed or a find hides.
   const changeScreensLayout = useCallback((layout: ScreensLayout) => {
-    navigate({ layout: layout === "filmstrip" ? "filmstrip" : undefined });
-  }, [navigate]);
+    writeScreensLayout(runId, layout);
+    navigate({ layout: layout === "filmstrip" ? "filmstrip" : undefined }, { preserveFocus: true });
+  }, [navigate, runId]);
+  // A link that opens the filmstrip is remembered as a switch to it is.
   useEffect(() => {
-    if (route.canvas === "screens" && !phone) writeScreensLayout(revisionRef.current?.runId, route.layout ?? "grid");
-  }, [phone, route.canvas, route.layout]);
+    if (route.canvas === "screens" && route.layout === "filmstrip" && !phone) writeScreensLayout(runId, "filmstrip");
+  }, [phone, route.canvas, route.layout, runId]);
 
   // The logo returns to the Map root, the equivalent of the "/map" URL.
   const openMapHome = useCallback(() => {
@@ -1151,10 +1161,11 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
       canvas: "screens",
       ...screenPatch(screenId),
       expandedGroups: [],
+      ...rememberedScreensLayout("screens"),
     }, {
       resetCamera: true,
     });
-  }, [applyCanvasPanelDefaults, navigate, screenPatch]);
+  }, [applyCanvasPanelDefaults, navigate, rememberedScreensLayout, screenPatch]);
   // Following a row inside the inspector is the exception: a transition or changed screen is
   // read from a view the reader chose, and landing somewhere new is no
   // reason to close it. The panel stays where it was and only its subject changes.
@@ -1726,7 +1737,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
             />
           )}
         </div>
-        {/* Top right holds the camera only, so only the Map has anything there. */}
+        {/* Top right holds the Map's camera; Screens puts its layout switch there itself. */}
         {phone || route.canvas !== "map" ? null : <CanvasCameraControls />}
         {phone ? (
           <PhoneTabBar
@@ -1746,8 +1757,6 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
             onOpenShortcuts={() => setShortcutsOpen(true)}
           />}
           onSelectCanvas={selectCanvas}
-          screensLayout={route.layout ?? "grid"}
-          onChangeScreensLayout={changeScreensLayout}
           onOpenSearch={() => setSearchOpen(true)}
         />}
       </CanvasVisibleFrameProvider>

@@ -55,24 +55,9 @@
   border-radius: 14px;
   background: var(--side-panel-surface);
 }
-.screens-tree-head > h2 {
-  min-width: 0;
-  flex: 1;
-  margin: 0;
-  padding: 0 8px;
-  overflow: hidden;
-  color: var(--tertiary);
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .screens-tree ul { margin: 0; padding: 0; list-style: none; }
-/* The tree's head: its title with Find and fold-all beside it, or the find field. One height either way, so opening
-   the find does not move the tree. */
-.screens-tree-head { display: flex; height: 34px; flex: none; align-items: center; gap: 6px; margin: 0 0 6px; }
+/* The tree's head: the find field, with fold-all beside it. */
+.screens-tree-head { display: flex; height: 34px; flex: none; align-items: center; gap: 4px; margin: 0 0 8px; }
 /* Changed / All filter the tree and the grid alike: one segmented control under the head, the tree's width. */
 .screens-tree > .screens-filter {
   flex: none;
@@ -345,24 +330,25 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-tree.phone .screens-tree-label.path { font-size: var(--phone-body-mono-size); }
 .screens-tree.phone .screens-tree-kind { font-size: var(--phone-micro-size); }
 
-/* ── Find: `/` or the magnifier turns the tree's head into a field; the tree and the grid narrow to its matches ── */
-.screens-tree-head > .tooltip-anchor { display: flex; flex: none; margin-left: auto; }
-.screens-tree-head > .tooltip-anchor + .screens-tree-fold-all { margin-left: 0; }
-.screens-tree-find {
+/* ── Find: the field heading the tree, focused by `/`; the tree and the grid narrow to its matches ── */
+.screens-find { display: flex; min-width: 0; flex: 1; }
+.screens-find .panel-search { height: 34px; flex: 1; border-radius: 9px; }
+/* The key that focuses the field, at its end while it is empty and unfocused. */
+.screens-find-key {
   display: grid;
-  width: 32px;
-  height: 32px;
+  min-width: 18px;
+  height: 18px;
   flex: none;
   place-items: center;
-  border-radius: 8px;
-  color: var(--secondary);
-  background: transparent;
+  margin-right: 2px;
+  padding: 0 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  color: var(--tertiary);
+  background: var(--surface);
+  font: 600 11px/1 var(--screens-mono);
 }
-.screens-tree-find:hover { color: var(--text); background: var(--panel-hover); }
-.screens-tree-find > svg { width: 16px; height: 16px; }
-.screens-tree-head.searching { gap: 4px; }
-.screens-find { display: flex; min-width: 0; flex: 1; }
-.screens-find .panel-search { height: 34px; border-radius: 9px; }
+.screens-find .panel-search:focus-within .screens-find-key { display: none; }
 .screens-find-empty { margin: 0; padding: 4px 8px; color: var(--tertiary); font-size: 12px; }
 .screens-empty { min-height: 240px; flex: 1; }
 .screens-empty-all { padding: 0; color: var(--accent); font: inherit; background: transparent; }
@@ -391,7 +377,8 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-strip-crumb > svg { width: 12px; height: 12px; opacity: 0.7; }
 .screens-strip-crumb.current { color: var(--text); font-weight: 600; }
 .screens-strip-crumb .path, .screens-strip-crumb.path { font-size: 12px; }
-.screens-strip-stage { position: relative; width: 100%; min-height: 0; flex: 1; overflow: hidden; }
+/* Clipped, not hidden: a hidden overflow is still a scroll box that focusing a clipped frame would scroll. */
+.screens-strip-stage { position: relative; width: 100%; min-height: 0; flex: 1; overflow: hidden; overflow: clip; }
 .screens-strip-frame {
   position: absolute;
   top: 50%;
@@ -464,3 +451,35 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-strip-tick.current { width: 10px; height: 22px; background: var(--text); box-shadow: none; }
 .screens-strip-group-label { max-width: 140px; overflow: hidden; color: var(--tertiary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .screens-strip-group.current .screens-strip-group-label { color: var(--text); font-weight: 600; }
+
+/* ── Layout switch: Grid or Filmstrip, in words, at the top right in the pill's row ── */
+.screens-layout-switch {
+  position: absolute;
+  z-index: 20;
+  top: var(--chrome-top);
+  right: calc(var(--screens-switch-right, 0px) + var(--canvas-chrome-inline-inset));
+  display: inline-flex;
+  height: var(--chrome-height);
+  align-items: stretch;
+  gap: 2px;
+  padding: calc(3px * var(--ui-scale));
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(10px * var(--ui-scale));
+  background: var(--side-panel-surface);
+  box-shadow: var(--floating-chrome-shadow);
+}
+.screens-layout-switch > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px 0 10px;
+  border-radius: calc(7px * var(--ui-scale));
+  color: var(--secondary);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  transition: color 120ms ease, background 120ms ease;
+}
+.screens-layout-switch > button:hover { color: var(--text); background: var(--panel-hover); }
+.screens-layout-switch > button[aria-pressed="true"] { color: var(--text); background: var(--selected); }
+.screens-layout-switch > button > svg { width: 15px; height: 15px; flex: none; }

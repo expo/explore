@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, ListTree, Search } from "lucide-react";
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, GalleryHorizontal, LayoutGrid, ListTree } from "lucide-react";
 import { artifactUrl, isLaunchScreen, type ExploreMap, type MapIndex, type Screen } from "../../utils/model";
 import { primaryScreenshotForScreen, screenshotSize, typicalScreenshotSize, type ScreenshotSize } from "../../utils/screen-images";
 import { diffClass, type BuildDiff, type DiffStatus } from "../../utils/build-diff";
@@ -18,7 +18,6 @@ import { NoScreens } from "../shared/no-screens";
 import { useCanvasVisibleFrame } from "../canvas/visible-frame-provider";
 import { PhoneSheet } from "../phone/phone-chrome";
 import { PanelSearch } from "../shared/panel-search";
-import { Tooltip } from "../shared/tooltip";
 import { ScreensFilmstrip } from "./screens-filmstrip";
 import "./screens.css";
 
@@ -165,7 +164,7 @@ function ScreenCell(props: {
   /** A phone's cell, whose screenshot is its own frame: no well frames it while it loads. */
   phone?: boolean | undefined;
   onSelect: () => void;
-  /** A double-click opens the screen in the filmstrip; the first click has already selected it. */
+  /** A double-click on the screenshot opens the screen in the filmstrip; its first click has already selected it. */
   onOpen?: (() => void) | undefined;
 }) {
   const artifact = primaryScreenshotForScreen(props.screen, props.index);
@@ -174,7 +173,10 @@ function ScreenCell(props: {
   const status = statusOf(props.diff, props.screen.id);
   return (
     <div className={`screens-cell${props.dimmed ? " dimmed" : ""}`} id={cardId(props.screen.id)} data-screen-id={props.screen.id}
-      onDoubleClick={props.onOpen}>
+      onDoubleClick={(event) => {
+        // The route under the screenshot copies a link and selects nothing, so only the screenshot opens the strip.
+        if ((event.target as Element).closest(".screen-screenshot-target")) props.onOpen?.();
+      }}>
       <ScreenScreenshotCard
         className="screens-card"
         ariaLabel={props.screen.title}
@@ -304,10 +306,9 @@ export function ScreensView(props: ScreensViewProps) {
   const [filter, setFilter] = useState<Filter>(props.phone && changedIds.size > 0 ? "changed" : "all");
   const [treeOpen, setTreeOpen] = useState(false);
   // Find: a query narrows the tree and the grid to the screens whose route or title contains it, inside Changed or All.
-  const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
   // The phone layout has no field to show or clear a query, so a query typed on desktop does not narrow it.
-  const findQuery = findOpen && !props.phone ? query : "";
+  const findQuery = props.phone ? "" : query;
   const matches = useMemo(() => findMatches(screens, props.index, findQuery), [props.index, screens, findQuery]);
   const inChanged = filter === "changed" && changedIds.size > 0;
   const inFilter = inChanged ? changedIds : new Set(screens.map(screen => screen.id));
@@ -381,44 +382,35 @@ export function ScreensView(props: ScreensViewProps) {
 
   const findField = useRef<HTMLDivElement>(null);
   const focusFind = () => findField.current?.querySelector("input")?.focus();
-  const openFind = () => {
-    setFindOpen(true);
-    requestAnimationFrame(focusFind);
-  };
+  // `/` focuses the field, deferred a frame so the key itself is not typed into it.
+  const openFind = () => requestAnimationFrame(focusFind);
   const closeFind = () => {
     setQuery("");
-    setFindOpen(false);
     // The field took the keyboard; hand it back to the page so its arrows work again.
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   };
-  // `/` from another canvas lands here with the field open.
+  // `/` from another canvas lands here with the field focused.
   useEffect(() => {
     if (props.findRequest === undefined) return;
     if (!props.phone) openFind();
     props.onFindRequestDone?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new request opens it once
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new request focuses it once
   }, [props.findRequest]);
-  const findButton = props.phone ? null : (
-    <Tooltip label="Find a screen" shortcut={FIND_KEY} placement="bottom">
-      <button type="button" className="screens-tree-find" aria-label="Find a screen" onClick={openFind}>
-        <Search aria-hidden="true" />
-      </button>
-    </Tooltip>
-  );
-  const findSearch = findOpen ? (
+  // The find field heads the tree on desktop.
+  const findSearch = props.phone ? null : (
     <div ref={findField} className="screens-find">
       <PanelSearch
         value={query}
-        placeholder="Find…"
+        placeholder="Find a screen"
         ariaLabel="Find screens"
         clearLabel="Clear find query"
         name="screens-find"
-        autoFocus
+        hint={<kbd className="screens-find-key" aria-hidden="true">{FIND_KEY}</kbd>}
         onEscape={() => (query ? setQuery("") : closeFind())}
         onChange={setQuery}
       />
     </div>
-  ) : null;
+  );
   const filterChips = changedIds.size > 0 ? (
     <div className="screens-filter" role="group" aria-label="Show">
       {(["changed", "all"] as const).map((value) => (
@@ -561,8 +553,9 @@ export function ScreensView(props: ScreensViewProps) {
         openRef.current(selectedId);
         return;
       }
-      // The page, or the bottom toolbar that Screens was just opened from; its buttons have no arrow keys of their own.
-      const onPage = !target || target === document.body || target.closest(".screens-page, .canvas-toolbar") !== null;
+      // The page, or the bottom toolbar that Screens was just opened from, or the layout switch just used; their buttons
+      // have no arrow keys of their own.
+      const onPage = !target || target === document.body || target.closest(".screens-page, .canvas-toolbar, .screens-layout-switch") !== null;
       if (!onPage || target?.closest(".screens-tree-list")) return;
       const id = next(event.code, stripFocusRef.current ?? selectedRef.current);
       if (!id) return;
@@ -593,6 +586,21 @@ export function ScreensView(props: ScreensViewProps) {
 
   if (screens.length === 0) return <NoScreens map={props.map} />;
 
+  // Grid or Filmstrip, in words, at the top right where the Map keeps its camera: outside the page, so it stays put
+  // as the grid scrolls, and clear of the Inspector.
+  const layoutSwitch = !props.phone && props.onChangeLayout ? (
+    <div className="screens-layout-switch" role="group" aria-label="Screens layout"
+      style={visibleFrame ? ({ "--screens-switch-right": `calc(100% - ${visibleFrame.x + visibleFrame.width}px)` } as CSSProperties) : undefined}>
+      {([["grid", "Grid", <LayoutGrid key="grid" aria-hidden="true" />], ["filmstrip", "Filmstrip", <GalleryHorizontal key="filmstrip" aria-hidden="true" />]] as const)
+        .map(([value, label, icon]) => (
+          <button key={value} type="button" aria-pressed={(filmstrip ? "filmstrip" : "grid") === value}
+            onClick={() => props.onChangeLayout!(value)}>
+            {icon}<span>{label}</span>
+          </button>
+        ))}
+    </div>
+  ) : null;
+
   const dimmed = (id: string) => Boolean(props.focus?.length) && !props.focus!.some((state) => state === focusStatusOf(props.diff?.screens.get(id)));
   const cell = (id: string) => {
     const screen = props.index.screens.get(id);
@@ -622,11 +630,13 @@ export function ScreensView(props: ScreensViewProps) {
   );
 
   return (
+    <>
+    {layoutSwitch}
     <main ref={scroller} className={`screens-page${props.phone ? " phone" : ""}${filmstrip ? " filmstrip" : ""}`} aria-label="Screens" style={style}
       onClick={(event) => {
-        if (!props.onClearSelection || !props.selectedScreenId) return;
         // The filmstrip always shows a screen; clearing the pick there would only jump it back to the first.
-        if ((event.target as Element).closest("button, a, input, .screens-cell, .screens-side, .screens-strip")) return;
+        if (!props.onClearSelection || !props.selectedScreenId || filmstrip) return;
+        if ((event.target as Element).closest("button, a, input, .screens-cell, .screens-side")) return;
         props.onClearSelection();
       }}>
       {props.phone && filterChips ? <div className="screens-head">{filterChips}</div> : null}
@@ -657,12 +667,9 @@ export function ScreensView(props: ScreensViewProps) {
         {props.phone ? null : (
           <aside className="screens-side">
             <nav className="screens-tree" aria-label={tree.mode === "source" ? "Route files" : "Navigation"}>
-              {/* The title shares its row with Find and fold-all, so a report without changes has no empty row above
-                  it; Changed / All follows under it, the whole width, when there are changes. The find field takes
-                  the title's row while it is open. */}
-              <div className={`screens-tree-head${findSearch ? " searching" : ""}`}>
-                {findSearch ?? <><h2>{tree.mode === "source" ? "app/" : "Explored app"}</h2>{findButton}{foldAll}</>}
-              </div>
+              {/* The find field heads the tree with fold-all beside it, so a report without changes has no empty row;
+                  Changed / All follows under it, the whole width, when there are changes. */}
+              <div className="screens-tree-head">{findSearch}{foldAll}</div>
               {filterChips}
               {matches && order.length === 0
                 ? <p className="screens-find-empty" role="status">{noMatch}</p>
@@ -711,5 +718,6 @@ export function ScreensView(props: ScreensViewProps) {
         </PhoneSheet>
       ) : null}
     </main>
+    </>
   );
 }
