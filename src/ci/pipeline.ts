@@ -297,6 +297,7 @@ export type PublicCiOptions = {
   progress?: Progress;
   /** Where the run's timings are appended (`$RUNNER_TEMP/explore-diagnostics/timings.jsonl`); none are kept without it. */
   timingsPath?: string;
+  progressPostMs?: number;
   /** Stops the captures between steps (a cancelled job): a session is still stopped, and a hosted repack run cancelled. */
   signal?: AbortSignal;
 };
@@ -379,11 +380,14 @@ export async function runPublicCi(options: PublicCiOptions) {
   assertRunIdentity(environment);
   const pr = projectPullRequestPresentation(JSON.parse(await readFile(options.pullRequestPath, "utf8")));
   const { projects, output, state } = await prepareCiRun(options, environment, pr);
-  const upsert = async () => {
+  // One write at a time, each rendering the state when its turn comes: a progress post still in flight can never land
+  // after a later phase's post, or the failure's, and undo it.
+  let writing = Promise.resolve();
+  const upsert = () => (writing = writing.then(async () => {
     state.updatedAt = now(); const body = renderPublicComment(state); options.onComment?.(state, body);
     try { await upsertStickyComment({ repository: pr.repository, issueNumber: pr.number, body, ...platformSectionMerge(state, options.target ?? options.platform), token: githubToken, fetchImpl: transport }); }
     catch (error) { process.stderr.write(`Progress comment unavailable: ${serializeCiError(error).message}\n`); }
-  };
+  }));
   const postComment = async () => { await assertCurrentPr(); await upsert(); };
   // A status update between the phases' posts: it skips the PR check, whose failure would fail the review, and never throws.
   const postProgress = async () => { if (!prVerificationFailed) await upsert().catch(() => undefined); };
@@ -445,6 +449,18 @@ export async function runPublicCi(options: PublicCiOptions) {
     assertCurrentHead, postComment, postProgress, canPublish: () => !prVerificationFailed });
 }
 
+/** The least time between two posts of the comment's waiting status, besides the posts that start and end the wait. */
+const PROGRESS_POST_MS = 3 * 60_000;
+
+/** Fetches the controllers in a span; a failure there ends the run before its phases, so it records the run's finish too. */
+async function controllersTimed(timings: Timings, fetch: () => Promise<void>): Promise<void> {
+  try { await timings.measure("controllers", fetch); }
+  catch (error) {
+    timings.record({ type: "finish", outcome: "failed", code: toCiError(error).code });
+    throw error;
+  }
+}
+
 /** The run a timings file belongs to: the workflow, target, release, and run attempt, from the runner's variables. */
 function runHeader(environment: NodeJS.ProcessEnv, config: ExploreConfig): RecordedEvent {
   return { type: "run", release: EXPLORE_VERSION, ...(config.target ? { target: config.target.id } : {}),
@@ -479,6 +495,8 @@ export async function runCiReview(options: {
   assertCurrentHead: () => Promise<void>; postComment: () => Promise<void>; canPublish?: () => boolean;
   /** Posts the comment's state without verifying the PR first; best effort, for what changes between phases. */
   postProgress?: () => Promise<void>;
+  /** The least time between two progress posts while base waits for a baseline (PROGRESS_POST_MS); tests shorten it. */
+  progressPostMs?: number;
   /** Where the run's timings are appended; none are kept without it. */
   timingsPath?: string;
   now?: () => number; sleep?: (milliseconds: number) => void; runner?: CommandRunner; subscription?: boolean; useLocalEasSession?: boolean;
@@ -501,7 +519,7 @@ export async function runCiReview(options: {
   // The controllers are fetched before any EAS work, so a blocked download fails before a session is paid for. agent-device
   // also compares the screenshots. An injected runner (tests) stands in for the controllers' calls, but not for that
   // comparison: it still runs the real agent-device, which fetches itself on first use.
-  if (!options.runner) await timings.measure("controllers", () => prefetchControllers(config, environment, progress));
+  if (!options.runner) await controllersTimed(timings, () => prefetchControllers(config, environment, progress));
   const pr = options.presentation;
   const now = options.now ?? Date.now;
   const secretValues = environmentSecrets(environment);
@@ -511,6 +529,8 @@ export async function runCiReview(options: {
   let reportWritten = false;
   // Stops a baseline wait still polling once the review no longer needs it: done, failed, or stopped.
   const stopWaiting = new AbortController();
+  let progressPost: ReturnType<typeof setTimeout> | undefined;
+  let progressPostedAt = -Infinity;
   try {
     phases.enter("plan");
     progress(`planning the review of ${pr.head.sha.slice(0, 8)} against base ${pr.base.sha.slice(0, 8)} (scope ${config.exploration.scope})`);
@@ -544,11 +564,17 @@ export async function runCiReview(options: {
       ...(environment.EXPLORE_CAPTURE_CACHE ? { sourceDirectory: environment.EXPLORE_CAPTURE_CACHE } : {}), commit: pr.base.sha });
     // With no finished baseline to reuse, one still being captured is waited for: from now, alongside head, and base
     // waits for it only where it would start. Head is never delayed by it (brentvatne/euxy's review run 39348956443).
-    // While it waits, the comment says so and names the step the baseline job is in; it changes only when that does.
+    // While it waits, the comment says so and names the step the baseline job is in. It is posted when the wait starts
+    // and ends, and in between at most every `progressPostMs` with the latest step: every post rewrites the whole
+    // comment, which the other targets' jobs write too.
     const waitingFor = (step?: string) => {
       if (step === undefined) delete state.capture!.waiting;
       else state.capture!.waiting = { on: "baseline", ...(step ? { step } : {}) };
-      void options.postProgress?.();
+      clearTimeout(progressPost);
+      const post = () => { progressPostedAt = Date.now(); void options.postProgress?.(); };
+      const due = progressPostedAt + (options.progressPostMs ?? PROGRESS_POST_MS) - Date.now();
+      if (step === undefined || due <= 0) post();
+      else (progressPost = setTimeout(post, due)).unref();
     };
     const waitedBaseline = !baselineMayExist && plan.baseCaptureSurfaceIds.length > 0 && options.awaitBaseline
       ? options.awaitBaseline(options.signal ? AbortSignal.any([stopWaiting.signal, options.signal]) : stopWaiting.signal,
@@ -736,6 +762,7 @@ export async function runCiReview(options: {
     throw error;
   } finally {
     stopWaiting.abort();
+    clearTimeout(progressPost);
   }
 }
 
@@ -760,7 +787,7 @@ export async function runBaselineCi(options: { platform?: ExplorePlatform; proje
   assertCheckout(options.project, options.sha);
   const timings = createTimings({ path: options.timingsPath, labels: { side: "baseline" }, secrets: environmentSecrets(environment) });
   timings.record(runHeader(environment, options.config));
-  if (!options.runner) await timings.measure("controllers", () => prefetchControllers(options.config, environment, options.progress ?? silentProgress));
+  if (!options.runner) await controllersTimed(timings, () => prefetchControllers(options.config, environment, options.progress ?? silentProgress));
   const phases = phaseSequence(timings);
   try {
     phases.enter("plan");

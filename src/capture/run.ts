@@ -831,6 +831,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           outcomes[schemeScreenId(id, scheme)] = { status: "failed", attempts: 0, landing: "unverified", reason: error.message, error };
         }
         // The finally block below stops the session after the export.
+        runtimePhases.end("skipped");
         return await finish();
       }
     }
@@ -1031,6 +1032,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       // A pass another session makes leaves its slot empty, so the passes stay aligned with the appearances they merge by.
       if (!capturedSchemes.includes(colorScheme)) { passes.push({}); continue; }
       const passOutcomes: CaptureBundle["outcomes"] = index === 0 ? outcomes : {};
+      // Each appearance's launch and routes are labelled with it, also when one session captures them in turn.
+      const passTimings = colorSchemes.length > 1 ? timings.labelled({ pass: colorScheme }) : timings;
       const capturePass = async () => {
         // Argent cannot switch the appearance yet (software-mansion/argent#1509): the host does, simctl or adb on this
         // machine and serve-sim on an EAS iOS session; elsewhere its single pass runs as the device starts.
@@ -1046,7 +1049,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           say(`observing the app launch${colorSchemes.length > 1 ? ` (${colorScheme})` : ""}`);
           try {
             // A restored baseline's launch evidence is replaced only by a fresh observation.
-            const record = await timings.measure("launch", () => captureLaunch({ bundleId: options.bundleId, keepVideo: launchSetting === "video", platform: options.platform,
+            const record = await passTimings.measure("launch", () => captureLaunch({ bundleId: options.bundleId, keepVideo: launchSetting === "video", platform: options.platform,
               directory: join(launchWorkDirectory, launchDirectory(colorScheme)), relativeDirectory: launchDirectory(colorScheme), ...(options.now ? { now: options.now } : {}),
               ...(recordingTools ? { recordingTools } : {}),
               controller: (args, controllerOptions) => runner({ command: controllerCommand, args: [...args, "--session", CONTROLLER_SESSION, ...deviceArgs(activeRuntime), "--platform", options.platform],
@@ -1063,7 +1066,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         activeRuntime.colorScheme = colorScheme;
         if (colorSchemes.length > 1) say(`appearance ${colorScheme} (${index + 1}/${colorSchemes.length})`);
         return await capturePlannedRoutes({ capture: { ...options, ...(argentBridge && !options.agent ? { runner: argentBridge.runner } : {}), agentDeviceCommand: controllerCommand, setup, progress: say }, routes: missingRoutes, inventory, scheme, appName: app.name, runtime: activeRuntime,
-          connection, environment: controllerEnvironment, store, map, acceptedFrames, outcomes: passOutcomes, timings,
+          connection, environment: controllerEnvironment, store, map, acceptedFrames, outcomes: passOutcomes, timings: passTimings,
           ...(colorSchemes.length > 1 ? { appearance: { scheme: colorScheme, primary: index === 0 } } : {}) });
       };
       // A later pass of a session whose primary pass captured fails only its own appearance, as a secondary session does

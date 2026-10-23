@@ -30,6 +30,12 @@ test("while a capture worker is blocked in a call it named, the parent prints a 
   assert.ok(beats.at(-1).at < Date.now() - started - 250, JSON.stringify(lines));
 });
 
+test("a baseline's worker is named as its timings are, not by the head side it captures as", async () => {
+  const lines = [];
+  await settleCaptureWorker(new Worker(blockingWorker, { eval: true }), { side: "head", timingsSide: "baseline" }, line => lines.push(line), undefined, 100);
+  assert.match(lines[1], /^baseline: still in install /);
+});
+
 test("a worker that names no blocking call gets no heartbeat, and its failure still settles the capture", async () => {
   const lines = [];
   const worker = new Worker(`require("node:worker_threads").parentPort.postMessage({ type: "error", error: { code: "CAPTURE_INSTALL_FAILED", stage: "session", message: "m", nextAction: "n", retryable: false } });`, { eval: true });

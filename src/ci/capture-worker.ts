@@ -22,7 +22,7 @@ export function runCiMapOnWorker(options: CaptureWorkerOptions, progress: Progre
 }
 
 /** The parent's side of a capture worker: its messages, its heartbeat while blocked, and how it ends. Tests drive it with a stub worker. */
-export function settleCaptureWorker(worker: Worker, options: Pick<CaptureWorkerOptions, "side" | "appearancePass">, progress: Progress,
+export function settleCaptureWorker(worker: Worker, options: Pick<CaptureWorkerOptions, "side" | "timingsSide" | "appearancePass">, progress: Progress,
   signal?: AbortSignal, heartbeatMs = 60_000): Promise<CiMapResult> {
   return new Promise((resolve, reject) => {
     let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -30,7 +30,8 @@ export function settleCaptureWorker(worker: Worker, options: Pick<CaptureWorkerO
     const blocked = (phase: TimingPhase, boundMs: number) => {
       unblocked();
       const since = Date.now();
-      const who = [options.side ?? "capture", options.appearancePass?.capture.join("+")].filter(Boolean).join(" ");
+      // Named as the capture's timings are: a baseline captures its commit as head.
+      const who = [options.timingsSide ?? options.side ?? "capture", options.appearancePass?.capture.join("+")].filter(Boolean).join(" ");
       heartbeat = setInterval(() => progress(`${who}: still in ${phase} (${formatDuration(Date.now() - since)} of at most ${formatDuration(boundMs)})`), heartbeatMs);
       heartbeat.unref();
     };

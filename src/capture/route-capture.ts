@@ -1143,7 +1143,9 @@ export async function capturePlannedRoutes(options: {
         const route = options.routes.find(route => outcomes[route.id]?.status !== "captured"
           && captureDestinationMatches(destination, route, inventory));
         if (!route) return;
-        await capturePreparedTarget(route, action.ready, current.nodes);
+        const endRoute = (options.timings ?? silentTimings).span("route", { route: route.route, via: "setup" });
+        try { await capturePreparedTarget(route, action.ready, current.nodes); }
+        finally { endRoute(outcomes[route.id]?.status === "captured" ? "ok" : "failed", { status: outcomes[route.id]?.status ?? "none" }); }
         reportOutcome(route, `after setup step ${index + 1}`);
       },
     });

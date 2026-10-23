@@ -192,8 +192,10 @@ const EAS_PAGE = /^\/accounts\/([\w.-]{1,100})\/projects\/([\w.-]{1,100})\/(work
  * these links; this keeps a query or a fragment it might carry from ever being written out.
  */
 export function easPageLink(value: string | undefined, kind: "workflows" | "builds"): string | undefined {
-  if (!value || !URL.canParse(value)) return undefined;
-  const url = new URL(value);
+  // A link at the end of a sentence ("See logs: https://…/workflows/01AB.") brings its punctuation along.
+  const trimmed = value?.replace(/[.,;:!?)\]'"]+$/, "");
+  if (!trimmed || !URL.canParse(trimmed)) return undefined;
+  const url = new URL(trimmed);
   const match = EAS_PAGE.exec(url.pathname);
   if (url.protocol !== "https:" || url.hostname !== "expo.dev" || url.port || url.username || url.password || !match || match[3] !== kind) return undefined;
   return `https://expo.dev/accounts/${match[1]}/projects/${match[2]}/${kind}/${match[4]}`;

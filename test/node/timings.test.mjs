@@ -89,6 +89,9 @@ test("links are rebuilt from their validated parts, never copied", () => {
   assert.equal(githubRunLink({ ...environment, GITHUB_REPOSITORY: "a/b/../c?d" }, 1), undefined);
   assert.equal(easPageLink("https://expo.dev/accounts/brent/projects/euxy/workflows/01ABC-def?token=x#y", "workflows"),
     "https://expo.dev/accounts/brent/projects/euxy/workflows/01ABC-def");
+  // eas-cli's "See logs: <link>." brings the full stop along.
+  assert.equal(easPageLink("https://expo.dev/accounts/brent/projects/euxy/workflows/01ABC-def.", "workflows"),
+    "https://expo.dev/accounts/brent/projects/euxy/workflows/01ABC-def");
   for (const value of ["https://evil.dev/accounts/a/projects/b/workflows/c", "https://user:pw@expo.dev/accounts/a/projects/b/workflows/c",
     "https://expo.dev/accounts/a/projects/b/builds/c", "https://expo.dev/accounts/a/projects/b/simulator-sessions/c", "http://expo.dev/accounts/a/projects/b/workflows/c", "not a url", undefined]) {
     assert.equal(easPageLink(value, "workflows"), undefined, String(value));
