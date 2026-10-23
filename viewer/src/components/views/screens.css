@@ -335,6 +335,22 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-jump-chip > svg { width: 14px; height: 14px; }
 .screens-jump-chip .path { font-family: var(--screens-mono); }
 .screens-page.phone .screens-body { display: block; margin: 0; }
+/* Grid or Filmstrip as two icons at the end of the Changed / All row. */
+.screens-page.phone .screens-head { display: flex; align-items: center; gap: 8px; }
+.screens-layout-toggle { display: inline-flex; flex: none; gap: 2px; margin-left: auto; padding: 3px; border-radius: 999px; background: var(--element); }
+.screens-layout-toggle > button { display: grid; width: 40px; height: 28px; place-items: center; border-radius: 999px; color: var(--secondary); }
+.screens-layout-toggle > button[aria-pressed="true"] { color: var(--text); background: var(--selected); }
+.screens-layout-toggle svg { width: 16px; height: 16px; }
+/* The phone's filmstrip fills what the bars leave: the head and the Tree button above it, the tab bar below. */
+.screens-page.phone.filmstrip { display: flex; flex-direction: column; overflow: hidden; }
+.screens-page.phone.filmstrip::before,
+.screens-page.phone.filmstrip :is(.screens-head, .screens-jump) { flex: none; }
+.screens-page.phone.filmstrip .screens-body { display: flex; min-height: 0; flex: 1; height: auto; }
+.screens-page.phone.filmstrip .screens-sections { padding: 4px 0 0; }
+.screens-strip.phone .screens-strip-path { padding: 0 16px; }
+/* A finger's sideways swipe moves the strip; an upward one still scrolls the page. The fade is narrower, so the
+   neighbours peeking in at the sides stay legible. */
+.screens-strip.phone .screens-strip-stage { touch-action: pan-y; mask-image: linear-gradient(to right, transparent, #000 6%, #000 94%, transparent); }
 /* Sections flow side by side, as on desktop, so a section of one screen leaves no empty row. Every
    card takes a fraction of the page width, so cards from neighbouring sections share columns. */
 .screens-page.phone .screens-sections { container-type: inline-size; gap: 32px 12px; padding: 20px 16px 0; }

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type WheelEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import { ChevronRight } from "lucide-react";
 import { artifactUrl, isLaunchScreen, type MapIndex, type Screen } from "../../utils/model";
 import { primaryScreenshotForScreen, screenshotSize, type ScreenshotSize } from "../../utils/screen-images";
@@ -21,6 +21,10 @@ const SWIPE_END_MS = 140;
  * so one wheel notch steps a screen and a twitch springs back.
  */
 const SWIPE_COMMIT = 0.2;
+/** How far a finger moves before a touch is a swipe rather than a tap. */
+const TAP_SLOP_PX = 8;
+/** How far ahead a flick's speed carries the strip when the finger lifts: its velocity times this. */
+const FLICK_MS = 160;
 /** An iPhone's portrait shape, for a run with no screenshot sizes at all. */
 const FALLBACK_SIZE: ScreenshotSize = { imageWidth: 390, imageHeight: 844 };
 
@@ -44,6 +48,8 @@ export type ScreensFilmstripProps = {
   onPick: (id: string) => void;
   /** Selects a screen and opens it in the Inspector, as a click on its card does. */
   onOpen: (id: string) => void;
+  /** The phone layout: the middle screen takes most of the width, and a finger swipes the strip. */
+  phone?: boolean | undefined;
 };
 
 function labelOf(screen: Screen, index: MapIndex): string {
@@ -78,6 +84,10 @@ export function ScreensFilmstrip(props: ScreensFilmstripProps) {
   const [swipe, setSwipe] = useState<{ position: number; direction: number } | null>(null);
   // The swipe's position as of the last wheel event, which can arrive before the render that shows the one before it.
   const live = useRef<number | null>(null);
+  // A finger on the strip: where it went down, the strip's position then, and its latest speed in px/ms.
+  const touch = useRef<{ id: number; x: number; from: number; lastX: number; lastAt: number; velocity: number; moved: boolean } | null>(null);
+  // A swipe ends with the finger lifting over a screen; the click that follows is not a tap on it.
+  const swallowClick = useRef(false);
   const swipeEnd = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(swipeEnd.current), []);
   const focused = props.index.screens.get(props.focusedId);
@@ -107,10 +117,10 @@ export function ScreensFilmstrip(props: ScreensFilmstripProps) {
     return size.imageWidth / size.imageHeight;
   };
   // Every frame is laid out as the middle one would be, filling the stage's height short of growing wider than half
-  // the stage, so a landscape capture beside portrait ones is as wide as it may be rather than as tall; then it is scaled
+  // the stage (on a phone, most of it, with the neighbours peeking in at the sides), so a landscape capture beside portrait ones is as wide as it may be rather than as tall; then it is scaled
   // down around its centre, and the centres are spaced so the scaled frames sit a gap apart, the gap shrinking with them.
   const frameSize = (screen: Screen) => {
-    const height = Math.max(0, Math.min(stage.height - 16, (stage.width * 0.5) / aspect(screen)));
+    const height = Math.max(0, Math.min(stage.height - 16, (stage.width * (props.phone ? 0.7 : 0.5)) / aspect(screen)));
     return { width: height * aspect(screen), height };
   };
   // Where each screen sits with the screen at `centre` in the middle: its distance and its centre's offset.
@@ -153,26 +163,65 @@ export function ScreensFilmstrip(props: ScreensFilmstripProps) {
   // The frames' gap at rest, which one screen of swipe travels.
   const pitch = Math.abs(layout(at).get(props.order[at + 1] ?? props.order[at - 1] ?? "")?.x ?? frameSize(focused).width) || 1;
 
-  // A swipe along either axis moves the strip with it, so a mouse wheel works as well as a trackpad; when it ends, the
-  // strip settles on a screen.
+  const clamp = (value: number) => Math.max(0, Math.min(props.order.length - 1, value));
+  // Puts the strip at `next` while a gesture lasts; the middle screen, and with it the path above, follows the swipe as
+  // it passes halfway.
+  const moveTo = (next: number, direction: number) => {
+    live.current = next;
+    setSwipe({ position: next, direction });
+    if (Math.round(next) !== at) props.onPick(props.order[Math.round(next)]!);
+  };
+  // When the gesture ends, the strip settles on the next screen in its direction once it is SWIPE_COMMIT of the way there.
+  const settle = (next: number, direction: number) => {
+    const index = clamp(direction > 0 ? Math.floor(next + 1 - SWIPE_COMMIT) : direction < 0 ? Math.ceil(next - 1 + SWIPE_COMMIT) : Math.round(next));
+    if (index !== Math.round(next)) props.onPick(props.order[index]!);
+    live.current = null;
+    setSwipe(null);
+  };
+
+  // A swipe along either axis moves the strip with it, so a mouse wheel works as well as a trackpad; it has ended when
+  // its events stop.
   const onWheel = (event: WheelEvent) => {
     const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
     const pixels = event.deltaMode === 1 ? delta * 16 : event.deltaMode === 2 ? delta * stage.width : delta;
     if (!pixels) return;
-    const next = Math.max(0, Math.min(props.order.length - 1, (live.current ?? position) + pixels / pitch));
-    live.current = next;
+    const next = clamp((live.current ?? position) + pixels / pitch);
     const direction = Math.sign(pixels);
-    setSwipe({ position: next, direction });
-    // The middle screen, and with it the path above, follows the swipe as it passes halfway.
-    if (Math.round(next) !== at) props.onPick(props.order[Math.round(next)]!);
+    moveTo(next, direction);
     clearTimeout(swipeEnd.current);
-    swipeEnd.current = setTimeout(() => {
-      const settle = direction > 0 ? Math.floor(next + 1 - SWIPE_COMMIT) : Math.ceil(next - 1 + SWIPE_COMMIT);
-      const index = Math.max(0, Math.min(props.order.length - 1, settle));
-      if (index !== Math.round(next)) props.onPick(props.order[index]!);
-      live.current = null;
-      setSwipe(null);
-    }, SWIPE_END_MS);
+    swipeEnd.current = setTimeout(() => settle(next, direction), SWIPE_END_MS);
+  };
+
+  // A finger drags the strip under it; on lifting, a flick carries it on by its speed before it settles. A mouse
+  // keeps its clicks and wheel.
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.pointerType === "mouse" || touch.current) return;
+    // A browser that sent no click after the last swipe must not have this touch's tap swallowed.
+    swallowClick.current = false;
+    clearTimeout(swipeEnd.current);
+    touch.current = { id: event.pointerId, x: event.clientX, from: live.current ?? position, lastX: event.clientX, lastAt: event.timeStamp, velocity: 0, moved: false };
+  };
+  const onPointerMove = (event: PointerEvent) => {
+    const current = touch.current;
+    if (!current || current.id !== event.pointerId) return;
+    const dx = event.clientX - current.x;
+    if (!current.moved && Math.abs(dx) < TAP_SLOP_PX) return;
+    if (!current.moved) { current.moved = true; event.currentTarget.setPointerCapture(event.pointerId); }
+    const elapsed = event.timeStamp - current.lastAt;
+    if (elapsed > 0) current.velocity = (event.clientX - current.lastX) / elapsed;
+    current.lastX = event.clientX; current.lastAt = event.timeStamp;
+    moveTo(clamp(current.from - dx / pitch), -Math.sign(dx));
+  };
+  const onPointerEnd = (event: PointerEvent) => {
+    const current = touch.current;
+    if (!current || current.id !== event.pointerId) return;
+    touch.current = null;
+    if (!current.moved) return;
+    swallowClick.current = true;
+    // A finger that stopped before lifting carries nothing on.
+    const velocity = event.timeStamp - current.lastAt > 80 ? 0 : current.velocity;
+    const next = clamp((live.current ?? position) - (velocity * FLICK_MS) / pitch);
+    settle(next, velocity ? -Math.sign(velocity) : -Math.sign(event.clientX - current.x));
   };
 
   const path = (props.shape.ancestors.get(props.focusedId) ?? []).flatMap(key => rowLabels.get(key) ?? []);
@@ -180,7 +229,9 @@ export function ScreensFilmstrip(props: ScreensFilmstripProps) {
   const dot = props.dot(props.focusedId);
 
   return (
-    <section className="screens-strip" aria-label="Filmstrip" onWheel={onWheel}>
+    <section className={`screens-strip${props.phone ? " phone" : ""}`} aria-label="Filmstrip" onWheel={onWheel}
+      onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerEnd} onPointerCancel={onPointerEnd}
+      onClickCapture={(event) => { if (swallowClick.current) { swallowClick.current = false; event.preventDefault(); event.stopPropagation(); } }}>
       <div className="screens-strip-path">
         {path.map((label, position) => (
           <span key={position} className="screens-strip-crumb" title={label}>

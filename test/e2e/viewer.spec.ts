@@ -5591,6 +5591,52 @@ test.describe("phone layout", () => {
     await expect(page.getByRole("navigation", { name: "Views" })).toBeVisible();
     await expect(page.locator(".map-canvas")).toBeVisible();
   });
+  test("the filmstrip on a phone: switched beside Changed / All, swiped by a finger, and its middle screen opens the Inspector", async ({ page }) => {
+    await serveWorkspace(page);
+    await page.goto("/screens");
+    const view = page.getByRole("main", { name: "Screens" });
+    await view.getByRole("button", { name: /^All/ }).tap();
+    const layouts = view.getByRole("group", { name: "Screens layout" });
+    await expect(layouts.getByRole("button", { name: "Grid" })).toHaveAttribute("aria-pressed", "true");
+    await layouts.getByRole("button", { name: "Filmstrip" }).tap();
+    await expect(page).toHaveURL(/[?&]layout=filmstrip/);
+    const strip = view.getByRole("region", { name: "Filmstrip" });
+    const middle = strip.locator(".screens-strip-frame.focused");
+    const first = await middle.getAttribute("data-screen-id");
+    // The section chips give way to the path above the strip; the Tree still jumps anywhere.
+    await expect(view.locator(".screens-jump-chip:not(.tree)")).toHaveCount(0);
+    await expect(view.getByRole("button", { name: "Tree" })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    // A finger dragged left moves the strip under it while it is down, and the strip settles on the next screen.
+    const stage = strip.locator(".screens-strip-stage");
+    const dragged = await stage.evaluate(async element => {
+      const box = element.getBoundingClientRect();
+      const y = box.top + box.height / 2, x = box.left + box.width * 0.7;
+      const fire = (type: string, at: number) => element.dispatchEvent(new PointerEvent(type, { pointerId: 7, pointerType: "touch", isPrimary: true,
+        clientX: at, clientY: y, bubbles: true, cancelable: true }));
+      const centre = () => { const frame = element.querySelector(".screens-strip-frame.focused")!.getBoundingClientRect(); return frame.left + frame.width / 2; };
+      const before = centre();
+      fire("pointerdown", x);
+      for (let step = 1; step <= 3; step++) { fire("pointermove", x - step * 20); await new Promise(resolve => setTimeout(resolve, 16)); }
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const during = centre();
+      for (let step = 4; step <= 6; step++) { fire("pointermove", x - step * 20); await new Promise(resolve => setTimeout(resolve, 16)); }
+      fire("pointerup", x - 120);
+      return { moved: before - during, swiping: element.classList.contains("swiping") };
+    });
+    expect(dragged.moved).toBeGreaterThan(50);
+    expect(dragged.moved).toBeLessThan(70);
+    await expect(middle).not.toHaveAttribute("data-screen-id", first!);
+    await expect(stage).not.toHaveClass(/swiping/);
+
+    // A tap on the middle screen opens the Inspector; a tap on a neighbour only brings it to the middle.
+    const inspector = page.getByRole("complementary", { name: "Inspector panel" });
+    await strip.locator(".screens-strip-frame:not(.focused) .screens-strip-target:not([disabled])").first().tap();
+    await expect(inspector).toHaveCount(0);
+    await middle.locator(".screens-strip-target").tap();
+    await expect(inspector).toBeVisible();
+  });
 });
 
 test("the theme is Auto until the More menu picks one: it follows the system, and a pick outlives a reload", async ({ page }) => {
@@ -6130,4 +6176,5 @@ test.describe("a wide Inspector in a short window", () => {
     await expect.poll(async () => (await frame.boundingBox())!.height).toBeLessThanOrEqual(421);
     await expect.poll(async () => (await frame.boundingBox())!.height).toBeGreaterThan(300);
   });
+
 });

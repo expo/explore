@@ -903,9 +903,9 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
   // into the destination view.
   // The report Screens' layout is remembered for: the loaded one, however it was loaded.
   const runId = payload?.map.run.id;
-  /** Screens opens in the layout the reader last left it in for this report; phones have only their list. */
+  /** Screens opens in the layout the reader last left it in for this report. */
   const rememberedScreensLayout = useCallback((canvas: CanvasView): Partial<Route> => (
-    canvas === "screens" && routeRef.current.canvas !== "screens" && !phoneRef.current ? { layout: readScreensLayout(runId) } : {}
+    canvas === "screens" && routeRef.current.canvas !== "screens" ? { layout: readScreensLayout(runId) } : {}
   ), [runId]);
   const commitCanvasSelection = useCallback((canvas: CanvasView) => {
     const current = routeRef.current;
@@ -952,8 +952,8 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
   }, [navigate, runId]);
   // A link that opens the filmstrip is remembered as a switch to it is.
   useEffect(() => {
-    if (route.canvas === "screens" && route.layout === "filmstrip" && !phone) writeScreensLayout(runId, "filmstrip");
-  }, [phone, route.canvas, route.layout, runId]);
+    if (route.canvas === "screens" && route.layout === "filmstrip") writeScreensLayout(runId, "filmstrip");
+  }, [route.canvas, route.layout, runId]);
 
   // The logo returns to the Map root, the equivalent of the "/map" URL.
   const openMapHome = useCallback(() => {
