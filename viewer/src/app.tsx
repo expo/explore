@@ -1130,10 +1130,11 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
   const pickedInPlaceRef = useRef<string | undefined>(undefined);
   // The Screens tree and jump bar pick a screen in place: it is selected and scrolled to, and the
   // Inspector stays as it was. A click on the screenshot, or I, opens it.
-  const pickScreenInPlace = useCallback((id: string) => {
+  const pickScreenInPlace = useCallback((id: string, options?: { replace?: boolean }) => {
     const sameSelection = resolveScreenId(routeRef.current, contextRef.current) === id;
     if (!sameSelection) pickedInPlaceRef.current = id;
-    navigate(screenPatch(id), { replace: sameSelection, focus: { target: "screen", id } });
+    // A swipe through the filmstrip is one step back, however many screens it passed.
+    navigate(screenPatch(id), { replace: sameSelection || options?.replace === true, focus: { target: "screen", id } });
   }, [navigate, screenPatch]);
   // On a phone the Inspector covers the map, so a tap selects the screen first (its ring, its
   // connections, the Open hint) and only a second tap on the selected screen opens it.

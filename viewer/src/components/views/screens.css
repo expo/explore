@@ -348,9 +348,8 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-page.phone.filmstrip .screens-body { display: flex; min-height: 0; flex: 1; height: auto; }
 .screens-page.phone.filmstrip .screens-sections { padding: 4px 0 0; }
 .screens-strip.phone .screens-strip-path { padding: 0 16px; }
-/* A finger's sideways swipe moves the strip; an upward one still scrolls the page. The fade is narrower, so the
-   neighbours peeking in at the sides stay legible. */
-.screens-strip.phone .screens-strip-stage { touch-action: pan-y; mask-image: linear-gradient(to right, transparent, #000 6%, #000 94%, transparent); }
+/* On a phone the fade is narrower, so the neighbours peeking in at the sides stay legible. */
+.screens-strip.phone .screens-strip-stage { mask-image: linear-gradient(to right, transparent, #000 6%, #000 94%, transparent); }
 /* Sections flow side by side, as on desktop, so a section of one screen leaves no empty row. Every
    card takes a fraction of the page width, so cards from neighbouring sections share columns. */
 .screens-page.phone .screens-sections { container-type: inline-size; gap: 32px 12px; padding: 20px 16px 0; }
@@ -446,6 +445,8 @@ html:has(.screens-page.filmstrip) { overscroll-behavior-x: none; }
   overflow: clip;
   /* The outer frames fade out towards the edges rather than being cut off. */
   mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+  /* A finger's sideways swipe moves the strip, on any touch screen; an upward one still scrolls the page. */
+  touch-action: pan-y;
 }
 .screens-strip-frame {
   position: absolute;

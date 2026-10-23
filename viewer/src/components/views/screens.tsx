@@ -50,7 +50,7 @@ export type ScreensViewProps = {
   onFindRequestDone?: (() => void) | undefined;
   onSelectScreen: (id: string) => void;
   /** The tree and jump bar pick a screen without opening the Inspector; a screenshot click selects it as the canvas does. */
-  onPickScreen?: ((id: string) => void) | undefined;
+  onPickScreen?: ((id: string, options?: { replace?: boolean }) => void) | undefined;
   /** A click on the page around the cards clears the selection, as a click on a canvas's pane does. */
   onClearSelection?: (() => void) | undefined;
   /** Every card in a grid, or one screen at a time in a filmstrip. */
