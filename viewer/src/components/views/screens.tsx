@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, GalleryHorizontal, LayoutGrid, ListTree } from "lucide-react";
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, GalleryHorizontal, LayoutGrid, ListTree, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { artifactUrl, isLaunchScreen, type ExploreMap, type MapIndex, type Screen } from "../../utils/model";
 import { primaryScreenshotForScreen, screenshotSize, typicalScreenshotSize, type ScreenshotSize } from "../../utils/screen-images";
 import { diffClass, type BuildDiff, type DiffStatus } from "../../utils/build-diff";
@@ -8,7 +8,7 @@ import { displayPathForScreen, screenLabel } from "../../utils/screen-path";
 import { screenTree, treeIndex, treeNodeKey, treeScreenOrder, type ScreenTree, type ScreenTreeNode } from "../../utils/screen-tree";
 import type { Appearance } from "../../utils/appearance";
 import type { FocusRequest, FocusStatus, ScreensLayout } from "../../utils/navigation";
-import { shortcutsLive } from "../../utils/shortcuts";
+import { formatShortcut, SHORTCUTS, shortcutsLive } from "../../utils/shortcuts";
 import { normalizeSearchText } from "../../utils/search";
 import { createKeyHold } from "../../utils/key-hold";
 import { placeholderScreen } from "../../utils/map-frame";
@@ -18,6 +18,7 @@ import { NoScreens } from "../shared/no-screens";
 import { useCanvasVisibleFrame } from "../canvas/visible-frame-provider";
 import { PhoneSheet } from "../phone/phone-chrome";
 import { PanelSearch } from "../shared/panel-search";
+import { Tooltip } from "../shared/tooltip";
 import { ScreensFilmstrip } from "./screens-filmstrip";
 import "./screens.css";
 
@@ -327,6 +328,13 @@ export function ScreensView(props: ScreensViewProps) {
   const filmstrip = !props.phone && props.layout === "filmstrip";
   // The filmstrip always has a screen in the middle: the selection when it is shown, else the first screen.
   const stripFocus = filmstrip ? (props.selectedScreenId && order.includes(props.selectedScreenId) ? props.selectedScreenId : order[0]) : undefined;
+  // The sidebar folds away to give the screens its width. Each switch of layout starts over: the filmstrip with the
+  // sidebar folded, the grid with it open. A find narrows the screens, so the sidebar that shows its query stays open
+  // while there is one.
+  const [side, setSide] = useState({ filmstrip, collapsed: filmstrip && !findQuery });
+  if (side.filmstrip !== filmstrip) setSide({ filmstrip, collapsed: filmstrip && !findQuery });
+  const sideCollapsed = side.filmstrip === filmstrip ? side.collapsed : filmstrip && !findQuery;
+  const setSideCollapsed = (collapsed: boolean) => setSide({ filmstrip, collapsed });
 
   // Folding. All keeps the reader's folds and remembers them per report. Changed folds separately, starting
   // each time with only the rows that hold no change folded, so trying Changed never disturbs the folds in All.
@@ -386,8 +394,21 @@ export function ScreensView(props: ScreensViewProps) {
 
   const findField = useRef<HTMLDivElement>(null);
   const focusFind = () => findField.current?.querySelector("input")?.focus();
-  // `/` focuses the field, deferred a frame so the key itself is not typed into it.
-  const openFind = () => requestAnimationFrame(focusFind);
+  // `/` focuses the field, deferred a frame so the key itself is not typed into it. A folded sidebar opens first.
+  const findOnOpen = useRef(false);
+  const openFind = () => {
+    if (!sideCollapsed) {
+      requestAnimationFrame(focusFind);
+      return;
+    }
+    findOnOpen.current = true;
+    setSideCollapsed(false);
+  };
+  useEffect(() => {
+    if (sideCollapsed || !findOnOpen.current) return;
+    findOnOpen.current = false;
+    requestAnimationFrame(focusFind);
+  }, [sideCollapsed]);
   const closeFind = () => {
     setQuery("");
     // The field took the keyboard; hand it back to the page so its arrows work again.
@@ -405,7 +426,7 @@ export function ScreensView(props: ScreensViewProps) {
     <div ref={findField} className="screens-find">
       <PanelSearch
         value={query}
-        placeholder="Find a screen"
+        placeholder="Search"
         ariaLabel="Find screens"
         clearLabel="Clear find query"
         name="screens-find"
@@ -621,12 +642,17 @@ export function ScreensView(props: ScreensViewProps) {
   const layoutSwitch = !props.phone && props.onChangeLayout && frameWidth >= SWITCH_MINIMUM_FRAME_WIDTH ? (
     <div className={`screens-layout-switch${frameWidth < SWITCH_LABELLED_FRAME_WIDTH ? " compact" : ""}`} role="group" aria-label="Screens layout"
       style={visibleFrame ? ({ "--screens-switch-right": `calc(100% - ${visibleFrame.x + visibleFrame.width}px)` } as CSSProperties) : undefined}>
-      {([["grid", "Grid", <LayoutGrid key="grid" aria-hidden="true" />], ["filmstrip", "Filmstrip", <GalleryHorizontal key="filmstrip" aria-hidden="true" />]] as const)
-        .map(([value, label, icon]) => (
-          <button key={value} type="button" aria-label={label} aria-pressed={(filmstrip ? "filmstrip" : "grid") === value}
-            onClick={() => props.onChangeLayout!(value)}>
-            {icon}<span aria-hidden="true">{label}</span>
-          </button>
+      {([
+        ["grid", "Grid", <LayoutGrid key="grid" aria-hidden="true" />, SHORTCUTS.screens.grid],
+        ["filmstrip", "Filmstrip", <GalleryHorizontal key="filmstrip" aria-hidden="true" />, SHORTCUTS.screens.filmstrip],
+      ] as const)
+        .map(([value, label, icon, shortcut]) => (
+          <Tooltip key={value} label={label} shortcut={formatShortcut(shortcut)} placement="bottom">
+            <button type="button" aria-label={label} aria-pressed={(filmstrip ? "filmstrip" : "grid") === value}
+              onClick={() => props.onChangeLayout!(value)}>
+              {icon}<span aria-hidden="true">{label}</span>
+            </button>
+          </Tooltip>
         ))}
     </div>
   ) : null;
@@ -697,12 +723,26 @@ export function ScreensView(props: ScreensViewProps) {
       ) : null}
 
       <div className="screens-body">
-        {props.phone ? null : (
+        {props.phone ? null : sideCollapsed ? (
+          <aside className="screens-side collapsed">
+            <button type="button" className="screens-side-toggle" aria-label="Show sidebar" title="Show sidebar"
+              onClick={() => setSideCollapsed(false)}>
+              <PanelLeftOpen aria-hidden="true" />
+            </button>
+          </aside>
+        ) : (
           <aside className="screens-side">
             <nav className="screens-tree" aria-label={tree.mode === "source" ? "Route files" : "Navigation"}>
-              {/* The find field heads the tree with fold-all beside it, so a report without changes has no empty row;
-                  Changed / All follows under it, the whole width, when there are changes. */}
-              <div className="screens-tree-head">{findSearch}{foldAll}</div>
+              {/* The find field heads the tree with fold-all and the sidebar's own fold beside it, so a report without
+                  changes has no empty row; Changed / All follows under it, the whole width, when there are changes. */}
+              <div className="screens-tree-head">
+                {findSearch}{foldAll}
+                {/* Folding the sidebar away clears its find, which would otherwise narrow the screens out of sight. */}
+                <button type="button" className="screens-side-toggle" aria-label="Hide sidebar" title="Hide sidebar"
+                  onClick={() => { setQuery(""); setSideCollapsed(true); }}>
+                  <PanelLeftClose aria-hidden="true" />
+                </button>
+              </div>
               {filterChips}
               {matches && order.length === 0
                 ? <p className="screens-find-empty" role="status">{noMatch}</p>

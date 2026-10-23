@@ -67,19 +67,32 @@
   border-radius: 9px;
   background: var(--element);
 }
-.screens-tree-fold-all {
+.screens-tree-fold-all,
+.screens-side-toggle {
   display: grid;
   width: 32px;
   height: 32px;
   flex: none;
-  margin-left: auto;
   place-items: center;
   border-radius: 8px;
   color: var(--secondary);
   background: transparent;
 }
-.screens-tree-fold-all:hover { color: var(--text); background: var(--panel-hover); }
-.screens-tree-fold-all > svg { width: 16px; height: 16px; }
+.screens-tree-fold-all { margin-left: auto; }
+.screens-tree-fold-all:hover,
+.screens-side-toggle:hover { color: var(--text); background: var(--panel-hover); }
+.screens-tree-fold-all > svg,
+.screens-side-toggle > svg { width: 16px; height: 16px; }
+/* Folded, the sidebar is only the button that opens it, on the tree's surface at the tree's top. */
+.screens-side.collapsed { width: auto; }
+.screens-side.collapsed > .screens-side-toggle {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--side-panel-surface);
+}
+.screens-side.collapsed > .screens-side-toggle:hover { background: var(--panel-hover); }
 .screens-tree > .screens-filter .screens-chip {
   height: 28px;
   flex: 1;
@@ -431,7 +444,7 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
   background: var(--side-panel-surface);
   box-shadow: var(--floating-chrome-shadow);
 }
-.screens-layout-switch > button {
+.screens-layout-switch button {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -443,8 +456,8 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
   font-weight: 500;
   transition: color 120ms ease, background 120ms ease;
 }
-.screens-layout-switch > button:hover { color: var(--text); background: var(--panel-hover); }
-.screens-layout-switch > button[aria-pressed="true"] { color: var(--text); background: var(--selected); }
-.screens-layout-switch > button > svg { width: 15px; height: 15px; flex: none; }
-.screens-layout-switch.compact > button { padding: 0 9px; }
-.screens-layout-switch.compact > button > span { display: none; }
+.screens-layout-switch button:hover { color: var(--text); background: var(--panel-hover); }
+.screens-layout-switch button[aria-pressed="true"] { color: var(--text); background: var(--selected); }
+.screens-layout-switch button > svg { width: 15px; height: 15px; flex: none; }
+.screens-layout-switch.compact button { padding: 0 9px; }
+.screens-layout-switch.compact button > span { display: none; }

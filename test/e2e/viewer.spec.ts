@@ -1409,7 +1409,7 @@ test("the Screens sidebar is headed by its find field with fold-all beside it, a
   const head = tree.locator(".screens-tree-head");
   const field = head.getByRole("searchbox", { name: "Find screens" });
   await expect(field).toBeVisible();
-  await expect(field).toHaveAttribute("placeholder", "Find a screen");
+  await expect(field).toHaveAttribute("placeholder", "Search");
   await expect(head.getByRole("button", { name: "Collapse all" })).toBeVisible();
   await expect(tree.locator(".screens-filter")).toHaveCount(0);
   // Nothing sits above the field.
@@ -1445,6 +1445,8 @@ test("Screens' filmstrip: switched from the corner switch, stepped with the arro
   const middle = strip.locator(".screens-strip-frame.focused");
   await expect(middle).toHaveAttribute("data-screen-id", ids[0]!);
   await expect(cells).toHaveCount(0);
+  // The sidebar is folded, and `/` opens it with the find field focused.
+  await expect(view.locator(".screens-tree")).toHaveCount(0);
 
   // In the find field, ↓ and ↑ step from the screen in the middle too; Esc then hands the keyboard back.
   await page.keyboard.press("/");
@@ -1531,6 +1533,7 @@ test("Screens' filmstrip keeps Changed across a layout switch, opens only from a
   await page.keyboard.press("Escape");
   await view.getByRole("button", { name: /^Changed/ }).click();
   await layouts.getByRole("button", { name: "Filmstrip" }).click();
+  await view.getByRole("button", { name: "Show sidebar" }).click();
   await expect(view.getByRole("button", { name: /^Changed/ })).toHaveAttribute("aria-pressed", "true");
   await expect(strip.locator(".screens-strip-frame.focused")).toHaveAttribute("data-screen-id", changed[0]!);
   // A click on the page around the strip keeps the screen in the middle.
@@ -1556,6 +1559,57 @@ test("Screens' filmstrip keeps Changed across a layout switch, opens only from a
   await chooseCanvasView(page, "Map");
   await chooseCanvasView(page, "Screens");
   await expect(page).toHaveURL(/[?&]layout=filmstrip/);
+});
+
+test("Screens' layouts switch with G and E, and the sidebar folds by its own buttons and on each switch to the filmstrip", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/screens");
+  const view = page.getByRole("main", { name: "Screens" });
+  const tree = view.locator(".screens-tree");
+  const strip = view.getByRole("region", { name: "Filmstrip" });
+  const show = view.getByRole("button", { name: "Show sidebar" });
+
+  // The grid opens with the sidebar; its head folds it away, and the button left in its place opens it again.
+  await expect(tree).toBeVisible();
+  await tree.getByRole("button", { name: "Hide sidebar" }).click();
+  await expect(tree).toHaveCount(0);
+  await show.click();
+  await expect(tree).toBeVisible();
+
+  // E opens the filmstrip, with the sidebar folded.
+  await page.keyboard.press("e");
+  await expect(page).toHaveURL(/[?&]layout=filmstrip/);
+  await expect(strip).toBeVisible();
+  await expect(tree).toHaveCount(0);
+  // G goes back to the grid, with the sidebar open, even though it was opened in the filmstrip.
+  await show.click();
+  await page.keyboard.press("g");
+  await expect(page).not.toHaveURL(/layout=/);
+  await expect(strip).toHaveCount(0);
+  await expect(tree).toBeVisible();
+  // Each switch to the filmstrip folds the sidebar again.
+  await page.keyboard.press("e");
+  await expect(strip).toBeVisible();
+  await expect(tree).toHaveCount(0);
+
+  // A find keeps the sidebar that shows it open on the switch to the filmstrip; folding the sidebar clears the find.
+  await page.keyboard.press("g");
+  const field = tree.getByRole("searchbox", { name: "Find screens" });
+  const firstTitle = (await view.locator(".screens-grid .screens-cell .screen-node-title").first().textContent())!;
+  await field.fill(firstTitle);
+  await field.blur();
+  await page.keyboard.press("e");
+  await expect(strip).toBeVisible();
+  await expect(tree).toBeVisible();
+  await expect(field).toHaveValue(firstTitle);
+  await tree.getByRole("button", { name: "Hide sidebar" }).click();
+  await show.click();
+  await expect(field).toHaveValue("");
+
+  // Elsewhere G and E do nothing.
+  await chooseCanvasView(page, "Map");
+  await page.keyboard.press("e");
+  await expect(page).not.toHaveURL(/\/screens/);
 });
 
 test("reuses the Map screenshot card in Screens, with the route under the screenshot at the card's left edge", async ({ page }) => {

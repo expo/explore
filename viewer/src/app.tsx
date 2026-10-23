@@ -1084,6 +1084,9 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
         setChangesOpen((open) => !open);
       } else if (matchesShortcut(event, SHORTCUTS.panel.right)) {
         toggleRightPanel();
+      } else if (matchesShortcut(event, SHORTCUTS.screens.grid) || matchesShortcut(event, SHORTCUTS.screens.filmstrip)) {
+        if (routeRef.current.canvas !== "screens" || phoneRef.current) return;
+        changeScreensLayout(matchesShortcut(event, SHORTCUTS.screens.grid) ? "grid" : "filmstrip");
       } else {
         const canvas = CANVAS_KEYS.find(([, shortcut]) => matchesShortcut(event, shortcut));
         if (!canvas) return;
