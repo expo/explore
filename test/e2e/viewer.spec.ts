@@ -1446,6 +1446,18 @@ test("Screens' filmstrip: switched from the corner switch, stepped with the arro
   await expect(middle).toHaveAttribute("data-screen-id", ids[0]!);
   await expect(cells).toHaveCount(0);
 
+  // In the find field, ↓ and ↑ step from the screen in the middle too; Esc then hands the keyboard back.
+  await page.keyboard.press("/");
+  const field = view.getByRole("searchbox", { name: "Find screens" });
+  await expect(field).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(middle).toHaveAttribute("data-screen-id", ids[1]!);
+  await page.keyboard.press("ArrowUp");
+  await expect(middle).toHaveAttribute("data-screen-id", ids[0]!);
+  await page.keyboard.press("Escape");
+  await expect(field).not.toBeFocused();
+  await expect(strip).toBeVisible();
+
   // → steps the middle frame through the screens in the grid's order.
   await page.keyboard.press("ArrowRight");
   await expect(middle).toHaveAttribute("data-screen-id", ids[1]!);

@@ -89,9 +89,12 @@ function writeFolded(key: string, folded: ReadonlySet<string>): void {
   } catch { /* Folds last for this visit only. */ }
 }
 
-/** The canvas widths below which the layout switch drops its labels, and below which it is hidden. */
+/**
+ * The canvas widths below which the layout switch drops its labels, and below which it is hidden: the pill at the top
+ * left grows to 420px (`--left-collapsed-pill-width`), and the switch keeps clear of it, labelled or not.
+ */
 const SWITCH_LABELLED_FRAME_WIDTH = 640;
-const SWITCH_MINIMUM_FRAME_WIDTH = 240;
+const SWITCH_MINIMUM_FRAME_WIDTH = 540;
 
 /** How soon a second click follows the first to make a double-click that opens a card in the filmstrip. */
 const DOUBLE_CLICK_MS = 500;
@@ -533,13 +536,15 @@ export function ScreensView(props: ScreensViewProps) {
       if (event.target instanceof Element && event.target.matches(".screens-find input")) {
         if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.code === "ArrowLeft" || event.code === "ArrowRight") return;
         const ids = orderRef.current;
-        const picked = selectedRef.current && ids.includes(selectedRef.current) ? selectedRef.current : undefined;
+        // In the filmstrip they step from the screen in the middle, as the page's arrows do.
+        const picked = stripFocusRef.current ?? (selectedRef.current && ids.includes(selectedRef.current) ? selectedRef.current : undefined);
         const id = !arrow ? picked ?? ids[0] : next(event.code === "ArrowDown" ? "ArrowRight" : "ArrowLeft", picked);
         if (!id) return;
         event.preventDefault();
         if (!arrow) { openRef.current(id); return; }
         pickRef.current(id);
-        requestAnimationFrame(() => document.getElementById(cardId(id))?.scrollIntoView({ block: "nearest" }));
+        // The filmstrip brings the screen to its middle itself; scrolling its frame would move the page under it.
+        if (stripFocusRef.current === undefined) requestAnimationFrame(() => document.getElementById(cardId(id))?.scrollIntoView({ block: "nearest" }));
         return;
       }
       // The browser's own repeat of a held arrow would scroll the page under the hold.
@@ -611,7 +616,7 @@ export function ScreensView(props: ScreensViewProps) {
   // Grid or Filmstrip, in words, at the top right where the Map keeps its camera: outside the page, so it stays put
   // as the grid scrolls, and clear of the Inspector.
   // A canvas narrowed by the Inspector keeps the switch's icons only, clear of the pill; one too narrow for even those
-  // hides it, as the Map's camera hides (camera-controls.tsx). Esc and a double-click still switch.
+  // hides it, as the Map's camera hides (camera-controls.tsx). Esc, a double-click and closing the Inspector remain.
   const frameWidth = visibleFrame?.width ?? Infinity;
   const layoutSwitch = !props.phone && props.onChangeLayout && frameWidth >= SWITCH_MINIMUM_FRAME_WIDTH ? (
     <div className={`screens-layout-switch${frameWidth < SWITCH_LABELLED_FRAME_WIDTH ? " compact" : ""}`} role="group" aria-label="Screens layout"
