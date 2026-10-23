@@ -1501,12 +1501,23 @@ test("Screens' filmstrip: switched from the corner switch, stepped with the arro
   const centre = await middle.evaluate(element => { const box = element.getBoundingClientRect(); return box.left + box.width / 2; });
   expect(Math.abs(centre - page.viewportSize()!.width / 2)).toBeLessThan(2);
 
-  // A sideways trackpad swipe, or a wheel notch, steps the strip; a short twitch does not.
+  // A sideways trackpad swipe moves the strip with it, and a short one springs back when it ends; a wheel notch steps.
   const lastAt = ids.indexOf(last);
   await middle.hover();
-  await page.mouse.wheel(40, 0);
-  await page.waitForTimeout(300);
+  // Measured in the page two frames after the event: the swipe ends, and the strip settles, 140 ms after the last one.
+  const moved = await middle.evaluate(async element => {
+    element.dispatchEvent(new WheelEvent("wheel", { deltaX: -40, bubbles: true, cancelable: true }));
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const box = element.getBoundingClientRect();
+    return { centre: box.left + box.width / 2, swiping: element.parentElement!.classList.contains("swiping") };
+  });
+  expect(moved.swiping).toBe(true);
+  expect(moved.centre - centre).toBeGreaterThan(20);
+  expect(moved.centre - centre).toBeLessThan(60);
+  await expect(strip.locator(".screens-strip-stage")).not.toHaveClass(/swiping/);
   await expect(middle).toHaveAttribute("data-screen-id", last);
+  await expect.poll(() => middle.evaluate(element => { const box = element.getBoundingClientRect(); return Math.round(box.left + box.width / 2); }))
+    .toBe(Math.round(centre));
   await page.mouse.wheel(0, -100);
   await expect(middle).toHaveAttribute("data-screen-id", ids[lastAt - 1]!);
   await page.waitForTimeout(300);

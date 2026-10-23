@@ -439,6 +439,8 @@ html:has(.screens-page.filmstrip) { overscroll-behavior-x: none; }
   transition: transform 300ms cubic-bezier(0.2, 0.75, 0.2, 1), width 300ms cubic-bezier(0.2, 0.75, 0.2, 1), height 300ms cubic-bezier(0.2, 0.75, 0.2, 1), opacity 300ms ease;
   will-change: transform;
 }
+/* During a swipe the frames follow the gesture directly; they ease only when it lets go and the strip settles. */
+.screens-strip-stage.swiping .screens-strip-frame { transition: none; }
 @media (prefers-reduced-motion: reduce) { .screens-strip-frame { transition: none; } }
 .screens-strip-frame.dimmed:not(.focused) { opacity: calc(var(--dim-out) * 0.6) !important; }
 .screens-strip-target {
