@@ -257,6 +257,20 @@ test("semantic Map scope is discarded by non-Map canvases", () => {
   }
 });
 
+test("Screens' filmstrip layout round-trips, and other canvases and unknown layouts drop it", () => {
+  const route = { ...base, canvas: "screens", screen: "accessibility", layout: "filmstrip" };
+  assert.equal(nav.formatRoute(route, ctx), "/screens?screen=accessibility&layout=filmstrip");
+  assert.deepEqual(parse("/screens?screen=accessibility&layout=filmstrip"), route);
+  // The grid is the default, so it is never written.
+  assert.equal(nav.formatRoute({ ...base, canvas: "screens", layout: "grid" }, ctx), "/screens");
+  assert.deepEqual(parse("/screens?layout=grid"), { ...base, canvas: "screens" });
+  assert.deepEqual(parse("/screens?layout=nope"), { ...base, canvas: "screens" });
+  for (const canvas of ["map", "compare"]) {
+    assert.equal(nav.formatRoute({ ...base, canvas, layout: "filmstrip" }, ctx), `/${canvas}`);
+    assert.deepEqual(parse(`/${canvas}?layout=filmstrip`), { ...base, canvas });
+  }
+});
+
 test("ids with reserved characters survive the query", () => {
   const route = { ...base, screen: "removed:a+b%c" };
   assert.deepEqual(parse(nav.formatRoute(route, ctx)), route);
@@ -274,6 +288,7 @@ test("another target's report opens at the same canvas and route, keeping only w
     "#/compare/settings/profile?inspect=diff&dir=in&focus=modified,added");
   assert.equal(nav.placeForAnotherTarget("#/map/home"), "#/map/home");
   assert.equal(nav.placeForAnotherTarget("#/screens?screen=s-3"), "#/screens");
+  assert.equal(nav.placeForAnotherTarget("#/screens?screen=s-3&layout=filmstrip"), "#/screens?layout=filmstrip");
   // No place, or a hash from before routes: the other report opens where a link to it would.
   assert.equal(nav.placeForAnotherTarget(""), "");
   assert.equal(nav.placeForAnotherTarget("#map"), "");

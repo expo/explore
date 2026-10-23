@@ -47,8 +47,10 @@ import {
   type MapDirection,
   type Route,
   type RouteContext,
+  type ScreensLayout,
   type ThemePreference,
 } from "./utils/navigation";
+import { readScreensLayout, writeScreensLayout } from "./utils/screens-layout";
 import {
   CANVAS_NUMBER_KEYS,
   matchesShortcut,
@@ -928,9 +930,17 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
       } : {
         canvas,
         ...clearedCanvasSelection,
+        // Screens opens in the layout the reader last left it in for this report.
+        ...(canvas === "screens" && !phoneRef.current ? { layout: readScreensLayout(revisionRef.current?.runId) } : {}),
       },
     );
   }, [applyCanvasPanelDefaults, navigate]);
+  const changeScreensLayout = useCallback((layout: ScreensLayout) => {
+    navigate({ layout: layout === "filmstrip" ? "filmstrip" : undefined });
+  }, [navigate]);
+  useEffect(() => {
+    if (route.canvas === "screens" && !phone) writeScreensLayout(revisionRef.current?.runId, route.layout ?? "grid");
+  }, [phone, route.canvas, route.layout]);
 
   // The logo returns to the Map root, the equivalent of the "/map" URL.
   const openMapHome = useCallback(() => {
@@ -1010,6 +1020,13 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
       if (event.key === "Escape") {
         if (routeRef.current.canvas === "compare") return;
         if (rightCollapsedRef.current) {
+          // The filmstrip is a screen opened from the grid: Esc steps back out to the grid, keeping the selection.
+          if (routeRef.current.canvas === "screens" && routeRef.current.layout === "filmstrip" && !phoneRef.current) {
+            setTimeout(() => {
+              if (!event.defaultPrevented) changeScreensLayout("grid");
+            }, 0);
+            return;
+          }
           if (!resolveScreenId(routeRef.current, contextRef.current)) return;
           setTimeout(() => {
             if (!event.defaultPrevented) clearSelectedScreen();
@@ -1067,7 +1084,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [chooseAppearance, clearSelectedScreen, flipTheme, navigate, searchOpen, selectCanvas, toggleFullscreen, toggleRightPanel]);
+  }, [changeScreensLayout, chooseAppearance, clearSelectedScreen, flipTheme, navigate, searchOpen, selectCanvas, toggleFullscreen, toggleRightPanel]);
 
   // A side-panel row or a deep link is a "go to": the camera fits that screen and the step is
   // kept. Screens inventory clicks only select in place; Map clicks also focus the chosen screen. Repeating a selected target refits it without adding history.
@@ -1656,6 +1673,8 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
               onSelectScreen={selectScreenOnCanvas}
               onPickScreen={pickScreenInPlace}
               onClearSelection={clearSelectedScreen}
+              layout={route.layout ?? "grid"}
+              onChangeLayout={changeScreensLayout}
             />
           ) : null}
           {comparing && phone && diff && selectedScreenId && comparePicker ? (
@@ -1727,6 +1746,8 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
             onOpenShortcuts={() => setShortcutsOpen(true)}
           />}
           onSelectCanvas={selectCanvas}
+          screensLayout={route.layout ?? "grid"}
+          onChangeScreensLayout={changeScreensLayout}
           onOpenSearch={() => setSearchOpen(true)}
         />}
       </CanvasVisibleFrameProvider>

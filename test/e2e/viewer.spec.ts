@@ -1402,40 +1402,117 @@ test("→ steps the Screens cards right after Screens is opened from the toolbar
   await expect(grid.locator(`.screens-cell[data-screen-id="${expected}"] .screen-screenshot-card`)).toHaveClass(/selected/);
 });
 
+test("the Screens sidebar's title shares a row with Find and fold-all, and Changed / All sits under it only when there are changes", async ({ page }) => {
+  // The fixture server's own report has no baseline, so no changes.
+  await page.goto("/screens");
+  const tree = page.getByRole("main", { name: "Screens" }).locator(".screens-tree");
+  const head = tree.locator(".screens-tree-head");
+  await expect(head.getByRole("heading", { name: "Explored app" })).toBeVisible();
+  await expect(head.getByRole("button", { name: "Find a screen" })).toBeVisible();
+  await expect(head.getByRole("button", { name: "Collapse all" })).toBeVisible();
+  await expect(tree.locator(".screens-filter")).toHaveCount(0);
+
+  await serveWorkspace(page);
+  await page.goto("/screens");
+  const filter = tree.locator(".screens-filter");
+  await expect(filter).toBeVisible();
+  await expect(head.locator("h2")).toBeVisible();
+  // Under the head, as wide as the tree's rows.
+  const headBox = (await head.boundingBox())!;
+  const filterBox = (await filter.boundingBox())!;
+  expect(filterBox.y).toBeGreaterThanOrEqual(headBox.y + headBox.height);
+  expect(Math.abs(filterBox.width - headBox.width)).toBeLessThan(2);
+});
+
+test("Screens' filmstrip: switched from the Screens tab, stepped with the arrows, opened by a double-click, left with Esc, and remembered", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/screens");
+  const view = page.getByRole("main", { name: "Screens" });
+  await view.getByRole("button", { name: /^All/ }).click();
+  const cells = view.locator(".screens-grid .screens-cell");
+  const ids = await cells.evaluateAll(elements => elements.map(element => element.getAttribute("data-screen-id")!));
+  expect(ids.length).toBeGreaterThan(2);
+  const layouts = page.getByRole("group", { name: "Screens layout" });
+  await expect(layouts.getByRole("button", { name: "Grid" })).toHaveAttribute("aria-pressed", "true");
+
+  // The switch in the Screens tab opens the filmstrip at the first screen, with nothing selected yet.
+  await layouts.getByRole("button", { name: "Filmstrip" }).click();
+  await expect(page).toHaveURL(/[?&]layout=filmstrip/);
+  const strip = view.getByRole("region", { name: "Filmstrip" });
+  const middle = strip.locator(".screens-strip-frame.focused");
+  await expect(middle).toHaveAttribute("data-screen-id", ids[0]!);
+  await expect(cells).toHaveCount(0);
+
+  // → steps the middle frame through the screens in the grid's order; the step button does the same.
+  await page.keyboard.press("ArrowRight");
+  await expect(middle).toHaveAttribute("data-screen-id", ids[1]!);
+  await expect(middle.locator(".screens-strip-target")).toBeFocused();
+  await strip.getByRole("button", { name: "Next screen" }).click();
+  await expect(middle).toHaveAttribute("data-screen-id", ids[2]!);
+  await page.keyboard.press("ArrowLeft");
+  await expect(middle).toHaveAttribute("data-screen-id", ids[1]!);
+  // A neighbour comes to the middle when clicked, without opening the Inspector.
+  const inspector = page.getByRole("complementary", { name: "Inspector panel" });
+  await strip.locator(`.screens-strip-frame[data-screen-id="${ids[2]}"] .screens-strip-target`).click();
+  await expect(middle).toHaveAttribute("data-screen-id", ids[2]!);
+  await expect(inspector).toBeHidden();
+
+  // Clicking Screens while it is open steps to the other layout, keeping the selection.
+  await page.getByRole("group", { name: "Canvas view" }).getByRole("button", { name: "Screens", exact: true }).click();
+  await expect(page).not.toHaveURL(/layout=/);
+  await expect(view.locator(`.screens-cell[data-screen-id="${ids[2]}"] .screen-screenshot-card`)).toHaveClass(/selected/);
+
+  // A double-click on a card opens it in the filmstrip; the first click has already opened the Inspector.
+  await view.locator(`.screens-cell[data-screen-id="${ids[0]}"] .screen-screenshot-target`).dblclick();
+  await expect(middle).toHaveAttribute("data-screen-id", ids[0]!);
+  await expect(inspector).toBeVisible();
+  // Esc closes the Inspector first, then steps back out to the grid with the screen still picked.
+  await page.keyboard.press("Escape");
+  await expect(inspector).toBeHidden();
+  await expect(strip).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(strip).toHaveCount(0);
+  await expect(view.locator(`.screens-cell[data-screen-id="${ids[0]}"] .screen-screenshot-card`)).toHaveClass(/selected/);
+
+  // The layout is remembered for the report: Screens opens in the filmstrip again after a visit to the Map.
+  await layouts.getByRole("button", { name: "Filmstrip" }).click();
+  await chooseCanvasView(page, "Map");
+  await chooseCanvasView(page, "Screens");
+  await expect(page).toHaveURL(/[?&]layout=filmstrip/);
+  await expect(page.getByRole("region", { name: "Filmstrip" })).toBeVisible();
+});
+
 test("reuses the Map screenshot card in Screens, with the route under the screenshot at the card's left edge", async ({ page }) => {
   await serveWorkspace(page);
   await page.goto("/screens");
 
-  for (const view of ["Screens"] as const) {
-    await chooseCanvasView(page, view);
-    const card = page.locator(".screens-page .screens-cell .screen-screenshot-card").first();
-    await expect(card).toBeVisible();
-    await expect(card.locator(".screen-node-title")).toHaveText(/^\//);
-    await expect(card.locator(".screen-node-title")).toHaveCSS("text-align", "left");
-    await expect(card.locator(".screen-node-image")).toBeVisible();
-    const layout = await card.evaluate((element) => {
-      const heading = element.querySelector<HTMLElement>(".screen-node-heading")!;
-      const title = element.querySelector<HTMLElement>(".screen-node-title")!;
-      const image = element.querySelector<HTMLElement>(".screen-node-image")!;
-      const headingBounds = heading.getBoundingClientRect();
-      const titleBounds = title.getBoundingClientRect();
-      return {
-        flexDirection: getComputedStyle(element).flexDirection,
-        headingBeforeImage: Boolean(
-          heading.compareDocumentPosition(image) & Node.DOCUMENT_POSITION_FOLLOWING
-        ),
-        headingTop: heading.getBoundingClientRect().top,
-        imageTop: image.getBoundingClientRect().top,
-        titleLeftDelta: Math.abs(titleBounds.left - headingBounds.left - parseFloat(getComputedStyle(heading).paddingLeft)),
-      };
-    });
-    expect(layout.flexDirection).toBe("column");
-    // The card is the Map's, so the heading still comes first in the markup; Screens shows it as the card's footer.
-    expect(layout.headingBeforeImage).toBe(true);
-    expect(layout.headingTop).toBeGreaterThan(layout.imageTop);
-    expect(layout.titleLeftDelta).toBeLessThan(1);
+  const card = page.locator(".screens-page .screens-cell .screen-screenshot-card").first();
+  await expect(card).toBeVisible();
+  await expect(card.locator(".screen-node-title")).toHaveText(/^\//);
+  await expect(card.locator(".screen-node-title")).toHaveCSS("text-align", "left");
+  await expect(card.locator(".screen-node-image")).toBeVisible();
+  const layout = await card.evaluate((element) => {
+    const heading = element.querySelector<HTMLElement>(".screen-node-heading")!;
+    const title = element.querySelector<HTMLElement>(".screen-node-title")!;
+    const image = element.querySelector<HTMLElement>(".screen-node-image")!;
+    const headingBounds = heading.getBoundingClientRect();
+    const titleBounds = title.getBoundingClientRect();
+    return {
+      flexDirection: getComputedStyle(element).flexDirection,
+      headingBeforeImage: Boolean(
+        heading.compareDocumentPosition(image) & Node.DOCUMENT_POSITION_FOLLOWING
+      ),
+      headingTop: heading.getBoundingClientRect().top,
+      imageTop: image.getBoundingClientRect().top,
+      titleLeftDelta: Math.abs(titleBounds.left - headingBounds.left - parseFloat(getComputedStyle(heading).paddingLeft)),
+    };
+  });
+  expect(layout.flexDirection).toBe("column");
+  // The card is the Map's, so the heading still comes first in the markup; Screens shows it as the card's footer.
+  expect(layout.headingBeforeImage).toBe(true);
+  expect(layout.headingTop).toBeGreaterThan(layout.imageTop);
+  expect(layout.titleLeftDelta).toBeLessThan(1);
 
-  }
 });
 
 test("opens the Inspector when a canvas screenshot is selected", async ({ page }) => {
@@ -4551,9 +4628,9 @@ test("desktop Compare: one command bar with the modes in it, even gaps to both b
   expect(overlaps).toEqual({ spills: [], crossings: 0 });
   const toolbar = page.getByRole("toolbar", { name: "Canvas tools" });
   await expect(toolbar.getByRole("button", { name: /changed screen/ })).toHaveCount(0);
-  // The bottom toolbar keeps the width it has on every other section: Compare's controls are in its own bar.
+  // The bottom toolbar keeps the width it has on the Map: Compare's controls are in its own bar.
   const toolbarWidth = (await toolbar.boundingBox())!.width;
-  await page.goto("/screens");
+  await page.goto("/map");
   await expect.poll(async () => Math.round(Math.abs((await toolbar.boundingBox())!.width - toolbarWidth))).toBeLessThanOrEqual(1);
   await page.goBack();
   await expect(bar).toBeVisible();
@@ -5653,13 +5730,13 @@ test("/ finds screens on the Screens page: the tree and the grid narrow to the q
     .find(segment => segment && titles.filter(title => title.includes(segment)).length < titles.length)!;
   expect(query).toBeTruthy();
 
-  // Opening the field does not move the tree under it: the head keeps one height in every state.
-  const heading = grid.locator(".screens-tree h2");
-  const headingTop = (await heading.boundingBox())!.y;
+  // Opening the field does not move the tree under it: the field takes the title's row, which keeps one height.
+  const firstRow = treeRows.first();
+  const rowTop = (await firstRow.boundingBox())!.y;
   await page.keyboard.press("/");
   const field = grid.getByRole("searchbox", { name: "Find screens" });
   await expect(field).toBeFocused();
-  expect((await heading.boundingBox())!.y).toBe(headingTop);
+  expect((await firstRow.boundingBox())!.y).toBe(rowTop);
   await field.fill(query);
   const matching = titles.filter(title => title.toLowerCase().includes(query.toLowerCase()));
   await expect(cells).toHaveCount(matching.length);

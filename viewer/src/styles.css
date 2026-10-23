@@ -1053,6 +1053,44 @@ code {
 .toolbar-button.active { color: var(--text); background: var(--element); }
 .toolbar-button:active { transform: scale(0.98); }
 .toolbar-button:disabled { opacity: 0.35; pointer-events: none; }
+/* Open, Screens is one pill holding its name and its layout switch, which unfolds on the same 0fr → 1fr track as the
+   sections' names. */
+.toolbar-screens { display: flex; align-items: center; border-radius: 8px; transition: background 120ms ease; }
+.toolbar-screens.open { background: var(--element); }
+.toolbar-screens .toolbar-button.active { background: transparent; }
+.toolbar-layout-reveal {
+  display: grid;
+  grid-template-columns: 0fr;
+  opacity: 0;
+  transition: grid-template-columns var(--toolbar-motion) var(--toolbar-easing), opacity 120ms ease;
+}
+.toolbar-screens.open .toolbar-layout-reveal { grid-template-columns: 1fr; opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .toolbar-layout-reveal { transition: opacity 120ms ease-out; } }
+.toolbar-layout {
+  display: flex;
+  min-width: 0;
+  gap: 2px;
+  overflow: hidden;
+  margin-right: 4px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--panel-hover);
+  transition: margin var(--toolbar-motion) var(--toolbar-easing), padding var(--toolbar-motion) var(--toolbar-easing);
+}
+.toolbar-screens:not(.open) .toolbar-layout { margin-right: 0; padding: 0; }
+.toolbar-layout-button {
+  display: grid;
+  width: 28px;
+  height: 26px;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--tertiary);
+  background: transparent;
+  transition: color 120ms ease, background 120ms ease;
+}
+.toolbar-layout-button:hover { color: var(--secondary); }
+.toolbar-layout-button[aria-pressed="true"] { color: var(--text); background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / 0.1); }
+.toolbar-layout-button > svg { width: 15px; height: 15px; }
 /* Section buttons size to their content and every section shows its name (.labelled). The name
    sits on a 0fr → 1fr grid track, so a narrow window can fold it away without a guessed width. */
 .toolbar-button:has(> .toolbar-view-label) { width: auto; min-width: var(--icon-btn-lg); padding: 0 8px; }

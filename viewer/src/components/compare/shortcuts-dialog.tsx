@@ -112,7 +112,7 @@ export function shortcutGroups(context: ShortcutContext): Group[][] {
     title: "Screens",
     rows: [
       { label: "Move through the screens", keys: ["←", "→", "↑", "↓"] },
-      { label: "Close the inspector, then deselect", keys: ["Esc"] },
+      { label: "Close the inspector, then leave the filmstrip or deselect", keys: ["Esc"] },
     ],
   };
   const here: Group[] = context.canvas === "compare"

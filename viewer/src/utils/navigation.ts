@@ -14,6 +14,8 @@ export type FocusStatus = "added" | "modified" | "accessibility-only" | "removed
 export type InspectView = "session" | "diff";
 /** Which way the inspector's transition list reads: into the screen, or out of it. */
 export type TransitionDirection = "in" | "out";
+/** How Screens lays out its screens: every card in a grid, or one at a time in a filmstrip. */
+export type ScreensLayout = "grid" | "filmstrip";
 
 export type Route = {
   canvas: CanvasView;
@@ -35,6 +37,8 @@ export type Route = {
   focus: FocusStatus[];
   /** Progressive Map groups the reader explicitly expanded, in stable URL order. */
   expandedGroups: string[];
+  /** Screens' layout; unset is the grid. Only Screens has one. */
+  layout?: ScreensLayout | undefined;
 };
 
 /** What the grammar needs from the app: which baselines exist, and which screens record a route. */
@@ -218,11 +222,12 @@ export function canonicalRoute(route: Route, ctx: RouteContext): Route {
     baseline,
     focus: compared ? FOCUSES.filter((status) => route.focus.includes(status)) : [],
     expandedGroups,
+    ...(canvas === "screens" && route.layout === "filmstrip" ? { layout: "filmstrip" as const } : {}),
   };
 }
 
 /** The query parameters that mean the same in another target's report of the run. */
-const PLACE_PARAMS = ["inspect", "dir", "focus"] as const;
+const PLACE_PARAMS = ["inspect", "dir", "focus", "layout"] as const;
 
 /**
  * Where the reader is, as another target's report reads it: the canvas and the screen's route (which resolves to that
@@ -291,6 +296,7 @@ export function parseLocation(location: LocationLike, ctx: RouteContext): Route 
     baseline: baseline === null ? ctx.defaultBaseline : baseline === "none" ? "" : baseline,
     focus,
     expandedGroups: legacyGraph ? [] : params.getAll("expand"),
+    ...(params.get("layout") === "filmstrip" ? { layout: "filmstrip" as const } : {}),
   }, ctx);
 }
 
@@ -319,6 +325,7 @@ export function formatRoute(route: Route, ctx: RouteContext): string {
     params.set("baseline", next.baseline === "" ? "none" : next.baseline);
   }
   if (next.focus.length > 0) params.set("focus", next.focus.join(","));
+  if (next.layout) params.set("layout", next.layout);
 
   const search = params.toString().replace(/%2C/gi, ",");
   return `/${next.canvas}${suffix}${search ? `?${search}` : ""}`;

@@ -1,4 +1,4 @@
-import { GitCompareArrows, LayoutGrid, Map, Search } from "lucide-react";
+import { GalleryHorizontal, GitCompareArrows, LayoutGrid, Map, Search } from "lucide-react";
 import { type CSSProperties, useLayoutEffect, useState } from "react";
 import { Tooltip } from "../shared/tooltip";
 import { useCanvasVisibleFrame } from "./visible-frame-provider";
@@ -9,6 +9,7 @@ import {
   CANVAS_DESCRIPTIONS,
   CANVAS_LABELS,
   type CanvasView,
+  type ScreensLayout,
 } from "../../utils/navigation";
 import { CANVAS_VIEW_ORDER } from "../../utils/canvas-view-transition";
 
@@ -26,6 +27,9 @@ type CanvasToolbarProps = {
   /** Page-wide actions beside Search (Hand off to AI). */
   actions?: React.ReactNode;
   onSelectCanvas: (canvas: CanvasView) => void;
+  /** Screens' layout, switched from its own section while Screens is open. */
+  screensLayout?: ScreensLayout;
+  onChangeScreensLayout?: (layout: ScreensLayout) => void;
   onOpenSearch: () => void;
   /** The bar's last button: the "More" menu with theme, full screen and keyboard shortcuts. */
   more: React.ReactNode;
@@ -108,7 +112,11 @@ export function CanvasToolbar(props: CanvasToolbarProps) {
           const active = props.canvas === id;
           // Every section is named, so the bar reads as the app's sections, not a row of icons.
           const labelled = true;
-          return (
+          // Open, Screens carries its layout switch, and a click on its name steps to the other layout.
+          const switchable = id === "screens" && props.onChangeScreensLayout ? props.onChangeScreensLayout : undefined;
+          const layouts = active ? switchable : undefined;
+          const layout = props.screensLayout ?? "grid";
+          const button = (
             <Tooltip
               key={id}
               label={CANVAS_LABELS[id]}
@@ -121,12 +129,32 @@ export function CanvasToolbar(props: CanvasToolbarProps) {
                 className={`toolbar-button${active ? " active" : ""}${labelled ? " labelled" : ""}`}
                 aria-label={CANVAS_LABELS[id]}
                 aria-pressed={active}
-                onClick={() => props.onSelectCanvas(id)}>
+                onClick={() => (layouts ? layouts(layout === "grid" ? "filmstrip" : "grid") : props.onSelectCanvas(id))}>
                 {VIEW_ICONS[id]}
                 <span className="toolbar-view-label" aria-hidden="true"><span>{CANVAS_LABELS[id]}</span></span>
                 {CANVAS_NUMBER_KEYS ? <KeyHint shortcut={SHORTCUTS.canvasByNumber[id]} /> : null}
               </button>
             </Tooltip>
+          );
+          if (!switchable) return button;
+          // The section keeps one shape whether or not it is open, so its button is not remounted and its name
+          // reveals as the others' do; the switch folds away (and out of reach) while Screens is closed.
+          return (
+            <div key={id} className={`toolbar-screens${layouts ? " open" : ""}`}>
+              {button}
+              <div className="toolbar-layout-reveal" inert={!layouts} aria-hidden={layouts ? undefined : true}>
+                <div className="toolbar-layout" role="group" aria-label="Screens layout">
+                  {([["grid", "Grid", <LayoutGrid key="grid" />], ["filmstrip", "Filmstrip", <GalleryHorizontal key="filmstrip" />]] as const).map(([value, label, icon]) => (
+                    <Tooltip key={value} label={label} placement="top" disabled={layout === value}>
+                      <button type="button" className="toolbar-layout-button" aria-label={label} aria-pressed={layout === value}
+                        onClick={() => switchable(value)}>
+                        {icon}
+                      </button>
+                    </Tooltip>
+                  ))}
+                </div>
+              </div>
+            </div>
           );
         })}
       </div>
