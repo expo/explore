@@ -1493,8 +1493,40 @@ test("Screens' filmstrip: switched from the corner switch, stepped with the arro
   await page.mouse.down({ clickCount: 2 });
   await page.mouse.up({ clickCount: 2 });
   await expect(middle).toHaveAttribute("data-screen-id", last);
+  // In the filmstrip the Inspector opens only from a click on the middle screen, so the one the first click opened closes.
+  await expect(inspector).toBeHidden();
+
+  // With the sidebar folded, the middle screen is at the centre of the canvas.
+  await expect(view.getByRole("button", { name: "Show sidebar" })).toBeVisible();
+  const centre = await middle.evaluate(element => { const box = element.getBoundingClientRect(); return box.left + box.width / 2; });
+  expect(Math.abs(centre - page.viewportSize()!.width / 2)).toBeLessThan(2);
+
+  // A sideways trackpad swipe moves the strip with it, and a short one springs back when it ends; a wheel notch steps.
+  const lastAt = ids.indexOf(last);
+  await middle.hover();
+  // Measured in the page two frames after the event: the swipe ends, and the strip settles, 100 ms after the last one.
+  const moved = await middle.evaluate(async element => {
+    element.dispatchEvent(new WheelEvent("wheel", { deltaX: -40, bubbles: true, cancelable: true }));
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const box = element.getBoundingClientRect();
+    return { centre: box.left + box.width / 2, swiping: element.parentElement!.classList.contains("swiping") };
+  });
+  expect(moved.swiping).toBe(true);
+  expect(moved.centre - centre).toBeGreaterThan(20);
+  expect(moved.centre - centre).toBeLessThan(60);
+  await expect(strip.locator(".screens-strip-stage")).not.toHaveClass(/swiping/);
+  await expect(middle).toHaveAttribute("data-screen-id", last);
+  await expect.poll(() => middle.evaluate(element => { const box = element.getBoundingClientRect(); return Math.round(box.left + box.width / 2); }))
+    .toBe(Math.round(centre));
+  await page.mouse.wheel(0, -100);
+  await expect(middle).toHaveAttribute("data-screen-id", ids[lastAt - 1]!);
+  await page.waitForTimeout(300);
+  await page.mouse.wheel(100, 0);
+  await expect(middle).toHaveAttribute("data-screen-id", last);
+
+  // A click on the middle screen opens the Inspector; Esc closes it first, then steps back out to the grid.
+  await middle.locator(".screens-strip-target").click();
   await expect(inspector).toBeVisible();
-  // Esc closes the Inspector first, then steps back out to the grid with the screen still picked.
   await page.keyboard.press("Escape");
   await expect(inspector).toBeHidden();
   await expect(strip).toBeVisible();
@@ -1579,6 +1611,63 @@ test("Screens' filmstrip keeps Changed across a layout switch, opens only from a
   await chooseCanvasView(page, "Map");
   await chooseCanvasView(page, "Screens");
   await expect(page).toHaveURL(/[?&]layout=filmstrip/);
+});
+
+test("Screens' filmstrip gestures: a short flick lands where it carries the strip, and a step made during a swipe is not undone by it", async ({ page }) => {
+  await serveWorkspace(page);
+  await page.goto("/screens");
+  const view = page.getByRole("main", { name: "Screens" });
+  await view.getByRole("button", { name: /^All/ }).click();
+  const ids = await view.locator(".screens-grid .screens-cell").evaluateAll(elements => elements.map(element => element.getAttribute("data-screen-id")!));
+  await page.getByRole("group", { name: "Screens layout" }).getByRole("button", { name: "Filmstrip" }).click();
+  const strip = view.getByRole("region", { name: "Filmstrip" });
+  const middle = strip.locator(".screens-strip-frame.focused");
+  const stage = strip.locator(".screens-strip-stage");
+  await expect(middle).toHaveAttribute("data-screen-id", ids[0]!);
+  const historyLength = await page.evaluate(() => history.length);
+
+  // A finger drags a quarter of a screen and lifts while still moving: the flick carries the strip past halfway, so it
+  // lands on the next screen though the finger never got there.
+  await stage.evaluate(async element => {
+    const box = element.getBoundingClientRect();
+    const y = box.top + box.height / 2, x = box.left + box.width * 0.6;
+    const pitch = (() => {
+      const [a, b] = [...element.querySelectorAll(".screens-strip-frame")].map(frame => { const r = frame.getBoundingClientRect(); return r.left + r.width / 2; });
+      return Math.abs(b! - a!);
+    })();
+    const fire = (type: string, at: number) => element.dispatchEvent(new PointerEvent(type, { pointerId: 9, pointerType: "touch", isPrimary: true,
+      clientX: at, clientY: y, bubbles: true, cancelable: true }));
+    fire("pointerdown", x);
+    const step = pitch / 16;
+    for (let n = 1; n <= 4; n++) { fire("pointermove", x - n * step); await new Promise(resolve => setTimeout(resolve, 16)); }
+    fire("pointerup", x - 4 * step);
+  });
+  await expect(middle).toHaveAttribute("data-screen-id", ids[1]!);
+  await expect(stage).not.toHaveClass(/swiping/);
+  // However many screens a swipe passes, it is one step back.
+  expect(await page.evaluate(() => history.length)).toBe(historyLength + 1);
+
+  // A short wheel swipe whose momentum is still coming in when ← steps back: the arrow's screen stays in the middle,
+  // neither settled over by the swipe nor dragged off by its momentum.
+  await middle.hover();
+  await page.evaluate(() => {
+    const stage = document.querySelector(".screens-strip-stage")!;
+    stage.dispatchEvent(new WheelEvent("wheel", { deltaX: 100, bubbles: true, cancelable: true }));
+    let left = 30;
+    const momentum = setInterval(() => {
+      stage.dispatchEvent(new WheelEvent("wheel", { deltaX: 1, bubbles: true, cancelable: true }));
+      if (--left === 0) clearInterval(momentum);
+    }, 16);
+  });
+  await page.keyboard.press("ArrowLeft");
+  await expect(middle).toHaveAttribute("data-screen-id", ids[0]!);
+  await page.waitForTimeout(900);
+  await expect(middle).toHaveAttribute("data-screen-id", ids[0]!);
+  await expect(stage).not.toHaveClass(/swiping/);
+  // A pinch (a wheel with Control) zooms; it does not move the strip.
+  await page.evaluate(() => document.querySelector(".screens-strip-stage")!.dispatchEvent(new WheelEvent("wheel", { deltaX: 400, ctrlKey: true, bubbles: true, cancelable: true })));
+  await page.waitForTimeout(300);
+  await expect(middle).toHaveAttribute("data-screen-id", ids[0]!);
 });
 
 test("Screens' layouts switch with G and E, and the sidebar folds by its own buttons and on each switch to the filmstrip", async ({ page }) => {
@@ -5559,6 +5648,56 @@ test.describe("phone layout", () => {
     await expect(page.getByRole("navigation", { name: "Views" })).toBeVisible();
     await expect(page.locator(".map-canvas")).toBeVisible();
   });
+  test("the filmstrip on a phone: switched beside Changed / All, swiped by a finger, and its middle screen opens the Inspector", async ({ page }) => {
+    await serveWorkspace(page);
+    await page.goto("/screens");
+    const view = page.getByRole("main", { name: "Screens" });
+    await view.getByRole("button", { name: /^All/ }).tap();
+    const layouts = view.getByRole("group", { name: "Screens layout" });
+    await expect(layouts.getByRole("button", { name: "Grid" })).toHaveAttribute("aria-pressed", "true");
+    await layouts.getByRole("button", { name: "Filmstrip" }).tap();
+    await expect(page).toHaveURL(/[?&]layout=filmstrip/);
+    const strip = view.getByRole("region", { name: "Filmstrip" });
+    const middle = strip.locator(".screens-strip-frame.focused");
+    const first = await middle.getAttribute("data-screen-id");
+    // The section chips give way to the path above the strip; the Tree still jumps anywhere.
+    await expect(view.locator(".screens-jump-chip:not(.tree)")).toHaveCount(0);
+    await expect(view.getByRole("button", { name: "Tree" })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    // A finger dragged left moves the strip under it while it is down, and the strip settles on the next screen.
+    const stage = strip.locator(".screens-strip-stage");
+    const dragged = await stage.evaluate(async element => {
+      const box = element.getBoundingClientRect();
+      const y = box.top + box.height / 2, x = box.left + box.width * 0.7;
+      const fire = (type: string, at: number) => element.dispatchEvent(new PointerEvent(type, { pointerId: 7, pointerType: "touch", isPrimary: true,
+        clientX: at, clientY: y, bubbles: true, cancelable: true }));
+      const centre = () => { const frame = element.querySelector(".screens-strip-frame.focused")!.getBoundingClientRect(); return frame.left + frame.width / 2; };
+      const before = centre();
+      fire("pointerdown", x);
+      for (let step = 1; step <= 3; step++) { fire("pointermove", x - step * 20); await new Promise(resolve => setTimeout(resolve, 16)); }
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const during = centre();
+      for (let step = 4; step <= 6; step++) { fire("pointermove", x - step * 20); await new Promise(resolve => setTimeout(resolve, 16)); }
+      fire("pointerup", x - 120);
+      return { moved: before - during, swiping: element.classList.contains("swiping") };
+    });
+    expect(dragged.moved).toBeGreaterThan(50);
+    expect(dragged.moved).toBeLessThan(70);
+    await expect(middle).not.toHaveAttribute("data-screen-id", first!);
+    await expect(stage).not.toHaveClass(/swiping/);
+
+    // A tap on the middle screen opens the Inspector; a tap on a neighbour only brings it to the middle.
+    const inspector = page.getByRole("complementary", { name: "Inspector panel" });
+    // The next screen peeks in at the right edge: a tap on the part that shows.
+    const next = strip.locator(".screens-strip-frame.focused + .screens-strip-frame");
+    const nextId = await next.getAttribute("data-screen-id");
+    await next.locator(".screens-strip-target").tap({ position: { x: 12, y: 60 } });
+    await expect(middle).toHaveAttribute("data-screen-id", nextId!);
+    await expect(inspector).toHaveCount(0);
+    await middle.locator(".screens-strip-target").tap();
+    await expect(inspector).toBeVisible();
+  });
 });
 
 test("the theme is Auto until the More menu picks one: it follows the system, and a pick outlives a reload", async ({ page }) => {
@@ -6098,4 +6237,5 @@ test.describe("a wide Inspector in a short window", () => {
     await expect.poll(async () => (await frame.boundingBox())!.height).toBeLessThanOrEqual(421);
     await expect.poll(async () => (await frame.boundingBox())!.height).toBeGreaterThan(300);
   });
+
 });

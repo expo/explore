@@ -335,6 +335,21 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-jump-chip > svg { width: 14px; height: 14px; }
 .screens-jump-chip .path { font-family: var(--screens-mono); }
 .screens-page.phone .screens-body { display: block; margin: 0; }
+/* Grid or Filmstrip as two icons at the end of the Changed / All row. */
+.screens-page.phone .screens-head { display: flex; align-items: center; gap: 8px; }
+.screens-layout-toggle { display: inline-flex; flex: none; gap: 2px; margin-left: auto; padding: 3px; border-radius: 999px; background: var(--element); }
+.screens-layout-toggle > button { display: grid; width: 40px; height: 28px; place-items: center; border-radius: 999px; color: var(--secondary); }
+.screens-layout-toggle > button[aria-pressed="true"] { color: var(--text); background: var(--selected); }
+.screens-layout-toggle svg { width: 16px; height: 16px; }
+/* The phone's filmstrip fills what the bars leave: the head and the Tree button above it, the tab bar below. */
+.screens-page.phone.filmstrip { display: flex; flex-direction: column; overflow: hidden; }
+.screens-page.phone.filmstrip::before,
+.screens-page.phone.filmstrip :is(.screens-head, .screens-jump) { flex: none; }
+.screens-page.phone.filmstrip .screens-body { display: flex; min-height: 0; flex: 1; height: auto; }
+.screens-page.phone.filmstrip .screens-sections { padding: 4px 0 0; }
+.screens-strip.phone .screens-strip-path { padding: 0 16px; }
+/* On a phone the fade is narrower, so the neighbours peeking in at the sides stay legible. */
+.screens-strip.phone .screens-strip-stage { mask-image: linear-gradient(to right, transparent, #000 6%, #000 94%, transparent); }
 /* Sections flow side by side, as on desktop, so a section of one screen leaves no empty row. Every
    card takes a fraction of the page width, so cards from neighbouring sections share columns. */
 .screens-page.phone .screens-sections { container-type: inline-size; gap: 32px 12px; padding: 20px 16px 0; }
@@ -383,6 +398,17 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 /* ── Filmstrip: one screen at a time, its neighbours smaller and fainter on either side ── */
 /* The page stops scrolling; the strip fills the height between the pill and the bottom toolbar. */
 .screens-page.filmstrip { overflow: hidden; padding-bottom: calc(84px * var(--ui-scale)); }
+/* With the sidebar folded, its button floats where the sidebar starts and the strip takes the page's width, with the same
+   gap either side, so the middle screen sits at the centre of the canvas (beside an open Inspector, of what it leaves). */
+.screens-page.filmstrip.side-folded { padding-left: 28px; }
+.screens-page.filmstrip.side-folded .screens-side.collapsed {
+  position: absolute;
+  z-index: 3;
+  top: calc(var(--chrome-top) + var(--chrome-height) + 20px);
+  left: var(--canvas-chrome-inline-inset);
+}
+/* A sideways swipe steps the strip; it must not also take the browser back a page. */
+html:has(.screens-page.filmstrip) { overscroll-behavior-x: none; }
 .screens-page.filmstrip .screens-body { height: 100%; }
 .screens-page.filmstrip .screens-side { max-height: 100%; }
 .screens-page.filmstrip .screens-sections { display: flex; height: 100%; flex-wrap: nowrap; align-items: stretch; }
@@ -410,7 +436,18 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-strip-crumb.current > .screens-tree-dot[class*="diff-"] { background: var(--diff); }
 .screens-strip-crumb-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .screens-strip-crumb-label.path { font-size: 12px; }
-.screens-strip-stage { position: relative; width: 100%; min-height: 0; flex: 1; overflow: hidden; overflow: clip; }
+.screens-strip-stage {
+  position: relative;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  overflow: clip;
+  /* The outer frames fade out towards the edges rather than being cut off. */
+  mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+  /* A finger's sideways swipe moves the strip, on any touch screen; an upward one still scrolls the page. */
+  touch-action: pan-y;
+}
 .screens-strip-frame {
   position: absolute;
   top: 50%;
@@ -418,6 +455,14 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
   /* A frame's size follows its screenshot's shape, so it eases with the move rather than snapping. */
   transition: transform 300ms cubic-bezier(0.2, 0.75, 0.2, 1), width 300ms cubic-bezier(0.2, 0.75, 0.2, 1), height 300ms cubic-bezier(0.2, 0.75, 0.2, 1), opacity 300ms ease;
   will-change: transform;
+}
+/* During a swipe the frames follow the gesture directly; they ease only when it lets go and the strip settles. */
+.screens-strip-stage.swiping .screens-strip-frame { transition: none; }
+/* After it lets go, the strip eases home from rest: by then the gesture (and a trackpad's momentum) has slowed to
+   nearly nothing, and a curve that starts fast, as a step's does, would jerk it into motion. */
+.screens-strip-stage.settling .screens-strip-frame {
+  transition-duration: var(--strip-settle-ms);
+  transition-timing-function: cubic-bezier(0.45, 0, 0.2, 1);
 }
 @media (prefers-reduced-motion: reduce) { .screens-strip-frame { transition: none; } }
 .screens-strip-frame.dimmed:not(.focused) { opacity: calc(var(--dim-out) * 0.6) !important; }

@@ -50,13 +50,15 @@ export type ScreensViewProps = {
   onFindRequestDone?: (() => void) | undefined;
   onSelectScreen: (id: string) => void;
   /** The tree and jump bar pick a screen without opening the Inspector; a screenshot click selects it as the canvas does. */
-  onPickScreen?: ((id: string) => void) | undefined;
+  onPickScreen?: ((id: string, options?: { replace?: boolean }) => void) | undefined;
   /** A click on the page around the cards clears the selection, as a click on a canvas's pane does. */
   onClearSelection?: (() => void) | undefined;
-  /** Desktop only: every card in a grid, or one screen at a time in a filmstrip. */
+  /** Every card in a grid, or one screen at a time in a filmstrip. */
   layout?: ScreensLayout | undefined;
   /** A double-click on a card opens it in the filmstrip. */
   onChangeLayout?: ((layout: ScreensLayout) => void) | undefined;
+  /** Closes the Inspector the first click of a double-click opened; in the filmstrip a click on its middle screen opens it. */
+  onCloseInspector?: (() => void) | undefined;
 };
 
 function statusOf(diff: BuildDiff | undefined, id: string): DiffStatus | undefined {
@@ -298,9 +300,9 @@ function Legend(props: { others: Appearance[] }) {
 }
 
 /**
- * Screens as a page that scrolls. On desktop, one grid of every screen in the order of the tree beside it, or the same
- * screens one at a time in a filmstrip (screens-filmstrip.tsx); on a phone, a section per route folder (or per tab,
- * when there are no route files), with the tree behind a Tree button.
+ * Screens as a page that scrolls. On desktop, one grid of every screen in the order of the tree beside it; on a phone,
+ * a section per route folder (or per tab, when there are no route files), with the tree behind a Tree button. Either
+ * can show the same screens one at a time in a filmstrip (screens-filmstrip.tsx), which a finger swipes on a phone.
  */
 export function ScreensView(props: ScreensViewProps) {
   // The report's screens, as the Map draws them: a public report's routes it never captured are not among them.
@@ -336,7 +338,7 @@ export function ScreensView(props: ScreensViewProps) {
   const treeOrder = useMemo(() => treeScreenOrder(tree), [tree]);
   const order = props.phone ? sections.flatMap(section => section.screenIds) : treeOrder.filter(id => shown.has(id));
   const others = [...new Set([...(props.changedElsewhere?.values() ?? [])].flat())];
-  const filmstrip = !props.phone && props.layout === "filmstrip";
+  const filmstrip = props.layout === "filmstrip";
   // The filmstrip always has a screen in the middle: the selection when it is shown; else, when Changed or a find hides
   // it, the nearest shown screen after it in the tree (before it, at the end), as the grid's arrows step from it; else
   // the first screen.
@@ -631,6 +633,7 @@ export function ScreensView(props: ScreensViewProps) {
   const openFilmstripRef = useRef<((id: string) => void) | undefined>(undefined);
   openFilmstripRef.current = !props.phone && !filmstrip && props.onChangeLayout ? (id: string) => {
     (props.onPickScreen ?? props.onSelectScreen)(id);
+    props.onCloseInspector?.();
     props.onChangeLayout!("filmstrip");
   } : undefined;
   useEffect(() => {
@@ -677,6 +680,16 @@ export function ScreensView(props: ScreensViewProps) {
     </div>
   ) : null;
 
+  // On a phone the switch is a pair of icons at the end of the Changed / All row.
+  const phoneLayoutSwitch = props.phone && props.onChangeLayout ? (
+    <div className="screens-layout-toggle" role="group" aria-label="Screens layout">
+      {([["grid", "Grid", <LayoutGrid key="grid" aria-hidden="true" />], ["filmstrip", "Filmstrip", <GalleryHorizontal key="filmstrip" aria-hidden="true" />]] as const)
+        .map(([value, label, icon]) => (
+          <button key={value} type="button" aria-label={label} aria-pressed={(filmstrip ? "filmstrip" : "grid") === value}
+            onClick={() => props.onChangeLayout!(value)}>{icon}</button>
+        ))}
+    </div>
+  ) : null;
   const dimmed = (id: string) => Boolean(props.focus?.length) && !props.focus!.some((state) => state === focusStatusOf(props.diff?.screens.get(id)));
   const cell = (id: string) => {
     const screen = props.index.screens.get(id);
@@ -698,6 +711,14 @@ export function ScreensView(props: ScreensViewProps) {
     ) : null;
   };
 
+  const strip = stripFocus ? (
+    <ScreensFilmstrip order={order} focusedId={stripFocus} selectedId={props.selectedScreenId}
+      index={props.index} diff={props.diff} tree={tree} shape={shape}
+      typicalSize={typicalSize} frameId={cardId} dimmed={dimmed} phone={props.phone}
+      dot={(id) => dotClass(props.diff, props.changedElsewhere, id)}
+      onPick={props.onPickScreen ?? props.onSelectScreen} onOpen={props.onSelectScreen} />
+  ) : null;
+
   // A find inside Changed can match only screens Changed hides; the empty state says so and offers All.
   const noMatch = `No ${inChanged ? "changed " : ""}screens match “${findQuery.trim()}”`;
   const matchedElsewhere = matches && inChanged ? [...matches].filter(id => !inFilter.has(id)).length : 0;
@@ -713,21 +734,22 @@ export function ScreensView(props: ScreensViewProps) {
   return (
     <>
     {layoutSwitch}
-    <main ref={scroller} className={`screens-page${props.phone ? " phone" : ""}${filmstrip ? " filmstrip" : ""}`} aria-label="Screens" style={style}
+    <main ref={scroller} className={`screens-page${props.phone ? " phone" : ""}${filmstrip ? " filmstrip" : ""}${filmstrip && sideCollapsed && !props.phone ? " side-folded" : ""}`} aria-label="Screens" style={style}
       onClick={(event) => {
         // The filmstrip always shows a screen; clearing the pick there would only jump it back to the first.
         if (!props.onClearSelection || !props.selectedScreenId || filmstrip) return;
         if ((event.target as Element).closest("button, a, input, .screens-cell, .screens-side")) return;
         props.onClearSelection();
       }}>
-      {props.phone && filterChips ? <div className="screens-head">{filterChips}</div> : null}
+      {props.phone && (filterChips || phoneLayoutSwitch) ? <div className="screens-head">{filterChips}{phoneLayoutSwitch}</div> : null}
 
       {props.phone ? (
         <nav className="screens-jump" aria-label="Sections">
           <button type="button" className="screens-jump-chip tree" onClick={() => setTreeOpen(true)}>
             <ListTree aria-hidden="true" />Tree
           </button>
-          {sections.map(section => {
+          {/* The filmstrip's path names where the screen is; the Tree jumps anywhere. */}
+          {filmstrip ? null : sections.map(section => {
             const dot = section.screenIds.map(id => dotClass(props.diff, props.changedElsewhere, id)).find(Boolean);
             return (
               <a key={section.id} className="screens-jump-chip" href={`#${sectionAnchor(section.id)}`}
@@ -776,7 +798,7 @@ export function ScreensView(props: ScreensViewProps) {
           </aside>
         )}
         <div className="screens-sections">
-          {props.phone ? sections.map(section => (
+          {props.phone ? strip ?? sections.map(section => (
             <section key={section.id} id={sectionAnchor(section.id)} className="screens-section" aria-label={section.name ?? section.title}>
               <header className="screens-section-head">
                 <h2>{section.name ?? section.title}</h2>
@@ -794,14 +816,7 @@ export function ScreensView(props: ScreensViewProps) {
                   <button type="button" className="screens-empty-all" onPointerDown={(event) => event.preventDefault()}
                     onClick={() => { setFilter("all"); focusFind(); }}>Show all</button></p>
                 : <p>Try part of a route, or press Esc to show every {inChanged ? "changed " : ""}screen.</p>}</div>
-              : stripFocus ? (
-                <ScreensFilmstrip order={order} focusedId={stripFocus} selectedId={props.selectedScreenId}
-                  index={props.index} diff={props.diff} tree={tree} shape={shape}
-                  typicalSize={typicalSize} frameId={cardId} dimmed={dimmed}
-                  dot={(id) => dotClass(props.diff, props.changedElsewhere, id)}
-                  onPick={props.onPickScreen ?? props.onSelectScreen} onOpen={props.onSelectScreen} />
-              )
-              : <div className="screens-grid">{order.map(cell)}</div>
+              : strip ?? <div className="screens-grid">{order.map(cell)}</div>
           )}
         </div>
       </div>

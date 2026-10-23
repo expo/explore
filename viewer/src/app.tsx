@@ -888,6 +888,8 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
     if (!rightCollapsedRef.current) inspectorDismissedRef.current = true;
     setRightCollapsed((current) => !current);
   }, []);
+  // A double-click that opens the filmstrip closes the Inspector its first click opened; it is not the reader dismissing it.
+  const closeInspector = useCallback(() => setRightCollapsed(true), []);
 
   // Every canvas opens with the panel showing and the Inspector out of the way.
   // The sidebar keeps whatever state the reader gave it; only the Inspector closes, because a
@@ -901,9 +903,9 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
   // into the destination view.
   // The report Screens' layout is remembered for: the loaded one, however it was loaded.
   const runId = payload?.map.run.id;
-  /** Screens opens in the layout the reader last left it in for this report; phones have only their list. */
+  /** Screens opens in the layout the reader last left it in for this report. */
   const rememberedScreensLayout = useCallback((canvas: CanvasView): Partial<Route> => (
-    canvas === "screens" && routeRef.current.canvas !== "screens" && !phoneRef.current ? { layout: readScreensLayout(runId) } : {}
+    canvas === "screens" && routeRef.current.canvas !== "screens" ? { layout: readScreensLayout(runId) } : {}
   ), [runId]);
   const commitCanvasSelection = useCallback((canvas: CanvasView) => {
     const current = routeRef.current;
@@ -950,8 +952,8 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
   }, [navigate, runId]);
   // A link that opens the filmstrip is remembered as a switch to it is.
   useEffect(() => {
-    if (route.canvas === "screens" && route.layout === "filmstrip" && !phone) writeScreensLayout(runId, "filmstrip");
-  }, [phone, route.canvas, route.layout, runId]);
+    if (route.canvas === "screens" && route.layout === "filmstrip") writeScreensLayout(runId, "filmstrip");
+  }, [route.canvas, route.layout, runId]);
 
   // The logo returns to the Map root, the equivalent of the "/map" URL.
   const openMapHome = useCallback(() => {
@@ -1128,10 +1130,11 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
   const pickedInPlaceRef = useRef<string | undefined>(undefined);
   // The Screens tree and jump bar pick a screen in place: it is selected and scrolled to, and the
   // Inspector stays as it was. A click on the screenshot, or I, opens it.
-  const pickScreenInPlace = useCallback((id: string) => {
+  const pickScreenInPlace = useCallback((id: string, options?: { replace?: boolean }) => {
     const sameSelection = resolveScreenId(routeRef.current, contextRef.current) === id;
     if (!sameSelection) pickedInPlaceRef.current = id;
-    navigate(screenPatch(id), { replace: sameSelection, focus: { target: "screen", id } });
+    // A swipe through the filmstrip is one step back, however many screens it passed.
+    navigate(screenPatch(id), { replace: sameSelection || options?.replace === true, focus: { target: "screen", id } });
   }, [navigate, screenPatch]);
   // On a phone the Inspector covers the map, so a tap selects the screen first (its ring, its
   // connections, the Open hint) and only a second tap on the selected screen opens it.
@@ -1690,6 +1693,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
               onClearSelection={clearSelectedScreen}
               layout={route.layout ?? "grid"}
               onChangeLayout={changeScreensLayout}
+              onCloseInspector={closeInspector}
             />
           ) : null}
           {comparing && phone && diff && selectedScreenId && comparePicker ? (
