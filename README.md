@@ -22,10 +22,10 @@ Explore maps your app: a screenshot of every screen, connected by the taps betwe
 <a href="docs/screenshots/readme-screens-light.png">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-screens-dark.png">
-  <img width="100%" alt="The Screens view of a euxy review showing Changed 7 of All 19: the app/ route tree on the left, and beside it a grid of the changed screens in the same order, each with its route below the screenshot: a red dot for the removed /lane-editor, orange for the modified /new-pattern and /channel-surf, green for the new /lane-editor/0, and Changed in dark under /p and /patterns" src="docs/screenshots/readme-screens-light.png">
+  <img width="100%" alt="The Screens view of a euxy review showing Changed 7 of All 19: a Search field and the app/ route tree on the left, and beside it a grid of the changed screens in the same order, each with its route below the screenshot: a red dot for the removed /lane-editor, orange for the modified /new-pattern and /channel-surf, green for the new /lane-editor/0, and Changed in dark under /p, /patterns and a /p/ link; at the top right, a switch between Grid and Filmstrip" src="docs/screenshots/readme-screens-light.png">
 </picture>
 </a>
-<strong>Screens</strong>: every capture in one grid, or only the changed ones, beside the route tree, with a dot for what changed.
+<strong>Screens</strong>: every capture, or only the changed ones, in a grid or one at a time in a filmstrip, beside the route tree, with a dot for what changed.
 </td>
 <td width="50%" valign="top">
 <a href="docs/screenshots/readme-pr-comment-light.png">
@@ -579,6 +579,7 @@ sequenceDiagram
 - The review workflow runs on open, non-draft PRs from the repository whose author has write access. Bots such as Devin go under `ci.trustedAuthors` in `.expo-explore/config.yaml`.
 - A screen with a source change is **Modified** if its captures differ.
 - If EAS fails to start a session, Explore starts a new one, up to five times within 30 minutes. On your machine, a local simulator can stand in for EAS Simulator.
+- Each capture job's summary shows where its time went, phase by phase, and its diagnostics artifact keeps the timings (`timings.jsonl`). When a review waits for the baseline of its base commit, its log and the PR comment name the step that baseline job is in.
 
 The same review runs for any two commits without a PR ([`explore-compare.yml`](#compare-any-two-commits), linking the report from the run summary) and on your machine (`capture`, [above](#quick-start)). The workflows' logic lives in `expo-explore ci:*` commands, so a fix reaches CI with the `@expo/explore` version the workflows pin.
 
