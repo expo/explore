@@ -360,24 +360,30 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-page.filmstrip .screens-body { height: 100%; }
 .screens-page.filmstrip .screens-side { max-height: 100%; }
 .screens-page.filmstrip .screens-sections { display: flex; height: 100%; flex-wrap: nowrap; align-items: stretch; }
-.screens-strip { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: center; }
+.screens-strip { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: center; gap: 8px; }
 .screens-strip-path {
   display: flex;
-  max-width: 100%;
+  width: 100%;
   min-height: 28px;
   flex: none;
-  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  gap: 2px 6px;
+  justify-content: safe center;
+  gap: 6px;
+  overflow: hidden;
   color: var(--tertiary);
   font-size: 13px;
+  white-space: nowrap;
 }
-.screens-strip-crumb { display: inline-flex; align-items: center; gap: 6px; }
-.screens-strip-crumb > svg { width: 12px; height: 12px; opacity: 0.7; }
-.screens-strip-crumb.current { color: var(--text); font-weight: 600; }
-.screens-strip-crumb .path, .screens-strip-crumb.path { font-size: 12px; }
-/* Clipped, not hidden: a hidden overflow is still a scroll box that focusing a clipped frame would scroll. */
+/* A long route keeps the path to one line: the screen's name shrinks to an ellipsis, and each row above it is capped
+   at a width of its own. A path still too long is cut at its end, not on both sides. */
+.screens-strip-crumb { display: inline-flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 6px; }
+.screens-strip-crumb:not(.current) { max-width: 160px; flex-shrink: 0; }
+.screens-strip-crumb > svg { width: 12px; height: 12px; flex: none; opacity: 0.7; }
+.screens-strip-crumb.current { flex-shrink: 1; gap: 7px; color: var(--text); font-weight: 600; }
+.screens-strip-crumb.current > .screens-tree-dot { flex: none; }
+.screens-strip-crumb.current > .screens-tree-dot[class*="diff-"] { background: var(--diff); }
+.screens-strip-crumb-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.screens-strip-crumb-label.path { font-size: 12px; }
 .screens-strip-stage { position: relative; width: 100%; min-height: 0; flex: 1; overflow: hidden; overflow: clip; }
 .screens-strip-frame {
   position: absolute;
@@ -404,53 +410,10 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
   box-shadow: 0 24px 48px rgb(0 0 0 / 0.08), 0 2px 6px rgb(0 0 0 / 0.08);
   cursor: zoom-in;
 }
-.screens-strip-frame.focused .screens-strip-target[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 24px 48px rgb(0 0 0 / 0.08); }
-/* A changed screen is outlined in its status colour, as its tree dot is coloured. */
-.screens-strip-frame:is(.diff-added, .diff-modified, .diff-removed, .diff-accessibility-only) .screens-strip-target { outline: 2px solid var(--diff); outline-offset: 2px; }
+/* A changed neighbour is outlined in its status colour; the middle screen's status is the dot beside its name. */
+.screens-strip-frame:not(.focused):is(.diff-added, .diff-modified, .diff-removed, .diff-accessibility-only) .screens-strip-target { outline: 2px solid var(--diff); outline-offset: 2px; }
 .screens-strip-target img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .screens-strip-placeholder { display: block; width: 100%; height: 100%; }
-.screens-strip-caption { display: flex; flex: none; align-items: center; gap: 20px; padding: 14px 0 0; }
-.screens-strip-step {
-  display: grid;
-  width: 36px;
-  height: 36px;
-  flex: none;
-  place-items: center;
-  border: 1px solid var(--border-subtle);
-  border-radius: 50%;
-  color: var(--text);
-  background: var(--surface);
-}
-.screens-strip-step:hover { background: var(--panel-hover); }
-.screens-strip-step:disabled { opacity: 0.35; cursor: default; }
-.screens-strip-step > svg { width: 16px; height: 16px; }
-.screens-strip-title { display: flex; width: 340px; min-width: 0; flex-direction: column; align-items: center; gap: 2px; text-align: center; }
-.screens-strip-name { display: flex; max-width: 100%; align-items: center; gap: 8px; }
-.screens-strip-name > h2 { min-width: 0; margin: 0; overflow: hidden; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
-.screens-strip-name > h2.path { font-size: 15px; }
-.screens-strip-kind { padding: 0 6px; border: 1px solid var(--border-subtle); border-radius: 5px; color: var(--secondary); font-family: var(--screens-mono); font-size: 11px; }
-.screens-strip-status { display: inline-flex; flex: none; align-items: center; gap: 6px; color: var(--diff); font-size: 12px; font-weight: 600; }
-.screens-strip-status > .screens-tree-dot { background: var(--diff); }
-.screens-strip-meta { max-width: 100%; margin: 0; overflow: hidden; color: var(--tertiary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-/* A tick for every screen, grouped by the tree's top rows; the screen in the middle stands taller. */
-.screens-strip-scrubber { display: flex; max-width: 100%; flex: none; flex-wrap: wrap; align-items: flex-end; justify-content: center; gap: 8px 14px; padding: 14px 0 0; }
-.screens-strip-group { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 4px; }
-.screens-strip-ticks { display: flex; height: 22px; align-items: flex-end; gap: 3px; }
-.screens-strip-tick {
-  width: 8px;
-  height: 16px;
-  flex: none;
-  padding: 0;
-  border-radius: 2px;
-  background: var(--selected);
-  transition: height 160ms ease, background 160ms ease;
-}
-.screens-strip-tick:hover { background: color-mix(in srgb, var(--text) 30%, var(--selected)); }
-.screens-strip-tick[class*="diff-"] { background: color-mix(in srgb, var(--diff) 22%, var(--surface)); box-shadow: inset 0 0 0 1.5px var(--diff); }
-.screens-strip-tick.elsewhere { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--modified) 50%, transparent); }
-.screens-strip-tick.current { width: 10px; height: 22px; background: var(--text); box-shadow: none; }
-.screens-strip-group-label { max-width: 140px; overflow: hidden; color: var(--tertiary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.screens-strip-group.current .screens-strip-group-label { color: var(--text); font-weight: 600; }
 
 /* ── Layout switch: Grid or Filmstrip, in words, at the top right in the pill's row ── */
 .screens-layout-switch {
@@ -483,3 +446,5 @@ button.screens-tree-row:hover { color: var(--text); background: var(--panel-hove
 .screens-layout-switch > button:hover { color: var(--text); background: var(--panel-hover); }
 .screens-layout-switch > button[aria-pressed="true"] { color: var(--text); background: var(--selected); }
 .screens-layout-switch > button > svg { width: 15px; height: 15px; flex: none; }
+.screens-layout-switch.compact > button { padding: 0 9px; }
+.screens-layout-switch.compact > button > span { display: none; }

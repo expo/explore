@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, GalleryHorizontal, LayoutGrid, ListTree } from "lucide-react";
 import { artifactUrl, isLaunchScreen, type ExploreMap, type MapIndex, type Screen } from "../../utils/model";
 import { primaryScreenshotForScreen, screenshotSize, typicalScreenshotSize, type ScreenshotSize } from "../../utils/screen-images";
@@ -89,6 +89,13 @@ function writeFolded(key: string, folded: ReadonlySet<string>): void {
   } catch { /* Folds last for this visit only. */ }
 }
 
+/** The canvas widths below which the layout switch drops its labels, and below which it is hidden. */
+const SWITCH_LABELLED_FRAME_WIDTH = 640;
+const SWITCH_MINIMUM_FRAME_WIDTH = 240;
+
+/** How soon a second click follows the first to make a double-click that opens a card in the filmstrip. */
+const DOUBLE_CLICK_MS = 500;
+
 /** The key that opens the find field: a character, not a key position, so it is read from the layout like "?". */
 export const FIND_KEY = "/";
 
@@ -163,20 +170,14 @@ function ScreenCell(props: {
   typicalSize?: ScreenshotSize | undefined;
   /** A phone's cell, whose screenshot is its own frame: no well frames it while it loads. */
   phone?: boolean | undefined;
-  onSelect: () => void;
-  /** A double-click on the screenshot opens the screen in the filmstrip; its first click has already selected it. */
-  onOpen?: (() => void) | undefined;
+  onSelect: (event: ReactMouseEvent) => void;
 }) {
   const artifact = primaryScreenshotForScreen(props.screen, props.index);
   const url = artifactUrl(artifact);
   const size = screenshotSize(artifact);
   const status = statusOf(props.diff, props.screen.id);
   return (
-    <div className={`screens-cell${props.dimmed ? " dimmed" : ""}`} id={cardId(props.screen.id)} data-screen-id={props.screen.id}
-      onDoubleClick={(event) => {
-        // The route under the screenshot copies a link and selects nothing, so only the screenshot opens the strip.
-        if ((event.target as Element).closest(".screen-screenshot-target")) props.onOpen?.();
-      }}>
+    <div className={`screens-cell${props.dimmed ? " dimmed" : ""}`} id={cardId(props.screen.id)} data-screen-id={props.screen.id}>
       <ScreenScreenshotCard
         className="screens-card"
         ariaLabel={props.screen.title}
@@ -429,6 +430,7 @@ export function ScreensView(props: ScreensViewProps) {
   // A selection made elsewhere (search, the map, the Inspector) scrolls its card to the middle of
   // the page, as a pick in the tree does; a card already in view stays put.
   const scroller = useRef<HTMLElement>(null);
+  const cardClick = useRef<{ id: string; at: number } | undefined>(undefined);
   const selected = props.selectedScreenId;
   const focusKey = props.focusRequest?.id === selected ? props.focusRequest?.key : undefined;
   const selectedShown = selected !== undefined && shown.has(selected);
@@ -578,6 +580,26 @@ export function ScreensView(props: ScreensViewProps) {
     };
   }, [props.phone]);
 
+  // A double-click on a card's screenshot opens that screen in the filmstrip. The first click selects it and opens the
+  // Inspector, which narrows the grid and can slide over the card, so the second click may land on another card or on
+  // the Inspector: the double-click is heard on the whole document, and the screen opened is the one the first click
+  // picked. The route under a screenshot copies a link and is no click on the card.
+  const openFilmstripRef = useRef<((id: string) => void) | undefined>(undefined);
+  openFilmstripRef.current = !props.phone && !filmstrip && props.onChangeLayout ? (id: string) => {
+    (props.onPickScreen ?? props.onSelectScreen)(id);
+    props.onChangeLayout!("filmstrip");
+  } : undefined;
+  useEffect(() => {
+    const onDoubleClick = (event: MouseEvent) => {
+      const first = cardClick.current;
+      if (!first || event.timeStamp - first.at > DOUBLE_CLICK_MS) return;
+      cardClick.current = undefined;
+      openFilmstripRef.current?.(first.id);
+    };
+    document.addEventListener("dblclick", onDoubleClick);
+    return () => document.removeEventListener("dblclick", onDoubleClick);
+  }, []);
+
   // The Inspector floats over the right edge; the page keeps its content clear of it.
   const { visibleFrame } = useCanvasVisibleFrame();
   const style = !props.phone && visibleFrame
@@ -588,14 +610,17 @@ export function ScreensView(props: ScreensViewProps) {
 
   // Grid or Filmstrip, in words, at the top right where the Map keeps its camera: outside the page, so it stays put
   // as the grid scrolls, and clear of the Inspector.
-  const layoutSwitch = !props.phone && props.onChangeLayout ? (
-    <div className="screens-layout-switch" role="group" aria-label="Screens layout"
+  // A canvas narrowed by the Inspector keeps the switch's icons only, clear of the pill; one too narrow for even those
+  // hides it, as the Map's camera hides (camera-controls.tsx). Esc and a double-click still switch.
+  const frameWidth = visibleFrame?.width ?? Infinity;
+  const layoutSwitch = !props.phone && props.onChangeLayout && frameWidth >= SWITCH_MINIMUM_FRAME_WIDTH ? (
+    <div className={`screens-layout-switch${frameWidth < SWITCH_LABELLED_FRAME_WIDTH ? " compact" : ""}`} role="group" aria-label="Screens layout"
       style={visibleFrame ? ({ "--screens-switch-right": `calc(100% - ${visibleFrame.x + visibleFrame.width}px)` } as CSSProperties) : undefined}>
       {([["grid", "Grid", <LayoutGrid key="grid" aria-hidden="true" />], ["filmstrip", "Filmstrip", <GalleryHorizontal key="filmstrip" aria-hidden="true" />]] as const)
         .map(([value, label, icon]) => (
-          <button key={value} type="button" aria-pressed={(filmstrip ? "filmstrip" : "grid") === value}
+          <button key={value} type="button" aria-label={label} aria-pressed={(filmstrip ? "filmstrip" : "grid") === value}
             onClick={() => props.onChangeLayout!(value)}>
-            {icon}<span>{label}</span>
+            {icon}<span aria-hidden="true">{label}</span>
           </button>
         ))}
     </div>
@@ -612,8 +637,11 @@ export function ScreensView(props: ScreensViewProps) {
         phone={props.phone}
         selected={props.selectedScreenId === id}
         dimmed={dimmed(id)}
-        onSelect={() => props.onSelectScreen(id)}
-        {...(!props.phone && props.onChangeLayout ? { onOpen: () => props.onChangeLayout!("filmstrip") } : {})} />
+        onSelect={(event) => {
+          // The first click of a pair, which a double-click opens in the filmstrip (see the page's onDoubleClick).
+          if (!cardClick.current || event.timeStamp - cardClick.current.at > DOUBLE_CLICK_MS) cardClick.current = { id, at: event.timeStamp };
+          props.onSelectScreen(id);
+        }} />
     ) : null;
   };
 
@@ -699,7 +727,7 @@ export function ScreensView(props: ScreensViewProps) {
                 : <p>Try part of a route, or press Esc to show every {inChanged ? "changed " : ""}screen.</p>}</div>
               : stripFocus ? (
                 <ScreensFilmstrip order={order} focusedId={stripFocus} selectedId={props.selectedScreenId}
-                  index={props.index} diff={props.diff} elsewhere={props.changedElsewhere} tree={tree} shape={shape}
+                  index={props.index} diff={props.diff} tree={tree} shape={shape}
                   typicalSize={typicalSize} frameId={cardId} dimmed={dimmed}
                   dot={(id) => dotClass(props.diff, props.changedElsewhere, id)}
                   onPick={props.onPickScreen ?? props.onSelectScreen} onOpen={props.onSelectScreen} />

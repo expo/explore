@@ -1427,7 +1427,7 @@ test("the Screens sidebar is headed by its find field with fold-all beside it, a
   expect(Math.abs(filterBox.width - headBox.width)).toBeLessThan(2);
 });
 
-test("Screens' filmstrip: switched from the corner switch, stepped with the arrows, opened by a double-click, left with Esc, and remembered", async ({ page }) => {
+test("Screens' filmstrip: switched from the corner switch, stepped with the arrows and clicks, opened by a double-click, left with Esc, and remembered", async ({ page }) => {
   await serveWorkspace(page);
   await page.goto("/screens");
   const view = page.getByRole("main", { name: "Screens" });
@@ -1446,11 +1446,11 @@ test("Screens' filmstrip: switched from the corner switch, stepped with the arro
   await expect(middle).toHaveAttribute("data-screen-id", ids[0]!);
   await expect(cells).toHaveCount(0);
 
-  // → steps the middle frame through the screens in the grid's order; the step button does the same.
+  // → steps the middle frame through the screens in the grid's order.
   await page.keyboard.press("ArrowRight");
   await expect(middle).toHaveAttribute("data-screen-id", ids[1]!);
   await expect(middle.locator(".screens-strip-target")).toBeFocused();
-  await strip.getByRole("button", { name: "Next screen" }).click();
+  await page.keyboard.press("ArrowRight");
   await expect(middle).toHaveAttribute("data-screen-id", ids[2]!);
   await page.keyboard.press("ArrowLeft");
   await expect(middle).toHaveAttribute("data-screen-id", ids[1]!);
@@ -1465,9 +1465,18 @@ test("Screens' filmstrip: switched from the corner switch, stepped with the arro
   await expect(page).not.toHaveURL(/layout=/);
   await expect(view.locator(`.screens-cell[data-screen-id="${ids[2]}"] .screen-screenshot-card`)).toHaveClass(/selected/);
 
-  // A double-click on a card opens it in the filmstrip; the first click has already opened the Inspector.
-  await view.locator(`.screens-cell[data-screen-id="${ids[0]}"] .screen-screenshot-target`).dblclick();
-  await expect(middle).toHaveAttribute("data-screen-id", ids[0]!);
+  // A double-click on a card opens it in the filmstrip. Its first click opens the Inspector, which narrows the grid: the
+  // last card of the first row moves before the second click lands, and it is still that card that opens.
+  await page.keyboard.press("Escape");
+  await expect(inspector).toBeHidden();
+  const tops = await cells.evaluateAll(elements => elements.map(element => Math.round(element.getBoundingClientRect().top)));
+  const last = ids[tops.filter(top => top === tops[0]).length - 1]!;
+  const box = (await view.locator(`.screens-cell[data-screen-id="${last}"] .screen-screenshot-target`).boundingBox())!;
+  const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.click(at.x, at.y);
+  await expect(inspector).toBeVisible();
+  await page.mouse.click(at.x, at.y, { clickCount: 2 });
+  await expect(middle).toHaveAttribute("data-screen-id", last);
   await expect(inspector).toBeVisible();
   // Esc closes the Inspector first, then steps back out to the grid with the screen still picked.
   await page.keyboard.press("Escape");
@@ -1475,7 +1484,7 @@ test("Screens' filmstrip: switched from the corner switch, stepped with the arro
   await expect(strip).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(strip).toHaveCount(0);
-  await expect(view.locator(`.screens-cell[data-screen-id="${ids[0]}"] .screen-screenshot-card`)).toHaveClass(/selected/);
+  await expect(view.locator(`.screens-cell[data-screen-id="${last}"] .screen-screenshot-card`)).toHaveClass(/selected/);
 
   // The layout is remembered for the report: Screens opens in the filmstrip again after a visit to the Map.
   await layouts.getByRole("button", { name: "Filmstrip" }).click();

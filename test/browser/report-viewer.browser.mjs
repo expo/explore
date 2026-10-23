@@ -454,6 +454,7 @@ test("a fold tried during a find changes nothing: the tree's own folds come back
   await field.press("Escape");
   await field.press("Escape");
   await expect(field).toHaveValue("");
+  await expect(field).not.toBeFocused();
   await expect(folder).toHaveAttribute("aria-expanded", "false");
   await expect(other).toHaveAttribute("aria-expanded", "true");
 

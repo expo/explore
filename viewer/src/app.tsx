@@ -945,7 +945,8 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
   // does not read the switch as a new pick that Changed or a find hides.
   const changeScreensLayout = useCallback((layout: ScreensLayout) => {
     writeScreensLayout(runId, layout);
-    navigate({ layout: layout === "filmstrip" ? "filmstrip" : undefined }, { preserveFocus: true });
+    // A change of view, not a move: Back leaves Screens rather than undoing it, as the change filter's does.
+    navigate({ layout: layout === "filmstrip" ? "filmstrip" : undefined }, { replace: true, preserveFocus: true });
   }, [navigate, runId]);
   // A link that opens the filmstrip is remembered as a switch to it is.
   useEffect(() => {
