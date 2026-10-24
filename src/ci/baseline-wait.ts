@@ -7,7 +7,7 @@ import { CiError, environmentSecrets } from "../shared/ci-errors.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
 import { githubRunLink, safeText, silentTimings, type Timings } from "../shared/timings.js";
 import { retryGitHubLookup } from "../report/github-lookup.js";
-import { safeRelativePath } from "../binary/archive.js";
+import { safeRelativePath } from "../shared/archive-entries.js";
 import { CAPTURE_CACHE_MAX_BYTES, CAPTURE_CACHE_MAX_FILES } from "./artifact-cache.js";
 import { baselineLookup, githubContext, trustedBaselineRun, type GithubArtifact, type GithubRun } from "./workflow-steps.js";
 

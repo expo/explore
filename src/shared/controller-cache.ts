@@ -11,7 +11,7 @@ import { chmod, mkdir, open, readdir, rename, rm, stat, writeFile } from "node:f
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { safeRelativePath, walkTar } from "../binary/archive.js";
+import { safeRelativePath, walkTar } from "./archive-entries.js";
 import { CiError } from "./ci-errors.js";
 import { AGENT_DEVICE_VERSION } from "./agent-device-version.js";
 import { ARGENT_VERSION } from "./argent-version.js";
