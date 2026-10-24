@@ -316,9 +316,13 @@
 .compare-stage.mode-flip .compare-frame-wrap,
 .sidebar-review-stage.mode-flip .compare-frame-wrap,
 .sidebar-review-stage.mode-split.landscape .compare-frame-wrap { display: flex; justify-content: center; }
+/* The width is spelled out, not left to aspect-ratio: WebKit sizes a flex item by its height + aspect-ratio box's
+   available width rather than its ratio width, so Split's two sides stayed half the stage each and each frame sat at
+   the left of its side, off centre under its name (seen on a folded iPhone Duo). */
 .compare-frame {
   position: relative;
   display: block;
+  width: calc(var(--compare-frame-height) * var(--compare-aspect));
   height: var(--compare-frame-height);
   aspect-ratio: var(--compare-aspect);
   overflow: hidden;
