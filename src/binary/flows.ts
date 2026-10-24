@@ -109,17 +109,21 @@ export async function readFlowPlan(path: string): Promise<FlowPlan> {
 const stepsFor = (flow: Flow, platform: ReplayPlatform | undefined) => flow.steps.map((step, index) => ({ step, number: index + 1 }))
   .filter(({ step }) => !platform || !step.platforms || step.platforms.includes(platform));
 
+/** The flows that run on the platform (every one while it is not known): a flow with no checkpoint there leaves nothing to compare, so it is skipped. */
+const flowsOn = (plan: FlowPlan, platform: ReplayPlatform | undefined) => plan.flows.map(flow => ({ flow, steps: stepsFor(flow, platform) }))
+  .filter(({ steps }) => steps.some(({ step }) => "checkpoint" in step));
+
 /**
  * The exact fill and type steps, whose {{secret:NAME}} inputs must be set before any device starts: those that run on
  * the platform, or every one while the platform is not known yet.
  */
 export function flowSetup(plan: FlowPlan, platform?: ReplayPlatform): CaptureSetupAction[] {
-  return plan.flows.flatMap(flow => stepsFor(flow, platform).flatMap(({ step }) => "action" in step && (step.action === "fill" || step.action === "type") ? [step as CaptureSetupAction] : []));
+  return flowsOn(plan, platform).flatMap(({ steps }) => steps.flatMap(({ step }) => "action" in step && (step.action === "fill" || step.action === "type") ? [step as CaptureSetupAction] : []));
 }
 
 /** The described steps that run on the platform (every one while it is not known), read for their {{secret:NAME}} references as the hints are. */
 export function flowGoals(plan: FlowPlan, platform?: ReplayPlatform): string[] {
-  return plan.flows.flatMap(flow => stepsFor(flow, platform).flatMap(({ step }) => "do" in step ? [step.do] : []));
+  return flowsOn(plan, platform).flatMap(({ steps }) => steps.flatMap(({ step }) => "do" in step ? [step.do] : []));
 }
 
 export const flowsNeedModel = (plan: FlowPlan, platform?: ReplayPlatform): boolean => flowGoals(plan, platform).length > 0;
@@ -129,9 +133,9 @@ export const flowsNeedModel = (plan: FlowPlan, platform?: ReplayPlatform): boole
  * budgets cannot hold. A described step's cost is not known in advance, so these are the least the flows take.
  */
 export function assertFlowsFit(plan: FlowPlan, platform: ReplayPlatform, limits: { maxScreens: number; maxActions: number; maxTurns: number }): void {
-  const flows = plan.flows.map(flow => stepsFor(flow, platform)).filter(steps => steps.length);
+  const flows = flowsOn(plan, platform).map(({ steps }) => steps);
   const steps = flows.flat();
-  if (!steps.some(({ step }) => "checkpoint" in step)) {
+  if (!flows.length) {
     throw new CiError({ code: "FLOWS_PLAN_EMPTY", stage: "exploration", message: `No checkpoint of the flows file runs on ${platform}: each one is limited to ${platform === "ios" ? "android" : "ios"} by its platforms.`,
       nextAction: `Add checkpoints for ${platform}, or run the flows on the platform they were written for.` });
   }
@@ -180,6 +184,8 @@ async function runGoal(model: Pick<CiAgentSession, "run">, request: CiAgentSessi
   const forward = () => stepAbort.abort(signal.reason);
   signal.addEventListener("abort", forward, { once: true });
   let outcome: { reached: boolean; reason?: string } | undefined;
+  // Counted here as well: a Codex session has no maxTurns of its own, and one step must not spend the run's budgets.
+  let calls = 0;
   const usage = { inputTokens: 0, outputTokens: 0 };
   try {
     const result = await model.run({ instructions: GOAL_INSTRUCTIONS, prompt, deadlineMs: request.deadlineMs, signal: stepAbort.signal, maxTurns: GOAL_TURNS,
@@ -192,6 +198,11 @@ async function runGoal(model: Pick<CiAgentSession, "run">, request: CiAgentSessi
           return toolText({ ok: true });
         }
         if (name !== "observe" && name !== "act") return toolText({ ok: false, message: `Unknown tool ${name}.` }, true);
+        if (++calls > GOAL_TURNS) {
+          outcome = { reached: false, reason: `The model used its ${GOAL_TURNS} tool calls without finishing the step.` };
+          stepAbort.abort(new Error("step_turns"));
+          return toolText({ ok: false, message: "The step is over: it used its tool calls." }, true);
+        }
         return request.callTool(name, input, toolSignal);
       } });
     usage.inputTokens += result.inputTokens; usage.outputTokens += result.outputTokens;
@@ -210,7 +221,7 @@ async function runGoal(model: Pick<CiAgentSession, "run">, request: CiAgentSessi
  */
 export function createFlowSession(plan: FlowPlan, platform: ReplayPlatform, options: { model?: Pick<CiAgentSession, "run">; app: { name: string }; hints?: string } ): FlowSession {
   if (flowsNeedModel(plan, platform) && !options.model) throw new Error("A flows file with described steps needs a model session.");
-  const flows = plan.flows.map(flow => ({ flow, steps: stepsFor(flow, platform) })).filter(item => item.steps.length);
+  const flows = flowsOn(plan, platform);
   /** The checkpoints each flow has attempted, with or without a picture. */
   const attempted = new Map<string, Set<string>>();
   const notReached = () => flows.flatMap(({ flow, steps }) => {
@@ -236,7 +247,7 @@ export function createFlowSession(plan: FlowPlan, platform: ReplayPlatform, opti
         return { failed: Boolean(result.isError) || value.ok === false, value };
       };
       const why = (value: Record<string, unknown>) => String(value.error ?? value.reason ?? value.message ?? value.missing ?? "it failed");
-      const completed: string[] = [], failed: string[] = [], skipped: string[] = [];
+      const completed: string[] = [], failed: string[] = [], skipped: string[] = [], unpictured: string[] = [];
       /** A device that cannot relaunch the app twice running will not for the flows after them either. */
       let unstarted = 0;
       try {
@@ -253,10 +264,14 @@ export function createFlowSession(plan: FlowPlan, platform: ReplayPlatform, opti
           let failure: string | undefined;
           for (const [index, { step, number }] of steps.entries()) {
             if ("checkpoint" in step) {
-              attempted.get(flow.name)!.add(step.checkpoint);
               const taken = await call("checkpoint", { name: step.checkpoint });
-              // A screen that blocks capture leaves its checkpoint without a picture; an observation that failed ends the flow.
-              if (!taken.value.failed) continue;
+              // Marked only once the explorer has answered: a budget that stops the run during the call leaves it for notReached.
+              attempted.get(flow.name)!.add(step.checkpoint);
+              // A screen that blocks capture (a secret on it, FLAG_SECURE) leaves its checkpoint without a picture and the flow goes on; an observation that failed ends the flow.
+              if (!taken.value.failed) {
+                if (taken.failed) unpictured.push(`${flow.name} › ${step.checkpoint}`);
+                continue;
+              }
               failure = `Checkpoint "${step.checkpoint}" could not be taken: ${why(taken.value)}`;
               break;
             }
@@ -280,7 +295,7 @@ export function createFlowSession(plan: FlowPlan, platform: ReplayPlatform, opti
           await call("end_flow", failure ? { status: "failed", reason: failure.slice(0, TOOL_LIMITS.reason) } : { status: "completed" });
           (failure ? failed : completed).push(flow.name);
         }
-        const sections = ([["Failed", failed, "flows"], ["Optional steps skipped because they failed", skipped, "steps"]] as const).filter(([, names]) => names.length);
+        const sections = ([["Failed", failed, "flows"], ["Checkpoints without a picture", unpictured, "checkpoints"], ["Optional steps skipped because they failed", skipped, "steps"]] as const).filter(([, names]) => names.length);
         let summary = `Ran ${flows.length} flow${flows.length === 1 ? "" : "s"} on ${platform}: ${completed.length} completed, ${failed.length} failed.`;
         for (const [label, names, noun] of sections) {
           const lead = ` ${label}: `;

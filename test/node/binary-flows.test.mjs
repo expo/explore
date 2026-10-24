@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tsImport } from "tsx/esm/api";
 
-const { runBlackBoxExploration, assertFlowsFit, createFlowSession, flowsNeedModel, parseFlowPlan, chooseStrategy, startStrategy, strategyInputs, ExploreStore, validateMap, CiError, CONTRACT } =
+const { runBlackBoxExploration, assertFlowsFit, createFlowSession, flowsNeedModel, parseFlowPlan, chooseStrategy, startStrategy, strategyInputs, runBoundedSession, ExploreStore, validateMap, CiError, CONTRACT } =
   await tsImport("../helpers/flows-host.ts", import.meta.url);
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
@@ -20,14 +20,17 @@ const ROUTES = { Settings: "settings", Profile: "profile", "Edit name": "editor"
 /**
  * A device whose taps follow ROUTES, and which a relaunch returns to Home; it records what reached it. `failRelaunch`
  * lists the relaunches (1 is the first) that fail, `failPicture` the pictures (1 is the first) whose observation throws,
- * and `driftOnTap` a tap that fails yet moves the app, to the screen it names.
+ * `withholdPicture` those the device declines to take (a blocked screenshot), and `driftOnTap` a tap that fails yet
+ * moves the app, to the screen it names.
  */
 function device(behaviour = {}) {
   let screen = "home", frames = 0, pictures = 0;
   const acted = [], restarts = [];
   return { acted, restarts, options: {
     observe: async includeImage => {
-      if (includeImage && behaviour.failPicture?.includes(++pictures)) throw new CiError({ code: "OBSERVATION_FAILED", stage: "session", message: "The accessibility snapshot failed.", nextAction: "Retry." });
+      if (includeImage) pictures += 1;
+      if (includeImage && behaviour.failPicture?.includes(pictures)) throw new CiError({ code: "OBSERVATION_FAILED", stage: "session", message: "The accessibility snapshot failed.", nextAction: "Retry." });
+      if (includeImage && behaviour.withholdPicture?.includes(pictures)) return { nodes: SCREENS[screen], capturedAt: new Date().toISOString(), imageUnavailable: { code: "SCREENSHOT_FAILED", message: "The screenshot was blocked." } };
       return { nodes: SCREENS[screen], capturedAt: new Date().toISOString(), ...(includeImage ? { frameId: `frame-${++frames}`, png: PNG, imageSha256: `${frames}`.padStart(64, "c") } : {}) };
     },
     act: async action => {
@@ -291,4 +294,87 @@ test("flows whose described steps run only on another platform start with no mod
   const strategy = await startStrategy({ kind: "flows", plan }, { platform: "ios", limits: { maxScreens: 10, maxActions: 10 }, options: { createSession }, environment: {}, say() {}, app: { name: "Example" } });
   assert.deepEqual([strategy.provider, strategy.model, strategy.auth], ["flows", "flows file", "none"]);
   assert.deepEqual(strategy.flows(), [{ flow: "A", checkpoints: ["Settings"] }]);
+});
+
+test("a checkpoint whose screen withholds its picture is recorded as missing, its flow goes on, and the summary names it", async () => {
+  const plan = parseFlowPlan({ flows: [{ name: "Home", steps: [{ checkpoint: "Home" }, { action: "wait", milliseconds: 1 }, { checkpoint: "Still home" }, { action: "tap", label: "Settings" }, { checkpoint: "Settings" }] }] });
+  const { result, map } = await explore(plan, { device: { withholdPicture: [2] } });
+  assert.equal(result.flows[0].status, "completed");
+  assert.deepEqual(checkpointShots(map, result.flows[0]), [{ name: "Home", screen: "Home" }, { name: "Still home", missing: "The screenshot was blocked." }, { name: "Settings", screen: "Settings" }]);
+  assert.match(result.summary, /1 completed, 0 failed\. Checkpoints without a picture: Home › Still home\.$/);
+});
+
+test("a checkpoint that a screen or turn budget stops is recorded as not reached, not dropped", async () => {
+  const plan = parseFlowPlan({ flows: [{ name: "Settings", steps: [{ checkpoint: "Home" }, { action: "tap", label: "Settings" }, { action: "wait", milliseconds: 1 }, { checkpoint: "Settings" }] }] });
+  // Home and the arrival at Settings use the two screens; the wait means the checkpoint needs a third.
+  const screens = await explore(plan, { host: { maxScreens: 2 } });
+  assert.equal(screens.result.stopReason, "budget-screens");
+  assert.equal(screens.result.flows[0].status, "stopped");
+  assert.deepEqual(checkpointShots(screens.map, screens.result.flows[0]), [{ name: "Home", screen: "Home" }, { name: "Settings", missing: "The run stopped before it." }]);
+  // start_flow is the one tool call the turn budget allows.
+  const turns = await explore(plan, { host: { maxTurns: 1 } });
+  assert.deepEqual(turns.result.flows[0].checkpoints, [{ name: "Home", missing: "The run stopped before it." }, { name: "Settings", missing: "The run stopped before it." }]);
+});
+
+test("a described step that a real session ends with AGENT_CANCELLED after step_done still counts as done", async () => {
+  const plan = parseFlowPlan({ flows: [{ name: "Settings", steps: [{ do: "Open the settings" }, { checkpoint: "Settings" }] }] });
+  // runBoundedSession rejects once the step's signal is aborted, as the Claude and Codex sessions do.
+  const model = { run: request => runBoundedSession({ provider: "openai", model: "test" }, request, async bounded => {
+    await bounded.callTool("act", { action: "tap", label: "Settings" });
+    await bounded.callTool("step_done", {});
+    return { inputTokens: 1, outputTokens: 1 };
+  }) };
+  await assert.rejects(model.run({ instructions: "x", prompt: "x", tools: [{ name: "step_done", inputSchema: { type: "object" } }], deadlineMs: Date.now() + 1000,
+    signal: AbortSignal.abort(), callTool: async () => ({ content: [] }) }), error => error.code === "AGENT_CANCELLED");
+  const { result } = await explore(plan, { model });
+  assert.equal(result.flows[0].status, "completed", result.flows[0].reason);
+});
+
+test("a described step whose model keeps going past its 40 tool calls fails, and the next flow still runs", async () => {
+  const plan = parseFlowPlan({ flows: [{ name: "Loop", steps: [{ do: "Find the hidden screen" }, { checkpoint: "Hidden" }] }, { name: "Home", steps: [{ checkpoint: "Home" }] }] });
+  let calls = 0;
+  // A session that ignores maxTurns, as the Codex one has no equivalent of it.
+  const model = { async run(request) {
+    while (!request.signal.aborted) { await request.callTool("observe", { includeImage: false }, request.signal); calls += 1; }
+    return { inputTokens: 0, outputTokens: 0 };
+  } };
+  const { result } = await explore(plan, { model, host: { maxTurns: 1000 } });
+  assert.equal(calls, 41, "40 calls reach the explorer, and the 41st is refused");
+  assert.equal(result.flows[0].status, "failed");
+  assert.match(result.flows[0].reason, /used its 40 tool calls without finishing the step/);
+  assert.equal(result.flows[1].status, "completed");
+});
+
+test("a flow with no checkpoint on the platform is skipped, and its steps need no model or secrets", async () => {
+  const plan = parseFlowPlan({ flows: [
+    { name: "Android only", steps: [{ do: "Sign in with {{secret:ANDROID_PASSWORD}}" }, { checkpoint: "Signed in", platforms: ["android"] }] },
+    { name: "Settings", steps: [{ action: "tap", label: "Settings" }, { checkpoint: "Settings" }] },
+  ] });
+  assert.equal(flowsNeedModel(plan, "ios"), false);
+  assert.deepEqual(strategyInputs({ kind: "flows", plan }, undefined, {}, "ios").names, []);
+  const { result } = await explore(plan);
+  assert.deepEqual(result.flows.map(flow => flow.name), ["Settings"]);
+  assert.match(result.summary, /^Ran 1 flow on ios/);
+});
+
+test("explore:session without --platform needs only the secrets of the flows' steps on the session's platform", async () => {
+  const { runSessionExploration } = await tsImport("../../src/binary/run.ts", import.meta.url);
+  const environment = { EXPO_TOKEN: "token", EAS_SIMULATOR_SESSION_ID: "01a1-mine", AGENT_DEVICE_DAEMON_BASE_URL: "https://daemon.example", AGENT_DEVICE_DAEMON_AUTH_TOKEN: "t" };
+  const looked = [];
+  // The session is an iOS one; any device work after looking it up ends the test.
+  const runner = request => {
+    if (request.args.includes("simulator:get")) {
+      looked.push(true);
+      return { stdout: JSON.stringify({ id: "01a1-mine", type: "agent-device", status: "IN_PROGRESS", platform: "IOS", name: "Session",
+        remoteConfig: { agentDeviceRemoteSessionUrl: "https://daemon.example", agentDeviceRemoteSessionToken: "t" } }), stderr: "", status: 0 };
+    }
+    throw new Error("device work started");
+  };
+  const run = steps => runSessionExploration({ output: join(tmpdir(), `explore-flows-session-${Math.random()}`), bundleId: "dev.example.app", environment, runner,
+    flows: parseFlowPlan({ flows: [{ name: "Sign in", steps }] }) });
+  await assert.rejects(run([{ action: "fill", label: "Password", text: "{{secret:ANDROID_PASSWORD}}", platforms: ["android"] }, { checkpoint: "Home" }]),
+    error => error.code !== "EXPLORATION_SECRET_MISSING" && /device work started/.test(error.message), "a secret only Android steps type is not needed on iOS");
+  await assert.rejects(run([{ action: "fill", label: "Password", text: "{{secret:IOS_PASSWORD}}" }, { checkpoint: "Home" }]),
+    error => error.code === "EXPLORATION_SECRET_MISSING" && /IOS_PASSWORD/.test(error.message));
+  assert.equal(looked.length, 2, "the platform comes from the session");
 });
