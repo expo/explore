@@ -119,9 +119,9 @@ const EXPLORE_REPACK_MESSAGE = /^expo-explore (?:ios|android) capture: route obs
 
 /**
  * The finished build to repack from `eas build:list --fingerprint-hash`: the newest one Explore did not repack itself,
- * else the newest. A repack keeps its source build's native code, and may carry its fingerprint; preferring the build
- * it came from has every job of a run pick the same one, which a shared repack's key needs (RepackShare), instead of a
- * repack another job finished a minute earlier.
+ * else the newest. A repack keeps its source build's native code and carries its fingerprint, so on a project that
+ * reviews often every listed build is a repack, and this is the newest of them; jobs that look minutes apart can get
+ * different ones. A shared repack is keyed by the fingerprint, not by this build (hostedRepackShareKey).
  */
 export function existingBuild(stdout: string): EasBuildDescriptor | undefined {
   const value = parseJson(stdout, "eas build:list");
@@ -712,13 +712,18 @@ export async function stagedProjectDigest(root: string): Promise<string> {
 
 /**
  * The key a shared repack's build carries in its message: everything the repack is made from, so two jobs share one only
- * when each would have uploaded the same bytes for the same native build, profile, EAS environment (by name and by a
- * snapshot of its variables) and Explore release, in the same run attempt.
+ * when each would have uploaded the same bytes onto the same native code, for the same profile, EAS environment (by name
+ * and by a snapshot of its variables) and Explore release, in the same run attempt.
+ *
+ * The native code is named by its fingerprint, not by the build a job found to repack: the build lookup returns the
+ * newest build with that fingerprint, which is often an earlier repack, and it moves as repacks finish. In
+ * brentvatne/euxy#179 (review run 40042718931) a target that started late found the repack the others had just made,
+ * so its key matched none; it waited 3 minutes for a repack it could not find, then made another.
  */
-export function hostedRepackShareKey(input: { scope: string; platform: "ios" | "android"; nativeBuildId: string; easProfile: string;
+export function hostedRepackShareKey(input: { scope: string; platform: "ios" | "android"; fingerprint: string; easProfile: string;
   environment: string; environmentVariables: string; project: string }): string {
-  return createHash("sha256").update(JSON.stringify({ contract: "expo-explore.repack-share.v2", explore: EXPLORE_VERSION, scope: input.scope,
-    platform: input.platform, nativeBuildId: input.nativeBuildId, easProfile: input.easProfile, environment: input.environment,
+  return createHash("sha256").update(JSON.stringify({ contract: "expo-explore.repack-share.v3", explore: EXPLORE_VERSION, scope: input.scope,
+    platform: input.platform, fingerprint: input.fingerprint, easProfile: input.easProfile, environment: input.environment,
     environmentVariables: input.environmentVariables, project: input.project })).digest("hex").slice(0, 32);
 }
 
@@ -870,6 +875,8 @@ async function prepareHostedRepack(options: {
   easCommand: string;
   project: string;
   nativeBuildId: string;
+  /** The native fingerprint of that build, which keys a shared repack (hostedRepackShareKey). */
+  fingerprint: string;
   easProfile: string;
   repackProfile: RepackProfile;
   easEnvironment: NodeJS.ProcessEnv;
@@ -930,7 +937,7 @@ async function prepareHostedRepack(options: {
     if (variables === undefined) options.say(`EAS did not list the ${environment} environment's variables; repacking here without sharing the repack`);
     else {
       // The digest is taken before the workflow file is written: the file's message carries the key made from it.
-      const marker = hostedRepackShareMarker(hostedRepackShareKey({ scope: options.share.scope, platform, nativeBuildId: options.nativeBuildId,
+      const marker = hostedRepackShareMarker(hostedRepackShareKey({ scope: options.share.scope, platform, fingerprint: options.fingerprint,
         easProfile: options.easProfile, environment, environmentVariables: variables, project: await stagedProjectDigest(staged) }));
       const shared = await options.timings.measure("repack-share-wait", () => sharedHostedRepack({ share: options.share!, marker, platform, say: options.say, clock,
         list: () => eas(["build:list", "--platform", platform, "--limit", String(SHARED_REPACK_LIST_LIMIT), "--json", "--non-interactive"], 2 * 60_000).stdout,
@@ -1012,7 +1019,7 @@ export async function prepareExactSourceBuild(options: {
     if ((options.repack ?? "eas") === "eas") {
       if (!options.easProfile) throw new Error("The hosted repack needs the capture build profile name.");
       const hosted = await prepareHostedRepack({ platform, runner: options.runner, easCommand: options.easCommand, project: options.project,
-        nativeBuildId: options.nativeBuildId, easProfile: options.easProfile, repackProfile: options.repackProfile,
+        nativeBuildId: options.nativeBuildId, fingerprint: options.fingerprint, easProfile: options.easProfile, repackProfile: options.repackProfile,
         easEnvironment: options.easEnvironment, restrictedEnvironment: options.repackEnvironment, provider: providers[0]!,
         parameterKeys: captureObserverParameterKeys(options.routes), root, share: options.share, say: options.progress ?? (() => undefined),
         timings: options.timings ?? silentTimings, onBlocking: options.onBlocking,

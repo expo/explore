@@ -243,7 +243,7 @@ async function fixture(t, settings = {}) {
         if (listed === null) throw new Error('eas env:list exited with status 1: GraphQL request failed.');
         return { stdout: listed ?? 'Environment: preview\nNo variables found for this environment.\n', stderr: '' };
       }
-      if (command === 'build:list') return json(settings.reuse ? [{ id: 'native-build', ...buildMetadata }] : []);
+      if (command === 'build:list') return json(settings.reuse ? [{ id: settings.reusable ?? 'native-build', ...buildMetadata }] : []);
       if (command === 'build') return json([{ id: 'built-app', fingerprint: { hash: 'source-fingerprint' }, ...buildMetadata }]);
       if (command === 'env:pull') { writeFileSync(value(request, '--path'), '# Environment: preview\nEXPO_PUBLIC_ENDPOINT=sample\n'); return { stdout: '', stderr: '' }; }
       if (command === 'build:download') {
@@ -2143,6 +2143,22 @@ test('two jobs of one run attempt that repack the same app share one hosted repa
   assert.deepEqual(downloaded(f), ['repacked-app']);
   assert.equal(result.easBuildId, 'repacked-app');
   assert.equal(result.runStatus, 'complete');
+  assert.ok(lines.some(line => /using EAS build repacked-app, the hosted repack of this commit another target of this run made/.test(line)), lines.join('\n'));
+});
+
+test('a target that starts after the shared repack finished, and finds that repack as its build to repack, joins it', async t => {
+  const eas = easBuilds();
+  const leader = await fixture(t, { reuse: true, eas });
+  await runCiMap({ ...leader.options, ...share('iphone') });
+  eas.builds[0].status = 'FINISHED';
+  // The newest build with the fingerprint is now the leader's repack (brentvatne/euxy#179, review run 40042718931): a
+  // key made from the build each job found would differ, and this target would wait, then repack a repack itself.
+  const { f, lines, run } = await follow(t, eas, { reusable: 'repacked-app' });
+  const result = await run;
+  assert.equal(runs(f), 0, 'the late target does not repack');
+  assert.equal(shareLists(f), 1, 'its first look finds the finished repack');
+  assert.deepEqual(downloaded(f), ['repacked-app']);
+  assert.equal(result.easBuildId, 'repacked-app');
   assert.ok(lines.some(line => /using EAS build repacked-app, the hosted repack of this commit another target of this run made/.test(line)), lines.join('\n'));
 });
 

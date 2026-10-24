@@ -129,13 +129,17 @@ test('the staged digest changes with any file, mode or link, and the share key w
   await rm(join(root, 'entry.js')); await symlink('package.json', join(root, 'entry.js')); digests.push(await stagedProjectDigest(root));
   await mkdir(join(root, 'empty')); digests.push(await stagedProjectDigest(root));
   assert.equal(new Set(digests).size, digests.length);
-  const input = { scope: 'acme/example#39506405687.1', platform: 'ios', nativeBuildId: 'a81d5d80', easProfile: 'explore', environment: 'preview', environmentVariables: 'a'.repeat(64), project: digests[0] };
+  const input = { scope: 'acme/example#39506405687.1', platform: 'ios', fingerprint: 'ea9bf84e1a5b0900000ba7c1e6b1c7e272e1306f', easProfile: 'explore', environment: 'preview', environmentVariables: 'a'.repeat(64), project: digests[0] };
   const key = hostedRepackShareKey(input);
   assert.match(key, /^[0-9a-f]{32}$/);
-  for (const [name, other] of Object.entries({ scope: 'acme/example#39506405687.2', platform: 'android', nativeBuildId: 'b0000000', easProfile: 'other', environment: 'production',
+  for (const [name, other] of Object.entries({ scope: 'acme/example#39506405687.2', platform: 'android', fingerprint: 'fc2446ef4e6d0000000000000000000000000000', easProfile: 'other', environment: 'production',
     environmentVariables: 'b'.repeat(64), project: digests[1] })) {
     assert.notEqual(hostedRepackShareKey({ ...input, [name]: other }), key, name);
   }
+  // Which build a job found to repack does not matter, only its native code: a target that starts after the others'
+  // repack finished finds that repack as its newest build of the fingerprint (brentvatne/euxy#179), and must still
+  // join it rather than make another.
+  assert.equal(hostedRepackShareKey({ ...input, nativeBuildId: '7f6b592a' }), hostedRepackShareKey({ ...input, nativeBuildId: '2ebcfd8d' }));
 });
 
 test("only a build whose message ends with this key, for this platform, is another job's repack", () => {
