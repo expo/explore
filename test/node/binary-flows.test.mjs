@@ -7,7 +7,7 @@ import { tsImport } from "tsx/esm/api";
 
 const { runBlackBoxExploration } = await tsImport("../../src/binary/explorer.ts", import.meta.url);
 const { assertFlowsFit, createFlowSession, parseFlowPlan } = await tsImport("../../src/binary/flows.ts", import.meta.url);
-const { hintInputs } = await tsImport("../../src/binary/run.ts", import.meta.url);
+const { chooseStrategy, strategyInputs } = await tsImport("../../src/binary/strategy.ts", import.meta.url);
 const { ExploreStore, validateMap } = await tsImport("../../src/map/store.ts", import.meta.url);
 const { CONTRACT } = await tsImport("../../src/types.ts", import.meta.url);
 
@@ -172,6 +172,19 @@ test("a flows file is checked before any device starts", () => {
 
 test("a {{secret:NAME}} in a described step must be set before any device starts, as one in the hints must", () => {
   const plan = parseFlowPlan({ flows: [{ name: "Sign in", steps: [{ do: "Sign in with {{secret:TEST_PASSWORD}}" }, { checkpoint: "Home" }] }] });
-  assert.throws(() => hintInputs(undefined, {}, undefined, plan), error => error.code === "EXPLORATION_SECRET_MISSING" && /TEST_PASSWORD/.test(error.nextAction));
-  assert.deepEqual(hintInputs(undefined, { TEST_PASSWORD: "hunter2" }, undefined, plan).names, ["TEST_PASSWORD"]);
+  assert.throws(() => strategyInputs({ kind: "flows", plan }, undefined, {}), error => error.code === "EXPLORATION_SECRET_MISSING" && /TEST_PASSWORD/.test(error.nextAction));
+  assert.deepEqual(strategyInputs({ kind: "flows", plan }, undefined, { TEST_PASSWORD: "hunter2" }).names, ["TEST_PASSWORD"]);
+});
+
+test("the strategy is chosen before any device starts, and options that would do nothing with it are refused", () => {
+  const exact = { flows: [{ name: "A", steps: [{ action: "tap", label: "Settings" }, { checkpoint: "Settings" }] }] };
+  const described = { flows: [{ name: "A", steps: [{ do: "Open the settings" }, { checkpoint: "Settings" }] }] };
+  assert.deepEqual(chooseStrategy({}), { kind: "model" });
+  assert.equal(chooseStrategy({ flows: exact }).kind, "flows");
+  assert.equal(chooseStrategy({ flows: described, provider: "openai", hints: "Use the test account" }).kind, "flows");
+  assert.throws(() => chooseStrategy({ flows: exact, replay: { steps: [{ capture: "Home" }] } }), { code: "FLOWS_WITH_REPLAY" });
+  assert.throws(() => chooseStrategy({ flows: exact, model: "gpt-6.1-sol" }), error => error.code === "FLOWS_OPTIONS_IGNORED" && /--model would do nothing/.test(error.message));
+  assert.throws(() => chooseStrategy({ replay: { steps: [{ capture: "Home" }] }, hints: "x" }), { code: "REPLAY_OPTIONS_IGNORED" });
+  assert.throws(() => chooseStrategy({ flows: { flows: [{ name: "A", steps: [{ action: "open", url: "https://example.com" }, { checkpoint: "Web" }] }] } }),
+    error => error.code === "FLOWS_PLAN_INVALID" && /Flow 1 \(A\), step 1: https: URLs leave the app/.test(error.message));
 });

@@ -2,11 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCiAgentSession, type CiAgentSession, type CiAgentSessionConfig } from "../capture/agent/session.js";
-import { createLocalCiAgentSession } from "../capture/agent/session-local.js";
+import type { CiAgentSession, CiAgentSessionConfig } from "../capture/agent/session.js";
 import type { CiAgentProviderName } from "../capture/agent/provider.js";
-import { assertReplayFits, createReplaySession, parseReplayPlan, replaySetup, type ReplayPlan } from "./replay.js";
-import { assertFlowsFit, createFlowSession, flowGoals, flowSetup, flowsNeedModel, parseFlowPlan, type FlowPlan } from "./flows.js";
+import type { ReplayPlan } from "./replay.js";
+import type { FlowPlan } from "./flows.js";
+import { assertAppUrl } from "./app-url.js";
+import { chooseStrategy, startStrategy, strategyInputs, turnBudget, type ExplorationStrategy, type ModelAuth } from "./strategy.js";
 import { CONTROLLER_SESSION, baseEnvironment, isRecord } from "../capture/common.js";
 import { controllerData, defaultRunner, openedSimulatorDevice } from "../capture/controller.js";
 import type { CommandRequest, CommandResult } from "../capture/run.js";
@@ -22,7 +23,7 @@ import { screenSpace } from "../capture/route-capture.js";
 import { approveSessionUrlSchemes, simulatorControlActions, type EasCommand } from "../capture/simulator-control.js";
 import { DEFAULT_ANDROID_DEVICE } from "../config/explore-config.js";
 import { DUO_PANELS } from "../contracts/capture.js";
-import { createExplorationInputs } from "../config/exploration-inputs.js";
+import type { createExplorationInputs } from "../config/exploration-inputs.js";
 import { ExploreStore, getCoverage } from "../map/store.js";
 import { whoamiAccounts } from "../report/preview-deploy.js";
 import { CiError, serializeCiError, toCiError } from "../shared/ci-errors.js";
@@ -34,7 +35,6 @@ import { runBlackBoxExploration, type BlackBoxExplorerResult, type BlackBoxFrame
 
 export const DEFAULT_IOS_DEVICE = "iPhone 17 Pro";
 export const DEFAULT_BINARY_PROJECT = "expo-explore";
-export const DEFAULT_MODELS: Record<CiAgentProviderName, string> = { anthropic: "claude-sonnet-4-5", openai: "gpt-6.1-sol" };
 export const BINARY_LIMITS = { maxDurationMinutes: 15, maxScreens: 40, maxActions: 150 } as const;
 
 export type BinaryExploreOptions = {
@@ -76,7 +76,7 @@ export type BinaryExploreResult = {
   archive: Omit<InspectedArchive, "path"> & { path: string };
   session: { id: string; platform: Platform; device: string; owner: string; project: string };
   runtime: ActiveSimulatorRuntime;
-  model: { provider: CiAgentProviderName | "replay" | "flows"; model: string; auth: "local-login" | "api-key" | "none" };
+  model: Pick<ExplorationStrategy, "provider" | "model" | "auth">;
   exploration: BlackBoxExplorerResult;
   durationMs: number;
 };
@@ -166,23 +166,6 @@ export function resolveSessionApp(runner: typeof defaultRunner, connection: Simu
     "Pass --bundle-id with the app's bundle identifier (iOS) or package name (Android).", { installed });
 }
 
-/**
- * App-test inputs: each {{secret:NAME}} in the hints names an environment variable whose value Explore types for the
- * model. Read before any session starts, so a missing one costs nothing.
- */
-export function hintInputs(hints: string | undefined, environment: NodeJS.ProcessEnv, replay?: ReplayPlan, flows?: FlowPlan): ReturnType<typeof createExplorationInputs> {
-  const setup = replay ? replaySetup(replay) : flows ? flowSetup(flows) : undefined;
-  try { return createExplorationInputs({ instructions: [hints ?? "", ...(flows ? flowGoals(flows) : [])].join("\n"), ...(setup ? { setup } : {}), environment }); }
-  catch (error) {
-    if (!(error instanceof CiError) || !error.code.startsWith("EXPLORATION_SECRET_")) throw error;
-    const name = typeof error.details?.secretName === "string" ? error.details.secretName : "NAME";
-    throw new CiError({ code: error.code, stage: "preflight", message: error.message, ...(error.details ? { details: error.details } : {}),
-      nextAction: error.code === "EXPLORATION_SECRET_REFERENCE_INVALID"
-        ? "Write each input in --hints as {{secret:NAME}} with an uppercase environment variable name that is not a provider, Expo, or CI credential."
-        : `Set ${name} in the environment that runs Explore (export ${name}=…) to the single-line test value, then rerun.` });
-  }
-}
-
 function validatedLimits(options: Pick<BinaryExploreOptions, "maxDurationMinutes" | "maxScreens" | "maxActions">) {
   const limits = { maxDurationMinutes: options.maxDurationMinutes ?? BINARY_LIMITS.maxDurationMinutes, maxScreens: options.maxScreens ?? BINARY_LIMITS.maxScreens, maxActions: options.maxActions ?? BINARY_LIMITS.maxActions };
   for (const [name, value] of Object.entries(limits)) if (!Number.isSafeInteger(value) || value < 1 || value > 1000) throw binaryError("EXPLORE_LIMIT_INVALID", `${name} must be an integer between 1 and 1000.`, "Correct the budget flag and rerun.");
@@ -191,108 +174,6 @@ function validatedLimits(options: Pick<BinaryExploreOptions, "maxDurationMinutes
 
 function binaryError(code: string, message: string, nextAction: string, details?: Record<string, unknown>): CiError {
   return new CiError({ code, stage: "session", message, nextAction, ...(details ? { details } : {}) });
-}
-
-type ModelAuth = "local-login" | "api-key";
-type ModelSessionOptions = Pick<BinaryExploreOptions, "provider" | "model" | "createSession">;
-
-function modelSession(provider: CiAgentProviderName, auth: ModelAuth, options: ModelSessionOptions, environment: NodeJS.ProcessEnv) {
-  const config = { provider, model: options.model ?? DEFAULT_MODELS[provider] };
-  const session = options.createSession ? options.createSession(config, { env: environment, auth })
-    : auth === "api-key" ? createCiAgentSession(config, { env: environment }) : createLocalCiAgentSession(config, { env: environment });
-  return { session, provider, model: config.model, auth };
-}
-
-/** The turns the model gets: three for each action and two for each screen, plus a few to look around and finish. */
-const turnBudget = (limits: { maxScreens: number; maxActions: number }): number => limits.maxActions * 3 + limits.maxScreens * 2 + 20;
-
-/**
- * A replay plan is checked here as well as by the CLI, for callers that pass one directly. It takes the model's place, so
- * the options that only steer a model would do nothing; the plan's own fill and type steps name the secrets it types.
- */
-function replayPlan(options: Pick<BinaryExploreOptions, "replay" | "provider" | "model" | "hints">): ReplayPlan | undefined {
-  if (!options.replay) return undefined;
-  const ignored = (["provider", "model", "hints"] as const).filter(name => options[name] !== undefined);
-  if (ignored.length) {
-    throw binaryError("REPLAY_OPTIONS_IGNORED", `--replay takes the model's place, so ${ignored.map(name => `--${name}`).join(" and ")} would do nothing.`,
-      `Drop ${ignored.map(name => `--${name}`).join(" and ")}. A {{secret:NAME}} in the plan's fill and type steps is read from the environment, as one in --hints is.`);
-  }
-  const plan = parseReplayPlan(options.replay);
-  for (const [index, step] of plan.steps.entries()) {
-    if (!("action" in step) || step.action !== "open") continue;
-    try { assertAppUrl(step.url); }
-    catch (error) { throw new CiError({ code: "REPLAY_PLAN_INVALID", stage: "exploration", message: `Step ${index + 1}: ${error instanceof Error ? error.message : String(error)}`, nextAction: "Open only the app's own URLs in the replay plan." }); }
-  }
-  return plan;
-}
-
-/** A replay plan takes the model's place: no model access is checked or used. */
-function replayModel(plan: ReplayPlan, platform: Platform, limits: { maxScreens: number; maxActions: number }) {
-  assertReplayFits(plan, platform, { ...limits, maxTurns: turnBudget(limits) });
-  const session = createReplaySession(plan, platform);
-  return { session, budgetNote: session.budgetNote, provider: "replay" as const, model: "replay plan", auth: "none" as const };
-}
-
-/**
- * A flows file is checked here as well as by the CLI. It decides every step, as a replay plan does, but a step it
- * describes in words is carried out by a model, so --provider, --model and --hints apply only when it has one.
- */
-function flowsPlan(options: Pick<BinaryExploreOptions, "flows" | "replay" | "provider" | "model" | "hints">): FlowPlan | undefined {
-  if (!options.flows) return undefined;
-  if (options.replay) throw binaryError("FLOWS_WITH_REPLAY", "--flows and --replay each decide every step, so only one of them can run.", "Drop --replay, or move its steps into a flow.");
-  const plan = parseFlowPlan(options.flows);
-  const ignored = flowsNeedModel(plan) ? [] : (["provider", "model", "hints"] as const).filter(name => options[name] !== undefined);
-  if (ignored.length) {
-    throw binaryError("FLOWS_OPTIONS_IGNORED", `Every step of the flows file is exact, so ${ignored.map(name => `--${name}`).join(" and ")} would do nothing.`,
-      `Drop ${ignored.map(name => `--${name}`).join(" and ")}, or describe a step in words ({"do": "…"}) for a model to carry out.`);
-  }
-  for (const [index, flow] of plan.flows.entries()) for (const [stepIndex, step] of flow.steps.entries()) {
-    if (!("action" in step) || step.action !== "open") continue;
-    try { assertAppUrl(step.url); }
-    catch (error) { throw new CiError({ code: "FLOWS_PLAN_INVALID", stage: "exploration", message: `Flow ${index + 1} (${flow.name}), step ${stepIndex + 1}: ${error instanceof Error ? error.message : String(error)}`, nextAction: "Open only the app's own URLs in the flows file." }); }
-  }
-  return plan;
-}
-
-/** The flows run in place of a model's exploration; a model is checked, and used, only when a step is described in words. */
-async function flowsModel(plan: FlowPlan, platform: Platform, limits: { maxScreens: number; maxActions: number }, options: ModelSessionOptions & Pick<BinaryExploreOptions, "hints">,
-  environment: NodeJS.ProcessEnv, say: (message: string) => void, app: { name: string }) {
-  assertFlowsFit(plan, platform, limits);
-  const goals = flowsNeedModel(plan) ? await preflightModelSession(options, environment, say) : undefined;
-  const session = createFlowSession(plan, platform, { app, ...(goals ? { model: goals.session } : {}), ...(options.hints ? { hints: options.hints } : {}) });
-  return { session, budgetNote: session.budgetNote, flows: true, provider: "flows" as const, model: goals ? `${goals.provider} ${goals.model}` : session.model, auth: goals?.auth ?? "none" as const };
-}
-
-/** Local `claude`/`codex` login unless an API key is present; preflight proves access before a simulator is paid for. */
-export function selectModelSession(options: ModelSessionOptions, environment: NodeJS.ProcessEnv) {
-  const provider: CiAgentProviderName = options.provider ?? (environment.OPENAI_API_KEY?.trim() && !environment.ANTHROPIC_API_KEY?.trim() ? "openai" : "anthropic");
-  const keyName = provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
-  return modelSession(provider, environment[keyName]?.trim() ? "api-key" : "local-login", options, environment);
-}
-
-/**
- * With --provider or --model, only that choice is tried. Otherwise every model access this shell has is tried
- * in turn (API keys, then the local claude and codex logins) and the first that passes preflight runs.
- */
-export async function preflightModelSession(options: ModelSessionOptions, environment: NodeJS.ProcessEnv, say: (message: string) => void) {
-  const candidates = options.provider || options.model ? [selectModelSession(options, environment)] : [
-    ...(["anthropic", "openai"] as const).filter(provider => environment[provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"]?.trim())
-      .map(provider => modelSession(provider, "api-key", options, environment)),
-    modelSession("anthropic", "local-login", options, environment),
-    modelSession("openai", "local-login", options, environment),
-  ];
-  let firstError: unknown;
-  for (const [index, candidate] of candidates.entries()) {
-    say(`checking ${candidate.provider} ${candidate.model} (${candidate.auth === "api-key" ? "API key" : "local login"})`);
-    try {
-      await candidate.session.preflight();
-      return candidate;
-    } catch (error) {
-      firstError ??= error;
-      if (index < candidates.length - 1) say(`${candidate.provider} ${candidate.auth === "api-key" ? "API key" : "local login"} unavailable (${error instanceof Error ? error.message : String(error)}); trying the next`);
-    }
-  }
-  throw firstError;
 }
 
 export type SessionExploreOptions = Omit<BinaryExploreOptions, "archive" | "bundleId" | "owner" | "project"> & {
@@ -329,8 +210,7 @@ export type ConnectedSessionExploration = {
   limits: { maxDurationMinutes: number; maxScreens: number; maxActions: number };
   store: ExploreStore;
   map: ExploreMap;
-  /** `flows`: the session takes the explorer's flow tools, and each flow after the first starts from a relaunched app. */
-  model: { session: Pick<CiAgentSession, "run">; budgetNote?: () => string | undefined; flows?: boolean };
+  strategy: ExplorationStrategy;
   /** `eas simulator:get --json` for the attached session; descriptive (OS version) only. */
   sessionJson: () => string;
   /** agent-device session name on the daemon; explore:session reuses the caller's session so the device is not "in use" by another. */
@@ -353,7 +233,7 @@ export type ConnectedSessionExploration = {
 
 /** Drives an agent-device daemon we already hold a connection to: optional install, open, then the model-led exploration. */
 export async function exploreConnectedSession(ctx: ConnectedSessionExploration): Promise<{ runtime: ActiveSimulatorRuntime; exploration: BlackBoxExplorerResult }> {
-  const { connection, platform, device, bundleId, app, install, work, runner, environment, secrets, inputs, say, now, limits, store, map, model, sessionJson, launchUrl, hints, allowDestructive, local } = ctx;
+  const { connection, platform, device, bundleId, app, install, work, runner, environment, secrets, inputs, say, now, limits, store, map, strategy, sessionJson, launchUrl, hints, allowDestructive, local } = ctx;
   const controllerSession = ctx.controllerSession ?? CONTROLLER_SESSION;
   const controllerKind = connectionController(connection);
   const controllerName = controllerKind === "argent" ? "Argent" : "agent-device";
@@ -534,9 +414,9 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
       blockedAtLaunch = { stopReason: "blocked", summary: reason, screens: 0, observations: 0, actions: 0, turns: 0 };
     }
   }
-  const exploration = blockedAtLaunch ?? await runBlackBoxExploration({ session: model.session, store, map, app: { name: app.name, bundleId, platform, ...(app.version ? { version: app.version } : {}) },
+  const exploration = blockedAtLaunch ?? await runBlackBoxExploration({ session: strategy.session, store, map, app: { name: app.name, bundleId, platform, ...(app.version ? { version: app.version } : {}) },
     inputs, ...(hints ? { hints: hints } : {}), ...(launchUrl ? { launchUrl: launchUrl } : {}), ...(allowDestructive ? { allowDestructive: allowDestructive } : {}), ...(ctx.appIcon ? { appIcon: ctx.appIcon } : {}),
-    ...(model.budgetNote ? { budgetNote: model.budgetNote } : {}), ...(model.flows ? { flows: { restart } } : {}),
+    ...(strategy.budgetNote ? { budgetNote: strategy.budgetNote } : {}), ...(strategy.flowTools ? { flows: { restart } } : {}),
     deadlineMs, maxScreens: limits.maxScreens, maxActions: limits.maxActions, maxTurns: turnBudget(limits), now, observe, progress: say,
     act: async action => {
       const perform = async () => {
@@ -601,9 +481,8 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
   const environment = options.environment ?? process.env;
   const runner = options.runner ?? defaultRunner;
   const limits = validatedLimits(options);
-  const replay = replayPlan(options);
-  const flows = flowsPlan(options);
-  const inputs = hintInputs(options.hints, environment, replay, flows);
+  const choice = chooseStrategy(options);
+  const inputs = strategyInputs(choice, options.hints, environment);
   if (options.bundleId !== undefined && !appIdPattern.test(options.bundleId)) throw binaryError("BUNDLE_ID_INVALID", `${options.bundleId} is not a bundle or package id.`, "Pass --bundle-id with the app's bundle identifier (iOS) or package name (Android).");
   let connection: SimulatorConnection;
   try { connection = await resolveAttachedSimulatorSession(environment, options.envFile, options.session); }
@@ -667,16 +546,15 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
     map.run.environment = { deviceModel: device };
     session = { id: connection.sessionId, platform, device, name: info.name, ...(info.deviceRunSessionUrl ? { url: info.deviceRunSessionUrl } : {}) };
 
-    const model = replay ? replayModel(replay, platform, limits) : flows ? await flowsModel(flows, platform, limits, options, environment, say, app)
-      : await preflightModelSession(options, environment, say);
+    const strategy = await startStrategy(choice, { platform, limits, options, environment, say, app });
     const outputDirectory = await realpath(await mkdir(options.output, { recursive: true }).then(() => options.output));
     const store = new ExploreStore(outputDirectory);
     if (await store.exists()) throw binaryError("OUTPUT_NOT_EMPTY", `${outputDirectory} already holds an Explore map.`, "Pass an empty --output directory.");
 
-    ({ runtime, exploration } = await exploreConnectedSession({ connection, platform, device, bundleId: app.bundleId, app, work, runner, environment, secrets, inputs, say, now, limits, store, map, model, sessionJson,
+    ({ runtime, exploration } = await exploreConnectedSession({ connection, platform, device, bundleId: app.bundleId, app, work, runner, environment, secrets, inputs, say, now, limits, store, map, strategy, sessionJson,
       ...(existing ? { controllerSession: existing.name } : {}),
       ...(options.launchUrl ? { launchUrl: options.launchUrl } : {}), ...(options.hints ? { hints: options.hints } : {}), ...(options.allowDestructive ? { allowDestructive: options.allowDestructive } : {}) }));
-    return { outputDirectory, mapPath: store.mapPath, app: { ...app, platform }, session, runtime, model: { provider: model.provider, model: model.model, auth: model.auth }, exploration, durationMs: Date.now() - startedAt };
+    return { outputDirectory, mapPath: store.mapPath, app: { ...app, platform }, session, runtime, model: { provider: strategy.provider, model: strategy.model, auth: strategy.auth }, exploration, durationMs: Date.now() - startedAt };
   } catch (error) {
     primaryError = toCiError(error, { code: "EXPLORE_SESSION_FAILED", stage: "exploration", nextAction: "Inspect the diagnostic, correct the failing prerequisite, and rerun explore:session. The session was left running." });
     throw primaryError;
@@ -761,9 +639,8 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
   const environment = options.environment ?? process.env;
   const runner = options.runner ?? defaultRunner;
   const limits = validatedLimits(options);
-  const replay = replayPlan(options);
-  const flows = flowsPlan(options);
-  const inputs = hintInputs(options.hints, environment, replay, flows);
+  const choice = chooseStrategy(options);
+  const inputs = strategyInputs(choice, options.hints, environment);
   const local = options.simulator === "local";
   // A local emulator runs this Mac's ABI (arm64-v8a on Apple silicon); EAS's runs x86_64.
   const emulatorAbi = local ? hostEmulatorAbi() : "x86_64";
@@ -780,8 +657,7 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
   say(`${archive.appName} ${archive.version ?? ""} (${bundleId}, ${platform}, ${(archive.bytes / 1048576).toFixed(0)} MB, sha256 ${archive.sha256.slice(0, 12)})`);
   if (archive.missingLibs?.length && emulatorAbi === "x86_64") say(`warning: lib/x86_64 lacks ${archive.missingLibs.slice(0, 4).join(", ")}${archive.missingLibs.length > 4 ? ` and ${archive.missingLibs.length - 4} more` : ""} that another ABI ships; the app may stop with UnsatisfiedLinkError on the emulator`);
 
-  const model = replay ? replayModel(replay, platform, limits) : flows ? await flowsModel(flows, platform, limits, options, environment, say, { name: archive.appName })
-    : await preflightModelSession(options, environment, say);
+  const strategy = await startStrategy(choice, { platform, limits, options, environment, say, app: { name: archive.appName } });
 
   const outputDirectory = await realpath(await mkdir(options.output, { recursive: true }).then(() => options.output));
   const store = new ExploreStore(outputDirectory);
@@ -821,7 +697,7 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
       ...(appIcon ? { appIcon } : {}), app: { name: archive.appName, ...(archive.version ? { version: archive.version } : {}) },
       // A local device has the app installed by simctl or adb before the controller starts.
       ...(localDevice ? { local: localDevice } : { install: { path: installPath, kind: archive.kind } }),
-      work, runner, environment, secrets: [environment.EXPO_TOKEN ?? "", connection.daemonAuthToken, ...inputs.values].filter(Boolean), inputs, say, now, limits, store, map, model,
+      work, runner, environment, secrets: [environment.EXPO_TOKEN ?? "", connection.daemonAuthToken, ...inputs.values].filter(Boolean), inputs, say, now, limits, store, map, strategy,
       urlSchemes: archive.urlSchemes, sessionJson,
       ...(options.launchUrl ? { launchUrl: options.launchUrl } : {}), ...(options.hints ? { hints: options.hints } : {}), ...(options.allowDestructive ? { allowDestructive: options.allowDestructive } : {}) });
     if (local) {
@@ -904,7 +780,7 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
   }
   if (primaryError) throw primaryError;
   return { outputDirectory, mapPath: store.mapPath, archive, session: { id: sessionId!, platform, device, owner, project }, runtime: runtime!,
-    model: { provider: model.provider, model: model.model, auth: model.auth }, exploration: exploration!, durationMs: Date.now() - startedAt };
+    model: { provider: strategy.provider, model: strategy.model, auth: strategy.auth }, exploration: exploration!, durationMs: Date.now() - startedAt };
 }
 
 function lastLine(text: string): string { return text.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? ""; }
@@ -919,10 +795,6 @@ async function easLoggedIn(runner: typeof defaultRunner, environment: NodeJS.Pro
   } catch { return false; }
 }
 
-/** Schemes the OS routes to a browser, the store, Settings, or another app: opening one hands the session away from the app under test. */
-const SYSTEM_URL_SCHEMES = /^(https?|ftp|file|javascript|data|blob|mailto|tel|telprompt|facetime(-audio)?|sms|mms|imessage|itms(-apps|-services|-beta)?|macappstore|app-settings|prefs|shortcuts|maps|music|videos|photos-redirect|x-apple-[a-z-]+|market|intent|content|android-app|geo|package):$/i;
-
-/** The model may only open app-owned URLs; an https page or a store link would hand the session to another app. */
 const RUNNER_BUSY = /still finishing a previous command/i;
 const sleepSync = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
@@ -938,16 +810,6 @@ export function retryWhileBusy<T>(run: () => T, pause: (ms: number) => void, bud
       if (!RUNNER_BUSY.test(error instanceof Error ? error.message : String(error)) || clock() - started >= budgetMs) throw error;
       pause(stepMs);
     }
-  }
-}
-
-export function assertAppUrl(url: string, appSchemes: readonly string[] = []): void {
-  let parsed: URL;
-  try { parsed = new URL(url); } catch { throw binaryError("AGENT_URL_INVALID", `Not a URL: ${url}`, "Pass a custom-scheme app URL."); }
-  if (SYSTEM_URL_SCHEMES.test(parsed.protocol)) throw binaryError("AGENT_URL_NOT_ALLOWED", `${parsed.protocol} URLs leave the app; only the app's own URL schemes are allowed.`, "Use the app's own URL scheme.");
-  const scheme = parsed.protocol.slice(0, -1).toLowerCase();
-  if (appSchemes.length && !appSchemes.includes(scheme)) {
-    throw binaryError("AGENT_URL_NOT_ALLOWED", `${parsed.protocol} is not a URL scheme this app registers (${appSchemes.join(", ")}).`, "Use one of the app's own URL schemes.");
   }
 }
 
