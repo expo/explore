@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tsImport } from "tsx/esm/api";
 
-const { runBlackBoxExploration, assertFlowsFit, createFlowSession, flowsNeedModel, parseFlowPlan, hintInputs, runBoundedSession, ExploreStore, validateMap, CiError, CONTRACT } =
+const { runBlackBoxExploration, assertFlowsFit, createFlowSession, flowsNeedModel, parseFlowPlan, chooseStrategy, startStrategy, strategyInputs, runBoundedSession, ExploreStore, validateMap, CiError, CONTRACT } =
   await tsImport("../helpers/flows-host.ts", import.meta.url);
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
@@ -185,8 +185,21 @@ test("a flows file is checked before any device starts", () => {
 
 test("a {{secret:NAME}} in a described step must be set before any device starts, as one in the hints must", () => {
   const plan = parseFlowPlan({ flows: [{ name: "Sign in", steps: [{ do: "Sign in with {{secret:TEST_PASSWORD}}" }, { checkpoint: "Home" }] }] });
-  assert.throws(() => hintInputs(undefined, {}, undefined, plan), error => error.code === "EXPLORATION_SECRET_MISSING" && /TEST_PASSWORD/.test(error.nextAction));
-  assert.deepEqual(hintInputs(undefined, { TEST_PASSWORD: "hunter2" }, undefined, plan).names, ["TEST_PASSWORD"]);
+  assert.throws(() => strategyInputs({ kind: "flows", plan }, undefined, {}), error => error.code === "EXPLORATION_SECRET_MISSING" && /TEST_PASSWORD/.test(error.nextAction));
+  assert.deepEqual(strategyInputs({ kind: "flows", plan }, undefined, { TEST_PASSWORD: "hunter2" }).names, ["TEST_PASSWORD"]);
+});
+
+test("the strategy is chosen before any device starts, and options that would do nothing with it are refused", () => {
+  const exact = { flows: [{ name: "A", steps: [{ action: "tap", label: "Settings" }, { checkpoint: "Settings" }] }] };
+  const described = { flows: [{ name: "A", steps: [{ do: "Open the settings" }, { checkpoint: "Settings" }] }] };
+  assert.deepEqual(chooseStrategy({}), { kind: "model" });
+  assert.equal(chooseStrategy({ flows: exact }).kind, "flows");
+  assert.equal(chooseStrategy({ flows: described, provider: "openai", hints: "Use the test account" }).kind, "flows");
+  assert.throws(() => chooseStrategy({ flows: exact, replay: { steps: [{ capture: "Home" }] } }), { code: "FLOWS_WITH_REPLAY" });
+  assert.throws(() => chooseStrategy({ flows: exact, model: "gpt-6.1-sol" }), error => error.code === "FLOWS_OPTIONS_IGNORED" && /--model would do nothing/.test(error.message));
+  assert.throws(() => chooseStrategy({ replay: { steps: [{ capture: "Home" }] }, hints: "x" }), { code: "REPLAY_OPTIONS_IGNORED" });
+  assert.throws(() => chooseStrategy({ flows: { flows: [{ name: "A", steps: [{ action: "open", url: "https://example.com" }, { checkpoint: "Web" }] }] } }),
+    error => error.code === "FLOWS_PLAN_INVALID" && /Flow 1 \(A\), step 1: https: URLs leave the app/.test(error.message));
 });
 
 test("a checkpoint after a relaunch takes a new picture, even of the screen the previous flow ended on untouched", async () => {
@@ -264,8 +277,8 @@ test("a described step limited to another platform needs no model, and its secre
   assert.equal(flowsNeedModel(plan, "ios"), false);
   assert.equal(flowsNeedModel(plan, "android"), true);
   assert.doesNotThrow(() => createFlowSession(plan, "ios", { app: { name: "Example" } }));
-  assert.deepEqual(hintInputs(undefined, {}, undefined, plan, "ios").names, []);
-  assert.throws(() => hintInputs(undefined, {}, undefined, plan), error => error.code === "EXPLORATION_SECRET_MISSING", "without a platform, every step's secrets are needed");
+  assert.deepEqual(strategyInputs({ kind: "flows", plan }, undefined, {}, "ios").names, []);
+  assert.throws(() => strategyInputs({ kind: "flows", plan }, undefined, {}), error => error.code === "EXPLORATION_SECRET_MISSING", "without a platform, every step's secrets are needed");
 });
 
 test("flows whose tool calls cannot fit the turn budget are refused before any device starts", () => {
@@ -273,6 +286,14 @@ test("flows whose tool calls cannot fit the turn budget are refused before any d
   const limits = { maxScreens: 51, maxActions: 1, maxTurns: 125 };
   assert.throws(() => assertFlowsFit(flows(50), "ios", limits), error => error.code === "FLOWS_PLAN_OVER_BUDGET" && /at least 151 tool calls, more than the 125/.test(error.message));
   assert.doesNotThrow(() => assertFlowsFit(flows(41), "ios", limits), "41 flows take 124 calls");
+});
+
+test("flows whose described steps run only on another platform start with no model at all", async () => {
+  const plan = parseFlowPlan({ flows: [{ name: "A", steps: [{ do: "Sign in", platforms: ["android"] }, { action: "tap", label: "Settings" }, { checkpoint: "Settings" }] }] });
+  const createSession = () => { throw new Error("no model may be started"); };
+  const strategy = await startStrategy({ kind: "flows", plan }, { platform: "ios", limits: { maxScreens: 10, maxActions: 10 }, options: { createSession }, environment: {}, say() {}, app: { name: "Example" } });
+  assert.deepEqual([strategy.provider, strategy.model, strategy.auth], ["flows", "flows file", "none"]);
+  assert.deepEqual(strategy.flows(), [{ flow: "A", checkpoints: ["Settings"] }]);
 });
 
 test("a checkpoint whose screen withholds its picture is recorded as missing, its flow goes on, and the summary names it", async () => {
@@ -330,7 +351,7 @@ test("a flow with no checkpoint on the platform is skipped, and its steps need n
     { name: "Settings", steps: [{ action: "tap", label: "Settings" }, { checkpoint: "Settings" }] },
   ] });
   assert.equal(flowsNeedModel(plan, "ios"), false);
-  assert.deepEqual(hintInputs(undefined, {}, undefined, plan, "ios").names, []);
+  assert.deepEqual(strategyInputs({ kind: "flows", plan }, undefined, {}, "ios").names, []);
   const { result } = await explore(plan);
   assert.deepEqual(result.flows.map(flow => flow.name), ["Settings"]);
   assert.match(result.summary, /^Ran 1 flow on ios/);

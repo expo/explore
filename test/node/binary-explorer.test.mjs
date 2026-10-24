@@ -9,7 +9,8 @@ const { runBlackBoxExploration, screenEvidenceKey, elementsOf, fieldName, system
 const { ExploreStore, validateMap } = await tsImport("../../src/map/store.ts", import.meta.url);
 const { CONTRACT } = await tsImport("../../src/types.ts", import.meta.url);
 const tsRun = await tsImport("../../src/binary/run.ts", import.meta.url);
-const { assertAppUrl, describeForeground, foreignNode, guardPositionals, leftForeground, retryWhileBusy } = tsRun;
+const { describeForeground, foreignNode, guardPositionals, leftForeground, retryWhileBusy } = tsRun;
+const { assertAppUrl } = await tsImport("../../src/binary/app-url.ts", import.meta.url);
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 const SCREENS = {
@@ -246,7 +247,8 @@ test("a {{secret:NAME}} from the hints is typed on the device, while the model, 
 });
 
 test("hint inputs are read before a session starts and name what to set", async () => {
-  const { hintInputs } = await tsImport("../../src/binary/run.ts", import.meta.url);
+  const { strategyInputs } = await tsImport("../../src/binary/strategy.ts", import.meta.url);
+  const hintInputs = (hints, environment) => strategyInputs({ kind: "model" }, hints, environment);
   assert.deepEqual(hintInputs("Explore the settings", {}).names, []);
   assert.deepEqual(hintInputs("Use {{secret:APP_TEST_EMAIL}} and {{secret:APP_TEST_PASSWORD}}", { APP_TEST_EMAIL: "a@example.com", APP_TEST_PASSWORD: "pw" }).names, ["APP_TEST_EMAIL", "APP_TEST_PASSWORD"]);
   assert.throws(() => hintInputs("Use {{secret:APP_TEST_PASSWORD}}", {}), error => error.code === "EXPLORATION_SECRET_MISSING" && /export APP_TEST_PASSWORD=/.test(error.nextAction));
@@ -854,7 +856,7 @@ test("a coordinate tap with no description on an icon-font button is named by wh
 });
 
 test("with no --provider, model access falls through API keys and local logins to the first that passes preflight", async () => {
-  const { preflightModelSession } = await tsImport("../../src/binary/run.ts", import.meta.url);
+  const { preflightModelSession } = await tsImport("../../src/binary/strategy.ts", import.meta.url);
   const tried = [];
   const working = "anthropic/local-login";
   const createSession = (config, { auth }) => ({ async preflight() {
@@ -870,7 +872,7 @@ test("with no --provider, model access falls through API keys and local logins t
 });
 
 test("an explicit --provider is the only model access tried, and its preflight error is the one reported", async () => {
-  const { preflightModelSession } = await tsImport("../../src/binary/run.ts", import.meta.url);
+  const { preflightModelSession } = await tsImport("../../src/binary/strategy.ts", import.meta.url);
   const tried = [];
   const createSession = (config, { auth }) => ({ async preflight() { tried.push(`${config.provider}/${auth}`); throw new Error("refused"); } });
   await assert.rejects(preflightModelSession({ provider: "openai", createSession }, { ANTHROPIC_API_KEY: "key" }, () => {}), /refused/);
@@ -878,7 +880,7 @@ test("an explicit --provider is the only model access tried, and its preflight e
 });
 
 test("when nothing passes preflight, the first failure is reported", async () => {
-  const { preflightModelSession } = await tsImport("../../src/binary/run.ts", import.meta.url);
+  const { preflightModelSession } = await tsImport("../../src/binary/strategy.ts", import.meta.url);
   const createSession = (config, { auth }) => ({ async preflight() { throw new Error(`${config.provider} ${auth} refused`); } });
   await assert.rejects(preflightModelSession({ createSession }, {}, () => {}), /anthropic local-login refused/);
 });
