@@ -18,11 +18,11 @@ export const EXPLORATION_REPORT_KIND = "explore.exploration-report" as const;
  */
 export type ExplorationFlow = {
   name: string;
-  /** `stopped`: the run ended (a budget, an error) while the flow was in progress. */
+  /** `failed`: a step, the relaunch before it, or a checkpoint's picture failed. `stopped`: the run ended (a budget, an error) before or during the flow. */
   status: "completed" | "failed" | "stopped";
   reason?: string;
-  /** The map's journey for the flow: its walk from the screen it started on. */
-  journeyId?: string;
+  /** The map's journeys for the flow: its walk from the screen it started on, in parts where the app moved without a transition. */
+  journeyIds?: string[];
   checkpoints: Array<{ name: string; observationId: string; missing?: never } | { name: string; missing: string; observationId?: never }>;
 };
 

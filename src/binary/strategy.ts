@@ -28,8 +28,11 @@ export type ExplorationStrategy = {
   auth: ModelAuth | "none";
   /** A sentence a budget stop's gap adds to its own: the planned screens or checkpoints the run did not reach. */
   budgetNote?: () => string | undefined;
-  /** Takes the explorer's flow tools (start_flow, checkpoint, end_flow), with a relaunch before each flow after the first. */
-  flowTools?: boolean;
+  /**
+   * Takes the explorer's flow tools (start_flow, checkpoint, end_flow), with a relaunch before each flow after the first,
+   * and names each flow's checkpoints it never attempted, for the explorer to record as missing.
+   */
+  flows?: () => Array<{ flow: string; checkpoints: string[] }>;
 };
 
 export const DEFAULT_MODELS: Record<CiAgentProviderName, string> = { anthropic: "claude-sonnet-4-5", openai: "gpt-6.1-sol" };
@@ -95,11 +98,12 @@ function flowsPlan(value: FlowPlan, options: StrategyOptions): FlowPlan {
 
 /**
  * App-test inputs: each {{secret:NAME}} in the hints, and in the strategy's own fill and type steps and described steps,
- * names an environment variable whose value Explore types. Read before any session starts, so a missing one costs nothing.
+ * names an environment variable whose value Explore types. Read before any session starts, so a missing one costs
+ * nothing; a step limited to another platform than `platform`, when it is known, needs none.
  */
-export function strategyInputs(choice: StrategyChoice, hints: string | undefined, environment: NodeJS.ProcessEnv): ReturnType<typeof createExplorationInputs> {
-  const setup = choice.kind === "replay" ? replaySetup(choice.plan) : choice.kind === "flows" ? flowSetup(choice.plan) : undefined;
-  try { return createExplorationInputs({ instructions: [hints ?? "", ...(choice.kind === "flows" ? flowGoals(choice.plan) : [])].join("\n"), ...(setup ? { setup } : {}), environment }); }
+export function strategyInputs(choice: StrategyChoice, hints: string | undefined, environment: NodeJS.ProcessEnv, platform?: Platform): ReturnType<typeof createExplorationInputs> {
+  const setup = choice.kind === "replay" ? replaySetup(choice.plan) : choice.kind === "flows" ? flowSetup(choice.plan, platform) : undefined;
+  try { return createExplorationInputs({ instructions: [hints ?? "", ...(choice.kind === "flows" ? flowGoals(choice.plan, platform) : [])].join("\n"), ...(setup ? { setup } : {}), environment }); }
   catch (error) {
     if (!(error instanceof CiError) || !error.code.startsWith("EXPLORATION_SECRET_")) throw error;
     const name = typeof error.details?.secretName === "string" ? error.details.secretName : "NAME";
@@ -120,10 +124,10 @@ export async function startStrategy(choice: StrategyChoice, context: { platform:
     return { session, budgetNote: session.budgetNote, provider: "replay", model: "replay plan", auth: "none" };
   }
   if (choice.kind === "flows") {
-    assertFlowsFit(choice.plan, platform, limits);
-    const goals = flowsNeedModel(choice.plan) ? await preflightModelSession(options, environment, say) : undefined;
+    assertFlowsFit(choice.plan, platform, { ...limits, maxTurns: turnBudget(limits) });
+    const goals = flowsNeedModel(choice.plan, platform) ? await preflightModelSession(options, environment, say) : undefined;
     const session = createFlowSession(choice.plan, platform, { app, ...(goals ? { model: goals.session } : {}), ...(options.hints ? { hints: options.hints } : {}) });
-    return { session, budgetNote: session.budgetNote, flowTools: true, provider: "flows", model: goals ? `${goals.provider} ${goals.model}` : session.model, auth: goals?.auth ?? "none" };
+    return { session, budgetNote: session.budgetNote, flows: session.notReached, provider: "flows", model: goals ? `${goals.provider} ${goals.model}` : session.model, auth: goals?.auth ?? "none" };
   }
   return preflightModelSession(options, environment, say);
 }
