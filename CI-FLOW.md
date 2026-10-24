@@ -154,9 +154,9 @@ Each new start logs the failed run's link and reason, for example `the hosted EA
 1. `hostedRepackPeers` lists, in config order, the targets that repack the same app on EAS: one platform, EAS profile and bundle id. `capture:review`, `capture:review --compare` and `capture:baseline` pass them on.
    - A capture gets a `RepackShare` when it has two or more peers and `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT` and `GITHUB_REPOSITORY` are set. Its scope is the run attempt, its leader is the first peer, and its rank is its place among the peers.
    - A single target, a local review, `capture.repack: local`, and a native build this job made itself behave as before. Nobody else's key can match a native build this job made.
-2. The build to repack is the newest finished build with the fingerprint that Explore did not repack itself (`existingBuild`, from 20 builds). If repacks carry their source's fingerprint, every job still picks the same build.
+2. The build to repack is the newest finished build with the fingerprint that Explore did not repack itself (`existingBuild`, from 20 builds), else the newest repack. On a project that reviews often, the 20 are all repacks (euxy's 50 most recent `explore` builds were), so jobs that start minutes apart can pick different builds; the key below names the native code, not the build, so they still share.
 3. Once the copy is staged, the capture takes a key (`hostedRepackShareKey`) from:
-   - the run attempt, the platform and the native build id;
+   - the run attempt, the platform and the native fingerprint;
    - the EAS profile and environment name;
    - a snapshot of the environment's variables: `eas env:list --format long` for the project and the account, which names each variable with its value (masked when sensitive or secret) and when it was last updated;
    - the Explore release;
