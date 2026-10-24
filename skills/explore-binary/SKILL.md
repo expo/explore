@@ -37,6 +37,13 @@ Budgets default to 15 minutes, 40 screens, 150 actions (`--max-duration-minutes`
 
 To compare runs, or an iPhone with an Android phone, screen for screen, pass `--replay steps.json` to `explore:binary` or `explore:session`: Explore takes the steps in the file instead of a model's, and no model access is needed. The format is in the README ("Take the same steps on every run and device"): `{ "steps": [{ "capture": "Home" }, { "action": "tap", "label": "Settings" }, { "capture": "Settings" }] }`, with `platforms` to limit a step and `optional` for an action that may fail. The plan is checked before a device starts: unknown fields, a plan with no steps for the platform, more captures or actions than `--max-screens` / `--max-actions`, and a `{{secret:NAME}}` in a `fill` or `type` whose variable is not set are all refused (`REPLAY_PLAN_INVALID`, `REPLAY_PLAN_EMPTY`, `REPLAY_PLAN_OVER_BUDGET`, `EXPLORATION_SECRET_MISSING`). `--provider`, `--model` and `--hints` cannot be combined with it (`REPLAY_OPTIONS_IGNORED`).
 
+## Named flows: `--flows`
+
+When the user describes a flow, or a set of flows, to look at ("sign in, then rename a pattern"), write them as a flows file and pass `--flows flows.json`, not `--replay`. The format is in the README ("Follow named flows, step by step"): `{ "flows": [{ "name": "Sign in", "steps": [{ "checkpoint": "Welcome" }, { "do": "Sign in with {{secret:TEST_EMAIL}}" }, { "checkpoint": "Home" }] }] }`.
+- Each step is an exact action (the `--replay` format), a step described in words (`do`) that a model carries out, or a named `checkpoint`. Use exact actions where you know the labels, and `do` where you don't.
+- Each flow starts from a relaunched app, and its checkpoints are photographed under their names. `report/exploration.json` lists each flow under `exploration.flows`, with its status and its checkpoints in order, so two runs pair up by flow and checkpoint name.
+- The file is checked before a device starts (`FLOWS_PLAN_INVALID`, `FLOWS_PLAN_EMPTY`, `FLOWS_PLAN_OVER_BUDGET`). `--provider`, `--model` and `--hints` steer the model that carries out `do` steps, and are refused when there are none (`FLOWS_OPTIONS_IGNORED`). `--flows` and `--replay` cannot be combined.
+
 ## Sign-in and other app state
 
 Without help, the model treats a sign-in wall as the end of the road: it captures it and stops (`blocked`). Before running, read what you can about the app (its source if you have it, its first screens otherwise) and decide what it needs.

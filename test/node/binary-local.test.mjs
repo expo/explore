@@ -116,3 +116,60 @@ test("an opened iPhone Duo's screenshots are stored upright, and the run records
   assert.equal(map.run.environment.orientation, "landscape");
   assert.equal(result.runtime.orientation, "landscape");
 });
+
+/** A model that does each described step it is given at once, reporting it done. */
+const stepDoneSession = { provider: "anthropic", model: "test", async preflight() {}, async run(request) {
+  try { await request.callTool("step_done", {}, request.signal); } catch (error) { if (!request.signal.aborted) throw error; }
+  return { inputTokens: 0, outputTokens: 0 };
+} };
+
+const SIGN_IN_FLOWS = { flows: [
+  { name: "Sign in", steps: [{ do: "Sign in with {{secret:TEST_PASSWORD}}" }, { checkpoint: "Home" }] },
+  { name: "Again", steps: [{ checkpoint: "Home" }] },
+] };
+
+test("flows relaunch the app at the first open, and a relaunch that fails is recorded with the controller's error, its secrets removed", async t => {
+  const root = await mkdtemp(join(tmpdir(), "explore-binary-flows-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { requests, runner: base } = localRunner();
+  let relaunches = 0;
+  const runner = request => {
+    if (request.args[0] === "open" && request.args.includes("--relaunch") && ++relaunches === 2) throw new Error("relaunch refused while typing hunter22");
+    return base(request);
+  };
+  const result = await runBinaryExploration({ archive: await simulatorApp(root), output: join(root, "out"), simulator: "local", provider: "anthropic", runner, flows: SIGN_IN_FLOWS,
+    createSession: () => stepDoneSession, environment: { PATH: process.env.PATH, HOME: root, ANTHROPIC_API_KEY: "key", TEST_PASSWORD: "hunter22" } });
+  const opens = requests.filter(request => request.args[0] === "open" && request.args[1] === "dev.example.app");
+  assert.ok(opens[0].args.includes("--relaunch"), "the first open relaunches an app that may already be running");
+  const [signIn, again] = result.exploration.flows;
+  assert.equal(signIn.status, "completed");
+  assert.equal(again.status, "failed");
+  assert.match(again.reason, /^The flow could not start: agent-device could not relaunch the app: relaunch refused while typing \[REDACTED\]$/);
+  assert.deepEqual(again.checkpoints, [{ name: "Home", missing: "The flow did not reach it." }]);
+});
+
+test("a launch URL the controller cannot open fails the run with its error, its secrets removed", async t => {
+  const root = await mkdtemp(join(tmpdir(), "explore-binary-flows-url-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { runner: base } = localRunner();
+  const runner = request => {
+    if (request.args[0] === "open" && request.args.includes("example://home")) throw new Error("open failed for hunter22");
+    return base(request);
+  };
+  await assert.rejects(runBinaryExploration({ archive: await simulatorApp(root), output: join(root, "out"), simulator: "local", provider: "anthropic", runner, flows: SIGN_IN_FLOWS,
+    launchUrl: "example://home", createSession: () => stepDoneSession, environment: { PATH: process.env.PATH, HOME: root, ANTHROPIC_API_KEY: "key", TEST_PASSWORD: "hunter22" } }),
+  error => error.code === "LAUNCH_URL_FAILED" && /could not open example:\/\/home: open failed for \[REDACTED\]$/.test(error.message));
+});
+
+test("when the app does not stay open, every flow is recorded as failed with its checkpoints missing", async t => {
+  const root = await mkdtemp(join(tmpdir(), "explore-binary-flows-blocked-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { runner: base } = localRunner();
+  const runner = request => request.args[0] === "appstate"
+    ? { stdout: JSON.stringify({ success: true, data: { platform: "ios", appBundleId: "com.apple.springboard", surface: "home" } }), stderr: "" } : base(request);
+  const result = await runBinaryExploration({ archive: await simulatorApp(root), output: join(root, "out"), simulator: "local", provider: "anthropic", runner, flows: SIGN_IN_FLOWS,
+    createSession: () => stepDoneSession, environment: { PATH: process.env.PATH, HOME: root, ANTHROPIC_API_KEY: "key", TEST_PASSWORD: "hunter22" } });
+  assert.equal(result.exploration.stopReason, "blocked");
+  assert.deepEqual(result.exploration.flows.map(flow => [flow.name, flow.status, flow.checkpoints]),
+    [["Sign in", "failed", [{ name: "Home", missing: "The app did not stay open." }]], ["Again", "failed", [{ name: "Home", missing: "The app did not stay open." }]]]);
+});

@@ -57,6 +57,8 @@ const BINARY = `Prebuilt apps (no source needed; runs with your local claude or 
         --max-duration-minutes N --max-screens N --max-actions N --provider anthropic|openai --model ID
         --owner ACCOUNT --project SLUG --allow-destructive "Label,Other label"
         --replay FILE (takes the steps in FILE instead of a model's, so every run and device takes the same path; no model access needed, and not with --provider, --model or --hints)
+        --flows FILE (takes the named flows in FILE, each from a relaunched app, and photographs their named checkpoints so two runs
+        compare step by step; a step written in words ({"do": "Sign in"}) is carried out by a model, an exact one as in --replay)
         --alias NAME (one EAS Hosting host per app that always serves the newest run; with EXPLORE_PREVIEW_TOKEN
         set to a fixed 32-character token, the hosted link is the same every run)
        (iOS needs a simulator build; a device .ipa and Android .aab are rejected before any device starts)

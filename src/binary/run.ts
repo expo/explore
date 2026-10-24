@@ -6,6 +6,7 @@ import { createCiAgentSession, type CiAgentSession, type CiAgentSessionConfig } 
 import { createLocalCiAgentSession } from "../capture/agent/session-local.js";
 import type { CiAgentProviderName } from "../capture/agent/provider.js";
 import { assertReplayFits, createReplaySession, parseReplayPlan, replaySetup, type ReplayPlan } from "./replay.js";
+import { assertFlowsFit, createFlowSession, flowGoals, flowSetup, flowsNeedModel, parseFlowPlan, type FlowPlan } from "./flows.js";
 import { CONTROLLER_SESSION, baseEnvironment, isRecord } from "../capture/common.js";
 import { controllerData, defaultRunner, openedSimulatorDevice } from "../capture/controller.js";
 import type { CommandRequest, CommandResult } from "../capture/run.js";
@@ -28,7 +29,7 @@ import { CiError, serializeCiError, toCiError } from "../shared/ci-errors.js";
 import { packageBin } from "../shared/package-paths.js";
 import { assertDecodedPng, solidColour } from "../shared/png-evidence.js";
 import { CONTRACT, type ExploreMap, type Platform } from "../types.js";
-import { assertEmulatorCompatible, extractIosBundle, inspectArchive, type ArchiveKind, type InspectedArchive, readArchiveIcon } from "./archive.js";
+import { archiveKind, assertEmulatorCompatible, extractIosBundle, inspectArchive, type ArchiveKind, type InspectedArchive, readArchiveIcon } from "./archive.js";
 import { runBlackBoxExploration, type BlackBoxExplorerResult, type BlackBoxFrame, SYSTEM_DIALOG_PACKAGES } from "./explorer.js";
 
 export const DEFAULT_IOS_DEVICE = "iPhone 17 Pro";
@@ -62,6 +63,8 @@ export type BinaryExploreOptions = {
   runner?: typeof defaultRunner;
   /** Fixed steps to take instead of a model's; no model access is needed. */
   replay?: ReplayPlan;
+  /** Named flows to take, each from a relaunched app, with named checkpoints; a model is used only for steps described in words. */
+  flows?: FlowPlan;
   createSession?: (config: CiAgentSessionConfig, options: { env: NodeJS.ProcessEnv; auth: ModelAuth }) => CiAgentSession;
   progress?: (message: string) => void;
   now?: () => number;
@@ -73,7 +76,7 @@ export type BinaryExploreResult = {
   archive: Omit<InspectedArchive, "path"> & { path: string };
   session: { id: string; platform: Platform; device: string; owner: string; project: string };
   runtime: ActiveSimulatorRuntime;
-  model: { provider: CiAgentProviderName | "replay"; model: string; auth: "local-login" | "api-key" | "none" };
+  model: { provider: CiAgentProviderName | "replay" | "flows"; model: string; auth: "local-login" | "api-key" | "none" };
   exploration: BlackBoxExplorerResult;
   durationMs: number;
 };
@@ -167,8 +170,9 @@ export function resolveSessionApp(runner: typeof defaultRunner, connection: Simu
  * App-test inputs: each {{secret:NAME}} in the hints names an environment variable whose value Explore types for the
  * model. Read before any session starts, so a missing one costs nothing.
  */
-export function hintInputs(hints: string | undefined, environment: NodeJS.ProcessEnv, replay?: ReplayPlan): ReturnType<typeof createExplorationInputs> {
-  try { return createExplorationInputs({ instructions: hints ?? "", ...(replay ? { setup: replaySetup(replay) } : {}), environment }); }
+export function hintInputs(hints: string | undefined, environment: NodeJS.ProcessEnv, replay?: ReplayPlan, flows?: FlowPlan, platform?: Platform): ReturnType<typeof createExplorationInputs> {
+  const setup = replay ? replaySetup(replay) : flows ? flowSetup(flows, platform) : undefined;
+  try { return createExplorationInputs({ instructions: [hints ?? "", ...(flows ? flowGoals(flows, platform) : [])].join("\n"), ...(setup ? { setup } : {}), environment }); }
   catch (error) {
     if (!(error instanceof CiError) || !error.code.startsWith("EXPLORATION_SECRET_")) throw error;
     const name = typeof error.details?.secretName === "string" ? error.details.secretName : "NAME";
@@ -227,6 +231,36 @@ function replayModel(plan: ReplayPlan, platform: Platform, limits: { maxScreens:
   assertReplayFits(plan, platform, { ...limits, maxTurns: turnBudget(limits) });
   const session = createReplaySession(plan, platform);
   return { session, budgetNote: session.budgetNote, provider: "replay" as const, model: "replay plan", auth: "none" as const };
+}
+
+/**
+ * A flows file is checked here as well as by the CLI. It decides every step, as a replay plan does, but a step it
+ * describes in words is carried out by a model, so --provider, --model and --hints apply only when it has one.
+ */
+function flowsPlan(options: Pick<BinaryExploreOptions, "flows" | "replay" | "provider" | "model" | "hints">): FlowPlan | undefined {
+  if (!options.flows) return undefined;
+  if (options.replay) throw binaryError("FLOWS_WITH_REPLAY", "--flows and --replay each decide every step, so only one of them can run.", "Drop --replay, or move its steps into a flow.");
+  const plan = parseFlowPlan(options.flows);
+  const ignored = flowsNeedModel(plan) ? [] : (["provider", "model", "hints"] as const).filter(name => options[name] !== undefined);
+  if (ignored.length) {
+    throw binaryError("FLOWS_OPTIONS_IGNORED", `Every step of the flows file is exact, so ${ignored.map(name => `--${name}`).join(" and ")} would do nothing.`,
+      `Drop ${ignored.map(name => `--${name}`).join(" and ")}, or describe a step in words ({"do": "…"}) for a model to carry out.`);
+  }
+  for (const [index, flow] of plan.flows.entries()) for (const [stepIndex, step] of flow.steps.entries()) {
+    if (!("action" in step) || step.action !== "open") continue;
+    try { assertAppUrl(step.url); }
+    catch (error) { throw new CiError({ code: "FLOWS_PLAN_INVALID", stage: "exploration", message: `Flow ${index + 1} (${flow.name}), step ${stepIndex + 1}: ${error instanceof Error ? error.message : String(error)}`, nextAction: "Open only the app's own URLs in the flows file." }); }
+  }
+  return plan;
+}
+
+/** The flows run in place of a model's exploration; a model is checked, and used, only when a step is described in words. */
+async function flowsModel(plan: FlowPlan, platform: Platform, limits: { maxScreens: number; maxActions: number }, options: ModelSessionOptions & Pick<BinaryExploreOptions, "hints">,
+  environment: NodeJS.ProcessEnv, say: (message: string) => void, app: { name: string }) {
+  assertFlowsFit(plan, platform, { ...limits, maxTurns: turnBudget(limits) });
+  const goals = flowsNeedModel(plan, platform) ? await preflightModelSession(options, environment, say) : undefined;
+  const session = createFlowSession(plan, platform, { app, ...(goals ? { model: goals.session } : {}), ...(options.hints ? { hints: options.hints } : {}) });
+  return { session, budgetNote: session.budgetNote, flows: session.notReached, provider: "flows" as const, model: goals ? `${goals.provider} ${goals.model}` : session.model, auth: goals?.auth ?? "none" as const };
 }
 
 /** Local `claude`/`codex` login unless an API key is present; preflight proves access before a simulator is paid for. */
@@ -295,7 +329,8 @@ export type ConnectedSessionExploration = {
   limits: { maxDurationMinutes: number; maxScreens: number; maxActions: number };
   store: ExploreStore;
   map: ExploreMap;
-  model: { session: Pick<CiAgentSession, "run">; budgetNote?: () => string | undefined };
+  /** `flows`: the session takes the explorer's flow tools, and names the checkpoints it never attempted. */
+  model: { session: Pick<CiAgentSession, "run">; budgetNote?: () => string | undefined; flows?: () => Array<{ flow: string; checkpoints: string[] }> };
   /** `eas simulator:get --json` for the attached session; descriptive (OS version) only. */
   sessionJson: () => string;
   /** agent-device session name on the daemon; explore:session reuses the caller's session so the device is not "in use" by another. */
@@ -356,7 +391,8 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
   }
   ctx.afterInstall?.();
   // On a local device, the first open also builds agent-device's iOS runner.
-  const opened = controller(["open", bundleId, "--level", "full", "--json"], local ? 15 * 60_000 : 2 * 60_000);
+  // Flows start from the app's first screen: an app already running on an attached session is relaunched, not brought forward.
+  const opened = controller(["open", bundleId, ...(model.flows ? ["--relaunch"] : []), "--level", "full", "--json"], local ? 15 * 60_000 : 2 * 60_000);
   const openedDevice = openedSimulatorDevice(opened.stdout, bundleId, "initial app open", platform, controllerSession);
   const data = controllerData(opened.stdout, "initial app open");
   const deviceData = data.device && typeof data.device === "object" ? data.device as Record<string, unknown> : {};
@@ -403,6 +439,15 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
     } catch { return undefined; /* observe() reports a lost foreground app itself. */ }
   };
   const reopen = (): void => { controller(["open", bundleId, "--level", "full", "--json"], 2 * 60_000); };
+  /** A flow starts from the app's first screen: the process is ended and launched again (the app's data stays). */
+  const restart = async (): Promise<void> => {
+    try {
+      controller(["open", bundleId, "--relaunch", "--level", "full", "--json"], 2 * 60_000);
+      if (launchUrl) await setupOptions.open(launchUrl);
+    } catch (error) { throw binaryError("APP_RELAUNCH_FAILED", `${controllerName} could not relaunch the app${launchUrl ? ` at ${launchUrl}` : ""}: ${failureText(error)}`, "Check that the app still launches, then rerun the flows."); }
+    await new Promise(resolve => setTimeout(resolve, 2500));
+    await settled();
+  };
   // iOS refuses a snapshot once the app is gone; Android happily returns the launcher's tree, so the foreground app is asked for.
   const foregroundState = (): Record<string, unknown> | undefined => {
     try { return controllerData(controller(["appstate", "--json"], 60_000).stdout, "appstate"); }
@@ -466,7 +511,12 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
   const setupOptions = { command: async (args: string[]) => { const result = controller(guardPositionals([...args, "--json"]), 120_000); return controllerData(result.stdout, args[0] ?? "command"); },
     open: async (url: string) => { assertAppUrl(url, ctx.urlSchemes); const result = controller(["open", "--json", "--", url], 120_000); return controllerData(result.stdout, "open"); },
     snapshot: async () => ({ truncated: false, ...snapshotData() }), readinessAttempts: 3, postActionObservation: "caller" as const };
-  if (launchUrl) { say(`opening ${launchUrl}`); await setupOptions.open(launchUrl); }
+  if (launchUrl) {
+    say(`opening ${launchUrl}`);
+    // A controller error is shown and recorded; it must not carry the daemon token.
+    try { await setupOptions.open(launchUrl); }
+    catch (error) { throw error instanceof CiError ? error : binaryError("LAUNCH_URL_FAILED", `${controllerName} could not open ${launchUrl}: ${failureText(error)}`, "Check that the app handles the launch URL, or drop --launch-url."); }
+  }
   // A build that crashes on launch is reported as such instead of costing the model a round of "app is not running" errors.
   // iOS appstate keeps naming the session's app after it dies, so the snapshot (which refuses a dead app) is the test.
   let blockedAtLaunch: BlackBoxExplorerResult | undefined;
@@ -488,12 +538,13 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
       const reason = `${app.name} exited within seconds of being opened, twice in a row, so nothing could be explored: this build does not stay running on ${runtime.deviceModel} (${runtime.osVersion}); ${goneReason}.`;
       map.gaps.push({ id: `gap_${randomUUID().slice(0, 8)}`, kind: "coverage", status: "open", message: reason, createdAt: new Date(now()).toISOString() });
       say("exploration blocked: the app does not stay running");
-      blockedAtLaunch = { stopReason: "blocked", summary: reason, screens: 0, observations: 0, actions: 0, turns: 0 };
+      blockedAtLaunch = { stopReason: "blocked", summary: reason, screens: 0, observations: 0, actions: 0, turns: 0,
+        ...(model.flows ? { flows: model.flows().map(({ flow, checkpoints }) => ({ name: flow, status: "failed" as const, reason, checkpoints: checkpoints.map(name => ({ name, missing: "The app did not stay open." })) })) } : {}) };
     }
   }
   const exploration = blockedAtLaunch ?? await runBlackBoxExploration({ session: model.session, store, map, app: { name: app.name, bundleId, platform, ...(app.version ? { version: app.version } : {}) },
     inputs, ...(hints ? { hints: hints } : {}), ...(launchUrl ? { launchUrl: launchUrl } : {}), ...(allowDestructive ? { allowDestructive: allowDestructive } : {}), ...(ctx.appIcon ? { appIcon: ctx.appIcon } : {}),
-    ...(model.budgetNote ? { budgetNote: model.budgetNote } : {}),
+    ...(model.budgetNote ? { budgetNote: model.budgetNote } : {}), ...(model.flows ? { flows: { restart, notReached: model.flows } } : {}),
     deadlineMs, maxScreens: limits.maxScreens, maxActions: limits.maxActions, maxTurns: turnBudget(limits), now, observe, progress: say,
     act: async action => {
       const perform = async () => {
@@ -559,7 +610,8 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
   const runner = options.runner ?? defaultRunner;
   const limits = validatedLimits(options);
   const replay = replayPlan(options);
-  const inputs = hintInputs(options.hints, environment, replay);
+  const flows = flowsPlan(options);
+  const inputs = hintInputs(options.hints, environment, replay, flows, options.platform);
   if (options.bundleId !== undefined && !appIdPattern.test(options.bundleId)) throw binaryError("BUNDLE_ID_INVALID", `${options.bundleId} is not a bundle or package id.`, "Pass --bundle-id with the app's bundle identifier (iOS) or package name (Android).");
   let connection: SimulatorConnection;
   try { connection = await resolveAttachedSimulatorSession(environment, options.envFile, options.session); }
@@ -623,7 +675,8 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
     map.run.environment = { deviceModel: device };
     session = { id: connection.sessionId, platform, device, name: info.name, ...(info.deviceRunSessionUrl ? { url: info.deviceRunSessionUrl } : {}) };
 
-    const model = replay ? replayModel(replay, platform, limits) : await preflightModelSession(options, environment, say);
+    const model = replay ? replayModel(replay, platform, limits) : flows ? await flowsModel(flows, platform, limits, options, environment, say, app)
+      : await preflightModelSession(options, environment, say);
     const outputDirectory = await realpath(await mkdir(options.output, { recursive: true }).then(() => options.output));
     const store = new ExploreStore(outputDirectory);
     if (await store.exists()) throw binaryError("OUTPUT_NOT_EMPTY", `${outputDirectory} already holds an Explore map.`, "Pass an empty --output directory.");
@@ -717,7 +770,10 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
   const runner = options.runner ?? defaultRunner;
   const limits = validatedLimits(options);
   const replay = replayPlan(options);
-  const inputs = hintInputs(options.hints, environment, replay);
+  const flows = flowsPlan(options);
+  // The archive's name gives its platform before it is read (inspectArchive confirms it), so a secret only another platform's steps type is not required.
+  const namedPlatform = options.platform ?? (() => { try { return archiveKind(options.archive) === "android-apk" ? "android" as const : "ios" as const; } catch { return undefined; } })();
+  const inputs = hintInputs(options.hints, environment, replay, flows, namedPlatform);
   const local = options.simulator === "local";
   // A local emulator runs this Mac's ABI (arm64-v8a on Apple silicon); EAS's runs x86_64.
   const emulatorAbi = local ? hostEmulatorAbi() : "x86_64";
@@ -734,7 +790,8 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
   say(`${archive.appName} ${archive.version ?? ""} (${bundleId}, ${platform}, ${(archive.bytes / 1048576).toFixed(0)} MB, sha256 ${archive.sha256.slice(0, 12)})`);
   if (archive.missingLibs?.length && emulatorAbi === "x86_64") say(`warning: lib/x86_64 lacks ${archive.missingLibs.slice(0, 4).join(", ")}${archive.missingLibs.length > 4 ? ` and ${archive.missingLibs.length - 4} more` : ""} that another ABI ships; the app may stop with UnsatisfiedLinkError on the emulator`);
 
-  const model = replay ? replayModel(replay, platform, limits) : await preflightModelSession(options, environment, say);
+  const model = replay ? replayModel(replay, platform, limits) : flows ? await flowsModel(flows, platform, limits, options, environment, say, { name: archive.appName })
+    : await preflightModelSession(options, environment, say);
 
   const outputDirectory = await realpath(await mkdir(options.output, { recursive: true }).then(() => options.output));
   const store = new ExploreStore(outputDirectory);
