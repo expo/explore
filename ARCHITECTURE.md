@@ -46,7 +46,7 @@ Each layer imports only from the layers below it.
 4. `capture` imports `capture/agent`, `config` and `map`. `capture/agent` imports `capture` and `config`.
 5. `review` imports `capture` and `map`.
 6. `ci` imports `config`, `source`, `capture`, `capture/agent`, `review` and `report`. `binary` imports `config`, `capture`, `capture/agent`, `map` and `report`.
-7. `cli` imports `ci`, `binary`, `map`, `config` and `report`. `src/cli.ts` imports `cli`, `map` and `shared`.
+7. `cli` imports `ci`, `binary`, `map`, `config`, `report` and `review`. `src/cli.ts` imports `cli`, `map` and `shared`.
 
 Every folder may import `contracts/`, `shared/` and `src/types.ts`.
 The exception is `contracts/`: its value imports stay inside `contracts/` or go to `src/types.ts`.

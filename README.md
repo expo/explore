@@ -267,6 +267,14 @@ npx @expo/explore explore:binary ./my-app.app --flows flows.json
 - The report lists every flow and checkpoint of the file, in order, even those a run never reached: each one without a picture says why, so two runs still pair up step by step.
 - Each flow is also a journey of the map: the path its steps took, from the screen it started on. When the app moved without a tap the map could record (it left the app, or changed on its own), the path goes on as a second journey of the flow.
 - Relaunching ends the app's process, and the app keeps its data, so a flow that signs in leaves the next flow signed in. On `explore:session`, the app is relaunched before the first flow too.
+
+To compare two runs of the same flows file, such as two builds, pass both output directories:
+
+```sh
+npx @expo/explore compare:flows --before explore-app-1 --after explore-app-2 --output flows.json
+```
+
+Each checkpoint comes back `unchanged`, `changed` (with where the screenshots differ, the status bar and home indicator set aside, as in a review), `missing` (no picture on one side, with why), `different-size` (another device or orientation, so not compared), or `added` / `removed` (in only one run's flows file). The result also lists how the two runs were captured differently (the app, device, OS version, locale, orientation, or appearance), since a change can come from those.
 - A `{{secret:NAME}}` or a described step limited by `platforms` to another platform needs no value, and no model, on this one.
 
 </details>

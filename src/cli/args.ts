@@ -19,6 +19,7 @@ const aliases: Record<string, string> = {
   "frontier list": "frontier:list",
   "gap list": "gap:list",
   "export web": "export:web",
+  "compare flows": "compare:flows",
   "ci report": "ci:report",
   "ci publish": "ci:publish",
   "ci failure": "ci:failure",
@@ -104,6 +105,7 @@ const flagKinds: Record<string, Record<string, "value" | "boolean">> = {
   "ci:find-baseline": { sha:"value", target:"value", platform:"value" },
   "ci:compare-refs": { project:"value", base:"value", head:"value", title:"value", output:"value" },
   "ci:after-capture": { output:"value", checkout:"value" },
+  "compare:flows": { before: "value", after: "value", output: "value" },
   compare: {
     baseline: "value",
     current: "value",

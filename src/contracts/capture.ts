@@ -189,7 +189,7 @@ export const DUO_PANELS = {
   inner: { width: 951, height: 669, statusBar: { x: 883, y: 34, width: 40, height: 64 } },
 } as const;
 const DUO_STATUS_BAR_PADDING_POINTS = 4;
-const isFoldable = (platform: "ios" | "android" | undefined, device: string | undefined) => platform !== "android" && /\bduo\b/i.test(device ?? "");
+export const isFoldable = (platform: "ios" | "android" | undefined, device: string | undefined) => platform !== "android" && /\bduo\b/i.test(device ?? "");
 
 /**
  * The areas the verdict leaves out for a capture: the platform's status-bar band and, on iOS, its home-indicator
