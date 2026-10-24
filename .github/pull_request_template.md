@@ -16,6 +16,21 @@ Write "No visible change" if there is none.
 | --- | --- |
 |  |  |
 
+## Code examples
+
+<!--
+Required for any change to how Explore is used or what it writes: a CLI command or flag,
+config.yaml, a workflow template, a file format (a replay or flows file, report JSON), or a
+public type. Show it in use as a reader would write it: the command with its flags, the config
+or file it reads, and what it prints or writes, trimmed to the lines that matter. When existing
+usage changes, show it before and after.
+Write "No change to usage" if there is none.
+-->
+
+```sh
+
+```
+
 ## Testing
 
 <!-- What you ran and what you checked by hand. -->
