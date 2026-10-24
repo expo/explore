@@ -8,12 +8,19 @@ import { keepReports } from "./report-commands.js";
 import { warnIgnoredExpiry } from "../config/explore-config.js";
 import { argumentError, flag, flags, has, nonNegativeInteger, oneOf, output, positional, positiveInteger } from "./args.js";
 import { readReplayPlan } from "../binary/replay.js";
+import { readFlowPlan } from "../binary/flows.js";
+import type { ExplorationFlow } from "../contracts/standalone-report.js";
 
 
 /** `--alias NAME` plus a fixed token from EXPLORE_PREVIEW_TOKEN: the hosted link stays the same from one run to the next (validated by the deploy). */
 function stableLinkOptions(): { alias?: string; token?: string } {
   const token = process.env.EXPLORE_PREVIEW_TOKEN?.trim();
   return { ...(flag("alias") ? { alias: flag("alias")!.trim().toLowerCase() } : {}), ...(token ? { token } : {}) };
+}
+
+/** Each flow's outcome for the run summary: how many of its checkpoints have a picture. */
+function flowSummary(flows: readonly ExplorationFlow[]) {
+  return flows.map(flow => ({ name: flow.name, status: flow.status, checkpoints: `${flow.checkpoints.filter(item => item.observationId).length}/${flow.checkpoints.length}`, ...(flow.reason ? { reason: flow.reason } : {}) }));
 }
 
 export function defaultOutputDirectory(archive: string, now = new Date()): string {
@@ -51,6 +58,7 @@ export async function exploreBinary(): Promise<void> {
     ...(flag("max-screens") ? { maxScreens: positiveInteger("max-screens") } : {}),
     ...(flag("max-actions") ? { maxActions: positiveInteger("max-actions") } : {}),
     ...(flag("replay") ? { replay: await readReplayPlan(resolve(process.cwd(), flag("replay")!)) } : {}),
+    ...(flag("flows") ? { flows: await readFlowPlan(resolve(process.cwd(), flag("flows")!)) } : {}),
   });
   say(`exploration ${result.exploration.stopReason}: ${result.exploration.screens} screens, ${result.exploration.observations} captures, ${result.exploration.actions} actions`);
   const report = await writeExplorationReport(result, join(outputDirectory, "report"));
@@ -67,11 +75,13 @@ export async function exploreBinary(): Promise<void> {
     archive: { path: result.archive.path, kind: result.archive.kind, sha256: result.archive.sha256, bytes: result.archive.bytes },
     device: { model: result.runtime.deviceModel, osVersion: result.runtime.osVersion }, session: { id: result.session.id, simulator, ...(simulator === "eas" ? { owner: result.session.owner, project: result.session.project } : {}) },
     model: result.model, exploration: { stopReason: result.exploration.stopReason, ...(result.exploration.summary ? { summary: result.exploration.summary } : {}),
-      screens: result.exploration.screens, observations: result.exploration.observations, actions: result.exploration.actions, durationMs: result.durationMs },
+      screens: result.exploration.screens, observations: result.exploration.observations, actions: result.exploration.actions, durationMs: result.durationMs,
+      ...(result.exploration.flows ? { flows: flowSummary(result.exploration.flows) } : {}) },
     map: result.mapPath, report: report.reportPath, ...(hosted ? { url: hosted.previewUrl, expiresAt: hosted.expiresAt, deploymentUrl: hosted.deploymentUrl, ...(hosted.aliasUrl ? { aliasUrl: hosted.aliasUrl } : {}) } : {}),
     next: [`expo-explore view --dir ${outputDirectory}`, `expo-explore screen:list --dir ${outputDirectory}`, `expo-explore gap:list --dir ${outputDirectory}`] };
   if (has("json")) { output(summary); return; }
   console.log(`${summary.app.name} (${summary.app.bundleId}, ${summary.app.platform}) explored on ${summary.device.model} ${summary.device.osVersion}: ${summary.exploration.screens} screens, ${summary.exploration.actions} actions, stopped because ${summary.exploration.stopReason}.`);
+  for (const flow of summary.exploration.flows ?? []) console.log(`  ${flow.name}: ${flow.status}, ${flow.checkpoints} checkpoints${flow.reason ? ` (${flow.reason})` : ""}`);
   if (hosted) console.log(`Hosted report: ${hosted.previewUrl}${hosted.expiresAt ? ` (expires ${hosted.expiresAt})` : ""}`);
   console.log(`Local report: ${report.reportPath}`);
   if (simulator === "eas" || hosted || has("no-open")) { console.log(`Next: ${summary.next.join("  |  ")}`); return; }
@@ -116,6 +126,7 @@ export async function exploreSession(): Promise<void> {
     ...(flag("max-screens") ? { maxScreens: positiveInteger("max-screens") } : {}),
     ...(flag("max-actions") ? { maxActions: positiveInteger("max-actions") } : {}),
     ...(flag("replay") ? { replay: await readReplayPlan(resolve(process.cwd(), flag("replay")!)) } : {}),
+    ...(flag("flows") ? { flows: await readFlowPlan(resolve(process.cwd(), flag("flows")!)) } : {}),
   });
   say(`exploration ${result.exploration.stopReason}: ${result.exploration.screens} screens, ${result.exploration.observations} captures, ${result.exploration.actions} actions`);
   const report = await writeExplorationReport(result, join(outputDirectory, "report"));
@@ -129,11 +140,13 @@ export async function exploreSession(): Promise<void> {
   const summary = { ok: true, app: result.app, device: { model: result.runtime.deviceModel, osVersion: result.runtime.osVersion },
     session: { id: result.session.id, name: result.session.name, ...(result.session.url ? { url: result.session.url } : {}), stopped: false },
     model: result.model, exploration: { stopReason: result.exploration.stopReason, ...(result.exploration.summary ? { summary: result.exploration.summary } : {}),
-      screens: result.exploration.screens, observations: result.exploration.observations, actions: result.exploration.actions, durationMs: result.durationMs },
+      screens: result.exploration.screens, observations: result.exploration.observations, actions: result.exploration.actions, durationMs: result.durationMs,
+      ...(result.exploration.flows ? { flows: flowSummary(result.exploration.flows) } : {}) },
     map: result.mapPath, report: report.reportPath, ...(hosted ? { url: hosted.previewUrl, expiresAt: hosted.expiresAt, deploymentUrl: hosted.deploymentUrl, ...(hosted.aliasUrl ? { aliasUrl: hosted.aliasUrl } : {}) } : {}),
     next: [`expo-explore view --dir ${outputDirectory}`, `expo-explore screen:list --dir ${outputDirectory}`, `expo-explore gap:list --dir ${outputDirectory}`] };
   if (has("json")) { output(summary); return; }
   console.log(`${summary.app.name} (${summary.app.bundleId}, ${summary.app.platform}) explored on ${summary.device.model} ${summary.device.osVersion}: ${summary.exploration.screens} screens, ${summary.exploration.actions} actions, stopped because ${summary.exploration.stopReason}.`);
+  for (const flow of summary.exploration.flows ?? []) console.log(`  ${flow.name}: ${flow.status}, ${flow.checkpoints} checkpoints${flow.reason ? ` (${flow.reason})` : ""}`);
   console.log(`Session ${result.session.id} is still running (stop it with: eas simulator:stop --id ${result.session.id}).`);
   if (hosted) console.log(`Hosted report: ${hosted.previewUrl}${hosted.expiresAt ? ` (expires ${hosted.expiresAt})` : ""}`);
   console.log(`Local report: ${report.reportPath}`);

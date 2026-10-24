@@ -8,7 +8,7 @@ import { TOOL_LIMITS, isPlaceholderTitle } from "./explorer.js";
 
 export type ReplayPlatform = "ios" | "android";
 type Selector = { label: string; identifier?: never } | { identifier: string; label?: never };
-type ReplayAction =
+export type ReplayAction =
   | ({ action: "tap" } & Selector)
   | ({ action: "fill"; text: string } & Selector)
   | { action: "type"; text: string }
@@ -56,7 +56,7 @@ function invalid(message: string): CiError {
 
 const nonEmpty = (value: unknown, max: number): value is string => typeof value === "string" && value.trim().length > 0 && value.length <= max;
 
-function parseStep(step: unknown, at: string): ReplayStep {
+export function parseReplayStep(step: unknown, at: string): ReplayStep {
   if (!step || typeof step !== "object" || Array.isArray(step)) throw invalid(`${at} is not an object.`);
   const entry = step as Record<string, unknown>;
   const kind = "capture" in entry ? "capture" : typeof entry.action === "string" && FIELDS.has(entry.action) ? entry.action : undefined;
@@ -116,7 +116,7 @@ export function parseReplayPlan(value: unknown): ReplayPlan {
   if (unknown !== undefined) throw invalid(`The replay plan has a field ${JSON.stringify(unknown.slice(0, 40))} it does not take; it takes only steps.`);
   const steps = (value as { steps: unknown[] }).steps;
   if (!steps.length) throw invalid("The replay plan has no steps.");
-  return { steps: steps.map((step, index) => parseStep(step, `Step ${index + 1}`)) };
+  return { steps: steps.map((step, index) => parseReplayStep(step, `Step ${index + 1}`)) };
 }
 
 export async function readReplayPlan(path: string): Promise<ReplayPlan> {
@@ -167,7 +167,7 @@ export function assertReplayFits(plan: ReplayPlan, platform: ReplayPlatform, lim
   }
 }
 
-function describeAction(step: ReplayAction): string {
+export function describeAction(step: ReplayAction): string {
   if ("label" in step && step.label) return `${step.action} "${step.label}"`;
   if ("identifier" in step && step.identifier) return `${step.action} #${step.identifier}`;
   if (step.action === "scroll") return `scroll ${step.direction}`;
@@ -175,7 +175,7 @@ function describeAction(step: ReplayAction): string {
 }
 
 /** Only the fields `act` documents for that action, whatever else the step object carries. */
-function actInput(step: ReplayAction): Record<string, unknown> {
+export function actInput(step: ReplayAction): Record<string, unknown> {
   const selector = "label" in step && step.label !== undefined ? { label: step.label } : "identifier" in step && step.identifier !== undefined ? { identifier: step.identifier } : {};
   switch (step.action) {
     case "tap": return { action: "tap", ...selector };
@@ -189,7 +189,7 @@ function actInput(step: ReplayAction): Record<string, unknown> {
 }
 
 /** As many names as fit in `room` characters, then "and N more"; a count of them when not even the first fits. */
-function listed(names: readonly string[], room: number, noun: string): string {
+export function listed(names: readonly string[], room: number, noun: string): string {
   let text = "";
   for (const [index, name] of names.entries()) {
     const next = text ? `${text}, ${name}` : name;
