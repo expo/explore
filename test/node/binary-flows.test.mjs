@@ -5,11 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { tsImport } from "tsx/esm/api";
 
-const { runBlackBoxExploration } = await tsImport("../../src/binary/explorer.ts", import.meta.url);
-const { assertFlowsFit, createFlowSession, parseFlowPlan } = await tsImport("../../src/binary/flows.ts", import.meta.url);
-const { hintInputs } = await tsImport("../../src/binary/run.ts", import.meta.url);
-const { ExploreStore, validateMap } = await tsImport("../../src/map/store.ts", import.meta.url);
-const { CONTRACT } = await tsImport("../../src/types.ts", import.meta.url);
+const { runBlackBoxExploration, assertFlowsFit, createFlowSession, flowsNeedModel, parseFlowPlan, hintInputs, ExploreStore, validateMap, CiError, CONTRACT } =
+  await tsImport("../helpers/flows-host.ts", import.meta.url);
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 const SCREENS = {
@@ -20,20 +17,31 @@ const SCREENS = {
 };
 const ROUTES = { Settings: "settings", Profile: "profile", "Edit name": "editor" };
 
-/** A device whose taps follow ROUTES, and which a relaunch returns to Home; it records what reached it. */
-function device() {
-  let screen = "home", frames = 0;
+/**
+ * A device whose taps follow ROUTES, and which a relaunch returns to Home; it records what reached it. `failRelaunch`
+ * lists the relaunches (1 is the first) that fail, `failPicture` the pictures (1 is the first) whose observation throws,
+ * and `driftOnTap` a tap that fails yet moves the app, to the screen it names.
+ */
+function device(behaviour = {}) {
+  let screen = "home", frames = 0, pictures = 0;
   const acted = [], restarts = [];
   return { acted, restarts, options: {
-    observe: async includeImage => ({ nodes: SCREENS[screen], capturedAt: new Date().toISOString(),
-      ...(includeImage ? { frameId: `frame-${++frames}`, png: PNG, imageSha256: `${frames}`.padStart(64, "c") } : {}) }),
+    observe: async includeImage => {
+      if (includeImage && behaviour.failPicture?.includes(++pictures)) throw new CiError({ code: "OBSERVATION_FAILED", stage: "session", message: "The accessibility snapshot failed.", nextAction: "Retry." });
+      return { nodes: SCREENS[screen], capturedAt: new Date().toISOString(), ...(includeImage ? { frameId: `frame-${++frames}`, png: PNG, imageSha256: `${frames}`.padStart(64, "c") } : {}) };
+    },
     act: async action => {
       acted.push(action);
+      if (action.action === "tap" && behaviour.driftOnTap?.[action.label]) { screen = behaviour.driftOnTap[action.label]; throw new Error(`${action.label} timed out`); }
       if (action.action === "tap" && !ROUTES[action.label]) throw new Error(`No element labelled ${action.label}`);
       if (action.action === "tap") screen = ROUTES[action.label];
       if (action.action === "back") screen = "home";
     },
-    flows: { restart: async () => { restarts.push(screen); screen = "home"; } },
+    restart: async () => {
+      restarts.push(screen);
+      if (behaviour.failRelaunch?.includes(restarts.length)) throw new CiError({ code: "APP_RELAUNCH_FAILED", stage: "session", message: "agent-device could not relaunch the app.", nextAction: "Retry." });
+      screen = "home";
+    },
   } };
 }
 
@@ -45,11 +53,12 @@ async function explore(plan, options = {}) {
     createdAt: now, updatedAt: now, build: { hash: "0".repeat(64), source: "local" }, environment: { deviceModel: "iPhone 17 Pro" }, limits: { maxScreens: 20, maxActions: 20, maxDurationMinutes: 5 } },
     artifacts: [], screens: [], variants: [], observations: [], elements: [], actionAttempts: [], transitions: [], journeys: [], frontier: [], gaps: [] };
   await store.initialize(map, false);
-  const phone = device();
+  const { acted, restarts, options: { restart, ...phone } } = device(options.device);
   const session = options.session ?? createFlowSession(plan, "ios", { app: { name: "Example" }, ...(options.model ? { model: options.model } : {}) });
   const result = await runBlackBoxExploration({ session, store, map, app: { name: "Example", bundleId: "dev.example.app", platform: "ios" },
-    deadlineMs: Date.now() + 60_000, maxScreens: 20, maxActions: 20, maxTurns: 100, loadingSettleMs: 0, budgetNote: session.budgetNote, ...phone.options, ...options.host });
-  return { result, map, store, ...phone };
+    deadlineMs: Date.now() + 60_000, maxScreens: 20, maxActions: 20, maxTurns: 100, loadingSettleMs: 0, budgetNote: session.budgetNote,
+    ...phone, flows: { restart, notReached: session.notReached }, ...options.host });
+  return { result, map, store, acted, restarts };
 }
 
 const checkpointShots = (map, flow) => flow.checkpoints.map(item => item.observationId
@@ -72,7 +81,7 @@ test("each flow runs from a relaunched app, records its checkpoints in order, an
   assert.notEqual(result.flows[0].checkpoints[0].observationId, result.flows[1].checkpoints[0].observationId);
   // A checkpoint on a screen just reached keeps the picture taken on arrival; only the relaunched Home needs a second one.
   assert.equal(map.observations.filter(observation => observation.screenshotArtifactId).length, 5);
-  const journey = map.journeys.find(item => item.id === result.flows[1].journeyId);
+  const journey = map.journeys.find(item => item.id === result.flows[1].journeyIds[0]);
   assert.deepEqual(journey.screenIds.map(id => map.screens.find(screen => screen.id === id).title), ["Home", "Profile", "Editor"]);
   assert.deepEqual(await validateMap(map, store), []);
 });
@@ -80,7 +89,7 @@ test("each flow runs from a relaunched app, records its checkpoints in order, an
 test("the same flows in two runs pair up by flow and checkpoint name", async () => {
   const first = await explore(parseFlowPlan(TWO_FLOWS));
   const second = await explore(parseFlowPlan(TWO_FLOWS));
-  const pairs = run => run.result.flows.map(flow => ({ journeyId: flow.journeyId, checkpoints: flow.checkpoints.map(item => item.name) }));
+  const pairs = run => run.result.flows.map(flow => ({ journeyIds: flow.journeyIds, checkpoints: flow.checkpoints.map(item => item.name) }));
   assert.deepEqual(pairs(first), pairs(second));
 });
 
@@ -131,7 +140,7 @@ test("a step described in words is carried out by a model that sees only observe
   assert.equal(result.flows[0].status, "completed");
   assert.deepEqual(seen, [{ step: "Open the name editor from the profile", afterwards: 'The flow records the checkpoint "Editor" next.', tools: ["observe", "act", "step_done", "step_blocked"] }]);
   assert.deepEqual(checkpointShots(map, result.flows[0]).map(item => item.screen), ["Home", "Editor"]);
-  const journey = map.journeys.find(item => item.id === result.flows[0].journeyId);
+  const journey = map.journeys.find(item => item.id === result.flows[0].journeyIds[0]);
   assert.equal(journey.attemptIds.length, 2, "the model's actions are the flow's journey");
   assert.deepEqual(await validateMap(map, store), []);
 });
@@ -150,6 +159,7 @@ test("a run that stops at its budget mid-flow marks the flow stopped and names t
   assert.equal(result.stopReason, "budget-actions");
   assert.deepEqual(result.flows.map(flow => [flow.name, flow.status]), [["Settings", "completed"], ["Profile", "stopped"]]);
   assert.ok(map.gaps.some(gap => /Not reached: Profile › Editor\./.test(gap.message)), JSON.stringify(map.gaps));
+  assert.deepEqual(checkpointShots(map, result.flows[1]), [{ name: "Home", screen: "Home" }, { name: "Profile", screen: "Profile" }, { name: "Editor", missing: "The run stopped before it." }]);
 });
 
 test("a flows file is checked before any device starts", () => {
@@ -165,13 +175,99 @@ test("a flows file is checked before any device starts", () => {
   refused({ flows: [{ name: "A", steps: [{ do: "Type {{secret:lower}}" }, { checkpoint: "Home" }] }] }, /\{\{secret:NAME\}\}/);
   refused({ flows: [{ name: "A", steps: [{ action: "tap" }, { checkpoint: "Home" }] }] }, /exactly one of label or identifier/);
   refused({ flows: [{ name: "A", steps: [{ checkpoint: "Home" }], extra: 1 }] }, /field "extra"/);
-  assert.throws(() => assertFlowsFit(parseFlowPlan({ flows: [{ name: "A", steps: [{ checkpoint: "Home", platforms: ["android"] }] }] }), "ios", { maxScreens: 10, maxActions: 10 }),
+  assert.throws(() => assertFlowsFit(parseFlowPlan({ flows: [{ name: "A", steps: [{ checkpoint: "Home", platforms: ["android"] }] }] }), "ios", { maxScreens: 10, maxActions: 10, maxTurns: 100 }),
     error => error.code === "FLOWS_PLAN_EMPTY");
-  assert.throws(() => assertFlowsFit(parseFlowPlan(TWO_FLOWS), "ios", { maxScreens: 5, maxActions: 10 }), error => error.code === "FLOWS_PLAN_OVER_BUDGET" && /--max-screens 6/.test(error.nextAction));
+  assert.throws(() => assertFlowsFit(parseFlowPlan(TWO_FLOWS), "ios", { maxScreens: 5, maxActions: 10, maxTurns: 100 }), error => error.code === "FLOWS_PLAN_OVER_BUDGET" && /--max-screens 6/.test(error.nextAction));
 });
 
 test("a {{secret:NAME}} in a described step must be set before any device starts, as one in the hints must", () => {
   const plan = parseFlowPlan({ flows: [{ name: "Sign in", steps: [{ do: "Sign in with {{secret:TEST_PASSWORD}}" }, { checkpoint: "Home" }] }] });
   assert.throws(() => hintInputs(undefined, {}, undefined, plan), error => error.code === "EXPLORATION_SECRET_MISSING" && /TEST_PASSWORD/.test(error.nextAction));
   assert.deepEqual(hintInputs(undefined, { TEST_PASSWORD: "hunter2" }, undefined, plan).names, ["TEST_PASSWORD"]);
+});
+
+test("a checkpoint after a relaunch takes a new picture, even of the screen the previous flow ended on untouched", async () => {
+  const plan = parseFlowPlan({ flows: [{ name: "First", steps: [{ checkpoint: "Home" }] }, { name: "Second", steps: [{ checkpoint: "Home" }] }] });
+  const { result, restarts } = await explore(plan);
+  assert.deepEqual(restarts, ["home"]);
+  assert.notEqual(result.flows[0].checkpoints[0].observationId, result.flows[1].checkpoints[0].observationId);
+});
+
+test("a checkpoint after a described step's model looked at the screen again takes a new picture", async () => {
+  const plan = parseFlowPlan({ flows: [{ name: "Settings", steps: [{ do: "Open the settings" }, { checkpoint: "Settings" }] }] });
+  const model = { async run(request) {
+    try {
+      await request.callTool("act", { action: "tap", label: "Settings" }, request.signal);
+      await request.callTool("observe", { includeImage: true }, request.signal);
+      await request.callTool("step_done", {}, request.signal);
+    } catch (error) { if (!request.signal.aborted) throw error; }
+    return { inputTokens: 0, outputTokens: 0 };
+  } };
+  const { result, map } = await explore(plan, { model });
+  const settings = map.screens.find(screen => screen.title === "Settings");
+  const pictures = map.observations.filter(observation => observation.screenId === settings.id && observation.screenshotArtifactId);
+  assert.equal(pictures.length, 2, "the picture on arrival, and the checkpoint's");
+  assert.equal(result.flows[0].checkpoints[0].observationId, pictures[1].id);
+});
+
+test("a flow whose relaunch fails is recorded as failed with its checkpoints missing, and the next flow is still relaunched", async () => {
+  const plan = parseFlowPlan({ flows: [
+    { name: "Home", steps: [{ checkpoint: "Home" }] },
+    { name: "Settings", steps: [{ action: "tap", label: "Settings" }, { checkpoint: "Settings" }] },
+    { name: "Profile", steps: [{ action: "tap", label: "Profile" }, { checkpoint: "Profile" }] },
+  ] });
+  const { result, map, store, restarts } = await explore(plan, { device: { failRelaunch: [1] } });
+  assert.equal(restarts.length, 2);
+  assert.deepEqual(result.flows.map(flow => [flow.name, flow.status]), [["Home", "completed"], ["Settings", "failed"], ["Profile", "completed"]]);
+  assert.equal(result.flows[1].reason, "The flow could not start: agent-device could not relaunch the app.");
+  assert.deepEqual(result.flows[1].checkpoints, [{ name: "Settings", missing: "The flow did not reach it." }]);
+  assert.deepEqual(await validateMap(map, store), []);
+});
+
+test("two relaunches failing in a row stop the run, and the flows after them are recorded as stopped", async () => {
+  const flow = name => ({ name, steps: [{ checkpoint: name }] });
+  const { result } = await explore(parseFlowPlan({ flows: [flow("A"), flow("B"), flow("C"), flow("D")] }), { device: { failRelaunch: [1, 2] } });
+  assert.equal(result.stopReason, "blocked");
+  assert.match(result.summary, /could not be relaunched for two flows running/);
+  assert.deepEqual(result.flows.map(item => [item.name, item.status]), [["A", "completed"], ["B", "failed"], ["C", "failed"], ["D", "stopped"]]);
+  assert.deepEqual(result.flows[3].checkpoints, [{ name: "D", missing: "The run stopped before it." }]);
+  assert.equal(result.flows[3].reason, "The run stopped (blocked) before this flow.");
+});
+
+test("a checkpoint whose picture throws is recorded as missing with the error, and fails its flow", async () => {
+  const plan = parseFlowPlan({ flows: [{ name: "Home", steps: [{ checkpoint: "Home" }, { action: "wait", milliseconds: 1 }, { checkpoint: "Still home" }, { checkpoint: "After" }] }] });
+  const { result } = await explore(plan, { device: { failPicture: [2] } });
+  assert.match(result.summary, /0 completed, 1 failed/);
+  assert.equal(result.flows[0].status, "failed");
+  assert.match(result.flows[0].reason, /^Checkpoint "Still home" could not be taken: The accessibility snapshot failed\./);
+  assert.deepEqual(result.flows[0].checkpoints.slice(1), [{ name: "Still home", missing: "The accessibility snapshot failed." }, { name: "After", missing: "The flow did not reach it." }]);
+});
+
+test("when the app moves without a transition, the flow's walk goes on as a second journey", async () => {
+  const plan = parseFlowPlan({ flows: [{ name: "Drift", steps: [
+    { action: "tap", label: "Settings" }, { action: "tap", label: "Profile", optional: true }, { action: "tap", label: "Edit name" }, { checkpoint: "Editor" },
+  ] }] });
+  const { result, map, store } = await explore(plan, { device: { driftOnTap: { Profile: "profile" } } });
+  assert.equal(result.flows[0].status, "completed");
+  const titles = id => map.journeys.find(journey => journey.id === id).screenIds.map(screen => map.screens.find(item => item.id === screen).title);
+  assert.equal(result.flows[0].journeyIds.length, 2);
+  assert.match(result.flows[0].journeyIds[1], /^jrn_[0-9a-f]{16}-2$/);
+  assert.deepEqual(result.flows[0].journeyIds.map(titles), [["Screen 1", "Screen 2"], ["Screen 3", "Editor"]]);
+  assert.deepEqual(await validateMap(map, store), []);
+});
+
+test("a described step limited to another platform needs no model, and its secrets need not be set", () => {
+  const plan = parseFlowPlan({ flows: [{ name: "A", steps: [{ do: "Sign in with {{secret:ANDROID_PASSWORD}}", platforms: ["android"] }, { action: "tap", label: "Settings" }, { checkpoint: "Settings" }] }] });
+  assert.equal(flowsNeedModel(plan, "ios"), false);
+  assert.equal(flowsNeedModel(plan, "android"), true);
+  assert.doesNotThrow(() => createFlowSession(plan, "ios", { app: { name: "Example" } }));
+  assert.deepEqual(hintInputs(undefined, {}, undefined, plan, "ios").names, []);
+  assert.throws(() => hintInputs(undefined, {}, undefined, plan), error => error.code === "EXPLORATION_SECRET_MISSING", "without a platform, every step's secrets are needed");
+});
+
+test("flows whose tool calls cannot fit the turn budget are refused before any device starts", () => {
+  const flows = count => parseFlowPlan({ flows: Array.from({ length: count }, (_, index) => ({ name: `Flow ${index}`, steps: [{ checkpoint: "Home" }] })) });
+  const limits = { maxScreens: 51, maxActions: 1, maxTurns: 125 };
+  assert.throws(() => assertFlowsFit(flows(50), "ios", limits), error => error.code === "FLOWS_PLAN_OVER_BUDGET" && /at least 151 tool calls, more than the 125/.test(error.message));
+  assert.doesNotThrow(() => assertFlowsFit(flows(41), "ios", limits), "41 flows take 124 calls");
 });

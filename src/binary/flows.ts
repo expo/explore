@@ -20,6 +20,8 @@ export type FlowSession = {
   run(request: CiAgentSessionRunRequest): Promise<CiAgentSessionRunResult>;
   /** After a budget stop, the checkpoints the run did not reach, for the explorer's gap. */
   budgetNote(): string | undefined;
+  /** Each flow's checkpoints the run has not attempted, in order: the explorer records them as missing. */
+  notReached(): Array<{ flow: string; checkpoints: string[] }>;
 };
 
 const MAX_FLOWS = 50;
@@ -104,27 +106,31 @@ export async function readFlowPlan(path: string): Promise<FlowPlan> {
   return parseFlowPlan(value);
 }
 
-/** The exact fill and type steps, whose {{secret:NAME}} inputs must be set before any device starts. */
-export function flowSetup(plan: FlowPlan): CaptureSetupAction[] {
-  return plan.flows.flatMap(flow => flow.steps.flatMap(step => "action" in step && (step.action === "fill" || step.action === "type") ? [step as CaptureSetupAction] : []));
+const stepsFor = (flow: Flow, platform: ReplayPlatform | undefined) => flow.steps.map((step, index) => ({ step, number: index + 1 }))
+  .filter(({ step }) => !platform || !step.platforms || step.platforms.includes(platform));
+
+/**
+ * The exact fill and type steps, whose {{secret:NAME}} inputs must be set before any device starts: those that run on
+ * the platform, or every one while the platform is not known yet.
+ */
+export function flowSetup(plan: FlowPlan, platform?: ReplayPlatform): CaptureSetupAction[] {
+  return plan.flows.flatMap(flow => stepsFor(flow, platform).flatMap(({ step }) => "action" in step && (step.action === "fill" || step.action === "type") ? [step as CaptureSetupAction] : []));
 }
 
-/** The described steps, read for their {{secret:NAME}} references as the hints are. */
-export function flowGoals(plan: FlowPlan): string[] {
-  return plan.flows.flatMap(flow => flow.steps.flatMap(step => "do" in step ? [step.do] : []));
+/** The described steps that run on the platform (every one while it is not known), read for their {{secret:NAME}} references as the hints are. */
+export function flowGoals(plan: FlowPlan, platform?: ReplayPlatform): string[] {
+  return plan.flows.flatMap(flow => stepsFor(flow, platform).flatMap(({ step }) => "do" in step ? [step.do] : []));
 }
 
-export const flowsNeedModel = (plan: FlowPlan): boolean => flowGoals(plan).length > 0;
-
-const stepsFor = (flow: Flow, platform: ReplayPlatform) => flow.steps.map((step, index) => ({ step, number: index + 1 }))
-  .filter(({ step }) => !step.platforms || step.platforms.includes(platform));
+export const flowsNeedModel = (plan: FlowPlan, platform?: ReplayPlatform): boolean => flowGoals(plan, platform).length > 0;
 
 /**
  * Refuses, before any device starts, a flows file with nothing to do on this platform, or one whose exact steps the
- * budgets cannot hold. A described step's cost is not known in advance.
+ * budgets cannot hold. A described step's cost is not known in advance, so these are the least the flows take.
  */
-export function assertFlowsFit(plan: FlowPlan, platform: ReplayPlatform, limits: { maxScreens: number; maxActions: number }): void {
-  const steps = plan.flows.flatMap(flow => stepsFor(flow, platform));
+export function assertFlowsFit(plan: FlowPlan, platform: ReplayPlatform, limits: { maxScreens: number; maxActions: number; maxTurns: number }): void {
+  const flows = plan.flows.map(flow => stepsFor(flow, platform)).filter(steps => steps.length);
+  const steps = flows.flat();
   if (!steps.some(({ step }) => "checkpoint" in step)) {
     throw new CiError({ code: "FLOWS_PLAN_EMPTY", stage: "exploration", message: `No checkpoint of the flows file runs on ${platform}: each one is limited to ${platform === "ios" ? "android" : "ios"} by its platforms.`,
       nextAction: `Add checkpoints for ${platform}, or run the flows on the platform they were written for.` });
@@ -138,6 +144,12 @@ export function assertFlowsFit(plan: FlowPlan, platform: ReplayPlatform, limits:
   if (over.length) {
     throw new CiError({ code: "FLOWS_PLAN_OVER_BUDGET", stage: "exploration", message: `On ${platform} the flows take ${over.map(item => item.text).join(" and ")}.`,
       nextAction: `Pass ${over.map(item => item.flag).join(" ")} (or more: described steps and the screens they pass through also count), or shorten the flows.` });
+  }
+  // Each step is one tool call, each flow two more (start_flow and end_flow), and the run ends with finish.
+  const turns = flows.reduce((sum, flow) => sum + flow.length + 2, 1);
+  if (turns > limits.maxTurns) {
+    throw new CiError({ code: "FLOWS_PLAN_OVER_BUDGET", stage: "exploration", message: `On ${platform} the flows take at least ${turns} tool calls, more than the ${limits.maxTurns} that the screen and action budgets allow.`,
+      nextAction: "Raise --max-actions or --max-screens, or use fewer flows or wait steps." });
   }
 }
 
@@ -197,18 +209,21 @@ async function runGoal(model: Pick<CiAgentSession, "run">, request: CiAgentSessi
  * from a relaunched app.
  */
 export function createFlowSession(plan: FlowPlan, platform: ReplayPlatform, options: { model?: Pick<CiAgentSession, "run">; app: { name: string }; hints?: string } ): FlowSession {
-  if (flowsNeedModel(plan) && !options.model) throw new Error("A flows file with described steps needs a model session.");
+  if (flowsNeedModel(plan, platform) && !options.model) throw new Error("A flows file with described steps needs a model session.");
   const flows = plan.flows.map(flow => ({ flow, steps: stepsFor(flow, platform) })).filter(item => item.steps.length);
-  let position = { flow: 0, step: 0 };
-  /** Checkpoints still ahead: the rest of the flow in progress, then every later flow's. */
-  const notReached = () => flows.slice(position.flow).flatMap(({ flow, steps }, index) => steps.slice(index === 0 ? position.step : 0)
-    .flatMap(({ step }) => "checkpoint" in step ? [`${flow.name} › ${step.checkpoint}`] : []));
+  /** The checkpoints each flow has attempted, with or without a picture. */
+  const attempted = new Map<string, Set<string>>();
+  const notReached = () => flows.flatMap(({ flow, steps }) => {
+    const checkpoints = steps.flatMap(({ step }) => "checkpoint" in step && !attempted.get(flow.name)?.has(step.checkpoint) ? [step.checkpoint] : []);
+    return checkpoints.length ? [{ flow: flow.name, checkpoints }] : [];
+  });
   return {
     provider: "flows",
     model: "flows file",
     async preflight() {},
+    notReached,
     budgetNote() {
-      const names = notReached();
+      const names = notReached().flatMap(({ flow, checkpoints }) => checkpoints.map(name => `${flow} › ${name}`));
       return names.length ? `Not reached: ${listed(names, TOOL_LIMITS.reason, "checkpoints")}.` : undefined;
     },
     async run(request) {
@@ -220,17 +235,31 @@ export function createFlowSession(plan: FlowPlan, platform: ReplayPlatform, opti
         const value = text && "text" in text ? JSON.parse(text.text) as Record<string, unknown> : {};
         return { failed: Boolean(result.isError) || value.ok === false, value };
       };
-      const why = (value: Record<string, unknown>) => String(value.error ?? value.reason ?? value.message ?? "it failed");
+      const why = (value: Record<string, unknown>) => String(value.error ?? value.reason ?? value.message ?? value.missing ?? "it failed");
       const completed: string[] = [], failed: string[] = [], skipped: string[] = [];
+      /** A device that cannot relaunch the app twice running will not for the flows after them either. */
+      let unstarted = 0;
       try {
-        for (const [flowIndex, { flow, steps }] of flows.entries()) {
-          position = { flow: flowIndex, step: 0 };
+        for (const { flow, steps } of flows) {
+          attempted.set(flow.name, new Set());
           const started = await call("start_flow", { name: flow.name });
-          if (started.failed) { failed.push(`${flow.name} (it could not start: ${why(started.value)})`); continue; }
+          if (started.failed) {
+            failed.push(`${flow.name} (it could not start: ${why(started.value)})`);
+            if (++unstarted < 2) continue;
+            await call("stop_blocked", { reason: `The app could not be relaunched for two flows running: ${why(started.value)}`.slice(0, TOOL_LIMITS.reason) });
+            return usage;
+          }
+          unstarted = 0;
           let failure: string | undefined;
           for (const [index, { step, number }] of steps.entries()) {
-            position = { flow: flowIndex, step: index };
-            if ("checkpoint" in step) { await call("checkpoint", { name: step.checkpoint }); continue; }
+            if ("checkpoint" in step) {
+              attempted.get(flow.name)!.add(step.checkpoint);
+              const taken = await call("checkpoint", { name: step.checkpoint });
+              // A screen that blocks capture leaves its checkpoint without a picture; an observation that failed ends the flow.
+              if (!taken.value.failed) continue;
+              failure = `Checkpoint "${step.checkpoint}" could not be taken: ${why(taken.value)}`;
+              break;
+            }
             if ("do" in step) {
               const next = steps[index + 1]?.step;
               const prompt = JSON.stringify({ app: options.app.name, flow: flow.name, step: step.do,
@@ -248,11 +277,9 @@ export function createFlowSession(plan: FlowPlan, platform: ReplayPlatform, opti
             failure = `Step ${number} (${describeAction(step)}) failed: ${why(acted.value)}`;
             break;
           }
-          const missed = failure ? steps.slice(position.step).flatMap(({ step }) => "checkpoint" in step ? [step.checkpoint] : []) : [];
-          await call("end_flow", failure ? { status: "failed", reason: failure.slice(0, TOOL_LIMITS.reason), ...(missed.length ? { notReached: missed } : {}) } : { status: "completed" });
+          await call("end_flow", failure ? { status: "failed", reason: failure.slice(0, TOOL_LIMITS.reason) } : { status: "completed" });
           (failure ? failed : completed).push(flow.name);
         }
-        position = { flow: flows.length, step: 0 };
         const sections = ([["Failed", failed, "flows"], ["Optional steps skipped because they failed", skipped, "steps"]] as const).filter(([, names]) => names.length);
         let summary = `Ran ${flows.length} flow${flows.length === 1 ? "" : "s"} on ${platform}: ${completed.length} completed, ${failed.length} failed.`;
         for (const [label, names, noun] of sections) {
