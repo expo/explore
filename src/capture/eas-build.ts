@@ -119,9 +119,9 @@ const EXPLORE_REPACK_MESSAGE = /^expo-explore (?:ios|android) capture: route obs
 
 /**
  * The finished build to repack from `eas build:list --fingerprint-hash`: the newest one Explore did not repack itself,
- * else the newest. A repack keeps its source build's native code, and may carry its fingerprint; preferring the build
- * it came from has every job of a run pick the same one, which a shared repack's key needs (RepackShare), instead of a
- * repack another job finished a minute earlier.
+ * else the newest. A repack keeps its source build's native code and carries its fingerprint, so on a project that
+ * reviews often every listed build is a repack, and this is the newest of them; jobs that look minutes apart can get
+ * different ones. A shared repack is keyed by the fingerprint, not by this build (hostedRepackShareKey).
  */
 export function existingBuild(stdout: string): EasBuildDescriptor | undefined {
   const value = parseJson(stdout, "eas build:list");

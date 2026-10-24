@@ -608,7 +608,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   type BuiltApp = { fingerprint: string; nativeEasBuildId: string | null; easBuildId: string | null; app?: string; reused: boolean; version?: string; buildNumber?: string };
   // What a hosted repack waits with and reports through: one deadline from the moment the session starts beside it, for
   // the wait for another job's repack and every repack of its own. The repack is shared with this run's other matrix
-  // jobs only when it repacks a build EAS already had: a native build this job made is its own, so nobody else's key matches it.
+  // jobs only when it repacks a build EAS already had: a native build this job made is its own, so its repack carries no key and is never shared.
   const repackWaits = (shared: boolean) => ({ ...(shared ? { share: options.repackShare } : {}), progress: say, now: options.now, sleep: options.sleep, timings, onBlocking: options.onBlocking,
     signal: options.signal, deadline: (options.now ?? Date.now)() + HOSTED_REPACK_BUDGET_MS });
   // `repacking` tells the captures sharing this build that their sessions can start too (sharedBuild).
