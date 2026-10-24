@@ -34,6 +34,7 @@ export async function writeExplorationReport(result: BinaryExploreResult | Sessi
       model: { provider: result.model.provider, model: result.model.model },
       budget: map.run.limits as ExplorationReport["exploration"]["budget"],
       stopReason: result.exploration.stopReason, ...(result.exploration.summary ? { summary: result.exploration.summary } : {}),
+      ...(result.exploration.flows ? { flows: result.exploration.flows } : {}),
       startedAt: map.run.createdAt, completedAt: map.run.completedAt ?? map.run.updatedAt, exploreVersion: EXPLORE_VERSION } };
   const reportFile = join(directory, "exploration.json");
   await writeFile(reportFile, JSON.stringify(report), { flag: "wx" });

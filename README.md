@@ -234,6 +234,41 @@ npx @expo/explore explore:session --replay steps.json   # an iPhone Duo pose, or
 </details>
 
 <details>
+<summary><strong>Follow named flows, step by step</strong></summary>
+
+A flow is a path through the app that you care about, such as signing in, or renaming a pattern. Name your flows and the checkpoints along each one, then pass them with `--flows`. Each flow starts from a relaunched app, and each checkpoint is photographed under its name, so two runs of the same flows (two builds, or an iPhone and an Android phone) line up checkpoint by checkpoint.
+
+```sh
+npx @expo/explore explore:binary ./my-app.app --flows flows.json
+```
+
+```json
+{
+  "flows": [
+    { "name": "Sign in", "steps": [
+      { "checkpoint": "Welcome" },
+      { "do": "Sign in with {{secret:TEST_EMAIL}} and {{secret:TEST_PASSWORD}}" },
+      { "checkpoint": "Home" }
+    ] },
+    { "name": "Dark mode", "steps": [
+      { "action": "tap", "label": "Settings" },
+      { "action": "tap", "label": "Dark" },
+      { "checkpoint": "Settings, dark" }
+    ] }
+  ]
+}
+```
+
+- A step is an exact action, written as in `--replay`; a step described in words (`"do"`); or a `"checkpoint"`. A model carries out each described step on its own, seeing only that step, and stops when the app shows it is done. An exact step needs no model, so a flows file with only exact steps runs without a model login.
+- `--provider`, `--model` and `--hints` steer the model that carries out described steps, and cannot be passed when there are none.
+- Flow names, and checkpoint names within a flow, must be unique: they are how two runs are paired. Every flow needs at least one checkpoint.
+- A step that fails ends its flow. The report keeps its checkpoints so far, names the step and the checkpoints the flow did not reach, and goes on to the next flow.
+- Each flow is also a journey of the map: the path its steps took, from the screen it started on.
+- Relaunching ends the app's process, and the app keeps its data, so a flow that signs in leaves the next flow signed in.
+
+</details>
+
+<details>
 <summary><strong>What a run without source shows</strong></summary>
 
 One card per screen the run reached, laid out by how many taps it took, with the tapped control on each edge. There is no before and after; that needs the app's source: [`capture`](#quick-start) on your machine, or [CI](#set-up-ci).

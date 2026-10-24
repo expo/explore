@@ -12,6 +12,20 @@ export type EmbeddedScreenshot = {
 
 export const EXPLORATION_REPORT_KIND = "explore.exploration-report" as const;
 
+/**
+ * One flow of a flows file, as a run took it. Its checkpoints keep the file's names and order, so two runs of the same
+ * flow pair up step by step; a checkpoint the run has no picture of says why instead of naming an observation.
+ */
+export type ExplorationFlow = {
+  name: string;
+  /** `stopped`: the run ended (a budget, an error) while the flow was in progress. */
+  status: "completed" | "failed" | "stopped";
+  reason?: string;
+  /** The map's journey for the flow: its walk from the screen it started on. */
+  journeyId?: string;
+  checkpoints: Array<{ name: string; observationId: string; missing?: never } | { name: string; missing: string; observationId?: never }>;
+};
+
 /** What `explore:binary` learned about one prebuilt app: provenance plus the map it explored, with no review or pull request. */
 export type ExplorationReport = {
   kind: typeof EXPLORATION_REPORT_KIND;
@@ -26,6 +40,8 @@ export type ExplorationReport = {
     budget: { maxDurationMinutes: number; maxScreens: number; maxActions: number };
     stopReason: string;
     summary?: string;
+    /** Present when the run followed a flows file (`--flows`). */
+    flows?: ExplorationFlow[];
     startedAt: string;
     completedAt: string;
     exploreVersion: string;

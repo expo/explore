@@ -6,6 +6,7 @@ import { isWebp, webpSize } from "../capture/app-icon.js";
 import type { CaptureSetupAction } from "../config/explore-config.js";
 import { createExplorationInputs, explorationSecretNames } from "../config/exploration-inputs.js";
 import type { ExploreStore, PreparedArtifact } from "../map/store.js";
+import type { ExplorationFlow } from "../contracts/standalone-report.js";
 import { CiError } from "../shared/ci-errors.js";
 import { turnedClockwise } from "../shared/png-evidence.js";
 import type { ActionKind, ActionRisk, Artifact, Controller, ElementRole, ExploreMap, ObservedElement, Observation, Screen } from "../types.js";
@@ -54,6 +55,8 @@ export type BlackBoxExplorerOptions = {
   inputs?: ReturnType<typeof createExplorationInputs>;
   /** A sentence a budget stop's gap adds to its own, read once the session has stopped: a replay names the planned screens it did not reach. */
   budgetNote?: () => string | undefined;
+  /** Offers the flow tools (start_flow, checkpoint, end_flow); `restart` relaunches the app so each flow after the first starts from its first screen. */
+  flows?: { restart: (signal: AbortSignal) => Promise<void> };
 };
 
 export type BlackBoxExplorerResult = {
@@ -63,6 +66,8 @@ export type BlackBoxExplorerResult = {
   observations: number;
   actions: number;
   turns: number;
+  /** Each flow the session started, in order; only when the host offered the flow tools. */
+  flows?: ExplorationFlow[];
   error?: unknown;
 };
 
@@ -108,6 +113,17 @@ const tools: CiAgentTool[] = [
     inputSchema: { type: "object", properties: { summary: { type: "string", minLength: 1, maxLength: TOOL_LIMITS.summary } }, required: ["summary"], additionalProperties: false } },
   { name: "stop_blocked", description: "Stop because the app cannot be explored further (login wall without credentials, crash loop, permission prompt that cannot be dismissed). Keeps the evidence so far.",
     inputSchema: { type: "object", properties: { reason: { type: "string", minLength: 1, maxLength: TOOL_LIMITS.reason } }, required: ["reason"], additionalProperties: false } },
+];
+
+/** Offered only to a flows run: each flow is a journey of the map, and its checkpoints are the frames two runs compare step by step. */
+const flowTools: CiAgentTool[] = [
+  { name: "start_flow", description: "Begin a named flow. Every flow after the first starts from a relaunched app.",
+    inputSchema: { type: "object", properties: { name: { type: "string", minLength: 1, maxLength: TOOL_LIMITS.title } }, required: ["name"], additionalProperties: false } },
+  { name: "checkpoint", description: "Photograph the current screen as a named step of the current flow, even when the screen was seen before.",
+    inputSchema: { type: "object", properties: { name: { type: "string", minLength: 1, maxLength: TOOL_LIMITS.title } }, required: ["name"], additionalProperties: false } },
+  { name: "end_flow", description: "End the current flow; notReached names its checkpoints a failed flow never got to.",
+    inputSchema: { type: "object", properties: { status: { type: "string", enum: ["completed", "failed"] }, reason: { type: "string", minLength: 1, maxLength: TOOL_LIMITS.reason },
+      notReached: { type: "array", maxItems: 200, items: { type: "string", minLength: 1, maxLength: TOOL_LIMITS.title } } }, required: ["status"], additionalProperties: false } },
 ];
 
 const INSTRUCTIONS = `You are exploring a prebuilt mobile app on a remote simulator through accessibility and screenshots. Nobody gave you its source. Your job is to produce a map of its screens: visit every reachable screen, capture each one once with a clear title, and try each distinct kind of control so transitions are recorded.
@@ -406,6 +422,11 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
   let actions = 0, turns = 0, captures = 0;
   let result: BlackBoxExplorerResult | undefined;
   let fatal: unknown;
+  const flows: ExplorationFlow[] = [];
+  /** The flow in progress: the screen it started on and every action it took, from which its journey is built when it ends. */
+  let activeFlow: { record: ExplorationFlow; startScreenId?: string; attemptIds: string[] } | undefined;
+  /** The picture taken of a screen on arriving at it, until the next action: a checkpoint there needs no second one. */
+  let arrival: { observationId: string } | undefined;
   const abort = new AbortController();
   const timestamp = () => new Date(now()).toISOString();
 
@@ -446,6 +467,7 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
     evidence.delete(from.id);
     into.visits += from.visits; into.firstSeenAt = into.firstSeenAt < from.firstSeenAt ? into.firstSeenAt : from.firstSeenAt;
     if (currentScreenId === from.id) currentScreenId = into.id;
+    if (activeFlow?.startScreenId === from.id) activeFlow.startScreenId = into.id;
   };
 
   /**
@@ -633,7 +655,8 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
     // real observation; `capture` names it and adds the states the model wants to show.
     if (created || map.elements.some(element => element.screenId === screen.id && !element.firstSeenObservationId)) {
       const withImage = created && Boolean(latest.png);
-      await recordObservation(latest, screen, undefined, withImage);
+      const observation = await recordObservation(latest, screen, undefined, withImage);
+      if (withImage) arrival = { observationId: observation.id };
       if (created && latest.imageUnavailable) {
         map.gaps.push({ id: `gap_${randomUUID().slice(0, 8)}`, kind: "coverage", status: "open", message: latest.imageUnavailable.message, screenId: screen.id, createdAt: timestamp() });
       }
@@ -756,12 +779,37 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
       .sort((a, b) => a.bounds!.width * a.bounds!.height - b.bounds!.width * b.bounds!.height)[0];
   };
 
+  /**
+   * The flow's journey is the walk its actions made from the screen it started on: an action whose transition does not
+   * leave the screen the walk has reached (one that left the app, or failed) is not part of it.
+   */
+  const endFlow = async (status: ExplorationFlow["status"], reason?: string, notReached: readonly string[] = []) => {
+    const flow = activeFlow!;
+    activeFlow = undefined;
+    for (const name of notReached) flow.record.checkpoints.push({ name, missing: "The flow did not reach it." });
+    if (flow.startScreenId) {
+      const screenIds = [flow.startScreenId], transitionIds: string[] = [], attemptIds: string[] = [];
+      for (const attemptId of flow.attemptIds) {
+        const transition = map.transitions.find(item => item.attemptIds.includes(attemptId));
+        if (!transition || transition.fromScreenId !== screenIds.at(-1)) continue;
+        screenIds.push(transition.toScreenId); transitionIds.push(transition.id); attemptIds.push(attemptId);
+      }
+      // Named after the flow, so the same flow is the same journey in every run.
+      const id = `jrn_${createHash("sha256").update(flow.record.name.toLowerCase()).digest("hex").slice(0, 16)}`;
+      map.journeys.push({ id, title: flow.record.name, screenIds, transitionIds, attemptIds });
+      flow.record.journeyId = id;
+    }
+    flows.push({ ...flow.record, status, ...(reason ? { reason } : {}) });
+    say(`flow ${flow.record.name} ${status}${reason ? `: ${reason}` : ""}`);
+    await persist();
+  };
+
   let queue: Promise<unknown> = Promise.resolve();
   const prompt = JSON.stringify({ app: options.app, ...(options.launchUrl ? { launchUrl: options.launchUrl } : {}), ...(options.hints ? { operatorHints: options.hints } : {}),
     budget: { maxScreens: options.maxScreens, maxActions: options.maxActions, minutes: Math.round((options.deadlineMs - now()) / 60_000) },
     start: "The app is already open on its first screen. Begin with observe." });
   try {
-    await options.session.run({ instructions: INSTRUCTIONS, prompt, tools, deadlineMs: options.deadlineMs, signal: abort.signal, maxTurns: options.maxTurns,
+    await options.session.run({ instructions: INSTRUCTIONS, prompt, tools: options.flows ? [...tools, ...flowTools] : tools, deadlineMs: options.deadlineMs, signal: abort.signal, maxTurns: options.maxTurns,
       callTool: (name, input, signal) => {
         const operation = queue.then(async (): Promise<CiAgentToolResult> => {
           if (fatal) throw fatal;
@@ -825,6 +873,7 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
               if (action.action !== "wait" && actions >= options.maxActions) { stop("budget-actions"); abort.abort(failure("EXPLORATION_BUDGET_EXHAUSTED", "Action budget exhausted.")); throw abort.signal.reason; }
               if (action.action !== "wait") actions += 1;
               let error: string | undefined;
+              arrival = undefined;
               try { await options.act(byCleanLabel(disambiguate(typed, matched, fromScreenId)), signal); }
               catch (caught) {
                 error = caught instanceof Error ? caught.message.slice(0, 500) : String(caught).slice(0, 500);
@@ -853,6 +902,7 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
                   ...(action.action === "scroll" ? { gesture: { direction: action.direction === "top" ? "up" as const : action.direction === "bottom" ? "down" as const : action.direction } } : {}),
                   ...(action.action === "fill" || action.action === "type" ? { input: { value: action.text, redacted: explorationSecretNames(action.text).length > 0 } } : {}) }, outcome, risk,
                 startedAt, completedAt: timestamp(), ...(error ? { error } : {}) });
+              activeFlow?.attemptIds.push(attemptId);
               if (matched) { matched.status = error ? "blocked" : "done"; matched.completedAt = timestamp(); matched.lastAttemptId = attemptId; }
               // same-screen outcomes are kept as self-transitions: the map requires every observed attempt to belong to one transition.
               if ((outcome === "transition" || outcome === "same-screen") && fromScreenId && toScreenId) {
@@ -862,6 +912,53 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
               }
               await persist();
               return toolResult({ ok: !error, outcome, ...(error ? { error } : {}), ...view, ...progress().budget });
+            }
+            if (options.flows && name === "start_flow") {
+              const flowName = text(input.name, "name", TOOL_LIMITS.title).trim();
+              if (activeFlow) throw failure("FLOW_ALREADY_STARTED", `End the flow "${activeFlow.record.name}" before starting another.`);
+              if (flows.some(flow => flow.name.toLowerCase() === flowName.toLowerCase())) throw failure("FLOW_NAME_TAKEN", `A flow named "${flowName}" already ran.`);
+              if (flows.length) await options.flows.restart(signal);
+              const view = await observeNow(false, signal);
+              activeFlow = { record: { name: flowName, status: "stopped", checkpoints: [] }, ...(currentScreenId ? { startScreenId: currentScreenId } : {}), attemptIds: [] };
+              say(`flow ${flowName}`);
+              return toolResult({ ok: true, ...view });
+            }
+            if (options.flows && name === "checkpoint") {
+              if (!activeFlow) throw failure("FLOW_NOT_STARTED", "Start a flow before recording a checkpoint.");
+              const checkpoint = text(input.name, "name", TOOL_LIMITS.title).trim();
+              const { checkpoints } = activeFlow.record;
+              if (checkpoints.some(item => item.name.toLowerCase() === checkpoint.toLowerCase())) throw failure("CHECKPOINT_NAME_TAKEN", `The flow already has a checkpoint named "${checkpoint}".`);
+              const arrived = () => {
+                const observation = arrival && map.observations.find(item => item.id === arrival!.observationId);
+                return observation?.screenId === currentScreenId ? observation : undefined;
+              };
+              // The host takes the picture: the one taken on arriving at the screen when nothing has happened since, else a new one.
+              let observation = arrived();
+              if (!observation) { await observeNow(true, signal); observation = arrived(); }
+              const screen = map.screens.find(item => item.id === currentScreenId);
+              if (!observation) {
+                // A checkpoint without a picture is still a step of the flow: comparing runs shows it as missing, not as a later step moved up.
+                if (!latest?.png || !screen) {
+                  checkpoints.push({ name: checkpoint, missing: latest?.imageUnavailable?.message ?? "No picture of the screen could be taken." });
+                  await persist();
+                  return toolResult({ ok: false, missing: checkpoints.at(-1)!.missing });
+                }
+                if (captures >= options.maxScreens) { stop("budget-screens"); abort.abort(failure("EXPLORATION_BUDGET_EXHAUSTED", "Screen budget exhausted.")); throw abort.signal.reason; }
+                observation = await recordObservation(latest, screen);
+                captures += 1;
+              }
+              if (screen && isPlaceholder(screen)) screen.title = checkpoint;
+              checkpoints.push({ name: checkpoint, observationId: observation.id });
+              await persist();
+              say(`checkpoint ${activeFlow.record.name} › ${checkpoint}`);
+              return toolResult({ ok: true, screenId: observation.screenId, observationId: observation.id, ...progress().budget });
+            }
+            if (options.flows && name === "end_flow") {
+              if (!activeFlow) throw failure("FLOW_NOT_STARTED", "No flow is in progress.");
+              const reason = input.reason === undefined ? undefined : text(input.reason, "reason", TOOL_LIMITS.reason);
+              const notReached = Array.isArray(input.notReached) ? input.notReached.map(item => text(item, "notReached", TOOL_LIMITS.title)) : [];
+              await endFlow(input.status === "failed" ? "failed" : "completed", reason, notReached);
+              return toolResult({ ok: true });
             }
             if (name === "finish") { stop("finished", text(input.summary, "summary", TOOL_LIMITS.summary)); abort.abort(new Error("finished")); return toolResult({ ok: true }); }
             if (name === "stop_blocked") {
@@ -893,6 +990,8 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
       createdAt: timestamp() });
   }
   for (const item of map.frontier) if (item.status === "claimed") item.status = "pending";
+  if (activeFlow) await endFlow("stopped", `The run stopped (${result!.stopReason}) during this flow.`);
+  if (options.flows) result!.flows = flows;
   nameUncapturedScreens(map);
   await persist();
   return result!;
