@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { DEFAULT_BINARY_PROJECT, runBinaryExploration, runSessionExploration } from "../binary/run.js";
 import { openViewerInBrowser, startViewerServer, waitForViewerShutdown } from "../map/viewer-server.js";
@@ -6,10 +6,14 @@ import { writeExplorationReport } from "../binary/report.js";
 import { assertHostingExport, deployExplorationReport, zipReportDirectory } from "../report/preview-deploy.js";
 import { keepReports } from "./report-commands.js";
 import { warnIgnoredExpiry } from "../config/explore-config.js";
-import { argumentError, flag, flags, has, nonNegativeInteger, oneOf, output, positional, positiveInteger } from "./args.js";
+import { argumentError, flag, flags, has, nonNegativeInteger, oneOf, output, positional, positiveInteger, required } from "./args.js";
 import { readReplayPlan } from "../binary/replay.js";
 import { readFlowPlan } from "../binary/flows.js";
-import type { ExplorationFlow } from "../contracts/standalone-report.js";
+import { EXPLORATION_REPORT_KIND, type ExplorationFlow, type ExplorationReport } from "../contracts/standalone-report.js";
+import { compareFlowRuns, type FlowRun } from "../review/flow-comparison.js";
+import { diffScreenshots } from "../review/visual-evidence.js";
+import { agentDeviceLauncher, ensureController } from "../shared/controller-cache.js";
+import { CiError } from "../shared/ci-errors.js";
 
 
 /** `--alias NAME` plus a fixed token from EXPLORE_PREVIEW_TOKEN: the hosted link stays the same from one run to the next (validated by the deploy). */
@@ -155,4 +159,33 @@ export async function exploreSession(): Promise<void> {
   console.log(`Viewer: ${viewer.url} (Ctrl+C to stop)`);
   openViewerInBrowser(viewer.url);
   await waitForViewerShutdown(viewer);
+}
+
+/** A flows run's report: the report directory explore:binary or explore:session wrote, or the output directory holding it. */
+async function flowRun(path: string, name: "before" | "after"): Promise<FlowRun> {
+  const refuse = (message: string) => { throw new CiError({ code: "FLOW_COMPARE_INPUT_INVALID", stage: "preflight", message,
+    nextAction: `Pass --${name} the output directory of an explore:binary or explore:session run that used --flows (or its report directory).` }); };
+  for (const directory of [resolve(path), resolve(path, "report")]) {
+    let text: string;
+    try { text = await readFile(join(directory, "exploration.json"), "utf8"); } catch { continue; }
+    let report: ExplorationReport;
+    try { report = JSON.parse(text) as ExplorationReport; } catch { return refuse(`${join(directory, "exploration.json")} is not JSON.`); }
+    if (report?.kind !== EXPLORATION_REPORT_KIND) return refuse(`${join(directory, "exploration.json")} is not an exploration report.`);
+    if (!Array.isArray(report.exploration?.flows)) return refuse(`The run in ${directory} did not follow a flows file, so it has no checkpoints to compare.`);
+    return { report, directory };
+  }
+  return refuse(`No exploration.json was found in ${resolve(path)} or its report folder.`);
+}
+
+/** `compare:flows --before DIR --after DIR [--output FILE]`: two runs of one flows file, checkpoint by checkpoint. */
+export async function compareFlows(): Promise<void> {
+  const [before, after] = await Promise.all([flowRun(required("before"), "before"), flowRun(required("after"), "after")]);
+  let command: string | undefined;
+  const comparison = await compareFlowRuns(before, after, async (beforePath, afterPath) => {
+    if (!command) { await ensureController("agent-device", { environment: process.env }); command = agentDeviceLauncher(process.env); }
+    return diffScreenshots({ baselinePath: beforePath, currentPath: afterPath, command });
+  });
+  const path = flag("output");
+  if (path) await writeFile(resolve(path), JSON.stringify(comparison, null, 2));
+  output({ ok: true, ...(path ? { output: resolve(path) } : {}), comparison });
 }

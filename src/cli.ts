@@ -11,7 +11,7 @@ import { help } from "./cli/help.js";
 import { listScreens, getScreen, listElements, listObservations, getObservation, nextFrontier, listAttempts, getAttempt, listTransitions, getTransition, neighbors, pathQuery, listJourneys, getJourney, listFrontier, listGaps, summary, search, status, validate, exportArtifacts } from "./cli/map-commands.js";
 import { compareCommand, exportWeb, view } from "./cli/catalog-commands.js";
 import { ciReport, ciPublish, ciFailure, ciDeploy, ciPullRequest, ciFindBaseline, ciCompareRefs, ciAfterCapture, setup, doctor, sourceVerify, captureReview, captureBaseline, configPlatforms, configTargetList } from "./cli/ci-commands.js";
-import { exploreBinary, exploreSession } from "./cli/binary-commands.js";
+import { compareFlows, exploreBinary, exploreSession } from "./cli/binary-commands.js";
 import { reports, reportUpload } from "./cli/report-commands.js";
 
 const handlers: Record<string, () => Promise<void> | void> = {
@@ -57,6 +57,7 @@ const handlers: Record<string, () => Promise<void> | void> = {
   "config:targets": configTargetList,
   doctor,
   compare: compareCommand,
+  "compare:flows": compareFlows,
   view,
   help,
   "--help": help,
