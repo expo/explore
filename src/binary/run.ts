@@ -611,7 +611,9 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
   const limits = validatedLimits(options);
   const replay = replayPlan(options);
   const flows = flowsPlan(options);
-  const inputs = hintInputs(options.hints, environment, replay, flows, options.platform);
+  // A flows run without --platform checks its secrets once the session reports its platform, before any device work, so a
+  // secret that only another platform's steps type is not required.
+  let inputs = flows && !options.platform ? undefined : hintInputs(options.hints, environment, replay, flows, options.platform);
   if (options.bundleId !== undefined && !appIdPattern.test(options.bundleId)) throw binaryError("BUNDLE_ID_INVALID", `${options.bundleId} is not a bundle or package id.`, "Pass --bundle-id with the app's bundle identifier (iOS) or package name (Android).");
   let connection: SimulatorConnection;
   try { connection = await resolveAttachedSimulatorSession(environment, options.envFile, options.session); }
@@ -643,7 +645,7 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
   let platform: Platform = options.platform ?? "ios";
   let device = options.device ?? "";
   const app = { name: options.appName ?? options.bundleId ?? "app", bundleId: options.bundleId ?? "app", ...(options.version ? { version: options.version } : {}) };
-  const secrets = [environment.EXPO_TOKEN ?? "", connection.daemonAuthToken, ...inputs.values].filter(Boolean);
+  const secrets = [environment.EXPO_TOKEN ?? "", connection.daemonAuthToken, ...inputs?.values ?? []].filter(Boolean);
   const map: ExploreMap = { contract: CONTRACT, revision: 0, run: { id: randomUUID(), name: app.name, platform, controller: sessionController, exploration: "black-box", bundleId: app.bundleId, status: "draft",
     createdAt: new Date(now()).toISOString(), updatedAt: new Date(now()).toISOString(), build: { ...(app.version ? { version: app.version } : {}), source: "unknown" }, environment: {}, limits },
     artifacts: [], screens: [], variants: [], observations: [], elements: [], actionAttempts: [], transitions: [], journeys: [], frontier: [], gaps: [] };
@@ -656,6 +658,10 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
         `Check \`eas simulator:list\`; the session must be in progress, of type ${sessionController}, and match the connection you passed.`, { sessionId: connection.sessionId });
     }
     platform = info.platform;
+    if (!inputs) {
+      inputs = hintInputs(options.hints, environment, replay, flows, platform);
+      secrets.push(...inputs.values);
+    }
     const candidates = daemonSessions(runner, connection, work, platform, environment).filter(item => !device || item.device === device);
     const devices = new Set(candidates.map(item => item.device));
     if (devices.size > 1) throw binaryError("SESSION_DEVICE_AMBIGUOUS", `The session has agent-device sessions on several devices (${[...devices].join(", ")}).`, "Pass --device with the one the app is installed on.", { devices: [...devices] });

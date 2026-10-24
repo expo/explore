@@ -18,7 +18,7 @@ export const EXPLORATION_REPORT_KIND = "explore.exploration-report" as const;
  */
 export type ExplorationFlow = {
   name: string;
-  /** `failed`: a step, the relaunch before it, or a checkpoint's picture failed. `stopped`: the run ended (a budget, an error) before or during the flow. */
+  /** `failed`: a step, the relaunch before it, or reading a checkpoint's screen failed. A checkpoint whose screen withheld its picture does not fail the flow. `stopped`: the run ended (a budget, an error) before or during the flow. */
   status: "completed" | "failed" | "stopped";
   reason?: string;
   /** The map's journeys for the flow: its walk from the screen it started on, in parts where the app moved without a transition. */

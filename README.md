@@ -261,8 +261,9 @@ npx @expo/explore explore:binary ./my-app.app --flows flows.json
 
 - A step is an exact action, written as in `--replay`; a step described in words (`"do"`); or a `"checkpoint"`. A model carries out each described step on its own, seeing only that step, and stops when the app shows it is done. An exact step needs no model, so a flows file with only exact steps runs without a model login.
 - `--provider`, `--model` and `--hints` steer the model that carries out described steps, and cannot be passed when there are none.
-- Flow names, and checkpoint names within a flow, must be unique: they are how two runs are paired. Every flow needs at least one checkpoint.
-- A step that fails ends its flow, as does a relaunch that fails or a checkpoint whose picture cannot be taken. The report names why and goes on to the next flow; after two relaunches fail in a row, the run stops.
+- Flow names, and checkpoint names within a flow, must be unique: they are how two runs are paired. Every flow needs at least one checkpoint, and a flow with no checkpoint on the platform being run is skipped.
+- A step that fails ends its flow, as does a relaunch that fails or a checkpoint whose screen cannot be read. The report names why and goes on to the next flow; after two relaunches fail in a row, the run stops. A described step that hasn't finished after 40 tool calls fails.
+- A checkpoint on a screen that withholds its picture (it shows a secret, or the app blocks screenshots) is recorded without one, with why, and the flow goes on. The run's summary lists such checkpoints.
 - The report lists every flow and checkpoint of the file, in order, even those a run never reached: each one without a picture says why, so two runs still pair up step by step.
 - Each flow is also a journey of the map: the path its steps took, from the screen it started on. When the app moved without a tap the map could record (it left the app, or changed on its own), the path goes on as a second journey of the flow.
 - Relaunching ends the app's process, and the app keeps its data, so a flow that signs in leaves the next flow signed in. On `explore:session`, the app is relaunched before the first flow too.
