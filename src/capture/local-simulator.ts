@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { apkAbis } from "../binary/archive.js";
+import { apkAbis } from "../shared/archive-entries.js";
 import { exploreCacheRoot } from "../shared/cache-root.js";
 import { CiError } from "../shared/ci-errors.js";
 import { isRecord, parseJson } from "./common.js";
