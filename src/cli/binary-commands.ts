@@ -11,6 +11,7 @@ import { readReplayPlan } from "../binary/replay.js";
 import { readFlowPlan } from "../binary/flows.js";
 import { EXPLORATION_REPORT_KIND, type ExplorationFlow, type ExplorationReport } from "../contracts/standalone-report.js";
 import { compareFlowRuns, type FlowRun } from "../review/flow-comparison.js";
+import { writeFlowReviewReport } from "../review/flow-review.js";
 import { diffScreenshots } from "../review/visual-evidence.js";
 import { agentDeviceLauncher, ensureController } from "../shared/controller-cache.js";
 import { CiError } from "../shared/ci-errors.js";
@@ -177,7 +178,10 @@ async function flowRun(path: string, name: "before" | "after"): Promise<FlowRun>
   return refuse(`No exploration.json was found in ${resolve(path)} or its report folder.`);
 }
 
-/** `compare:flows --before DIR --after DIR [--output FILE]`: two runs of one flows file, checkpoint by checkpoint. */
+/**
+ * `compare:flows --before DIR --after DIR [--output FILE] [--report DIR]`: two runs of one flows file, checkpoint by
+ * checkpoint. `--report` writes a report the Viewer opens on its Flows view.
+ */
 export async function compareFlows(): Promise<void> {
   const [before, after] = await Promise.all([flowRun(required("before"), "before"), flowRun(required("after"), "after")]);
   let command: string | undefined;
@@ -185,7 +189,8 @@ export async function compareFlows(): Promise<void> {
     if (!command) { await ensureController("agent-device", { environment: process.env }); command = agentDeviceLauncher(process.env); }
     return diffScreenshots({ baselinePath: beforePath, currentPath: afterPath, command });
   });
-  const path = flag("output");
+  const path = flag("output"), reportPath = flag("report");
   if (path) await writeFile(resolve(path), JSON.stringify(comparison, null, 2));
-  output({ ok: true, ...(path ? { output: resolve(path) } : {}), comparison });
+  const report = reportPath ? await writeFlowReviewReport(comparison, before, after, reportPath) : undefined;
+  output({ ok: true, ...(path ? { output: resolve(path) } : {}), ...(report ? { report } : {}), comparison });
 }

@@ -1,4 +1,4 @@
-import { GitCompareArrows, LayoutGrid, Map, Search } from "lucide-react";
+import { GitCompareArrows, LayoutGrid, Map, Search, Waypoints } from "lucide-react";
 import { type CSSProperties, useLayoutEffect, useState } from "react";
 import { Tooltip } from "../shared/tooltip";
 import { useCanvasVisibleFrame } from "./visible-frame-provider";
@@ -10,18 +10,20 @@ import {
   CANVAS_LABELS,
   type CanvasView,
 } from "../../utils/navigation";
-import { CANVAS_VIEW_ORDER } from "../../utils/canvas-view-transition";
 
 const VIEW_ICONS: Record<CanvasView, React.ReactNode> = {
   map: <Map />,
   screens: <LayoutGrid />,
   compare: <GitCompareArrows />,
+  flows: <Waypoints />,
 };
 
 const TOOLBAR_MINIMUM_FRAME_WIDTH = 220;
 
 type CanvasToolbarProps = {
   canvas: CanvasView;
+  /** The views this report has, in the toolbar's order; Flows only with a flow review. */
+  views: readonly CanvasView[];
   searchOpen: boolean;
   /** Page-wide actions beside Search (Hand off to AI). */
   actions?: React.ReactNode;
@@ -76,7 +78,7 @@ export function CanvasToolbar(props: CanvasToolbarProps) {
     "--canvas-visible-bottom-inset": `calc(100% - ${visibleFrame.y + visibleFrame.height}px)`,
     "--canvas-toolbar-shift": `${shift}px`,
   } as CSSProperties) : undefined;
-  const views = CANVAS_VIEW_ORDER;
+  const views = props.views;
 
   return (
     <div ref={setElement} className="canvas-toolbar" role="toolbar" aria-label="Canvas tools" style={style}>

@@ -3,7 +3,7 @@
 // and the URL is that route written out, Figma-style: a path for the place and a query for the
 // selection. This module is DOM-free on purpose so the grammar can be tested in plain node.
 /** Map and Screens are canvases; Compare is the Before/After review of one changed screen. */
-export type CanvasView = "map" | "screens" | "compare";
+export type CanvasView = "map" | "screens" | "compare" | "flows";
 export type ThemePreference = "light" | "dark" | "system";
 export type MapDirection = "TB" | "LR";
 /** The explicitly selected amount of Map hierarchy, independent from camera zoom. */
@@ -44,6 +44,8 @@ export type Route = {
 /** What the grammar needs from the app: which baselines exist, and which screens record a route. */
 export type RouteContext = {
   defaultBaseline: string;
+  /** The report compares two runs of a flows file: Flows is one of its views, and the one a link that names none opens on. */
+  flows?: boolean;
   baselines: readonly string[];
   /** Screen id → normalised expo-router route, for the screens that record one. */
   screenRoutes: ReadonlyMap<string, string>;
@@ -85,7 +87,7 @@ export type FocusRequest = {
   preserveMapContent?: boolean;
 };
 
-const CANVASES: CanvasView[] = ["map", "screens", "compare"];
+const CANVASES: CanvasView[] = ["map", "screens", "compare", "flows"];
 const INSPECTS: InspectView[] = ["session", "diff"];
 const DIRECTIONS: TransitionDirection[] = ["in", "out"];
 const FOCUSES: FocusStatus[] = ["added", "modified", "accessibility-only", "removed", "needs-review", "source-affected"];
@@ -166,7 +168,7 @@ function routeFitsPath(route: string | undefined): route is string {
   return route !== undefined && route !== "/";
 }
 
-/** `#workspace/<canvas>` and the bare `#screens` predate path routing and are still linked; a retired canvas (flows) lands on the map. */
+/** `#workspace/<canvas>` and the bare `#screens` predate path routing and are still linked. */
 function parseLegacyHash(hash: string): CanvasView | undefined {
   const [first, second] = hash.replace(/^#/, "").split("/");
   if (first === "screens" && !second) return "screens";
@@ -180,7 +182,8 @@ export function canonicalRoute(route: Route, ctx: RouteContext): Route {
   // Graph was removed as a destination. Runtime history or callers compiled against an older
   // route type can still hand us that value, so settle it to Map before deriving scope or URLs.
   const legacyGraph = (route.canvas as string) === "graph";
-  const canvas = isCanvas(route.canvas) ? route.canvas : "map";
+  // Flows is a view only of a flow review; elsewhere its links (and the retired Flows canvas's) land on the map.
+  const canvas = isCanvas(route.canvas) && (route.canvas !== "flows" || ctx.flows) ? route.canvas : "map";
   const baseline = route.baseline === "" || ctx.baselines.includes(route.baseline)
     ? route.baseline
     : ctx.defaultBaseline;
@@ -259,7 +262,7 @@ export function sanitizeViewerRoute(route: Route): Route {
 
 export function parseLocation(location: LocationLike, ctx: RouteContext): Route {
   const params = new URLSearchParams(location.search);
-  let canvas: CanvasView = "map";
+  let canvas: CanvasView = ctx.flows ? "flows" : "map";
   let legacyGraph = false;
   let screenRoute: string | undefined;
 
@@ -344,6 +347,7 @@ export const CANVAS_LABELS: Record<CanvasView, string> = {
   map: "Map",
   screens: "Screens",
   compare: "Compare",
+  flows: "Flows",
 };
 
 /** One line each, shown under the canvas name on hover, so the views are easy to tell apart. */
@@ -351,6 +355,7 @@ export const CANVAS_DESCRIPTIONS: Record<CanvasView, string> = {
   map: "How screens connect",
   screens: "Every screen in one grid",
   compare: "Before and After of each changed screen",
+  flows: "Each flow, step by step",
 };
 
 export const FOCUS_LABELS: Record<FocusStatus, string> = {

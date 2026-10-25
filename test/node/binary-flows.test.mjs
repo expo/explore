@@ -113,6 +113,19 @@ test("a failed step ends its flow with the reason and the checkpoints it did not
   assert.deepEqual(await validateMap(map, store), []);
 });
 
+test("the session records each flow's steps as the flows file names them, and the step a failed flow stopped at", async () => {
+  const plan = parseFlowPlan({ flows: [
+    { name: "Broken", steps: [{ checkpoint: "Home" }, { action: "tap", label: "Nowhere" }, { checkpoint: "Never" }] },
+    { name: "Settings", steps: [{ action: "tap", label: "Settings" }, { checkpoint: "Settings" }] },
+  ] });
+  const session = createFlowSession(plan, "ios", { app: { name: "Example" } });
+  await explore(plan, { session });
+  assert.deepEqual(session.steps(), [
+    { flow: "Broken", steps: [{ checkpoint: "Home" }, { action: 'tap "Nowhere"' }, { checkpoint: "Never" }], failedStep: 2 },
+    { flow: "Settings", steps: [{ action: 'tap "Settings"' }, { checkpoint: "Settings" }] },
+  ]);
+});
+
 test("a destructive tap in a flow is refused by the explorer, which fails the flow", async () => {
   const { result, acted } = await explore(parseFlowPlan({ flows: [{ name: "Danger", steps: [{ action: "tap", label: "Delete account" }, { checkpoint: "After" }] }] }));
   assert.ok(!acted.some(action => action.label === "Delete account"));

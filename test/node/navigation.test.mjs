@@ -193,10 +193,18 @@ test("a screen without a route, or one the map does not know yet, travels as an 
   assert.equal(nav.formatRoute(pending, ctx), "/screens/(tabs)/later");
 });
 
+test("a flow review opens on Flows, and a link that names another view still opens it", () => {
+  const flows = { ...ctx, flows: true };
+  assert.equal(nav.parseLocation({ pathname: "/", search: "", hash: "" }, flows).canvas, "flows");
+  assert.equal(nav.parseLocation({ pathname: "/flows", search: "", hash: "" }, flows).canvas, "flows");
+  assert.equal(nav.parseLocation({ pathname: "/screens", search: "", hash: "" }, flows).canvas, "screens");
+  assert.equal(nav.formatRoute(nav.parseLocation({ pathname: "/flows", search: "", hash: "" }, flows), flows), "/flows");
+});
+
 test("legacy hashes still parse", () => {
   assert.deepEqual(parse("/#workspace"), base);
   assert.deepEqual(parse("/#workspace/screens"), { ...base, canvas: "screens" });
-  // Flows was retired; its links land on the map.
+  // Flows is a view only of a flow review: elsewhere its links, the retired Flows canvas's among them, land on the map.
   assert.deepEqual(parse("/#workspace/flows"), base);
   assert.deepEqual(parse("/flows?flow=derived-apps"), base);
   assert.deepEqual(parse("/#workspace/graph"), base);

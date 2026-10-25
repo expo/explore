@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { tsImport } from "tsx/esm/api";
 
 const { pairCheckpoints, conditionDifferences, runConditions } = await tsImport("../../src/contracts/flow-comparison.ts", import.meta.url);
 const { compareFlowRuns } = await tsImport("../../src/review/flow-comparison.ts", import.meta.url);
+const { writeFlowReviewReport } = await tsImport("../../src/review/flow-review.ts", import.meta.url);
 const { PNG } = createRequire(import.meta.url)("pngjs");
 
 const png = (width, height) => PNG.sync.write(new PNG({ width, height }));
@@ -24,14 +26,25 @@ async function run(flows, options = {}) {
     exploration: { app: { name: "Example", bundleId: options.bundleId ?? "dev.example.app", platform: options.platform ?? "ios" }, device: { model: options.device ?? "iPhone 17 Pro", osVersion: options.osVersion ?? "26.0" }, flows: [] } };
   let index = 0;
   for (const [name, checkpoints] of Object.entries(flows)) {
-    const flow = { name, status: "completed", checkpoints: [] };
+    const flow = { name, status: "completed", checkpoints: [], ...options.flow?.[name] };
     for (const [checkpoint, shot] of checkpoints) {
       if (shot.missing) { flow.checkpoints.push({ name: checkpoint, missing: shot.missing }); continue; }
-      const sha = String(++index).padStart(64, "0"), id = `obs_${index}`;
+      // Named by a digest, as a run names its assets: two runs never share a name for different pictures.
+      const sha = createHash("sha256").update(`${directory}:${++index}`).digest("hex"), id = `obs_${index}`;
       await writeFile(join(directory, "assets", `${sha}.png`), png(...shot));
       report.assets.push({ sha256: sha, path: `assets/${sha}.png` });
       report.map.artifacts.push({ id: `art_${index}`, kind: "screenshot", sha256: sha });
-      report.map.observations.push({ id, screenshotArtifactId: `art_${index}` });
+      const observation = { id, screenshotArtifactId: `art_${index}` };
+      const text = options.text?.[checkpoint];
+      if (text) {
+        // The accessibility tree a run keeps beside its report, as the explorer writes it.
+        const path = `artifacts/accessibility/${index}.json`;
+        await mkdir(join(directory, "artifacts", "accessibility"), { recursive: true });
+        await writeFile(join(directory, path), JSON.stringify({ nodes: text.map(label => ({ label })) }));
+        report.map.artifacts.push({ id: `acc_${index}`, kind: "accessibility", path });
+        observation.accessibilityArtifactId = `acc_${index}`;
+      }
+      report.map.observations.push(observation);
       flow.checkpoints.push({ name: checkpoint, observationId: id });
     }
     report.exploration.flows.push(flow);
@@ -52,7 +65,7 @@ test("checkpoints pair by flow and checkpoint name, ignoring case, in the after 
   assert.deepEqual(pairs.map(pair => [pair.flow, pair.checkpoint, !!pair.before, !!pair.after]), [
     ["sign in", "home", true, true], ["sign in", "welcome", true, true], ["Profile", "Profile", false, true], ["Settings", "Settings", true, false]]);
   assert.deepEqual(pairs[1].after, { missing: "The screenshot was blocked." });
-  assert.match(pairs[0].before.screenshot, /^assets\/0+2\.png$/);
+  assert.equal(pairs[0].before.screenshot, before.report.assets[1].path, "Home is the before run's second picture");
 });
 
 test("a run's conditions that differ are listed, not refused", async () => {
@@ -112,4 +125,36 @@ test("compare:flows reads two output directories, needs no diff when no pair has
   const refused = spawnSync(process.execPath, [cli, "compare:flows", "--before", plain.directory, "--after", output], { cwd: root, encoding: "utf8" });
   assert.notEqual(refused.status, 0);
   assert.match(JSON.parse(refused.stderr).error, /did not follow a flows file/);
+});
+
+test("a review report is the after run's report with the review beside it: both builds' pictures and text, each flow's outcome and steps", async () => {
+  const steps = [{ checkpoint: "Home" }, { action: 'tap "Continue"' }, { checkpoint: "Done" }];
+  const before = await run({ Flow: [["Home", [4, 8]], ["Done", [4, 8]]] }, { text: { Home: ["Welcome", "Sign in"], Done: ["All set"] }, flow: { Flow: { steps } } });
+  const after = await run({ Flow: [["Home", [4, 8]], ["Done", { missing: "The flow did not reach it." }]] },
+    { text: { Home: ["Welcome", "Log in"] }, flow: { Flow: { status: "failed", reason: "Step 2 (tap \"Continue\") failed: no such element", steps, failedStep: 2 } } });
+  const comparison = await compareFlowRuns(before, after, measuring(() => [{ x: 10, y: 40, width: 20, height: 10 }]));
+  const target = await mkdtemp(join(tmpdir(), "explore-flow-review-"));
+  await writeFlowReviewReport(comparison, before, after, target);
+  const written = JSON.parse(await readFile(join(target, "exploration.json"), "utf8"));
+  assert.equal(written.kind, "explore.exploration-report");
+  assert.deepEqual(written.exploration, after.report.exploration, "the after run's report is kept as it was");
+  const [flow] = written.flowReview.flows;
+  assert.deepEqual(flow.after, { status: "failed", reason: 'Step 2 (tap "Continue") failed: no such element', steps, failedStep: 2 });
+  assert.deepEqual(flow.before, { status: "completed", steps });
+  assert.deepEqual(flow.checkpoints.map(item => [item.name, item.verdict]), [["Home", "changed"], ["Done", "missing"]]);
+  assert.deepEqual(flow.checkpoints[0].before.text, ["Welcome", "Sign in"]);
+  assert.deepEqual(flow.checkpoints[0].after.text, ["Welcome", "Log in"]);
+  assert.deepEqual(flow.checkpoints[0].regions, [{ x: 10, y: 40, width: 20, height: 10 }]);
+  assert.deepEqual(flow.checkpoints[1].after, { missing: "The flow did not reach it." });
+  // Every picture the review names is in the report's folder, the before run's included.
+  for (const checkpoint of flow.checkpoints) for (const side of [checkpoint.before, checkpoint.after]) {
+    if (side?.screenshot) await access(join(target, side.screenshot));
+  }
+  assert.equal(written.assets.length, 3);
+});
+
+test("a review report is not written over one of the runs' own reports", async () => {
+  const before = await run({ Flow: [["Home", [4, 8]]] }), after = await run({ Flow: [["Home", [4, 8]]] });
+  const comparison = await compareFlowRuns(before, after, measuring());
+  await assert.rejects(writeFlowReviewReport(comparison, before, after, after.directory), /its own folder/);
 });

@@ -1,4 +1,5 @@
 import type { PublicReview } from "./capture.js";
+import type { FlowReview } from "./flow-comparison.js";
 import type { BuildWorkspacePayload, Coverage, ExploreMap } from "../types.js";
 
 export const STANDALONE_REPORT_CONTRACT = "expo.explore.standalone-report.v1" as const;
@@ -24,7 +25,14 @@ export type ExplorationFlow = {
   /** The map's journeys for the flow: its walk from the screen it started on, in parts where the app moved without a transition. */
   journeyIds?: string[];
   checkpoints: Array<{ name: string; observationId: string; missing?: never } | { name: string; missing: string; observationId?: never }>;
+  /** The flow's steps on this run's platform, as the flows file names them. */
+  steps?: ExplorationFlowStep[];
+  /** The step the flow failed at, counted from 1 in `steps`. */
+  failedStep?: number;
 };
+
+/** An exact action (`tap "Settings"`), a step described in words for a model, or a checkpoint. */
+export type ExplorationFlowStep = { action: string } | { do: string } | { checkpoint: string };
 
 /** What `explore:binary` learned about one prebuilt app: provenance plus the map it explored, with no review or pull request. */
 export type ExplorationReport = {
@@ -47,6 +55,8 @@ export type ExplorationReport = {
     exploreVersion: string;
   };
   assets: Array<{ sha256: string; path: string }>;
+  /** Present when compare:flows wrote this report: the run compared with an earlier run of the same flows file. */
+  flowReview?: FlowReview;
 };
 
 export type EmbeddedReport = {
