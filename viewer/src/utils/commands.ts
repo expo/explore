@@ -13,6 +13,8 @@ export type CommandContext = {
   selectedScreenId?: string | undefined;
   /** The Screens page has a find field (desktop). */
   find: boolean;
+  /** The report compares two runs of a flows file, so it has a Flows view. */
+  flows?: boolean;
   /** The report can be handed off to an agent (a hosted preview). */
   handoff: boolean;
   pullRequest?: { origin?: "local" | "compare" | undefined; number?: number | undefined; url?: string | undefined } | undefined;
@@ -71,6 +73,7 @@ export function commandItems(context: CommandContext, actions: CommandActions): 
   if (context.canvas !== "map") add("go:map", "Go to", "Map", () => actions.selectCanvas("map"), { keywords: ["canvas", "overview"], shortcut: key(SHORTCUTS.canvas.map) });
   if (context.canvas !== "screens") add("go:screens", "Go to", "Screens", () => actions.selectCanvas("screens"), { keywords: ["inventory", "grid", "list"], shortcut: key(SHORTCUTS.canvas.screens) });
   if (hasChanges && context.canvas !== "compare") add("go:compare", "Go to", "Compare", () => actions.selectCanvas("compare"), { keywords: ["review", "changes", "diff", "before", "after"], shortcut: key(SHORTCUTS.canvas.compare) });
+  if (context.flows && context.canvas !== "flows") add("go:flows", "Go to", "Flows", () => actions.selectCanvas("flows"), { keywords: ["steps", "checkpoints", "journeys"], shortcut: key(SHORTCUTS.canvas.flows) });
   if (context.find) add("go:find", "Go to", "Find a screen", actions.openFind, { keywords: ["filter", "screens", "search"], shortcut: "/" });
   if (context.handoff) add("go:handoff", "Go to", "Hand off to AI", actions.openHandoff, { keywords: ["agent", "prompt", "claude", "codex", "copy"], shortcut: key(SHORTCUTS.app.handoff) });
   if (!context.phone) add("go:shortcuts", "Go to", "Keyboard shortcuts", actions.openShortcuts, { keywords: ["keys", "help"], shortcut: "?" });
@@ -134,9 +137,10 @@ export function commandItems(context: CommandContext, actions: CommandActions): 
 /** The commands the empty palette leads with: what a reader on this canvas is most likely to do next. */
 export function suggestedCommands(items: readonly SearchItem[], canvas: CanvasView, limit = 6): SearchItem[] {
   const priority: Record<CanvasView, string[]> = {
-    map: ["changes:next", "changes:open-selected", "go:compare", "camera:fit", "go:find", "go:handoff", "go:screens", "view:inspector"],
+    map: ["go:flows", "changes:next", "changes:open-selected", "go:compare", "camera:fit", "go:find", "go:handoff", "go:screens", "view:inspector"],
     screens: ["go:find", "changes:next", "changes:open-selected", "go:compare", "go:map", "go:handoff", "view:inspector"],
     compare: ["changes:next", "changes:previous", "go:map", "go:screens", "go:handoff", "go:shortcuts"],
+    flows: ["go:map", "go:screens", "go:handoff", "go:shortcuts"],
   };
   return priority[canvas].flatMap((id) => items.filter((item) => item.id === `command:${id}`)).slice(0, limit);
 }

@@ -42,8 +42,9 @@ export function releaseEmbeddedArtifactUrl(reference: string): boolean {
 
 export function viewerLocation(): Pick<Location, "pathname" | "search" | "hash"> {
   if (!activeArtifactReport) return window.location;
-  // A report link opens on the Map, or in Compare when it names one changed screen (`view=compare`).
-  const view = new URLSearchParams(window.location.search).get("view") === "compare" ? "/compare" : "/map";
+  // A report link opens on the Map, on Flows for a flow review, or in Compare when it names one changed screen (`view=compare`).
+  const view = new URLSearchParams(window.location.search).get("view") === "compare" ? "/compare"
+    : activeArtifactReport.data.exploration?.flowReview ? "/flows" : "/map";
   const url = new URL(window.location.hash.slice(1) || `${view}${window.location.search}`, "https://report.invalid");
   return { pathname: url.pathname, search: url.search, hash: "" };
 }

@@ -2,6 +2,7 @@ import { createCiAgentSession, type CiAgentSession } from "../capture/agent/sess
 import { createLocalCiAgentSession } from "../capture/agent/session-local.js";
 import type { CiAgentProviderName } from "../capture/agent/provider.js";
 import { createExplorationInputs } from "../config/exploration-inputs.js";
+import type { ExplorationFlowStep } from "../contracts/standalone-report.js";
 import { CiError } from "../shared/ci-errors.js";
 import type { Platform } from "../types.js";
 import { assertAppUrl } from "./app-url.js";
@@ -33,6 +34,8 @@ export type ExplorationStrategy = {
    * and names each flow's checkpoints it never attempted, for the explorer to record as missing.
    */
   flows?: () => Array<{ flow: string; checkpoints: string[] }>;
+  /** Each flow's steps and the one it failed at, which the report keeps beside the flow. */
+  flowSteps?: () => Array<{ flow: string; steps: ExplorationFlowStep[]; failedStep?: number }>;
 };
 
 export const DEFAULT_MODELS: Record<CiAgentProviderName, string> = { anthropic: "claude-sonnet-4-5", openai: "gpt-6.1-sol" };
@@ -127,7 +130,7 @@ export async function startStrategy(choice: StrategyChoice, context: { platform:
     assertFlowsFit(choice.plan, platform, { ...limits, maxTurns: turnBudget(limits) });
     const goals = flowsNeedModel(choice.plan, platform) ? await preflightModelSession(options, environment, say) : undefined;
     const session = createFlowSession(choice.plan, platform, { app, ...(goals ? { model: goals.session } : {}), ...(options.hints ? { hints: options.hints } : {}) });
-    return { session, budgetNote: session.budgetNote, flows: session.notReached, provider: "flows", model: goals ? `${goals.provider} ${goals.model}` : session.model, auth: goals?.auth ?? "none" };
+    return { session, budgetNote: session.budgetNote, flows: session.notReached, flowSteps: session.steps, provider: "flows", model: goals ? `${goals.provider} ${goals.model}` : session.model, auth: goals?.auth ?? "none" };
   }
   return preflightModelSession(options, environment, say);
 }

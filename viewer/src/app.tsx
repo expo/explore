@@ -21,6 +21,7 @@ import { MapView } from "./components/views/semantic-map";
 import { RightPanel } from "./components/panels/right";
 import { SearchCommand } from "./components/search-command";
 import { FIND_KEY, ScreensView } from "./components/views/screens";
+import { FlowsView } from "./components/views/flows";
 import { publicReviewProjection, publicReviewToWorkspace } from "./public/public-workspace";
 import type { PublicReview } from "../../src/contracts/capture";
 import {
@@ -81,7 +82,7 @@ import {
   presentScreensByPath,
   screenAliasesForPresentation,
 } from "./utils/screen-presentation";
-import { canvasViewTransitionDirection } from "./utils/canvas-view-transition";
+import { CANVAS_VIEW_ORDER, canvasViewTransitionDirection } from "./utils/canvas-view-transition";
 import {
   STATIC_VIEWER_SOURCE,
   withStaticSourceParameters,
@@ -304,6 +305,11 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
   const [workspace, setWorkspace] = useState<ViewerWorkspace>();
   const [loadedPublicReview, setLoadedPublicReview] = useState<PublicReview>();
   const [error, setError] = useState<string>();
+  // A report compare:flows wrote carries its flow review; the Flows view exists only then.
+  const flowReview = REPORT_SOURCE.data?.exploration?.flowReview;
+  const flowReviewRef = useRef(flowReview);
+  flowReviewRef.current = flowReview;
+  const views: readonly CanvasView[] = flowReview ? CANVAS_VIEW_ORDER : CANVAS_VIEW_ORDER.filter((view) => view !== "flows");
   // The URL is the one record of where the viewer is; `route` is it parsed, and everything a
   // reader would call navigation — canvas, rail, selection, inspector tabs, baseline, focus —
   // is read off it rather than held on its own.
@@ -402,7 +408,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
       setLoadedPublicReview(undefined);
       setWorkspace(undefined);
       setPayload({ map, coverage });
-      const nextContext = routeContextForMap(map);
+      const nextContext: RouteContext = { ...routeContextForMap(map), ...(REPORT_SOURCE.data.exploration.flowReview ? { flows: true } : {}) };
       const nextRoute = viewerRoute(parseLocation(viewerLocation(), nextContext));
       contextRef.current = nextContext;
       routeRef.current = nextRoute;
@@ -969,6 +975,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
   }, [applyCanvasPanelDefaults, navigate, requestCanvasFit]);
 
   const selectCanvas = useCallback((canvas: CanvasView) => {
+    if (canvas === "flows" && !flowReviewRef.current) return;
     const direction = canvasViewTransitionDirection(routeRef.current.canvas, canvas);
     if (!direction) return;
     if (typeof document.startViewTransition !== "function") {
@@ -1353,6 +1360,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
   const routeContext = useMemo<RouteContext>(
     () => (map ? {
       ...buildRouteContext,
+      ...(flowReview ? { flows: true } : {}),
       screenRoutes: screenRoutesOf(map.screens),
       screenVariants: screenVariantsOf(map.screens),
       ...(screenAliases ? {
@@ -1361,7 +1369,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
         screenRouteAliases: screenAliases.screenRouteAliases,
       } : {}),
     } : { ...buildRouteContext, screenRoutes: new Map() }),
-    [buildRouteContext, map, screenAliases],
+    [buildRouteContext, map, screenAliases, flowReview],
   );
   contextRef.current = routeContext;
   const cameraDocumentId = currentBuild?.id ?? map?.run.id ?? payload?.map.run.id ?? "loading";
@@ -1617,11 +1625,12 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
     changed: compareOrder,
     selectedScreenId,
     find: !phone,
+    flows: Boolean(flowReview),
     handoff: Boolean(handoffInput),
     pullRequest: review?.pullRequest,
     theme: themePreference,
     appearances: appearances.length > 1 ? appearances.map((option) => ({ id: option, label: appearanceLabel(option), current: option === appearance })) : [],
-    inspector: phone || comparingScreens ? undefined : { open: !rightCollapsed },
+    inspector: phone || comparingScreens || route.canvas === "flows" ? undefined : { open: !rightCollapsed },
     fullscreen: !phone && fullscreenSupported() ? fullscreen : undefined,
     targets: (() => {
       const run = runTargets(map.run);
@@ -1696,6 +1705,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
               onCloseInspector={closeInspector}
             />
           ) : null}
+          {route.canvas === "flows" && flowReview ? <FlowsView review={flowReview} phone={phone} /> : null}
           {comparing && phone && diff && selectedScreenId && comparePicker ? (
             <PhoneCompare
               diff={diff}
@@ -1750,18 +1760,20 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
         {phone ? (
           <PhoneTabBar
             canvas={route.canvas}
+            views={views}
             compareCount={compareOrder.length}
             onSelectCanvas={selectCanvas}
           />
         ) : <CanvasToolbar
           canvas={route.canvas}
+          views={views}
           searchOpen={searchOpen}
           {...(handoffAction ? { actions: handoffAction } : {})}
           more={<MoreMenu
             themePreference={themePreference}
             onChangeTheme={setThemePreference}
             {...(fullscreenSupported() ? { fullscreen: { active: fullscreen, onToggle: toggleFullscreen } } : {})}
-            {...(comparingScreens ? {} : { inspector: { open: !rightCollapsed, onToggle: toggleRightPanel } })}
+            {...(comparingScreens || route.canvas === "flows" ? {} : { inspector: { open: !rightCollapsed, onToggle: toggleRightPanel } })}
             onOpenShortcuts={() => setShortcutsOpen(true)}
           />}
           onSelectCanvas={selectCanvas}
@@ -1770,7 +1782,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
       </CanvasVisibleFrameProvider>
       {shortcutsOpen ? (
         <ShortcutsDialog
-          context={{ canvas: route.canvas, review: reviewingInSidebar, hasChanges: compareOrder.length > 0, handoff: Boolean(handoffInput), appearances: appearances.length > 1,
+          context={{ canvas: route.canvas, review: reviewingInSidebar, hasChanges: compareOrder.length > 0, flows: Boolean(flowReview), handoff: Boolean(handoffInput), appearances: appearances.length > 1,
             fullscreen: !phone && fullscreenSupported(),
             ...(switchTargets ? { targets: switchTargets } : {}) }}
           onClose={() => setShortcutsOpen(false)}
@@ -1787,7 +1799,7 @@ const ViewerApp = memo(function ViewerApp({ reportKey }: { reportKey: number }) 
         onClose={closeSearch}
         onSelectScreen={selectSearchScreen}
       />
-      {comparingScreens ? null : <RightPanel
+      {comparingScreens || route.canvas === "flows" ? null : <RightPanel
         index={index}
         screen={selectedScreen}
         diff={diff}

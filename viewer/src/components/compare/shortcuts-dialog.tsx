@@ -1,8 +1,8 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
-import { CANVAS_NUMBER_KEYS, formatShortcut, SHORTCUTS, TARGET_NUMBER_KEYS, type Shortcut } from "../../utils/shortcuts";
-import type { CanvasView } from "../../utils/navigation";
+import { CANVAS_LABELS, type CanvasView } from "../../utils/navigation";
+import { CANVAS_NUMBER_KEYS, FLOWS_KEYS, formatShortcut, SHORTCUTS, TARGET_NUMBER_KEYS, type Shortcut } from "../../utils/shortcuts";
 import { useModalDialog } from "../../hooks/use-modal-dialog";
 
 type Row = { label: string; keys: (Shortcut | string)[] };
@@ -15,6 +15,8 @@ export type ShortcutContext = {
   review: boolean;
   /** The report has changed screens, so Compare and the changes menu exist. */
   hasChanges: boolean;
+  /** The report compares two runs of a flows file, so it has a Flows view. */
+  flows?: boolean;
   /** The report can be handed off to an agent (a hosted preview). */
   handoff?: boolean;
   /** The report was captured in both light and dark, so the app's appearance can be switched. */
@@ -72,12 +74,12 @@ const CAMERA: Group = {
 
 /** The groups for one context, in two columns: what this section does, then the app-wide keys. */
 export function shortcutGroups(context: ShortcutContext): Group[][] {
-  const sections: CanvasView[] = context.hasChanges ? ["map", "screens", "compare"] : ["map", "screens"];
+  const sections: CanvasView[] = ["map", "screens", ...(context.hasChanges ? ["compare" as const] : []), ...(context.flows ? ["flows" as const] : [])];
   const goTo: Group = {
     title: "Go to",
     rows: [
       {
-        label: context.hasChanges ? "Map, Screens, Compare" : "Map, Screens",
+        label: sections.map((section) => CANVAS_LABELS[section]).join(", "),
         keys: sections.map((section) => SHORTCUTS.canvas[section]),
       },
       ...(CANVAS_NUMBER_KEYS
@@ -116,8 +118,17 @@ export function shortcutGroups(context: ShortcutContext): Group[][] {
       { label: "Close the inspector, then leave the filmstrip or deselect", keys: ["Esc"] },
     ],
   };
+  const flowsGroup: Group = {
+    title: "Flows",
+    rows: [
+      { label: "Previous or next checkpoint", keys: [FLOWS_KEYS.previous, FLOWS_KEYS.next] },
+      { label: "Next or previous changed area", keys: [FLOWS_KEYS.nextArea, FLOWS_KEYS.previousArea] },
+      { label: "Flip between Before and After", keys: [FLOWS_KEYS.flip] },
+    ],
+  };
   const here: Group[] = context.canvas === "compare"
     ? [reviewGroup(context)]
+    : context.canvas === "flows" ? [flowsGroup]
     : [...(context.review ? [reviewGroup(context)] : []), ...(context.canvas === "map" ? [mapGroup] : []),
       ...(context.canvas === "screens" ? [screensGroup] : []), CAMERA];
   return [here, [goTo, view]];

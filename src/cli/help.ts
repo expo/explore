@@ -84,8 +84,9 @@ const CI = `CI (the installed workflows run these; they manage remote EAS Simula
   capture:baseline --project DIRECTORY --sha COMMIT --output TEMP_DIRECTORY [--config FILE] [--target ID | --platform ios|android] [--controller agent-device|argent] [--simulator eas|local] [--repack eas|local]
   source:verify --base-project DIRECTORY --head-project DIRECTORY
        --base-sha COMMIT --head-sha COMMIT --output DIRECTORY [--config FILE] [--scope all|changes] [--target ID | --platform ios|android]
-  compare:flows --before DIRECTORY --after DIRECTORY [--output FILE]
-       (two runs of one --flows file, checkpoint by checkpoint: unchanged, changed with where, or why not compared)
+  compare:flows --before DIRECTORY --after DIRECTORY [--output FILE] [--report DIRECTORY]
+       (two runs of one --flows file, checkpoint by checkpoint: unchanged, changed with where, or why not compared;
+        --report writes a report the Viewer opens on its Flows view)
   compare --baseline DIRECTORY --current DIRECTORY --output FILE
        [--review-output FILE] [--catalog-output FILE] [--catalog-name NAME]
        [--base-surface-coverage FILE] [--head-surface-coverage FILE]

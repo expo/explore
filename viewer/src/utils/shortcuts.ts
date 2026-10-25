@@ -109,19 +109,21 @@ export const SHORTCUTS = {
     map: plain("KeyM", "M"),
     screens: plain("KeyS", "S"),
     compare: plain("KeyC", "C"),
+    flows: plain("KeyP", "P"),
   },
   /** The canvases by their place in the toolbar, as tabs are numbered elsewhere. Apple keyboards only (CANVAS_NUMBER_KEYS). */
   canvasByNumber: {
     map: ctrl("Digit1", "1"),
     screens: ctrl("Digit2", "2"),
     compare: ctrl("Digit3", "3"),
+    flows: ctrl("Digit4", "4"),
   },
-  /** Screens only, on desktop: G for the grid and E for the filmstrip, as Lightroom's Library switches Grid and Loupe. */
+  /** Screens only, on desktop: G for the grid and E for the filmstrip, as Lightroom's Library switches Grid and Loupe. Flows takes them for Row and Focus. */
   screens: {
     grid: plain("KeyG", "G"),
     filmstrip: plain("KeyE", "E"),
   },
-  /** Compare only. The arrows walk changed screens; J and K walk the changed areas of one. */
+  /** Compare only. The arrows walk changed screens; J and K walk the changed areas of one. Flows takes the arrows, J, K and X for its problems, areas and flip. */
   compare: {
     previousScreen: plain("ArrowLeft", "←"),
     nextScreen: plain("ArrowRight", "→"),
@@ -140,6 +142,15 @@ export const SHORTCUTS = {
   find: {
     close: plain("Escape", "Esc"),
   },
+} as const;
+
+/** Flows borrows Compare's keys: the arrows, J, K and X step and flip as there. */
+export const FLOWS_KEYS = {
+  previous: SHORTCUTS.compare.previousScreen,
+  next: SHORTCUTS.compare.nextScreen,
+  nextArea: SHORTCUTS.compare.nextArea,
+  previousArea: SHORTCUTS.compare.previousArea,
+  flip: SHORTCUTS.compare.flipSide,
 } as const;
 
 /** The hint, in the idiom of the keyboard reading it: Apple's ⌥⇧⌘ order, or Ctrl+Alt+Shift. */

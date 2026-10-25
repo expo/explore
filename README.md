@@ -275,6 +275,14 @@ npx @expo/explore compare:flows --before explore-app-1 --after explore-app-2 --o
 ```
 
 Each checkpoint comes back `unchanged`, `changed` (with where the screenshots differ, the status bar and home indicator set aside, as in a review), `missing` (no picture on one side, with why), `different-size` (another device or orientation, so not compared), or `added` / `removed` (in only one run's flows file). The result also lists how the two runs were captured differently (the app, device, OS version, locale, orientation, or appearance), since a change can come from those.
+
+Add `--report DIRECTORY` to write a report that opens on the Viewer's Flows view, and host it with `report:upload DIRECTORY`. It is the after run's report with the comparison beside it and both builds' checkpoint screenshots:
+
+- The list shows each flow with what happened to it ("Stopped · 2 not reached", "3 changed"). Changed keeps every flow with a change and every run that stopped.
+- A flow is a filmstrip of its checkpoints, as in Screens, and opens at its first problem. Above the checkpoint in the middle are the steps that led to it, and, for a change too small to read in the picture, the text that changed. ← and → step through the checkpoints, J and K through the changed areas of one.
+- Before | After (X) flips the pictures to the other build in place.
+
+A run records each flow's steps for the review; runs made before Explore recorded them show none.
 - A `{{secret:NAME}}` or a described step limited by `platforms` to another platform needs no value, and no model, on this one.
 
 </details>

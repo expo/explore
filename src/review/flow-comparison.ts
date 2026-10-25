@@ -1,22 +1,20 @@
 import { open } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isFoldable, systemRegions } from "../contracts/capture.js";
-import { FLOW_COMPARISON_KIND, conditionDifferences, pairCheckpoints, runConditions, type CheckpointPair, type RunConditionDifference, type RunConditions } from "../contracts/flow-comparison.js";
+import {
+  FLOW_COMPARISON_KIND, conditionDifferences, pairCheckpoints, runConditions,
+  type ChangedRegion, type CheckpointPair, type CheckpointVerdict, type RunConditionDifference, type RunConditions,
+} from "../contracts/flow-comparison.js";
 import type { ExplorationReport } from "../contracts/standalone-report.js";
 import { ignoreSystemRegions, systemBandFrameLoader } from "./evidence-assessment.js";
 import type { ScreenshotDiffMeasurement } from "./visual-evidence.js";
 
-/**
- * `changed` and `unchanged` compare the two screenshots; `different-size` could not (another device or orientation);
- * `missing` has no screenshot on one side; `added` and `removed` are in only one run's flows file.
- */
-export type CheckpointVerdict = "unchanged" | "changed" | "different-size" | "missing" | "added" | "removed";
+export type { CheckpointVerdict } from "../contracts/flow-comparison.js";
 export type ComparedCheckpoint = CheckpointPair & {
   verdict: CheckpointVerdict;
   /** Share of the screenshot that differs once the status bar and home indicator are set aside. */
   mismatchPercentage?: number;
-  /** Where the screenshots differ, in percent of the image (0–100). */
-  regions?: Array<{ x: number; y: number; width: number; height: number }>;
+  regions?: ChangedRegion[];
 };
 
 export type FlowComparison = {

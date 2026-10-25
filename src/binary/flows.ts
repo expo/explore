@@ -3,6 +3,7 @@ import { CiError } from "../shared/ci-errors.js";
 import type { CiAgentSession, CiAgentSessionRunRequest, CiAgentSessionRunResult, CiAgentToolResult } from "../capture/agent/session.js";
 import type { CiAgentTool } from "../capture/agent/provider.js";
 import type { CaptureSetupAction } from "../config/explore-config.js";
+import type { ExplorationFlowStep } from "../contracts/standalone-report.js";
 import { explorationSecretNames } from "../config/exploration-inputs.js";
 import { TOOL_LIMITS } from "./explorer.js";
 import { actInput, describeAction, listed, parseReplayStep, type ReplayAction, type ReplayPlatform } from "./replay.js";
@@ -22,6 +23,8 @@ export type FlowSession = {
   budgetNote(): string | undefined;
   /** Each flow's checkpoints the run has not attempted, in order: the explorer records them as missing. */
   notReached(): Array<{ flow: string; checkpoints: string[] }>;
+  /** Each flow's steps on the platform, and the one it failed at, for the report. */
+  steps(): Array<{ flow: string; steps: ExplorationFlowStep[]; failedStep?: number }>;
 };
 
 const MAX_FLOWS = 50;
@@ -228,11 +231,16 @@ export function createFlowSession(plan: FlowPlan, platform: ReplayPlatform, opti
     const checkpoints = steps.flatMap(({ step }) => "checkpoint" in step && !attempted.get(flow.name)?.has(step.checkpoint) ? [step.checkpoint] : []);
     return checkpoints.length ? [{ flow: flow.name, checkpoints }] : [];
   });
+  /** The step each failed flow stopped at, counted from 1 among its steps on the platform. */
+  const failedAt = new Map<string, number>();
   return {
     provider: "flows",
     model: "flows file",
     async preflight() {},
     notReached,
+    steps: () => flows.map(({ flow, steps }) => ({ flow: flow.name,
+      steps: steps.map(({ step }): ExplorationFlowStep => "checkpoint" in step ? { checkpoint: step.checkpoint } : "do" in step ? { do: step.do } : { action: describeAction(step) }),
+      ...(failedAt.has(flow.name) ? { failedStep: failedAt.get(flow.name)! } : {}) })),
     budgetNote() {
       const names = notReached().flatMap(({ flow, checkpoints }) => checkpoints.map(name => `${flow} › ${name}`));
       return names.length ? `Not reached: ${listed(names, TOOL_LIMITS.reason, "checkpoints")}.` : undefined;
@@ -273,6 +281,7 @@ export function createFlowSession(plan: FlowPlan, platform: ReplayPlatform, opti
                 continue;
               }
               failure = `Checkpoint "${step.checkpoint}" could not be taken: ${why(taken.value)}`;
+              failedAt.set(flow.name, index + 1);
               break;
             }
             if ("do" in step) {
@@ -284,12 +293,14 @@ export function createFlowSession(plan: FlowPlan, platform: ReplayPlatform, opti
               usage.inputTokens += goal.usage.inputTokens; usage.outputTokens += goal.usage.outputTokens;
               if (goal.reached) continue;
               failure = `Step ${number} ("${step.do.slice(0, 120)}") was not done: ${goal.reason}`;
+              failedAt.set(flow.name, index + 1);
               break;
             }
             const acted = await call("act", actInput(step));
             if (!acted.failed) continue;
             if (step.optional) { skipped.push(`${flow.name} step ${number} (${describeAction(step)})`); continue; }
             failure = `Step ${number} (${describeAction(step)}) failed: ${why(acted.value)}`;
+            failedAt.set(flow.name, index + 1);
             break;
           }
           await call("end_flow", failure ? { status: "failed", reason: failure.slice(0, TOOL_LIMITS.reason) } : { status: "completed" });

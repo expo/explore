@@ -1,7 +1,7 @@
 import type { CanvasView } from "./navigation";
 
 /** Matches the left-to-right order of the persistent canvas toolbar. */
-export const CANVAS_VIEW_ORDER = ["map", "screens", "compare"] as const satisfies readonly CanvasView[];
+export const CANVAS_VIEW_ORDER = ["map", "screens", "compare", "flows"] as const satisfies readonly CanvasView[];
 
 export type CanvasViewTransitionDirection = "forward" | "backward";
 

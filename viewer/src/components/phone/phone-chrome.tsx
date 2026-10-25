@@ -1,14 +1,14 @@
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { GitCompareArrows, LayoutGrid, Map as MapIcon, X } from "lucide-react";
+import { GitCompareArrows, LayoutGrid, Map as MapIcon, Waypoints, X } from "lucide-react";
 import { CANVAS_LABELS, type CanvasView } from "../../utils/navigation";
-import { CANVAS_VIEW_ORDER } from "../../utils/canvas-view-transition";
 import "./phone.css";
 
 const VIEW_ICONS: Record<CanvasView, ReactNode> = {
   map: <MapIcon />,
   screens: <LayoutGrid />,
   compare: <GitCompareArrows />,
+  flows: <Waypoints />,
 };
 
 /**
@@ -17,12 +17,14 @@ const VIEW_ICONS: Record<CanvasView, ReactNode> = {
  */
 export function PhoneTabBar(props: {
   canvas: CanvasView;
+  /** The views this report has, in the toolbar's order; Flows only with a flow review. */
+  views: readonly CanvasView[];
   compareCount: number;
   onSelectCanvas: (canvas: CanvasView) => void;
 }) {
   return (
     <nav className="phone-tab-bar" aria-label="Views">
-      {CANVAS_VIEW_ORDER.map((id) => {
+      {props.views.map((id) => {
         return (
           <button key={id} type="button" className="phone-tab"
             aria-current={props.canvas === id ? "page" : undefined}

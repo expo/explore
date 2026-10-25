@@ -470,6 +470,12 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
         throw new Error(failureText(error));
       }
     } });
+  for (const planned of strategy.flowSteps?.() ?? []) {
+    const record = exploration.flows?.find(flow => flow.name.toLowerCase() === planned.flow.toLowerCase());
+    if (!record) continue;
+    record.steps = planned.steps;
+    if (planned.failedStep !== undefined && record.status === "failed") record.failedStep = planned.failedStep;
+  }
   // "complete" is reserved for a run with no pending frontier or open gaps; a model that finishes early is "partial".
   // The map schema allows stopReason only on partial/failed runs.
   map.run.status = exploration.stopReason === "model-error" ? "failed"

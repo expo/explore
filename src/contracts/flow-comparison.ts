@@ -1,6 +1,34 @@
-import type { ExplorationReport } from "./standalone-report.js";
+import type { ExplorationFlow, ExplorationFlowStep, ExplorationReport } from "./standalone-report.js";
 
 export const FLOW_COMPARISON_KIND = "explore.flow-comparison" as const;
+
+/**
+ * `changed` and `unchanged` compare the two screenshots; `different-size` could not (another device or orientation);
+ * `missing` has no screenshot on one side; `added` and `removed` are in only one run's flows file.
+ */
+export type CheckpointVerdict = "unchanged" | "changed" | "different-size" | "missing" | "added" | "removed";
+/** Where two screenshots differ, in percent of the image (0–100). */
+export type ChangedRegion = { x: number; y: number; width: number; height: number };
+
+/** One build's side of a checkpoint in a flow review: its screenshot (an asset of the review's report) and the text its screen showed, or why it has none. */
+export type FlowReviewSide = { screenshot: string; text?: string[] } | { missing: string };
+export type FlowReviewCheckpoint = { name: string; verdict: CheckpointVerdict; before?: FlowReviewSide; after?: FlowReviewSide; regions?: ChangedRegion[] };
+/** How one build's run took the flow. */
+export type FlowReviewRun = Pick<ExplorationFlow, "status" | "reason" | "failedStep"> & { steps?: ExplorationFlowStep[] };
+export type FlowReviewFlow = { name: string; before?: FlowReviewRun; after?: FlowReviewRun; checkpoints: FlowReviewCheckpoint[] };
+
+/**
+ * Two runs of one flows file, compared checkpoint by checkpoint, as the Viewer shows them: carried in the after run's
+ * exploration report, whose assets hold both builds' checkpoint screenshots.
+ */
+export type FlowReview = {
+  before: RunConditions;
+  after: RunConditions;
+  /** How the runs were captured differently; a checkpoint that changed may owe its change to these. */
+  conditions: RunConditionDifference[];
+  notes: string[];
+  flows: FlowReviewFlow[];
+};
 
 /** One run's side of a checkpoint: its screenshot (a path inside that run's report directory), or why it has none. */
 export type CheckpointSide = { observationId: string; screenshot: string } | { missing: string };
