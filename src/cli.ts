@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { ExploreStore } from "./map/store.js";
 import { QUERY_CONTRACT } from "./types.js";
 import { EXPLORE_VERSION } from "./shared/package-paths.js";
+import { enableProgramStatus, lastReportedStatus, reportFinished, reportStatus } from "./shared/program-status.js";
 import { isTargetId } from "./config/explore-config.js";
 import { command, resultContract, argumentError, validateCommandArguments, flag, has, setStore } from "./cli/args.js";
 import { help } from "./cli/help.js";
@@ -69,6 +70,11 @@ const handlers: Record<string, () => Promise<void> | void> = {
 /** Commands people type at a terminal; everything else answers agents and scripts in JSON. */
 const HUMAN_COMMANDS = new Set(["setup", "doctor", "view", "help", "explore:binary", "explore:session", "report:upload", "reports"]);
 
+/** Commands that run for minutes, so the terminal hears whether they are working, done or failed (see program-status). */
+const LONG_COMMANDS = new Set(["capture:review", "capture:baseline", "explore:binary", "explore:session", "report:upload"]);
+/** Stopped with Ctrl+C at the terminal: the person already knows, so the status is cleared rather than left as an error. */
+const CANCELLED = new Set(["LOCAL_REVIEW_INTERRUPTED", "CAPTURE_CANCELLED"]);
+
 function version(): void {
   console.log(EXPLORE_VERSION);
 }
@@ -77,10 +83,15 @@ try {
   const handler = handlers[command];
   if (!handler) argumentError(`Unknown command: ${command}`, undefined, "Run expo-explore help and choose a supported command.");
   validateCommandArguments();
+  // Not with --json: under a pseudo-terminal the sequence would share a line with the JSON an agent parses.
+  if ((LONG_COMMANDS.has(command) || (command === "doctor" && has("capture"))) && !has("json")) { enableProgramStatus(); reportStatus("working"); }
   const workspace = resolve(process.cwd(), flag("dir") ?? ".explore");
   setStore(new ExploreStore(workspace));
   await handler();
+  if (lastReportedStatus() === "working") reportFinished();
 } catch (error) {
+  if (error instanceof CiError && CANCELLED.has(error.code)) reportStatus("clear");
+  else reportStatus("error", { message: error instanceof Error ? error.message : String(error) });
   if (command.startsWith("capture:") || command.startsWith("source:") || command.startsWith("ci:") || command.startsWith("config:")) {
     // The failure comment names the target from this: a capture, report or publication of one matrix target.
     const target = (() => { try { return flag("target"); } catch { return undefined; } })();

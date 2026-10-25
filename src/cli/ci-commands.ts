@@ -21,6 +21,7 @@ import { help } from "./help.js";
 import { CiError } from "../shared/ci-errors.js";
 import { cleanupAfterCapture, findOptionalBaseline, resolveCompareRefs, resolvePullRequest, writeCaptureOutputs, writeStepOutputs } from "../ci/workflow-steps.js";
 import { stderrProgress } from "../shared/progress.js";
+import { reportFinished, reportStatus } from "../shared/program-status.js";
 import { appendTimingsSummary, timingsPathFor } from "../shared/timings.js";
 import { maxParallelTargets } from "../ci/session-plan.js";
 
@@ -47,10 +48,12 @@ Fix the problems in steps 1–5 before a capture check.`);
   }
   if (!has("yes")) {
     if (!process.stdin.isTTY || has("json")) argumentError("A capture check starts an EAS build and simulator session; pass --yes to confirm.", "yes");
+    reportStatus("blocked", { kind: "question", message: "Start a capture check on EAS?" });
     const terminal = createInterface({ input: process.stdin, output: process.stderr });
     const answer = await terminal.question(`This builds the app on EAS and runs an EAS Simulator session (EAS usage applies${report.mode === "agent" ? "; agent mode also uses your model API key or local claude/codex login" : ""}). Continue? (yes/no) `);
     terminal.close();
-    if (!/^(y|yes)$/i.test(answer.trim())) return;
+    if (!/^(y|yes)$/i.test(answer.trim())) { reportStatus("clear"); return; }
+    reportStatus("working");
   }
   let result: Awaited<ReturnType<typeof runCaptureCheck>>;
   try {
@@ -310,6 +313,8 @@ async function localReview(): Promise<void> {
   }
   // A target that failed outright has no report; the others still open, save and upload, and the command exits 1.
   if (result.failures.length) process.exitCode = 1;
+  // The terminal keeps this record after the run, so it names what failed rather than what was open.
+  const finished = () => reportFinished(result.failures.length ? `No report for ${result.failures.map(({ target }) => target.id).join(", ")}` : undefined);
   const summary = { ok: result.failures.length === 0, runId: result.runId, base: result.base, head: result.head,
     ...(result.failures.length ? { failures: result.failures.map(({ target, error }) => ({ target: target.id, code: error.code, message: error.message })) } : {}),
     reports: result.reports.map(({ platform, target, directory, zip, changes, device }) => ({ platform, target: target.id, label: target.label, directory, zip,
@@ -331,15 +336,18 @@ async function localReview(): Promise<void> {
     if (has("json")) output({ ...summary, ...(copied ? {} : { reports: summary.reports.map(({ directory: _directory, zip: _zip, ...report }) => report) }),
       url: hosted.previewUrl, expiresAt: hosted.expiresAt });
     else console.log(`Report: ${hosted.previewUrl}${hosted.expiresAt ? ` (until ${hosted.expiresAt.slice(0, 10)})` : ""}`);
+    finished();
     return;
   }
   if (has("json") || has("no-open")) {
     if (has("json")) output(summary);
     else for (const report of result.reports) console.log(`${report.target.id}: ${report.zip}`);
+    finished();
     return;
   }
   const server = await startLocalReportServer({ reports: zips, ...(has("port") ? { port: nonNegativeInteger("port") } : {}) });
   console.log(`Viewer: ${server.url} (Ctrl+C to stop)`);
+  finished();
   if (saved) console.log(`Saved as ${saved.id}: expo-explore reports reopens it, and reports upload ${saved.id} hosts it.`);
   openViewerInBrowser(server.url);
   await new Promise<void>(done => { process.once("SIGINT", () => done()); process.once("SIGTERM", () => done()); });

@@ -8,6 +8,7 @@ import { keepReports } from "./report-commands.js";
 import { warnIgnoredExpiry } from "../config/explore-config.js";
 import { argumentError, flag, flags, has, nonNegativeInteger, oneOf, output, positional, positiveInteger } from "./args.js";
 import { readReplayPlan } from "../binary/replay.js";
+import { reportFinished, reportStatus } from "../shared/program-status.js";
 
 
 /** `--alias NAME` plus a fixed token from EXPLORE_PREVIEW_TOKEN: the hosted link stays the same from one run to the next (validated by the deploy). */
@@ -37,7 +38,7 @@ export async function exploreBinary(): Promise<void> {
   const upload = simulator === "local" ? has("upload") : !has("no-upload");
   const port = flag("port") === undefined ? undefined : nonNegativeInteger("port");
   const started = Date.now();
-  const say = (message: string) => { process.stderr.write(`[explore ${Math.round((Date.now() - started) / 1000)}s] ${message}\n`); };
+  const say = (message: string) => { reportStatus("working", { message }); process.stderr.write(`[explore ${Math.round((Date.now() - started) / 1000)}s] ${message}\n`); };
   const allowDestructive = flags("allow-destructive").flatMap(value => value.split(",")).map(value => value.trim()).filter(Boolean);
   if (upload) await assertHostingExport();
   const result = await runBinaryExploration({
@@ -77,6 +78,7 @@ export async function exploreBinary(): Promise<void> {
   if (simulator === "eas" || hosted || has("no-open")) { console.log(`Next: ${summary.next.join("  |  ")}`); return; }
   const viewer = await startViewerServer({ root: outputDirectory, ...(port === undefined ? {} : { port }) });
   console.log(`Viewer: ${viewer.url} (Ctrl+C to stop)`);
+  reportFinished();
   openViewerInBrowser(viewer.url);
   await waitForViewerShutdown(viewer);
 }
@@ -100,7 +102,7 @@ export async function exploreSession(): Promise<void> {
   const controller = flag("controller") === undefined ? undefined : oneOf("controller", ["agent-device", "argent"] as const);
   const port = flag("port") === undefined ? undefined : nonNegativeInteger("port");
   const started = Date.now();
-  const say = (message: string) => { process.stderr.write(`[explore ${Math.round((Date.now() - started) / 1000)}s] ${message}\n`); };
+  const say = (message: string) => { reportStatus("working", { message }); process.stderr.write(`[explore ${Math.round((Date.now() - started) / 1000)}s] ${message}\n`); };
   const allowDestructive = flags("allow-destructive").flatMap(value => value.split(",")).map(value => value.trim()).filter(Boolean);
   const envFile = await defaultSessionEnvFile(flag("env-file"));
   if (has("upload")) await assertHostingExport();
@@ -140,6 +142,7 @@ export async function exploreSession(): Promise<void> {
   if (hosted || has("no-open")) { console.log(`Next: ${summary.next.join("  |  ")}`); return; }
   const viewer = await startViewerServer({ root: outputDirectory, ...(port === undefined ? {} : { port }) });
   console.log(`Viewer: ${viewer.url} (Ctrl+C to stop)`);
+  reportFinished();
   openViewerInBrowser(viewer.url);
   await waitForViewerShutdown(viewer);
 }
