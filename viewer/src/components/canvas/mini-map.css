@@ -9,6 +9,9 @@
   background: var(--canvas-minimap-background);
   box-shadow: var(--shadow-md);
   contain: layout paint;
+  /* iOS WebKit lifts the minimap above freshly composited cards (a screenshot's reveal fade, as a
+     fast pan mounts them) a frame late, so they flicker over it. Its own layer keeps it on top. */
+  will-change: transform;
   pointer-events: none;
   view-transition-name: canvas-minimap;
   --canvas-minimap-background: color-mix(in srgb, var(--surface) 94%, transparent);
