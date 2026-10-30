@@ -174,7 +174,7 @@ Pointed to a build, the [quick start](#quick-start) maps every screen of it, wit
 - A simulator build. A device `.ipa`, an `.aab`, an unsigned APK, or an APK without native libraries for the emulator (x86_64 on EAS Simulator, `arm64-v8a` locally on Apple silicon; a universal APK has both) is rejected before a device starts.
 - Platform, bundle id, name, and version are read from the build; you pass nothing else.
 - A run stops after 15 minutes, 40 screens, or 150 actions (`--max-duration-minutes`, `--max-screens`, `--max-actions`).
-- Buttons that delete, pay, sign out, send, or leave the app are never tapped. `--allow-destructive "Reset filters"` allows one by its exact label.
+- Buttons that delete, pay, sign out, send, or leave the app are never tapped. Explore judges a control by its label and its identifier (`btn_delete`, `deleteAccount`), including one tapped by position. `--allow-destructive "Reset filters"` allows one by its exact label.
 - `--hints "…"` tells the model what to focus on or how to sign in ([details](#sign-in-and-other-app-state)).
 - On EAS Simulator the report is hosted, and the link lasts as long as its EAS Hosting deployment (see [report access](docs/private-review.md#hosted-previews)); `--no-upload` keeps it local. On a local simulator it opens in the local Viewer (`--no-open` or `--json` skips that; `view --dir <folder>` opens it later), and `--upload` hosts it, which needs an EAS login. `--json` prints the result for scripts.
 - For a link that stays the same from run to run, pass `--alias NAME` and set `EXPLORE_PREVIEW_TOKEN` to a fixed token of 32 characters from a–z and 2–7 (`LC_ALL=C tr -dc a-z2-7 </dev/urandom | head -c 32`).
@@ -508,7 +508,7 @@ npx @expo/explore explore:binary ./my-app.app \
   --hints "Sign in as explore-test@example.com with {{secret:APP_TEST_PASSWORD}}"
 ```
 
-The model only sees the reference, and Explore types the value. The value is redacted everywhere, and a screen that shows it gets no screenshot, so keep non-sensitive values like a test email as plain text. In CI, store the value as a repository secret instead.
+The model only sees the reference, and Explore types the value. The value is redacted everywhere, and a screen that shows it gets no screenshot, so keep non-sensitive values like a test email as plain text. Explore finds the value in the screen's accessibility tree; a screen that draws it without exposing it there (in a canvas or an image) is not recognised. In CI, store the value as a repository secret instead.
 
 If the sign-in can't be typed (one-time codes, email links, Sign in with Apple or Google), sign in by hand on a session and run `explore:session`. Explore never taps Sign out.
 

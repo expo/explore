@@ -1207,3 +1207,52 @@ test("a replay plan's {{secret:NAME}} inputs are read before any device starts a
   assert.equal(map.actionAttempts[0].action.input.value, "{{secret:APP_TEST_PASSWORD}}");
   assert.ok(!JSON.stringify(map).includes("hunter2-test"));
 });
+
+test("risk words are found inside identifiers that join them", async () => {
+  const { riskOf } = await tsImport("../../src/binary/explorer.ts", import.meta.url);
+  for (const label of ["btn_delete", "deleteAccount", "sign-out", "logOutButton", "settings.reset"]) assert.equal(riskOf(label, []), "destructive", label);
+  assert.equal(riskOf("openInSafari", []), "external");
+  for (const label of ["postsTab", "settings_button", "Profile", "MapView"]) assert.equal(riskOf(label, []), "safe", label);
+  assert.equal(riskOf("resetFilters", ["resetFilters"]), "safe", "an allowed identifier");
+});
+
+/**
+ * A screen whose only control is a hittable custom view the map does not record as a control (type Other, as many
+ * custom pressables are): its risk is in its own label and identifier.
+ */
+function iconScreen(icon) {
+  return [{ type: "Window", rect: { x: 0, y: 0, width: 400, height: 800 } }, { type: "StaticText", label: "Inbox" },
+    { type: "Other", hittable: true, rect: { x: 340, y: 40, width: 44, height: 44 }, ...icon }];
+}
+
+test("a coordinate tap is judged by the control under the point, whatever the model calls it", async () => {
+  for (const icon of [{ identifier: "btn_delete" }, { label: "Delete conversation" }]) {
+    const { calls, acted, map } = await harness([["observe", { includeImage: true }], ["act", { action: "tap", frameId: "frame-0", x: 0.9, y: 0.075, target: "Profile" }], ["finish", { summary: "x" }]],
+      { observe: async includeImage => ({ nodes: iconScreen(icon), capturedAt: new Date().toISOString(), ...(includeImage ? { frameId: "frame-0", png: PNG, imageSha256: "d".repeat(64) } : {}) }) });
+    assert.equal(acted.length, 0, JSON.stringify(icon));
+    assert.equal(calls[1].result.blocked, true);
+    assert.match(calls[1].result.reason, /looks destructive.*--allow-destructive/);
+    assert.equal(map.actionAttempts.at(-1).risk, "destructive");
+  }
+});
+
+test("a coordinate tap on a control allowed by its label goes through, even when its identifier reads as risky", async () => {
+  const { acted } = await harness([["observe", { includeImage: true }], ["act", { action: "tap", frameId: "frame-0", x: 0.9, y: 0.075 }], ["finish", { summary: "x" }]],
+    { allowDestructive: ["Reset filters"],
+      observe: async includeImage => ({ nodes: iconScreen({ label: "Reset filters", identifier: "resetFilters" }), capturedAt: new Date().toISOString(), ...(includeImage ? { frameId: "frame-0", png: PNG, imageSha256: "d".repeat(64) } : {}) }) });
+  assert.equal(acted.length, 1);
+});
+
+test("a coordinate tap with no control under the point is still recorded as unknown, not refused", async () => {
+  const { acted, map } = await harness([["observe", { includeImage: true }], ["act", { action: "tap", frameId: "frame-0", x: 0.5, y: 0.5 }], ["finish", { summary: "x" }]],
+    { observe: async includeImage => ({ nodes: iconScreen({ identifier: "btn_delete" }), capturedAt: new Date().toISOString(), ...(includeImage ? { frameId: "frame-0", png: PNG, imageSha256: "d".repeat(64) } : {}) }) });
+  assert.equal(acted.length, 1);
+  assert.equal(map.actionAttempts.at(-1).risk, "unknown");
+});
+
+test("a tap by identifier on a control allowed by its label goes through", async () => {
+  const screen = [{ type: "StaticText", label: "Filters" }, { type: "Button", label: "Reset filters", identifier: "resetFilters" }];
+  const { acted } = await harness([["observe", { includeImage: true }], ["act", { action: "tap", identifier: "resetFilters" }], ["finish", { summary: "x" }]],
+    { allowDestructive: ["Reset filters"], observe: async includeImage => ({ nodes: screen, capturedAt: new Date().toISOString(), ...(includeImage ? { frameId: "frame-0", png: PNG, imageSha256: "e".repeat(64) } : {}) }) });
+  assert.equal(acted.length, 1);
+});
