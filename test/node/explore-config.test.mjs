@@ -183,7 +183,7 @@ test("report.preview opts into hosted previews with an optional owner and projec
   assert.deepEqual(validateExploreConfig({ ...base(), report: { preview: { hosting: "eas" } } }).report, { preview: { hosting: "eas" } });
   assert.deepEqual(validateExploreConfig({ ...base(), report: { preview: { hosting: "eas", owner: "acme", project: "acme-explore" } } }).report,
     { preview: { hosting: "eas", owner: "acme", project: "acme-explore" } });
-  // A hosted preview lasts as long as its EAS Hosting deployment: an old config's expiresAfter still validates, and is only noted.
+  // A hosted preview lasts as long as its Expo Hosting deployment: an old config's expiresAfter still validates, and is only noted.
   for (const expiresAfter of ["14 days", 3, "never", "forever"]) {
     assert.deepEqual(validateExploreConfig({ ...base(), report: { preview: { hosting: "eas", expiresAfter } } }).report, { preview: { hosting: "eas", expiresAfterIgnored: true } });
   }
@@ -281,7 +281,7 @@ test("capture.simulator: local runs on a simulator on this Mac; eas, the default
   assert.throws(() => validateExploreConfig({ ...base(), capture: { simulator: "device-farm" } }), error => error.code === "CONFIG_INVALID");
 });
 
-test("the repack runs on this machine with a local simulator and in EAS otherwise, unless the config or --repack chooses", () => {
+test("the repack runs on this machine with a local simulator and in Expo Services otherwise, unless the config or --repack chooses", () => {
   const plain = validateExploreConfig(base());
   assert.equal("repack" in plain.capture, false, "an unset repack is resolved where it is used");
   assert.equal(captureRepack(plain), "eas");
@@ -363,7 +363,7 @@ test("target ids and entries are validated", () => {
   assert.equal(validateExploreConfig({ ...base(), platforms, capture: { maxSessions: 1 } }).capture.maxSessions, 1);
 });
 
-test("the targets that repack one app on EAS are its repack peers, led by the first in config order", () => {
+test("the targets that repack one app on Expo Services are its repack peers, led by the first in config order", () => {
   const config = validateExploreConfig({ ...base(), targets: {
     iphone: { platform: "ios" },
     "duo-closed": { platform: "ios", device: "iPhone Duo", pose: "closed" },
@@ -375,10 +375,10 @@ test("the targets that repack one app on EAS are its repack peers, led by the fi
   assert.deepEqual(peers("duo-open"), ["iphone", "duo-closed", "duo-open"]);
   assert.deepEqual(peers("android"), ["android"], "a target no other one shares an app with has only itself");
   assert.deepEqual(peers("local"), [], "a repack on this machine is shared with nobody");
-  // A run that repacks on the runner (--repack local) shares nothing; one that repacks on EAS includes the local-simulator target.
+  // A run that repacks on the runner (--repack local) shares nothing; one that repacks on Expo Services includes the local-simulator target.
   assert.deepEqual(peers("iphone", { repack: "local" }), []);
   assert.deepEqual(peers("iphone", { repack: "eas" }), ["iphone", "duo-closed", "duo-open", "local"]);
-  // An override that makes every target run on a local simulator repacks each on its runner, unless it also asks for EAS.
+  // An override that makes every target run on a local simulator repacks each on its runner, unless it also asks for Expo Services.
   assert.deepEqual(peers("iphone", { simulator: "local" }), []);
   assert.deepEqual(peers("iphone", { simulator: "local", repack: "eas" }), ["iphone", "duo-closed", "duo-open", "local"]);
   // A config whose own repack setting makes one target local leaves it out of the others' peers under the same override.

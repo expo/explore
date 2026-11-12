@@ -1,4 +1,4 @@
-/** Hostname of a session's serve-sim server, as EAS names them. */
+/** Hostname of a session's serve-sim server, as Expo Services names them. */
 export const SIMULATOR_PREVIEW_HOST = /^web-preview-[0-9a-f]{16,64}\.eas-simulator\.ngrok\.dev$/;
 
 /**

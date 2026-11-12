@@ -187,7 +187,7 @@ export function adbDeviceOffline(error: unknown): boolean {
 const ADB_OFFLINE_RETRY_DELAYS_MS = [2_000, 5_000, 10_000] as const;
 /**
  * How long one observation keeps waiting for the emulator's adb transport to come back. The
- * outage seen on EAS Simulator lasted about 30 s (euxy #156, Android base); the fixed 17 s of
+ * outage seen on Expo Simulators lasted about 30 s (euxy #156, Android base); the fixed 17 s of
  * resends before this budget gave up in the middle of it and failed the setup it was serving.
  */
 export const ADB_OFFLINE_BUDGET_MS = 60_000;

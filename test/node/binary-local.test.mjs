@@ -53,7 +53,7 @@ function localRunner(device = { name: "iPhone 17 Pro", identifier: DEVICE_TYPE }
   return { requests, runner };
 }
 
-test("explore:binary --simulator local runs on a simulator it creates, with no EAS login, and deletes it afterwards", async t => {
+test("explore:binary --simulator local runs on a simulator it creates, with no Expo Services login, and deletes it afterwards", async t => {
   const root = await mkdtemp(join(tmpdir(), "explore-binary-local-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const { requests, runner } = localRunner();
@@ -61,7 +61,7 @@ test("explore:binary --simulator local runs on a simulator it creates, with no E
   const result = await runBinaryExploration({ archive: await simulatorApp(root), output: join(root, "out"), simulator: "local", provider: "anthropic", runner,
     createSession: () => session, environment: { PATH: process.env.PATH, HOME: root, ANTHROPIC_API_KEY: "key" } });
 
-  // No EAS: no login check, project, or session.
+  // No Expo Services: no login check, project, or session.
   assert.equal(requests.some(request => request.args.some(arg => /^(whoami|init|simulator:)/.test(arg))), false);
   const simctl = requests.filter(request => request.command === "xcrun").map(request => request.args.slice(1).join(" "));
   assert.ok(simctl.some(command => command.startsWith(`create Explore iPhone 17 Pro (binary `)));

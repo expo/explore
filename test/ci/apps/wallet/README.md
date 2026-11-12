@@ -331,7 +331,7 @@ npm run typecheck
 npx expo run:ios   # EXPO_PUBLIC_EXPLORE_MODE=true npx expo start for the explore profile
 ```
 
-The EAS project is `@expo/explore-example-app`. Generated `ios/` and `android/` folders
+The Expo Services project is `@expo/explore-example-app`. Generated `ios/` and `android/` folders
 are ignored; `npm run prebuild` regenerates `ios/` after a native dependency changes.
 
 iOS 27 does not launch an app built with Xcode 27 unless it uses the UIScene life cycle, which

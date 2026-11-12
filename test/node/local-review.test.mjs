@@ -93,7 +93,7 @@ test('a review uses the head commit\'s config, else an uncommitted one, else the
   assert.deepEqual([defaults.app.platform, defaults.app.bundleId, defaults.app.easProfile, defaults.app.scheme], ['ios', 'com.example.test', 'explore', 'test-app']);
   assert.equal(defaults.navigation.provider, 'expo-router');
   assert.equal(defaults.exploration.scope, 'changes');
-  assert.match(messages.join('\n'), /setup's defaults \(com\.example\.test, EAS profile explore, iPhone 17\)/);
+  assert.match(messages.join('\n'), /setup's defaults \(com\.example\.test, Expo Build profile explore, iPhone 17\)/);
   await assert.rejects(lstat(join(project, '.expo-explore')), { code: 'ENOENT' }, 'the defaults are not written');
 
   const config = name => `mode: deterministic\napp:\n  name: ${name}\n  platform: ios\n  bundleId: com.example.test\n  easProfile: explore\n`
@@ -349,7 +349,7 @@ test('Ctrl+C stops the review, and the checkouts are removed while its files are
   assert.equal(process.listenerCount('SIGINT'), listeners, 'its handlers are gone, so a later Ctrl+C behaves normally');
 });
 
-test('an interrupted review deletes the local simulators it recorded and stops its EAS sessions', async t => {
+test('an interrupted review deletes the local simulators it recorded and stops its Expo Simulators sessions', async t => {
   const output = await realpath(await mkdtemp(join(tmpdir(), 'explore-recorded-')));
   t.after(() => rm(output, { recursive: true, force: true }));
   const udid = '0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D';
@@ -479,7 +479,7 @@ test('a target that fails outright costs only its own report', async t => {
   const f = await fixture(t, 'expo-router', { targets });
   t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
   const environment = { ...f.environment, EXPLORE_CACHE_DIR: await scratch(t, 'explore-local-cache-'), GITHUB_RUN_ID: '', GITHUB_RUN_ATTEMPT: '', GITHUB_TOKEN: '' };
-  // EAS cannot start the tablet's session; the phone's review goes on.
+  // Expo Services cannot start the tablet's session; the phone's review goes on.
   const runner = request => {
     if (request.args[0] === 'simulator:start' && request.args.includes('iPad Air')) throw new Error('No simulator capacity for iPad Air');
     return f.runner(request);

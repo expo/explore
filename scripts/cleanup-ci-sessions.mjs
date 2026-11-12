@@ -56,7 +56,7 @@ export async function cleanupCiSessions({ sessionFiles, easCommand, environment 
       } catch (error) {
         result.failures.push({ code: 'SESSION_CLEANUP_FAILED', ...(sessionId ? { sessionId } : {}),
           message: error instanceof Error ? error.message : 'Session cleanup failed.',
-          nextAction: sessionId ? `Stop EAS Simulator session ${sessionId} and verify its status.` : 'Inspect the invalid handoff before stopping any session.' });
+          nextAction: sessionId ? `Stop Expo Simulators session ${sessionId} and verify its status.` : 'Inspect the invalid handoff before stopping any session.' });
       }
     }
   } finally {
@@ -75,7 +75,7 @@ async function main() {
     else options.sessionFiles.push(value);
   }
   const result = await cleanupCiSessions(options);
-  for (const sessionId of result.stopped) process.stdout.write(`Confirmed retained EAS session ${sessionId} is STOPPED.\n`);
+  for (const sessionId of result.stopped) process.stdout.write(`Confirmed retained Expo Simulators session ${sessionId} is STOPPED.\n`);
   if (!result.failures.length) return;
   for (const failure of result.failures) {
     process.stderr.write(`::error title=SESSION_CLEANUP_FAILED::${failure.message} ${failure.nextAction}\n`);

@@ -178,15 +178,15 @@ test("a side whose light session fails still fails, whatever the dark session di
 });
 
 test("a dark session not proven stopped fails the side, so a running session is never hidden behind a partial report", async () => {
-  const cleanup = new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup", message: "The exact EAS session could not be confirmed stopped.",
-    nextAction: "Stop EAS Simulator session 01a15b61 and verify its status.", retryable: false });
+  const cleanup = new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup", message: "The exact Expo Simulators session could not be confirmed stopped.",
+    nextAction: "Stop Expo Simulators session 01a15b61 and verify its status.", retryable: false });
   await assert.rejects((await sideInSessions({ dark: cleanup })).run(), { code: "SESSION_CLEANUP_FAILED" });
   await assert.rejects((await sideInSessions({ light: new CiError({ ...DARK_FAILURE, code: "CAPTURE_INSTALL_FAILED" }), dark: cleanup })).run(), { code: "SESSION_CLEANUP_FAILED" },
     "the leaked session is reported before the light session's own failure");
-  const handoff = new CiError({ code: "SESSION_HANDOFF_UNVERIFIED", stage: "session", message: "EAS did not provide an exact verifiable simulator session.",
+  const handoff = new CiError({ code: "SESSION_HANDOFF_UNVERIFIED", stage: "session", message: "Expo Services did not provide an exact verifiable simulator session.",
     nextAction: "Verify a session's exact ID and ownership before cleanup." });
   await assert.rejects((await sideInSessions({ dark: handoff })).run(), { code: "SESSION_HANDOFF_UNVERIFIED" });
-  const unverified = new CiError({ code: "SIMULATOR_START_FAILED", stage: "session", message: "EAS simulator:start failed before a session identity could be verified.",
+  const unverified = new CiError({ code: "SIMULATOR_START_FAILED", stage: "session", message: "eas simulator:start failed before a session identity could be verified.",
     nextAction: "Verify a session's exact ID and ownership before cleanup.", details: { allocation: "unknown" } });
   await assert.rejects((await sideInSessions({ dark: unverified })).run(), { code: "SIMULATOR_START_FAILED" });
   // A worker that died before its capture's own cleanup ran: it exited, or failed with a raw error.

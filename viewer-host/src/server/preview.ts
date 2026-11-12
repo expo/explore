@@ -1,7 +1,7 @@
 /**
  * One hosted preview deployment per review. `ci:deploy` writes the report as static files of the deployment under the
  * link's token: each target's manifest at `/p/<token>/targets/<target>.json` and every screenshot at
- * `/p/<token>/assets/<sha256>.<ext>`. EAS Hosting serves those files directly; nothing encrypts them, and what keeps
+ * `/p/<token>/assets/<sha256>.<ext>`. Expo Hosting serves those files directly; nothing encrypts them, and what keeps
  * them private is the 160-bit token in their path. This Worker answers the rest of `/p/<token>`: the Viewer shell,
  * the manifest the Viewer asks for by target, the target list, and the agent API. The Viewer bundle under /viewer/ is
  * public and identical to the central host's.
@@ -216,7 +216,7 @@ export function selectReport(config: PreviewConfig, url: URL): PreviewReport | u
 function agentContext(pageUrl: string, config: PreviewConfig, report: PreviewReport): AgentContext {
   return { pageUrl, platform: report.platform, platforms: [...new Set(config.reports.map(entry => entry.platform))], target: report.target,
     targets: config.reports.map(entry => ({ id: entry.target, platform: entry.platform, label: entry.label ?? (entry.target === entry.platform ? PLATFORM_LABELS[entry.platform] : entry.target) })),
-    // A hosted preview lasts as long as its EAS Hosting deployment; Explore sets no expiry of its own.
+    // A hosted preview lasts as long as its Expo Hosting deployment; Explore sets no expiry of its own.
     expiresAt: null };
 }
 const PLATFORM_LABELS: Record<PreviewPlatform, string> = { ios: "iOS", android: "Android" };

@@ -3,7 +3,7 @@ import { reportStatus } from "./program-status.js";
 /**
  * One line per capture step on stderr, so a CI log or a terminal shows what Explore is doing while
  * a build or a simulator session runs for minutes; the same line becomes the terminal's status
- * message (see program-status). Messages carry plan, route, and EAS identifiers only; never setup
+ * message (see program-status). Messages carry plan, route, and Expo Services identifiers only; never setup
  * text, which can hold app-test secrets.
  */
 export type Progress = (message: string) => void;

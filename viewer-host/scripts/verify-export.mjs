@@ -79,7 +79,7 @@ if (!preview) {
     }
   }
 } else {
-  // A preview deployment answers only its own token. ci:deploy writes the report as static files under it, which EAS
+  // A preview deployment answers only its own token. ci:deploy writes the report as static files under it, which Expo
   // Hosting serves without the Worker; the Worker reads the manifest back for the shell's index and the agent API, and
   // everything else is the same 404.
   const token = "abcdefghijklmnopqrstuvwxyz234567";
@@ -134,7 +134,7 @@ if (!preview) {
     if (image.status !== 200 || Buffer.compare(Buffer.from(await image.arrayBuffer()), Buffer.from(files.get(`/p/${token}/assets/${sha}.png`))) !== 0) {
       throw new Error(`Preview route ${page} must serve a screenshot to the agent API from the static file`);
     }
-    // Screenshots and manifests are static files EAS Hosting serves itself; the Worker answers none of their paths.
+    // Screenshots and manifests are static files Expo Hosting serves itself; the Worker answers none of their paths.
     for (const path of [`/p/${token.replace("a", "b")}`, `/p/${token.replace("a", "b")}/manifest.json`, `/p/${token.replace("a", "b")}/api/v1`, `/p/${token}/report.zip`,
       `/p/${token}/targets/report.json`, `/p/${token}/assets/${sha}.png`, `/p/${token}/viewer/index.html`, `/p/${token}/other`, `/p/${token}/api/v1/other`, `/p/${token}/api/v2`, "/p/", `/P/${token}`]) {
       if ((await handlers.GET(new Request(origin + path))).status !== 404) throw new Error(`Preview route ${page} incorrectly accepts ${path}`);

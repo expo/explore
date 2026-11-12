@@ -102,7 +102,7 @@ async function hostReports(reports: ReadReport[]): Promise<void> {
     reports: reports.map(report => ({ platform: report.summary.platform, target: report.summary.target, zip: report.zip,
       ...(report.summary.changes === undefined ? {} : { changes: report.summary.changes }), ...(report.summary.device ? { device: report.summary.device } : {}) })),
     ownerHint: "Pass --owner with the Expo account that should host the report.",
-    projectHint: "Give this EAS login permission to create projects under the owner, or pass --project with an existing project slug." });
+    projectHint: "Give this Expo Services login permission to create projects under the owner, or pass --project with an existing project slug." });
   if (has("json")) {
     output({ ok: true, url: hosted.previewUrl, expiresAt: hosted.expiresAt, project: hosted.project, owner: hosted.owner,
       reports: reports.map(report => ({ path: report.path, platform: report.summary.platform, target: report.summary.target.id, kind: report.summary.kind })) });
@@ -126,7 +126,7 @@ export function commitSubject(cwd: string, sha: string): string | undefined {
 }
 
 /**
- * `report:upload <report.zip | report directory>...`: hosts reports already on this machine behind one token-gated EAS
+ * `report:upload <report.zip | report directory>...`: hosts reports already on this machine behind one token-gated Expo
  * Hosting link, as `capture:review --upload` and `explore:binary` do for the report they just wrote. Several reports
  * must be one review's platforms; a review goes to the repository's preview project, an exploration to expo-explore.
  * The reports are also kept among the saved runs (`expo-explore reports`).

@@ -106,7 +106,7 @@ export async function snapshotWorkingTree(root: string, options: { untracked?: b
   let bytes = 0;
   for (const file of untracked) bytes += (await stat(join(root, file)).catch(() => ({ size: 0 }))).size;
   if (bytes > UNTRACKED_LIMIT_BYTES) throw new CiError({ code: "LOCAL_REVIEW_UNTRACKED_TOO_LARGE", stage: "preflight",
-    message: `The untracked files add up to ${Math.round(bytes / 1024 / 1024)} MB; they would be uploaded with the EAS build.`,
+    message: `The untracked files add up to ${Math.round(bytes / 1024 / 1024)} MB; they would be uploaded with the Expo Build.`,
     nextAction: "Ignore or commit the large files, or pass --committed to review HEAD alone." });
   must(git(root, ["add", options.untracked ? "-A" : "-u", "--", "."], environment), "Cannot stage the working tree", "Check the repository's state.");
   const tree = must(git(root, ["write-tree"], environment), "Cannot write the working tree", "Check the repository's state.");
@@ -310,7 +310,7 @@ function recordedSessionIds(outputs: string[]): string[] {
   }));
 }
 
-/** How to stop a recorded session by hand: an EAS Simulator session, or a local simulator or emulator the capture started. */
+/** How to stop a recorded session by hand: an Expo Simulators session, or a local simulator or emulator the capture started. */
 function stopHint(id: string): string {
   const udid = localSimulatorFromState(id);
   const serial = localEmulatorFromState(id);
@@ -318,7 +318,7 @@ function stopHint(id: string): string {
 }
 
 /**
- * Stop the simulators a capture recorded and did not stop itself (an interrupted run): EAS Simulator sessions with the
+ * Stop the simulators a capture recorded and did not stop itself (an interrupted run): Expo Simulators sessions with the
  * local login, local simulators by deleting them, and local emulators by killing them.
  */
 export async function stopRecordedSessions(outputs: string[], environment: NodeJS.ProcessEnv, runner: (args: string[]) => { status: number | null } =
@@ -379,7 +379,7 @@ export async function localReviewConfig(options: { project: string; head: string
       message: `There is no ${options.configPath}, so this review uses setup's defaults, which need this: ${(error as Error).message}`,
       nextAction: "Fix that and rerun (with several simulator profiles, the one named explore is used), or run expo-explore setup to write a config." });
   }
-  progress(`config: none yet, so setup's defaults (${config.app.bundleId}, EAS profile ${config.app.easProfile}, ${config.device.name}); `
+  progress(`config: none yet, so setup's defaults (${config.app.bundleId}, Expo Build profile ${config.app.easProfile}, ${config.device.name}); `
     + "expo-explore setup writes one you can change");
   return config;
 }
@@ -463,7 +463,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     const useLocalEasSession = !environment.EXPO_TOKEN?.trim();
     if (useLocalEasSession && !options.runner) {
       const whoami = spawnSync(packageBin("eas-cli", "eas"), ["whoami"], { cwd: projects.head, env: environment, encoding: "utf8", timeout: 60_000 });
-      if (whoami.status !== 0) throw new CiError({ code: "EXPO_LOGIN_REQUIRED", stage: "preflight", message: "You are not logged in to EAS.",
+      if (whoami.status !== 0) throw new CiError({ code: "EXPO_LOGIN_REQUIRED", stage: "preflight", message: "You are not logged in to Expo Services.",
         nextAction: "Run eas login (or set EXPO_TOKEN), then rerun." });
     }
     const subscription = rawConfig.mode === "agent" && rawConfig.agent !== undefined && !environment[AGENT_PROVIDERS[rawConfig.agent.provider].secret]?.trim();

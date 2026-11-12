@@ -7,7 +7,7 @@ export const LAUNCH_SECONDS = 28;
 /** A pass moves to its own session only when that shortens the side by at least this much. */
 export const SPLIT_MIN_SAVING_SECONDS = 60;
 /**
- * `capture.maxSessions` when the config sets none: the simulators a typical EAS plan runs at once. A starter plan runs
+ * `capture.maxSessions` when the config sets none: the simulators a typical Expo Services plan runs at once. A starter plan runs
  * one per platform, so its config sets the ceiling lower (2 for an iOS and an Android target).
  */
 export const DEFAULT_MAX_SESSIONS = 5;

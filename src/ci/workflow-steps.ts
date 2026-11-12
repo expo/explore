@@ -240,7 +240,7 @@ export function resolveCompareRefs(options: { project: string; base: string; hea
 }
 
 /**
- * `ci:after-capture`: after capture, success or not. Stops the EAS Simulator sessions the capture recorded in its output
+ * `ci:after-capture`: after capture, success or not. Stops the Expo Simulators sessions the capture recorded in its output
  * directory, then checks that capture left each source checkout as it found it. Reports every problem, then fails.
  */
 export async function cleanupAfterCapture(options: { output: string; checkouts: string[]; environment?: Environment }):

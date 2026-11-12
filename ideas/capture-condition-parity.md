@@ -75,7 +75,7 @@ leading "Added/Removed button" facts.
 **Reinstalling is not a clean slate.** Argent's `reinstall-app`
 ([`argent-driver.ts:712`](../src/capture/argent-driver.ts)) uninstalls and
 installs, but ignores uninstall errors. iOS keychain and SecureStore data
-survive an uninstall. EAS `simulator:control` has no clear-data, keychain or
+survive an uninstall. `eas simulator:control` has no clear-data, keychain or
 keyboard action.
 
 ## Goal
@@ -104,7 +104,7 @@ uses.
 1. **Fuller keyboard log.** Add the scheme, the pass, the tree's keyboard
    bounds, Argent's `keyboardVisible`, the screen size and the app's keyboard
    metrics to `keyboard.jsonl`, and export it.
-2. **App-side keyboard probe on EAS**, with Argent and with agent-device. Read
+2. **App-side keyboard probe on Expo Services**, with Argent and with agent-device. Read
    `Keyboard.metrics()` and the show and hide events, and work out how much of
    the window the keyboard covers. Compare that with a screenshot, a tree read,
    and a second screenshot about 2 s later. Capture at least one session where
@@ -112,7 +112,7 @@ uses.
    drawn from not drawn, and whether a missing keyboard is a late draw or a
    suppressed one.
 3. **Reset probe.** Write a test value into app storage through a fixture
-   app's deep link, reinstall through each controller on EAS and locally, and
+   app's deep link, reinstall through each controller on Expo Services and locally, and
    check that it is gone. Check the keychain too, and time each reset.
 
 ### Phase 1: identical app history
@@ -136,7 +136,7 @@ uses.
    - Clear `deepLinkPromptAccepted` in the bridge's install case and approve
      URL schemes again.
 6. **Fall back to separate sessions.** When no verified reset exists, or the
-   app keeps state in the keychain on EAS, run each appearance in its own
+   app keeps state in the keychain on Expo Services, run each appearance in its own
    session ([`session-plan.ts`](../src/ci/session-plan.ts)).
 7. **Same history on both sides.**
    - Reuse a baseline pass only if every selected route in it is cached;
@@ -180,7 +180,7 @@ undrawn one.
       is `needs-review` with the caveat;
     - show the caveat in the PR comment and the Viewer.
 13. **Keep the keyboard on screen where possible.** Local Android:
-    `settings put secure show_ime_with_hard_keyboard 1`. EAS: a serve-sim
+    `settings put secure show_ime_with_hard_keyboard 1`. Expo Services: a serve-sim
     action, if one is added. Local iOS boots headless, so phase 0 confirms
     whether the Simulator.app preference applies.
 
@@ -228,7 +228,7 @@ undrawn one.
 ## Open questions
 
 1. Can serve-sim add clear-app-data, keychain-reset and hardware-keyboard
-   actions to EAS sessions? Without them, EAS relies on Argent's reinstall and
+   actions to Expo Simulators sessions? Without them, Expo Services relies on Argent's reinstall and
    on separate sessions for apps that keep state in the keychain.
 2. Is about 25 s per extra appearance pass acceptable by default, or should
    the reset be a setting?

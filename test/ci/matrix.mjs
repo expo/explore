@@ -27,7 +27,7 @@ async function main() {
   let interrupts = 0;
   const onSignal = () => {
     interrupts++;
-    // First Ctrl+C lets each run cancel and clean up its EAS session; a second one stops them.
+    // First Ctrl+C lets each run cancel and clean up its Expo Simulators session; a second one stops them.
     for (const child of children) { try { process.kill(-child.pid, interrupts === 1 ? 'SIGINT' : 'SIGKILL'); } catch { /* Already exited. */ } }
     if (interrupts === 1) console.error('Cancelling matrix cells; press Ctrl+C again to stop them immediately.');
   };
@@ -75,7 +75,7 @@ async function main() {
   await mkdir(summary);
   await writeFile(join(summary, 'matrix.json'), JSON.stringify({ contract: 'explore.local-matrix.v1', app: options.app, prefix: options.prefix, planOnly: options.planOnly, results }, null, 2) + '\n');
   await writeFile(join(summary, 'README.md'), [`# ${options.prefix} matrix`, '', `App: \`${options.app}\`${options.planOnly ? ' · planning only' : ''}`, '', matrixTable(results), '',
-    ...results.map(r => `- [${r.name}](../${r.runId}/README.md)`), '', 'Estimated costs are CLI estimates for agent sessions; EAS charges are not included.', ''].join('\n'));
+    ...results.map(r => `- [${r.name}](../${r.runId}/README.md)`), '', 'Estimated costs are CLI estimates for agent sessions; Expo Services charges are not included.', ''].join('\n'));
   console.log(`\n${matrixTable(results)}\n\nSummary: test/ci/runs/${options.prefix}-matrix/README.md`);
   const ok = results.every(cellPassed);
   if (!ok || interrupts) process.exitCode = 1;

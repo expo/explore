@@ -1599,7 +1599,7 @@ test("transition thumbnails without a readable screenshot show the variant thumb
   assert.deepEqual(errors, []);
 });
 
-test("a docs-only report with zero images and no EAS build has no screens to show, and its link to a route says why", async t => {
+test("a docs-only report with zero images and no Expo Build has no screens to show, and its link to a route says why", async t => {
   const report = reportFixture();
   report.review.mode = "changes";
   report.review.runtime.projectId = "";

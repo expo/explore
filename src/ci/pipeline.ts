@@ -87,7 +87,7 @@ function captureOptions(config: ExploreConfig, environment: NodeJS.ProcessEnv, r
  * The hosted repack this capture shares with the other matrix jobs of its GitHub run attempt (RepackShare): only inside
  * a GitHub Actions run, whose jobs are the only ones that meet, and only when another target repacks the same app
  * (`peers`, in config order, from hostedRepackPeers). A run attempt's repacks are never used by another attempt or run,
- * such as the baseline workflow's: "Re-run failed jobs" after an EAS environment value was fixed rebundles with it.
+ * such as the baseline workflow's: "Re-run failed jobs" after an Expo Services environment value was fixed rebundles with it.
  * Each target's `rank` (its place among the peers) staggers how long it waits for another's repack (sharedRepackWaitMs);
  * a re-run attempt runs only the jobs it re-runs, so its leader may not be one of them, and its stagger starts at once.
  */
@@ -116,7 +116,7 @@ async function prefetchControllers(config: ExploreConfig, environment: NodeJS.Pr
  * environment: never evaluated in this process, which holds the review's secrets. Unknown: undefined.
  */
 async function expectedColorSchemes(config: ExploreConfig, project: string, environment: NodeJS.ProcessEnv, easCommand: string): Promise<ColorScheme[] | undefined> {
-  // Argent switches the appearance only through serve-sim on an EAS iOS session; elsewhere it captures one.
+  // Argent switches the appearance only through serve-sim on an iOS Expo Simulators session; elsewhere it captures one.
   if (config.capture.controller === "argent" && config.capture.simulator !== "local" && config.app.platform !== "ios") return undefined;
   if (config.capture.appearance !== "auto") return resolveColorSchemes(config.capture.appearance, undefined, config.app.platform);
   const easEnvironment = { ...baseEnvironment(environment), ...(environment.EXPO_TOKEN ? { EXPO_TOKEN: environment.EXPO_TOKEN } : {}) };
@@ -516,7 +516,7 @@ export async function runCiReview(options: {
   const timings = createTimings({ path: options.timingsPath, secrets: environmentSecrets(environment) });
   timings.record(runHeader(environment, config));
   const phases = phaseSequence(timings);
-  // The controllers are fetched before any EAS work, so a blocked download fails before a session is paid for. agent-device
+  // The controllers are fetched before any Expo Services work, so a blocked download fails before a session is paid for. agent-device
   // also compares the screenshots. An injected runner (tests) stands in for the controllers' calls, but not for that
   // comparison: it still runs the real agent-device, which fetches itself on first use.
   if (!options.runner) await controllersTimed(timings, () => prefetchControllers(config, environment, progress));

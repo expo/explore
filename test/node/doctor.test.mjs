@@ -375,7 +375,7 @@ test("doctor checks that npm has the pinned version, and flags a vendored workfl
   assert.match(kept.notes.join("\n"), /vendored copy/);
 });
 
-test("EAS variables that repacking cannot reproduce are recognized by name only", () => {
+test("Expo Services variables that repacking cannot reproduce are recognized by name only", () => {
   assert.deepEqual(unreproducibleEasVariables([
     "PLAIN=value",
     "SENSITIVE=***** (This is a sensitive env variable. To access it, run command with --include-sensitive flag. Learn more.)",
@@ -487,7 +487,7 @@ test("workflows count as on the default branch only when its copy matches this c
   assert.match(check(missing, "default-branch")[0].message, /explore-baseline\.yml \(missing\)/);
 });
 
-test("doctor checks each configured platform's EAS profile and warns when the workflows capture one platform", async (t) => {
+test("doctor checks each configured platform's Expo Build profile and warns when the workflows capture one platform", async (t) => {
   const multi = { ...baseConfig, platforms: { ios: {}, android: { bundleId: "com.example.app", easProfile: "explore-android" } } };
   const root = await app(t, multi);
   await workflows(root);
@@ -597,11 +597,11 @@ test("with a local Android emulator, doctor checks the device profile and that t
   assert.equal(check(ready, "local-repack")[0].status, "pass");
   assert.match(check(ready, "local-repack")[0].message, /build-tools 35\.0\.0, openjdk version "17\.0\.20\.1"/);
   assert.match(check(await doctor({ java: false }), "local-repack")[0].message, /needs Java/);
-  // A hosted EAS repack needs neither.
+  // A hosted Expo Workflows repack needs neither.
   assert.deepEqual(check(await doctor({ extra: { repack: "eas" } }), "local-repack"), []);
 });
 
-test("with a local simulator, doctor checks that this Mac can create the device instead of EAS Simulator access", async (t) => {
+test("with a local simulator, doctor checks that this Mac can create the device instead of Expo Simulators access", async (t) => {
   const root = await app(t);
   const eas = easRun({ available: false });
   const simctl = (devicetypes, runtimes) => (command, args, cwd) => {
@@ -613,14 +613,14 @@ test("with a local simulator, doctor checks that this Mac can create the device 
   const runtimes = { runtimes: [{ identifier: "runtime.iOS-27-0", version: "27.0", platform: "iOS", isAvailable: true,
     supportedDeviceTypes: [{ identifier: "type.iPhone-17" }, { identifier: "type.iPhone-17-Pro" }] }] };
   const ready = await runDoctor({ project: root, github: false, simulator: "local", run: simctl(types, runtimes) });
-  assert.deepEqual(check(ready, "eas-simulator"), [], "EAS Simulator access is not needed");
+  assert.deepEqual(check(ready, "eas-simulator"), [], "Expo Simulators access is not needed");
   assert.equal(check(ready, "local-simulator")[0].status, "pass");
   assert.match(check(ready, "local-simulator")[0].message, /iOS 27\.0/);
   const missing = await runDoctor({ project: root, github: false, simulator: "local", run: simctl({ devicetypes: [] }, runtimes) });
   assert.equal(check(missing, "local-simulator")[0].code, "LOCAL_SIMULATOR_DEVICE_UNAVAILABLE");
 });
 
-test("doctor checks each target where it runs: local tools for local targets, EAS Simulator access when any target uses it", async (t) => {
+test("doctor checks each target where it runs: local tools for local targets, Expo Simulators access when any target uses it", async (t) => {
   const eas = easRun();
   const run = (command, args, cwd) => {
     if (command !== "xcrun") return eas.run(command, args, cwd);
@@ -630,18 +630,18 @@ test("doctor checks each target where it runs: local tools for local targets, EA
   };
   const doctor = async (config, options = {}) => runDoctor({ project: await app(t, config), github: false, run, ...options });
   const devices = report => check(report, "local-simulator").map(item => item.message.match(/create an (.+) simulator/)[1]);
-  // Every target runs locally on its own say, with nothing at the top level: no EAS Simulator access is needed.
+  // Every target runs locally on its own say, with nothing at the top level: no Expo Simulators access is needed.
   const local = await doctor({ ...baseConfig, targets: { phone: { platform: "ios", simulator: "local" }, pro: { platform: "ios", device: "iPhone 17 Pro", simulator: "local" } } });
   assert.deepEqual(devices(local), ["iPhone 17", "iPhone 17 Pro"]);
   assert.deepEqual(check(local, "eas-simulator"), []);
-  // A local config with one target on EAS: that target needs EAS Simulator access, and the local one this Mac's tools.
+  // A local config with one target on Expo Services: that target needs Expo Simulators access, and the local one this Mac's tools.
   const mixed = await doctor({ ...baseConfig, capture: { ...baseConfig.capture, simulator: "local" },
     targets: { phone: { platform: "ios" }, cloud: { platform: "ios", device: "iPhone 17 Pro", simulator: "eas", controller: "argent" } } });
   assert.deepEqual(devices(mixed), ["iPhone 17"]);
   assert.equal(check(mixed, "eas-simulator")[0].status, "pass");
-  // The target's Argent is reported as a top-level one would be: on an iOS EAS session the host switches its appearance.
+  // The target's Argent is reported as a top-level one would be: on an iOS Expo Simulators session the host switches its appearance.
   assert.equal(check(mixed, "controller")[0].status, "pass");
-  // Only Argent on an Android EAS session records a single appearance.
+  // Only Argent on an Android Expo Simulators session records a single appearance.
   const android = await doctor({ ...baseConfig, targets: { phone: { platform: "ios" },
     droid: { platform: "android", device: "pixel_7", bundleId: "com.example.app", easProfile: "explore-android", controller: "argent" } } });
   assert.equal(check(android, "controller")[0].code, "CONTROLLER_APPEARANCE_FIXED");

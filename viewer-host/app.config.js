@@ -1,7 +1,7 @@
 // Two exports share this app and the staged Viewer under public/viewer:
 // - default: the central report page (explore-preview.expo.app), routes in src/app
 // - EXPLORE_HOST_VARIANT=preview: one deployment per review, routes in src/app-preview;
-//   deployed by `expo-explore ci:deploy` into the reviewed app's own EAS project.
+//   deployed by `expo-explore ci:deploy` into the reviewed app's own Expo Services project.
 const preview = process.env.EXPLORE_HOST_VARIANT === "preview";
 
 export default {

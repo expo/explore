@@ -33,7 +33,7 @@ export async function exploreBinary(): Promise<void> {
   const provider = flag("provider") === undefined ? undefined : oneOf("provider", ["anthropic", "openai"] as const);
   const controller = flag("controller") === undefined ? undefined : oneOf("controller", ["agent-device", "argent"] as const);
   const simulator = flag("simulator") === undefined ? "eas" : oneOf("simulator", ["eas", "local"] as const);
-  // On EAS Simulator the report is hosted unless --no-upload; locally it opens in the Viewer unless --upload, so a
+  // On Expo Simulators the report is hosted unless --no-upload; locally it opens in the Viewer unless --upload, so a
   // local run needs no Expo account at all.
   const upload = simulator === "local" ? has("upload") : !has("no-upload");
   const port = flag("port") === undefined ? undefined : nonNegativeInteger("port");
@@ -58,7 +58,7 @@ export async function exploreBinary(): Promise<void> {
   await keepReports(async () => [{ platform: result.archive.platform, zip: await zipReportDirectory(report.reportPath) }]);
   let hosted: Awaited<ReturnType<typeof deployExplorationReport>> | undefined;
   if (upload) {
-    say("hosting the report on EAS Hosting");
+    say("hosting the report on Expo Hosting");
     const owner = result.session.owner || flag("owner");
     hosted = await deployExplorationReport({ reportPath: report.reportPath, platform: result.archive.platform, project: flag("project") ?? DEFAULT_BINARY_PROJECT, ...(owner ? { owner } : {}), ...stableLinkOptions() });
     say(`report: ${hosted.previewUrl}${hosted.expiresAt ? ` (expires ${hosted.expiresAt})` : ""}`);
@@ -124,7 +124,7 @@ export async function exploreSession(): Promise<void> {
   await keepReports(async () => [{ platform: result.app.platform, zip: await zipReportDirectory(report.reportPath) }]);
   let hosted: Awaited<ReturnType<typeof deployExplorationReport>> | undefined;
   if (has("upload")) {
-    say("hosting the report on EAS Hosting");
+    say("hosting the report on Expo Hosting");
     hosted = await deployExplorationReport({ reportPath: report.reportPath, platform: result.app.platform, project: flag("project") ?? DEFAULT_BINARY_PROJECT, ...(flag("owner") ? { owner: flag("owner")! } : {}), ...stableLinkOptions() });
     say(`report: ${hosted.previewUrl}${hosted.expiresAt ? ` (expires ${hosted.expiresAt})` : ""}`);
   }

@@ -12,7 +12,7 @@
 #
 # Call it once per workflow run: a called workflow shares its caller's run, and its artifact names come from the run.
 # The report links are written to the run's summary. For a release, pass scope: all to capture every screen. A hosted
-# link (report.preview.hosting: eas) lasts as long as its EAS Hosting deployment; expires-in is accepted and ignored.
+# link (report.preview.hosting: eas) lasts as long as its Expo Hosting deployment; expires-in is accepted and ignored.
 name: Expo Explore compare
 on:
   workflow_dispatch:
@@ -20,13 +20,13 @@ on:
       base: { description: 'Base: a branch, tag or commit SHA', required: true }
       head: { description: 'Head: a branch, tag or commit SHA', required: true }
       scope: { description: 'changes (screens whose source changed) or all; default: exploration.scope in config.yaml', required: false, default: '' }
-      expires-in: { description: 'Ignored: kept for workflows that pass it. A hosted preview lasts as long as its EAS Hosting deployment.', required: false, default: '' }
+      expires-in: { description: 'Ignored: kept for workflows that pass it. A hosted preview lasts as long as its Expo Hosting deployment.', required: false, default: '' }
   workflow_call:
     inputs:
       base: { description: 'Base: a branch, tag or commit SHA', required: true, type: string }
       head: { description: 'Head: a branch, tag or commit SHA', required: true, type: string }
       scope: { description: 'changes (screens whose source changed) or all; default: exploration.scope in config.yaml', required: false, type: string, default: '' }
-      expires-in: { description: 'Ignored: kept for workflows that pass it. A hosted preview lasts as long as its EAS Hosting deployment.', required: false, type: string, default: '' }
+      expires-in: { description: 'Ignored: kept for workflows that pass it. A hosted preview lasts as long as its Expo Hosting deployment.', required: false, type: string, default: '' }
 permissions: {}
 env:
   # The exact @expo/explore release CI installs. expo-explore setup --workflows sets it.
@@ -305,7 +305,7 @@ jobs:
           path: ${{ runner.temp }}/explore-diagnostics
           retention-days: 7
           if-no-files-found: ignore
-  # Hosted report (opt-in, report.preview in config.yaml): one token-gated EAS Hosting deployment serving every target's report.
+  # Hosted report (opt-in, report.preview in config.yaml): one token-gated Expo Hosting deployment serving every target's report.
   # This is the only job after capture that holds EXPO_TOKEN; it writes the link to the run summary.
   # It runs once any target linked its report, and serves the targets that did; a failed target has no report to wait for.
   deploy:

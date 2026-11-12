@@ -56,7 +56,7 @@ export function isPreviewPath(pathname: string): boolean {
 }
 
 /**
- * The token of a hosted preview page, `/p/<token>`: one EAS Hosting deployment per review, whose Worker serves this
+ * The token of a hosted preview page, `/p/<token>`: one Expo Hosting deployment per review, whose Worker serves this
  * Viewer there, each target's manifest at `/p/<token>/manifest.json`, and every screenshot as a static file.
  */
 export function previewToken(page: URL): string | undefined {

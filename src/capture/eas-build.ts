@@ -46,40 +46,40 @@ export function assertCaptureEasProfile(configValue: { appConfig: Record<string,
   const where = source ? ` at the ${source.side} commit ${source.commit.slice(0, 8)}` : "";
   const profileFix = (setting: string) => `Set ${setting} on the selected profile in eas.json`
     + (source?.side === "base" ? " on the default branch (the base side is built from its own checkout), then rerun Explore." : ", then rerun Explore.");
-  const bundleIdFix = (field: string) => `Set app.bundleId to the ${field} resolved by the selected EAS profile`
+  const bundleIdFix = (field: string) => `Set app.bundleId to the ${field} resolved by the selected Expo Build profile`
     + (source?.side === "base" ? ", or land the app config change on the default branch first." : ".");
   if (platform === "android") {
     // `eas config` resolves the platform section into the profile, so buildType sits beside distribution.
-    // EAS Simulator installs APKs; internal distribution builds one unless the profile asks for an app bundle.
+    // Expo Simulators installs APKs; internal distribution builds one unless the profile asks for an app bundle.
     const { buildType, distribution } = configValue.buildProfile;
     const apk = buildType === "apk" || (buildType === undefined && distribution === "internal");
     if (!apk || configValue.buildProfile.developmentClient === true) throw new CiError({ code: "EAS_PROFILE_NOT_SIMULATOR", stage: "configuration",
-      message: `The selected EAS build profile${where} does not produce an Android emulator APK that opens the app directly.`,
+      message: `The selected Expo Build profile${where} does not produce an Android emulator APK that opens the app directly.`,
       nextAction: profileFix("android.buildType: apk (without developmentClient)") });
     const configuredAndroid = configValue.appConfig.android;
     if (!isRecord(configuredAndroid) || configuredAndroid.package !== bundleId) throw new CiError({ code: "APP_BUNDLE_ID_MISMATCH", stage: "configuration",
-      message: `The configured app package differs from the EAS app configuration resolved${where}.`,
+      message: `The configured app package differs from the Expo Services app configuration resolved${where}.`,
       nextAction: bundleIdFix("android.package") });
     return;
   }
   if (configValue.buildProfile.simulator !== true) throw new CiError({ code: "EAS_PROFILE_NOT_SIMULATOR", stage: "configuration",
-    message: `The selected EAS build profile${where} does not produce an iOS Simulator application.`,
+    message: `The selected Expo Build profile${where} does not produce an iOS Simulator application.`,
     nextAction: profileFix("ios.simulator: true") });
   const configuredIos = configValue.appConfig.ios;
   if (!isRecord(configuredIos) || configuredIos.bundleIdentifier !== bundleId) throw new CiError({ code: "APP_BUNDLE_ID_MISMATCH", stage: "configuration",
-    message: `The configured app bundle identifier differs from the EAS app configuration resolved${where}.`,
+    message: `The configured app bundle identifier differs from the Expo Services app configuration resolved${where}.`,
     nextAction: bundleIdFix("ios.bundleIdentifier") });
 }
 
 export function assertSimulatorAvailable(stdout: string): void {
   const availability = parseJson(stdout, "simulator availability");
   if (!isRecord(availability) || availability.available !== true) throw new CiError({ code: "SIMULATOR_UNAVAILABLE", stage: "preflight",
-    message: "EAS Simulator is not available for this account.", nextAction: "Enable EAS Simulator access for the configured Expo account before running capture." });
+    message: "Expo Simulators is not available for this account.", nextAction: "Enable Expo Simulators access for the configured Expo account before running capture." });
 }
 
 /**
  * Names of `eas env:list` variables that capture cannot reproduce when it repacks a build:
- * secret-visibility values never leave EAS builders, and file variables are not repacked.
+ * secret-visibility values never leave Expo Build builders, and file variables are not repacked.
  */
 export function unreproducibleEasVariables(stdout: string): string[] {
   const names = new Set<string>();
@@ -175,7 +175,7 @@ export type RepackProfile = {
   };
 };
 
-/** A finished EAS build as `eas build:list --json` / `eas build --json` describe it. */
+/** A finished Expo Build as `eas build:list --json` / `eas build --json` describe it. */
 type EasBuildDescriptor = {
   id: string;
   appVersion?: string;
@@ -230,14 +230,14 @@ export function repackProfileFrom(stdout: string): RepackProfile {
       : "preview";
   const easEnvironment = buildProfile.environment === undefined
     ? inferredEnvironment
-    : configValue(buildProfile.environment, "EAS build-profile environment");
+    : configValue(buildProfile.environment, "Expo Build profile environment");
   if (easEnvironment.length > 256) {
-    throw new Error("EAS build-profile environment is too long");
+    throw new Error("Expo Build profile environment is too long");
   }
   const appConfig = value.appConfig;
   const extra = isRecord(appConfig.extra) ? appConfig.extra : undefined;
   const eas = extra && isRecord(extra.eas) ? extra.eas : undefined;
-  const owner = configValue(appConfig.owner, "EAS app owner");
+  const owner = configValue(appConfig.owner, "Expo Services app owner");
   const ios = isRecord(appConfig.ios) ? appConfig.ios : undefined;
   const version = optionalAppText(appConfig.version, "app config version");
   const buildNumber = optionalAppText(ios?.buildNumber, "app config ios.buildNumber");
@@ -245,10 +245,10 @@ export function repackProfileFrom(stdout: string): RepackProfile {
     easEnvironment,
     profileEnvironment,
     projectIdentity: {
-      name: configValue(appConfig.name, "EAS app name"),
-      slug: configValue(appConfig.slug, "EAS app slug"),
+      name: configValue(appConfig.name, "Expo Services app name"),
+      slug: configValue(appConfig.slug, "Expo Services app slug"),
       owner,
-      projectId: configValue(eas?.projectId, "EAS project id"),
+      projectId: configValue(eas?.projectId, "Expo Services project id"),
       ...(version ? { version } : {}),
       ...(buildNumber ? { buildNumber } : {}),
     },
@@ -282,8 +282,8 @@ export function easPlanLimitError(error: unknown, platform: "ios" | "android"): 
   return new CiError({
     code: "EAS_PLAN_LIMIT_REACHED",
     stage: "instrumentation",
-    message: `EAS refused the repacked ${platform} build upload because the account's build plan is used up: ${match[0].trim()}.`,
-    nextAction: "Each review uploads one repacked build per side and platform. Wait for the plan's monthly reset or raise the EAS plan limit; a current baseline artifact for the default branch halves the uploads a review needs.",
+    message: `Expo Services refused the repacked ${platform} build upload because the account's build plan is used up: ${match[0].trim()}.`,
+    nextAction: "Each review uploads one repacked build per side and platform. Wait for the plan's monthly reset or raise the Expo Services plan limit; a current baseline artifact for the default branch halves the uploads a review needs.",
     cause: error,
   });
 }
@@ -295,7 +295,7 @@ class UnsupportedRepackEnvironmentError extends Error {
 function assertSafeRepackEnvironmentName(name: string): void {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
     throw new UnsupportedRepackEnvironmentError(
-      `EAS environment variable ${name} cannot be represented safely during local repacking`,
+      `Expo Services environment variable ${name} cannot be represented safely during local repacking`,
     );
   }
   const upper = name.toUpperCase();
@@ -308,7 +308,7 @@ function assertSafeRepackEnvironmentName(name: string): void {
     || upper.startsWith("NPM_CONFIG_")
   ) {
     throw new UnsupportedRepackEnvironmentError(
-      `EAS environment variable ${name} cannot override the repack process environment`,
+      `Expo Services environment variable ${name} cannot override the repack process environment`,
     );
   }
 }
@@ -316,7 +316,7 @@ function assertSafeRepackEnvironmentName(name: string): void {
 function assertSafeRepackEnvironmentValue(name: string, value: string): void {
   if (/[\u0000-\u001f\u007f]/.test(value)) {
     throw new UnsupportedRepackEnvironmentError(
-      `EAS environment variable ${name} cannot be represented safely during local repacking`,
+      `Expo Services environment variable ${name} cannot be represented safely during local repacking`,
     );
   }
 }
@@ -355,15 +355,15 @@ async function pulledEnvironment(options: {
       if (isWithin(options.fileRoot, candidateFile)) {
         const info = await lstat(candidateFile);
         if (info.isSymbolicLink() || !info.isFile()) {
-          throw new Error(`EAS file environment variable ${name} is not a regular file`);
+          throw new Error(`Expo Services file environment variable ${name} is not a regular file`);
         }
         const canonicalFile = await realpath(candidateFile);
         const canonicalRoot = await realpath(options.fileRoot);
         if (!isWithin(canonicalRoot, canonicalFile)) {
-          throw new Error(`EAS file environment variable ${name} escapes its private directory`);
+          throw new Error(`Expo Services file environment variable ${name} escapes its private directory`);
         }
         throw new UnsupportedRepackEnvironmentError(
-          `EAS file environment variable ${name} cannot be reproduced safely during local repacking`,
+          `Expo Services file environment variable ${name} cannot be reproduced safely during local repacking`,
         );
       }
     }
@@ -378,7 +378,7 @@ export type RepackMode = "eas" | "local";
 const HOSTED_REPACK_WORKFLOW = ".eas/workflows/expo-explore-repack.yml";
 const HOSTED_OBSERVER_DIRECTORY = ".expo-explore-observer";
 
-/** A one-job EAS workflow that repacks `buildId` with the staged copy's JavaScript and the route observer. */
+/** A one-job Expo Workflows file that repacks `buildId` with the staged copy's JavaScript and the route observer. */
 export function hostedRepackWorkflow(input: {
   buildId: string;
   profile: string;
@@ -412,11 +412,11 @@ export function hostedRepackWorkflow(input: {
 /**
  * Why a hosted repack failed, as far as its run tells:
  * - `app`: the app's own code broke it: the "Repack" step failed, or the logs show a bundling error. A rerun repeats it.
- * - `configuration`: EAS or a package registry refused a credential (not logged in, unauthorized, a 401 or 403).
+ * - `configuration`: Expo Services or a package registry refused a credential (not logged in, unauthorized, a 401 or 403).
  * - `canceled`: someone cancelled the run.
- * - `timeout`: the build ran out its EAS build time, which a rerun would wait out again, or Explore's time for the repack ran out.
- * - `unconfirmed`: Explore could not learn whether the run ended; it asked EAS to cancel it and starts no other beside it.
- * - `infrastructure`: EAS failed around the app's code: a step that sets up the job, downloads or uploads failed, or EAS
+ * - `timeout`: the build ran out its Expo Build time, which a rerun would wait out again, or Explore's time for the repack ran out.
+ * - `unconfirmed`: Explore could not learn whether the run ended; it asked Expo Services to cancel it and starts no other beside it.
+ * - `infrastructure`: Expo Services failed around the app's code: a step that sets up the job, downloads or uploads failed, or Expo Services
  *   ended the build (brentvatne/euxy#176).
  * - `unknown`: nothing says why.
  */
@@ -426,13 +426,13 @@ const APP_REPACK_STEP = /^Repack(?: app)?$/i;
 // Metro's, Babel's and Expo's words for the app's own code or files: `Unable to resolve "react-native-reanimated" from
 // "index.js"`, a missing module, a file an asset step could not read.
 const APP_REPACK_FAILURE = /Unable to resolve\b|SyntaxError|TransformError|Error while bundling|Bundling failed|Cannot find module|could not read \.{0,2}\/|no such file or directory, open '\.{0,2}\//i;
-// A file of EAS's own worker missing (`Cannot find module '/opt/eas/...'`) is EAS's failure, whatever the step.
+// A file of Expo Services' own worker missing (`Cannot find module '/opt/eas/...'`) is Expo Services' failure, whatever the step.
 const WORKER_REPACK_FAILURE = /['"]\/opt\/eas\//;
 const CONFIGURATION_REPACK_FAILURE = /Not logged in|\bunauthori[sz]ed\b|\bnot authorized\b|\bE40[13]\b|\b40[13] (?:Unauthorized|Forbidden)\b|authentication (?:failed|required)/i;
 const TIMEOUT_REPACK_FAILURE = /\bEAS_BUILD_TIMEOUT_ERROR\b/;
-// The steps EAS runs around the app's own: setting up the job, fetching the build to repack, saving the result.
+// The steps Expo Services runs around the app's own: setting up the job, fetching the build to repack, saving the result.
 const INFRASTRUCTURE_REPACK_STEP = /^(?:Spin up|Set up|Download|Upload)\b/i;
-// EAS's and eas-cli's own words for a failure on their side. In brentvatne/euxy#176 (review run 39506405687) EAS refused
+// Expo Services' and eas-cli's own words for a failure on their side. In brentvatne/euxy#176 (review run 39506405687) Expo Services refused
 // the "Upload artifact" step with "Turtle build is not in progress", and the build reported "Failed to upload application archive.".
 const INFRASTRUCTURE_REPACK_FAILURE = /Turtle build is not in progress|Failed to upload application archive|\bSERVER_ERROR\b|Failed to upload project sources|Failed to start the workflow with the API|Unexpected response from server \(5\d\d\)|\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN)\b|socket hang up|fetch failed/;
 
@@ -448,7 +448,7 @@ export function hostedRepackFailure(evidence: string, status?: unknown): HostedR
   return "unknown";
 }
 
-/** How many fresh repacks a failure earns: two after EAS's own failure, one after one nothing explains, none otherwise. */
+/** How many fresh repacks a failure earns: two after Expo Services' own failure, one after one nothing explains, none otherwise. */
 export function hostedRepackRetries(error: unknown): number {
   const failure = error instanceof CiError && error.code === "EAS_REPACK_FAILED" ? error.details?.failure : undefined;
   return failure === "infrastructure" ? 2 : failure === "unknown" ? 1 : 0;
@@ -474,7 +474,7 @@ export function hostedRepackBuildId(stdout: string, evidence: string, platform: 
       code: "EAS_REPACK_FAILED",
       stage: "instrumentation",
       message: `eas workflow:run did not report the hosted ${platform} repack: ${tail || (error instanceof Error ? error.message : String(error))}`,
-      nextAction: `Check that EXPO_TOKEN can run workflows for this EAS project and retry.${logs ? ` Logs: ${logs}` : ""}`,
+      nextAction: `Check that EXPO_TOKEN can run workflows for this Expo Services project and retry.${logs ? ` Logs: ${logs}` : ""}`,
       details: { failure: hostedRepackFailure(evidence), ...(logs ? { logs } : {}) },
       cause: error,
     });
@@ -498,8 +498,8 @@ export function hostedRepackBuildId(stdout: string, evidence: string, platform: 
     throw new CiError({
       code: "EAS_REPACK_FAILED",
       stage: "instrumentation",
-      message: `The hosted EAS repack of the ${platform} build ${job ? `finished with status ${String(job.status)}` : "did not run"}${detail ? `: ${detail.slice(0, 600)}` : "."}`,
-      nextAction: `Open the EAS workflow run and fix the repack job; a broken app build environment usually surfaces in its "Repack" step.${where}`,
+      message: `The hosted Expo Workflows repack of the ${platform} build ${job ? `finished with status ${String(job.status)}` : "did not run"}${detail ? `: ${detail.slice(0, 600)}` : "."}`,
+      nextAction: `Open the Expo Workflows run and fix the repack job; a broken app build environment usually surfaces in its "Repack" step.${where}`,
       details: { failure, ...(logs ? { logs } : {}) },
     });
   }
@@ -528,7 +528,7 @@ export function hostedRepackRunStart(stdout: string, stderr: string, platform: "
   const tail = stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 600);
   throw new CiError({ code: "EAS_REPACK_FAILED", stage: "instrumentation",
     message: `eas workflow:run did not start the hosted ${platform} repack: ${tail || "it printed no run"}`,
-    nextAction: "Check that EXPO_TOKEN can run workflows for this EAS project and retry.",
+    nextAction: "Check that EXPO_TOKEN can run workflows for this Expo Services project and retry.",
     details: { failure: hostedRepackFailure(stderr) } });
 }
 
@@ -560,8 +560,8 @@ async function pause(milliseconds: number, clock: RepackClock): Promise<void> {
 
 function timeoutError(platform: "ios" | "android", detail: string, logs?: string): CiError {
   return new CiError({ code: "EAS_REPACK_FAILED", stage: "instrumentation",
-    message: `The hosted EAS repack of the ${platform} build did not finish within the ${HOSTED_REPACK_BUDGET_MS / 60_000} minutes a capture has to prepare its app: ${detail}.`,
-    nextAction: `Check the EAS workflow run for a long queue or a stuck step, then rerun Explore.${logs ? ` Logs: ${logs}` : ""}`,
+    message: `The hosted Expo Workflows repack of the ${platform} build did not finish within the ${HOSTED_REPACK_BUDGET_MS / 60_000} minutes a capture has to prepare its app: ${detail}.`,
+    nextAction: `Check the Expo Workflows run for a long queue or a stuck step, then rerun Explore.${logs ? ` Logs: ${logs}` : ""}`,
     details: { failure: "timeout", ...(logs ? { logs } : {}) } });
 }
 
@@ -591,7 +591,7 @@ function printedBy(error: unknown): { stdout: string; stderr: string } {
  * One hosted repack run: started without `--wait`, so Explore always knows the run and waits on it within its own
  * budget. eas-cli's `--wait` gives up after six failed status reads with exit code 13 and leaves the run going, and
  * Explore then started another beside it. A run whose state stays unreadable, that outlasts the budget, or whose
- * capture is stopped is cancelled (`eas workflow:cancel`) and not replaced: only a run EAS reports finished is
+ * capture is stopped is cancelled (`eas workflow:cancel`) and not replaced: only a run Expo Services reports finished is
  * followed by another. A start that timed out or was stopped is waited on when it printed its run, and otherwise
  * not replaced, since it may have started one.
  */
@@ -601,7 +601,7 @@ async function hostedRepackRun(options: { eas: EasCall; staged: string; platform
   let started: { stdout: string; stderr: string };
   let startFailure: unknown;
   const startMs = Math.min(10 * 60_000, clock.deadline - clock.now());
-  options.say(`uploading the project and starting the hosted EAS repack (up to ${Math.ceil(startMs / 60_000)} minutes)`);
+  options.say(`uploading the project and starting the hosted Expo Workflows repack (up to ${Math.ceil(startMs / 60_000)} minutes)`);
   const uploaded = options.onBlocking?.("repack", startMs);
   try { started = options.eas(["workflow:run", HOSTED_REPACK_WORKFLOW, "--json", "--non-interactive"], startMs, { cwd: options.staged }); }
   catch (error) { started = printedBy(error); startFailure = error; }
@@ -618,7 +618,7 @@ async function hostedRepackRun(options: { eas: EasCall; staged: string; platform
   const cancel = (): boolean => {
     try { options.eas(["workflow:cancel", run.id, "--non-interactive"], 2 * 60_000, { strict: true }); return true; } catch { return false; }
   };
-  options.say(`waiting for the hosted EAS repack ${run.id}${run.url ? `: ${run.url}` : ""}`);
+  options.say(`waiting for the hosted Expo Workflows repack ${run.id}${run.url ? `: ${run.url}` : ""}`);
   const waitedFrom = clock.now();
   // Once a minute: the run's state, how long it has run and how long the capture still gives it.
   const tick = throttledProgress(options.say, { now: clock.now });
@@ -640,14 +640,14 @@ async function hostedRepackRun(options: { eas: EasCall; staged: string; platform
         }
         return hostedRepackBuildId(view.stdout, `${started.stderr}\n${logs}`, platform);
       }
-      tick(`hosted EAS repack ${run.id}: ${status && /^[A-Z_]{1,32}$/.test(status) ? status.toLowerCase().replaceAll("_", " ") : "state unreadable"}, `
+      tick(`hosted Expo Workflows repack ${run.id}: ${status && /^[A-Z_]{1,32}$/.test(status) ? status.toLowerCase().replaceAll("_", " ") : "state unreadable"}, `
         + `${Math.floor((clock.now() - waitedFrom) / 60_000)} min, ${Math.max(0, Math.floor((clock.deadline - clock.now()) / 60_000))} min left`);
       unreadable = status ? 0 : unreadable + 1;
       if (unreadable >= HOSTED_REPACK_UNREADABLE_READS) {
         const cancelled = cancel();
         throw new CiError({ code: "EAS_REPACK_FAILED", stage: "instrumentation",
-          message: `EAS did not report the state of the hosted ${platform} repack ${HOSTED_REPACK_UNREADABLE_READS} times in a row; ${cancelled ? "Explore cancelled the run" : "Explore could not cancel the run"} and did not start another beside it.`,
-          nextAction: `Check the EAS status and the run${cancelled ? "" : ", and cancel it if it is still going"}, then rerun Explore.${run.url ? ` Logs: ${run.url}` : ""}`,
+          message: `Expo Services did not report the state of the hosted ${platform} repack ${HOSTED_REPACK_UNREADABLE_READS} times in a row; ${cancelled ? "Explore cancelled the run" : "Explore could not cancel the run"} and did not start another beside it.`,
+          nextAction: `Check the Expo Services status and the run${cancelled ? "" : ", and cancel it if it is still going"}, then rerun Explore.${run.url ? ` Logs: ${run.url}` : ""}`,
           details: { failure: "unconfirmed", ...(run.url ? { logs: run.url } : {}) } });
       }
       const left = clock.deadline - clock.now();
@@ -668,12 +668,12 @@ async function hostedRepackRun(options: { eas: EasCall; staged: string; platform
  * Where the matrix jobs of one GitHub run attempt meet to make one hosted repack of an app instead of one each: `scope`
  * names the run attempt (repository, run id and attempt), `leader` the first target in config order that repacks this
  * app, `target` this one, `rank` its place among them (the leader's is 0), and `rerun` an attempt after the first, which
- * runs only the jobs it re-runs. In brentvatne/euxy#176 (review run 39506405687) four iOS targets each repacked EAS
- * build a81d5d80 with the same commit's JavaScript at the same time, and one of the four failed.
+ * runs only the jobs it re-runs. In brentvatne/euxy#176 (review run 39506405687) four iOS targets each repacked Expo
+ * Build a81d5d80 with the same commit's JavaScript at the same time, and one of the four failed.
  */
 export type RepackShare = { scope: string; leader: string; target: string; rank: number; rerun?: boolean };
 
-/** How long the target after the leader waits for a repack to appear on EAS before it repacks itself. */
+/** How long the target after the leader waits for a repack to appear on Expo Services before it repacks itself. */
 const SHARED_REPACK_APPEAR_MS = 3 * 60_000;
 /**
  * Each later target waits this much longer, so that when the leader makes no repack (its baseline covered every route,
@@ -712,7 +712,7 @@ export async function stagedProjectDigest(root: string): Promise<string> {
 
 /**
  * The key a shared repack's build carries in its message: everything the repack is made from, so two jobs share one only
- * when each would have uploaded the same bytes onto the same native code, for the same profile, EAS environment (by name
+ * when each would have uploaded the same bytes onto the same native code, for the same profile, Expo Services environment (by name
  * and by a snapshot of its variables) and Explore release, in the same run attempt.
  *
  * The native code is named by its fingerprint, not by the build a job found to repack: the build lookup returns the
@@ -756,7 +756,7 @@ export function sharedRepackBuildView(stdout: string, marker: string, platform: 
 }
 
 /**
- * A snapshot of the EAS environment's variables the repack job reads: `eas env:list --format long` of the project's
+ * A snapshot of the Expo Services environment's variables the repack job reads: `eas env:list --format long` of the project's
  * and the account's variables, which names each with its value (masked when sensitive or secret) and when it was last
  * updated, so an edited value changes it. Undefined when either list fails.
  */
@@ -782,7 +782,7 @@ export function sharedRepackWaitMs(share: Pick<RepackShare, "rank" | "rerun">, a
 }
 
 /**
- * A repack another job of this run attempt made, or is making, of exactly this app: its EAS build id once it finished,
+ * A repack another job of this run attempt made, or is making, of exactly this app: its Expo Build id once it finished,
  * or undefined when this job should repack itself.
  * - The leader looks once. Another target looks every 15 s for as long as sharedRepackWaitMs gives it, and joins any
  *   repack with the key it finds, whichever job started it.
@@ -816,30 +816,30 @@ async function sharedHostedRepack(options: { share: RepackShare; marker: string;
     } catch { read = undefined; }
     if (!read) {
       unreadable += 1;
-      if (unreadable >= 3) { say("EAS did not answer three times in a row; repacking here instead of waiting for another target's repack"); return undefined; }
+      if (unreadable >= 3) { say("Expo Services did not answer three times in a row; repacking here instead of waiting for another target's repack"); return undefined; }
     } else {
       unreadable = 0;
       const builds = read.filter(build => !setAside.has(build.id));
       const finished = builds.find(build => build.status === "FINISHED");
       if (finished) {
-        say(`using EAS build ${finished.id}, the hosted repack of this commit another target of this run made, instead of repacking it again`);
+        say(`using Expo Build ${finished.id}, the hosted repack of this commit another target of this run made, instead of repacking it again`);
         return finished.id;
       }
       const live = builds.find(build => LIVE_BUILD_STATUSES.has(build.status));
       if (followed && !live) {
-        say(`the shared repack (EAS build ${followed}) ${read[0] ? `ended ${read[0].status}` : "no longer carries this commit's key"}; looking for another for up to ${sharedRepackWaitMs(options.share, true) / 1000} s before repacking here`);
+        say(`the shared repack (Expo Build ${followed}) ${read[0] ? `ended ${read[0].status}` : "no longer carries this commit's key"}; looking for another for up to ${sharedRepackWaitMs(options.share, true) / 1000} s before repacking here`);
         setAside.add(followed);
         followed = undefined;
         lookUntil = Math.min(clock.now() + sharedRepackWaitMs(options.share, true), lookLatest);
       } else if (!followed && live) {
         followed = live.id;
         beat = clock.now();
-        say(`waiting for EAS build ${live.id}, the hosted repack of this commit another target of this run started, instead of repacking it again`);
+        say(`waiting for Expo Build ${live.id}, the hosted repack of this commit another target of this run started, instead of repacking it again`);
       }
     }
     const now = clock.now();
     if (followed && now >= clock.deadline) {
-      say(`the shared repack (EAS build ${followed}) did not finish in the time this capture has to prepare its app`);
+      say(`the shared repack (Expo Build ${followed}) did not finish in the time this capture has to prepare its app`);
       return undefined;
     }
     if (!followed && now >= lookUntil) {
@@ -853,7 +853,7 @@ async function sharedHostedRepack(options: { share: RepackShare; marker: string;
     }
     if (followed && now - beat >= 60_000) {
       beat = now;
-      say(`waiting for EAS build ${followed}, the shared repack: ${Math.floor((now - start) / 60_000)} min, ${Math.max(0, Math.floor((clock.deadline - now) / 60_000))} min left`);
+      say(`waiting for Expo Build ${followed}, the shared repack: ${Math.floor((now - start) / 60_000)} min, ${Math.max(0, Math.floor((clock.deadline - now) / 60_000))} min left`);
     }
     const until = followed ? clock.deadline : lookUntil;
     await pause(Math.max(0, Math.min(followed ? SHARED_REPACK_FOLLOW_POLL_MS : SHARED_REPACK_APPEAR_POLL_MS, until - now)), clock);
@@ -861,12 +861,12 @@ async function sharedHostedRepack(options: { share: RepackShare; marker: string;
 }
 
 /**
- * Repack on EAS instead of the runner: the tracked files of the clean checkout are staged beside the
+ * Repack on Expo Services instead of the runner: the tracked files of the clean checkout are staged beside the
  * observer and a one-job workflow, uploaded with `eas workflow:run`, and the job's `build_id` comes back.
- * No build tools, no `eas upload`, and the profile's EAS environment applies as it does for any build.
+ * No build tools, no `eas upload`, and the profile's Expo Services environment applies as it does for any build.
  * With a `share`, a repack another job of this run attempt makes of the same staged bytes is used instead
  * (sharedHostedRepack), and this job's own repack carries the key that lets the others use it. A repack that fails
- * for a reason a rerun can fix starts again (hostedRepackRetries): in brentvatne/euxy#176 EAS ended a build that had
+ * for a reason a rerun can fix starts again (hostedRepackRetries): in brentvatne/euxy#176 Expo Services ended a build that had
  * repacked before it could save the app. All of it stays within the capture's budget (`clock.deadline`).
  */
 async function prepareHostedRepack(options: {
@@ -934,7 +934,7 @@ async function prepareHostedRepack(options: {
         return listedVariables.stdout;
       } catch { return undefined; }
     });
-    if (variables === undefined) options.say(`EAS did not list the ${environment} environment's variables; repacking here without sharing the repack`);
+    if (variables === undefined) options.say(`Expo Services did not list the ${environment} environment's variables; repacking here without sharing the repack`);
     else {
       // The digest is taken before the workflow file is written: the file's message carries the key made from it.
       const marker = hostedRepackShareMarker(hostedRepackShareKey({ scope: options.share.scope, platform, fingerprint: options.fingerprint,
@@ -957,19 +957,19 @@ async function prepareHostedRepack(options: {
       return await options.timings.measure("repack", () => hostedRepackRun({ eas, staged, platform, clock, say: options.say, onBlocking: options.onBlocking }),
         { attempt: retries + 1 });
     } catch (error) {
-      // Only a run EAS reported finished gets here with a failure that earns another (hostedRepackRun), so none is left beside it.
+      // Only a run Expo Services reported finished gets here with a failure that earns another (hostedRepackRun), so none is left beside it.
       const allowed = hostedRepackRetries(error);
       if (retries >= allowed || clock.deadline - clock.now() < HOSTED_REPACK_MIN_ATTEMPT_MS) throw error;
       retries += 1;
       const logs = error instanceof CiError && typeof error.details?.logs === "string" ? error.details.logs : undefined;
-      options.say(`the hosted EAS repack${logs ? ` ${logs}` : ""} failed (${error instanceof Error ? error.message : String(error)}); starting another repack (${retries}/${allowed})`);
+      options.say(`the hosted Expo Workflows repack${logs ? ` ${logs}` : ""} failed (${error instanceof Error ? error.message : String(error)}); starting another repack (${retries}/${allowed})`);
       clock.signal?.throwIfAborted();
     }
   }
 }
 
 /**
- * The instrumented app a capture runs, on this machine, and the EAS build it came from when a hosted job repacked it.
+ * The instrumented app a capture runs, on this machine, and the Expo Build it came from when a hosted job repacked it.
  * A local repack is never uploaded, so it has no build id.
  */
 export type PreparedBuild = { buildId: string | null; app: string };
@@ -986,7 +986,7 @@ export async function prepareExactSourceBuild(options: {
   easEnvironment: NodeJS.ProcessEnv;
   repackEnvironment: NodeJS.ProcessEnv;
   routes: readonly SourceRoute[];
-  /** `eas` (default) repacks in a hosted EAS workflow job; `local` runs repack-app on this machine. */
+  /** `eas` (default) repacks in a hosted Expo Workflows job; `local` runs repack-app on this machine. */
   repack?: RepackMode | undefined;
   /** The capture build profile name; the hosted repack job builds against it. */
   easProfile?: string | undefined;
@@ -1025,8 +1025,8 @@ export async function prepareExactSourceBuild(options: {
         timings: options.timings ?? silentTimings, onBlocking: options.onBlocking,
         clock: { deadline: options.deadline ?? (options.now ?? Date.now)() + HOSTED_REPACK_BUDGET_MS, now: options.now ?? Date.now, sleep: options.sleep, signal: options.signal } });
       {
-        // The hosted job leaves its app on EAS; the capture installs a copy downloaded here.
-        options.progress?.(`downloading the repacked app, EAS build ${hosted} (up to 10 minutes)`);
+        // The hosted job leaves its app on Expo Services; the capture installs a copy downloaded here.
+        options.progress?.(`downloading the repacked app, Expo Build ${hosted} (up to 10 minutes)`);
         const downloaded = await downloadedAppPath(blockingCall(options.timings ?? silentTimings, options.onBlocking, "build-download", 10 * 60_000, () => options.runner({ command: options.easCommand,
           args: ["build:download", "--build-id", hosted, "--json", "--non-interactive"], cwd: options.project,
           environment: { ...options.easEnvironment, TMPDIR: root, TMP: root, TEMP: root }, timeoutMs: 10 * 60_000 })).stdout, root, platform);
@@ -1147,7 +1147,7 @@ export async function prepareExactSourceBuild(options: {
         if (repackedInfo.isSymbolicLink() || (platform === "android" ? !repackedInfo.isFile() : !repackedInfo.isDirectory())) {
           throw new Error(platform === "android" ? "repack-app did not produce a non-symlink Android .apk file" : "repack-app did not produce a non-symlink iOS .app directory");
         }
-        // The capture installs the repacked app from here (a local device directly, an EAS session through its
+        // The capture installs the repacked app from here (a local device directly, an Expo Simulators session through its
         // controller), so it is never uploaded.
         await rename(repackedApp, options.keepApp);
         outcome = { buildId: null, app: options.keepApp };

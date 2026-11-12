@@ -56,7 +56,7 @@ for (const provider of ['expo-router', 'react-navigation']) {
     assert.deepEqual(Object.keys(headBundle.outcomes).sort(), [...plan.headCaptureSurfaceIds].sort());
     for (const [id, image] of Object.entries(baseBundle.images)) assert.deepEqual(image, baselineBundle.images[id], 'base evidence retains its original capture provenance');
     const starts = f.requests.slice(before).filter(request => request.args[0] === 'simulator:start');
-    assert.equal(starts.length, 1, 'an exact baseline cache avoids a second EAS allocation');
+    assert.equal(starts.length, 1, 'an exact baseline cache avoids a second Expo Services allocation');
     assert.equal(value(starts[0], '--device'), f.config.device.name);
     // The session starts empty beside the repack; the head's repacked app is installed through the controller.
     assert.equal(starts[0].args.includes('--build-id'), false);
@@ -172,7 +172,7 @@ test('baseline with a planned dynamic route that lacks parameters is cached with
   assert.equal(f.requests.filter(request => request.args[0] === 'simulator:stop').length, 1);
 });
 
-test('docs-only changes publish a complete inventory without allocating an EAS build or session', async t => {
+test('docs-only changes publish a complete inventory without allocating an Expo Build or session', async t => {
   const f = await fixture(t, 'expo-router', { docsOnly: true });
   t.mock.method(globalThis, 'fetch', async input => assert.fail(`Unmocked network request: ${input}`));
   // The pipeline stamps its times from the fixture's simulated clock, which starts at the wall clock and runs ahead of it.

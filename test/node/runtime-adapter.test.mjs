@@ -268,7 +268,7 @@ test("fails closed on provenance, environment, surface, and capture mismatches",
   wrongEnvironment.run.environment.deviceModel = "iPhone 16";
   assert.throws(
     () => runtimeEvidenceInputFromMap({ ...base, map: wrongEnvironment }),
-    /does not match EAS Simulator context/,
+    /does not match Expo Simulators context/,
   );
   assert.throws(
     () => runtimeEvidenceInputFromMap({ ...base, sampleObservationIds: ["missing"] }),

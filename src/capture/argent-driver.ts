@@ -270,7 +270,7 @@ const DEPENDENCY_RETRY_DELAYS_MS = [3_000, 6_000] as const;
  * A tool-server that is not serving its tools yet. Argent's client asks GET /tools before every tool call and stops with
  * "GET /tools failed: <status>" when that is not answered, so the tool itself was never sent; a refused connection
  * reached nothing at all. Either is safe to send again, a UI action too. In brentvatne/euxy's main baseline run
- * 39506374824 a replacement EAS session's tool-server answered 404 to /tools for the first list-devices of its install,
+ * 39506374824 a replacement Expo Simulators session's tool-server answered 404 to /tools for the first list-devices of its install,
  * and the whole target failed. An unknown tool's 404 comes from POST /tools/<name> instead, and still fails at once.
  */
 const TOOLS_NOT_SERVED = /GET \/tools failed: (?:404|503)\b|ECONNREFUSED/;
@@ -435,7 +435,7 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
     const version = platform === "ios" ? iosRuntimeVersion(device.runtime) : undefined;
     if (version) state.osVersion = version;
   };
-  /** Relaunches until the app's tree is readable: an EAS simulator Argent did not boot needs a relaunch first. */
+  /** Relaunches until the app's tree is readable: an Expo Simulators device Argent did not boot needs a relaunch first. */
   const relaunch = async (bundleId: string) => {
     for (let restart = 0; restart < 2; restart++) {
       await call("restart-app", { bundleId });
@@ -465,7 +465,7 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
   };
   /**
    * A UI action is only sent when the tool-server answers first, so a failure after this point is never resent unless
-   * the tool provably never ran (see call). A session's tool-server can still be starting when EAS reports the session
+   * the tool provably never ran (see call). A session's tool-server can still be starting when Expo Services reports the session
    * ready, so it is given about 25 s to answer.
    */
   const beforeAction = async () => {
@@ -722,7 +722,7 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         const posture = positional[0];
         if (posture !== "closed" && posture !== "half-open" && posture !== "open") throw new BridgeFailure("INVALID_ARGS", "fold needs closed, half-open or open.");
         await beforeAction();
-        // Helpers the tool-server started before a fold can leave the panel it lights black and unread: on a fresh EAS
+        // Helpers the tool-server started before a fold can leave the panel it lights black and unread: on a fresh Expo Simulators
         // session, whose tool-server started them at boot, the first fold opened to a black inner panel every time
         // without this, and read the panel at once with it. A local tool-server is Explore's own and starts clean.
         await call("stop-all-simulator-servers", { devices: [state.udid] });
@@ -756,7 +756,7 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
       case "reset-reader": {
         // Stops the device's Argent helpers, among them the accessibility service describe reads through; the
         // tool-server starts fresh ones on the next call. It is how a reader stuck on the panel a fold turned off is
-        // reset where the tool-server itself cannot be restarted, as on EAS (it started it; never stop it there).
+        // reset where the tool-server itself cannot be restarted, as on Expo Services (it started it; never stop it there).
         await ensureDevice();
         const stopped = await call("stop-all-simulator-servers", { devices: [state.udid] });
         delete state.screen;

@@ -28,7 +28,7 @@ import type { ActiveSimulatorRuntime, SimulatorConnection } from "./simulator.js
 import { androidTools } from "./local-simulator.js";
 import type { CiMapOptions, CommandResult } from "./run.js";
 
-/** iOS commands name the simulator; an EAS Android session has exactly one emulator, selected by the session. */
+/** iOS commands name the simulator; an Android Expo Simulators session has exactly one emulator, selected by the session. */
 export function deviceArgs(runtime: Pick<ActiveSimulatorRuntime, "platform" | "deviceModel"> & Partial<Pick<ActiveSimulatorRuntime, "provider" | "controllerDeviceId">>): string[] {
   // A local simulator is picked by its UDID, a local emulator by its adb serial: this machine may run others of the same model.
   if (runtime.provider === "local-simulator" && runtime.controllerDeviceId) return [runtime.platform === "android" ? "--serial" : "--udid", runtime.controllerDeviceId];
@@ -169,7 +169,7 @@ function landing(nodes: readonly Record<string, unknown>[], route: SourceRoute, 
 export async function capturePlannedRoutes(options: {
   capture: CiMapOptions; routes: readonly SourceRoute[]; scheme: string | undefined; appName: string;
   runtime: ActiveSimulatorRuntime;
-  /** The EAS session's controller connection; a local simulator has none. */
+  /** The Expo Simulators session's controller connection; a local simulator has none. */
   connection?: SimulatorConnection | undefined; environment: NodeJS.ProcessEnv;
   store: ExploreStore; map: ExploreMap;
   inventory?: readonly SourceRoute[];
@@ -783,7 +783,7 @@ export async function capturePlannedRoutes(options: {
         if (!gesture) throw error;
         const gestures: [number, number, number, number][] = [];
         let after = before;
-        // A first drag can move a sheet without closing it (observed on EAS: y 72 -> 62). One more
+        // A first drag can move a sheet without closing it (observed on Expo Services: y 72 -> 62). One more
         // drag from the sheet's new top closes it; each drag still requires sheet evidence.
         for (let swipe = 0; swipe < 2 && gesture; swipe++) {
           gestures.push(gesture);

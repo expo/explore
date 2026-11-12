@@ -368,7 +368,7 @@ export async function prepareCaptureObserver(options: {
   if (outputInfo.isSymbolicLink() || !outputInfo.isDirectory()) throw new Error("Capture observer output must be a regular temporary directory.");
   const files: string[] = [];
   const proxies: Record<string, string> = {};
-  // Canonical like outputDirectory, or PROJECT_RELATIVE climbs through a symlinked temp dir (macOS /var -> /private/var) and misses on the EAS runner.
+  // Canonical like outputDirectory, or PROJECT_RELATIVE climbs through a symlinked temp dir (macOS /var -> /private/var) and misses on the Expo Services runner.
   const mountProject = options.mountProject ? await canonicalPath(resolve(options.mountProject)) : project;
   const relativeRequire = (from: string, target: string) => {
     const path = relative(from, target).split(sep).join("/");

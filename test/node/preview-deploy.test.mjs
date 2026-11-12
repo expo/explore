@@ -96,7 +96,7 @@ function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", alia
       if (failDeploy === true || deploys <= failDeploy) return { status: 1, stdout: "", stderr: "Error: GraphQL request failed.\n    Upload failed" };
       captured.env = Object.fromEntries(readFileSyncUtf8(join(options.cwd, ".env")).trim().split("\n").map(line => line.split(/=(.*)/s).slice(0, 2)));
       captured.listing = captured.env.EXPLORE_PREVIEW_REPORTS ? JSON.parse(captured.env.EXPLORE_PREVIEW_REPORTS) : [{ platform: "ios", path: captured.env.EXPLORE_PREVIEW_REPORT }];
-      // The report's static files, by the path EAS Hosting serves each at.
+      // The report's static files, by the path Expo Hosting serves each at.
       const tokenDirectory = join(options.cwd, "dist", "client", "p", captured.env.EXPLORE_PREVIEW_TOKEN);
       captured.files = Object.fromEntries(readdirTree(tokenDirectory).map(file => [`/p/${captured.env.EXPLORE_PREVIEW_TOKEN}/${file}`, readFileSyncBytes(join(tokenDirectory, file))]));
       captured.hasViewer = existsSyncLocal(join(options.cwd, "dist", "client", "viewer", "index.html"));
@@ -114,7 +114,7 @@ function easFixture({ origin = "https://acme-explore--1lcbdcpwn3.expo.app", alia
     // An alias that has not moved to the new deployment yet: it answers for an earlier token, so this one is 404.
     if (!aliasServes && url.origin === aliasOrigin) return new Response("Not found", { status: 404 });
     if (url.origin === origin || (captured.alias && url.origin === aliasOrigin)) {
-      // EAS Hosting serves a deployment's static file before the Worker sees the request.
+      // Expo Hosting serves a deployment's static file before the Worker sees the request.
       if (captured.files?.[url.pathname]) return new Response(captured.files[url.pathname], { status: 200 });
       if (url.pathname === "/robots.txt" && captured.robots !== undefined && robotsServes) return new Response(captured.robots, { status: 200, headers: { "content-type": "text/plain" } });
       const match = /^\/p\/([a-z2-7]{32})(?:\/(reports\.json|manifest\.json|api\/v1))?$/.exec(url.pathname);
@@ -192,7 +192,7 @@ test("ci:deploy seals the exact report, deploys it with the preview export, veri
   const assets = Object.keys(eas.captured.files).filter(path => path.includes("/assets/"));
   assert.deepEqual(assets.map(path => path.slice(`/p/${token}/`.length)).sort(), Object.keys(manifest.entries).sort());
   for (const path of assets) assert.equal(createHash("sha256").update(eas.captured.files[path]).digest("hex"), /([a-f0-9]{64})\./.exec(path)[1]);
-  // EAS Hosting cannot put noindex on static files, so robots.txt keeps crawlers off the screenshots and manifests, not the page.
+  // Expo Hosting cannot put noindex on static files, so robots.txt keeps crawlers off the screenshots and manifests, not the page.
   assert.equal(eas.captured.robots, "User-agent: *\nDisallow: /p/*/assets/\nDisallow: /p/*/targets/\n");
   // Verification hit the gate and its negatives before the comment was published.
   const previewPaths = eas.requests.filter(request => request.url.origin === "https://acme-explore--1lcbdcpwn3.expo.app").map(request => request.url.pathname.replace(/[a-f0-9]{64}/, "<sha256>"));
@@ -233,7 +233,7 @@ test("the report ZIP is deterministic and mirrors the GitHub artifact layout", a
   await assert.rejects(zipReportDirectory(reportPath), /review\.json \(or exploration\.json\) and assets/, "a report carries exactly one root file");
 });
 
-test("ci:deploy refuses to run without a preview request, EXPO_TOKEN, or the preview export, and reports EAS failures", async t => {
+test("ci:deploy refuses to run without a preview request, EXPO_TOKEN, or the preview export, and reports Expo Services failures", async t => {
   const plain = await exportFixture(t, { preview: null });
   const eas = easFixture();
   await assert.rejects(deployPreview({ inputPath: plain.inputPath, reportPath: plain.reportPath, artifactUrl, exportPath: plain.exportPath,
@@ -488,7 +488,7 @@ test("a preview sets no expiry of its own: an old config's expiresAfter is noted
   const body = JSON.parse(eas.requests.find(request => request.options.method === "PATCH" || request.options.method === "POST").options.body).body;
   assert.match(body, /^<sub>Preview links work for anyone who has them until the deployment is deleted · \[Workflow run\]/m);
   assert.doesNotMatch(body, /works until/);
-  assert.ok(warnings.some(line => line.includes("report.preview.expiresAfter no longer applies: a hosted preview lasts as long as its EAS Hosting deployment")), warnings.join(""));
+  assert.ok(warnings.some(line => line.includes("report.preview.expiresAfter no longer applies: a hosted preview lasts as long as its Expo Hosting deployment")), warnings.join(""));
 
   // A capture from an earlier version recorded the expiry as expiresAfterDays: still accepted, and noted the same way.
   const legacy = await exportFixture(t, { preview: { hosting: "eas", expiresAfterDays: 7 } });

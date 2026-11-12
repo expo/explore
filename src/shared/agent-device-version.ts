@@ -1,5 +1,5 @@
 /**
- * The one agent-device version Explore runs. The local CLI (`package.json`), the EAS Simulator
+ * The one agent-device version Explore runs. The local CLI (`package.json`), the Expo Simulators
  * controller (`--package-version`), the daemon health check, and the screenshot diff tool must
  * all be this version; each caller checks it by exact equality.
  */

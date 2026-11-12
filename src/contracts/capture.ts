@@ -181,7 +181,7 @@ export type SystemRegion = { kind: "status-bar" | "home-indicator"; x: number; y
 /**
  * iPhone Duo (iOS 27) has no status bar across the top: its clock and Wi-Fi indicator stack in one pill in the
  * right-hand rail, 28 points from the edge, lower on the outer (closed) panel than on the inner one. Measured on
- * EAS Simulator captures of both panels; the pill is the same 40×64 points on each, only its top differs. The app's own
+ * Expo Simulators captures of both panels; the pill is the same 40×64 points on each, only its top differs. The app's own
  * rail controls start about 3% of the height below it on the outer panel, so the padding stays small.
  */
 export const DUO_PANELS = {

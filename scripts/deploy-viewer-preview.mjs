@@ -1,4 +1,4 @@
-// Deploys this checkout's hosted Viewer (dist/hosting-preview) with the fixture reports to a fixed EAS Hosting alias,
+// Deploys this checkout's hosted Viewer (dist/hosting-preview) with the fixture reports to a fixed Expo Hosting alias,
 // so a pull request in this repository can be reviewed on real data. Prints the deployment as JSON.
 //
 //   node scripts/deploy-viewer-preview.mjs --fixtures DIR --alias pr-123 --project explore-viewer-pr [--owner expo-public]

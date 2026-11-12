@@ -22,7 +22,7 @@ const SIMULATOR_CONTROL_RETRY_DELAYS_MS = [3_000, 6_000] as const;
 const NO_ACTION_LIST = /serve-sim version that does not support this action|did not return its list of actions|command simulator:control not found/;
 
 /**
- * The host actions an EAS Simulator iOS session offers through `eas simulator:control` (serve-sim's actions, 0.10.0 and
+ * The host actions an Expo Simulators iOS session offers through `eas simulator:control` (serve-sim's actions, 0.10.0 and
  * later for the ones Explore uses): an empty set when the session's serve-sim or the EAS CLI predates the list, so a
  * caller falls back to what it did before them. The session is always named by id, never taken from a
  * `.env.eas-simulator` beside it.
@@ -57,7 +57,7 @@ export function simulatorControlActions(eas: EasCommand, sessionId: string, opti
     }
     const delayMs = SIMULATOR_CONTROL_RETRY_DELAYS_MS[retry];
     if (delayMs === undefined) throw new CiError({ code: "SIMULATOR_CONTROL_UNAVAILABLE", stage: "session", retryable: true,
-      message: `EAS could not list the simulator:control actions of session ${sessionId} after ${retry + 1} attempts: ${failure}`,
+      message: `Expo Services could not list the simulator:control actions of session ${sessionId} after ${retry + 1} attempts: ${failure}`,
       nextAction: "Rerun the capture on a new session. Without the list, Explore cannot tell whether the session can switch appearance, approve the app's links, or restart SpringBoard.",
       details: { sessionId, attempts: retry + 1 } });
     // A list that succeeds on a later attempt would otherwise leave no trace of the failure in the job log.
@@ -71,7 +71,7 @@ export type SimulatorControlOptions = { sleep?: ((milliseconds: number) => void)
 
 /**
  * Runs one `eas simulator:control` action on the session; eas-cli fills in the device. A failed action is sent again
- * after a pause; one that still fails throws with EAS's reason.
+ * after a pause; one that still fails throws with Expo Services' reason.
  */
 export function simulatorControl(eas: EasCommand, sessionId: string, action: string, values: readonly string[] = [], options: SimulatorControlOptions = {}): void {
   const sleep = options.sleep ?? (milliseconds => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); });

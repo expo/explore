@@ -10,7 +10,7 @@ import { classifySessionError, runBoundedSession, sessionError } from "./session
 import { usageReceipt } from "./session-claude.js";
 import { runCodexSession } from "./session-codex.js";
 
-/** Login remains in the user's CLI credential store; app/EAS/API secrets never enter it. */
+/** Login remains in the user's CLI credential store; app/Expo Services/API secrets never enter it. */
 export function localAgentEnvironment(input: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { NO_COLOR: "1", DISABLE_AUTOUPDATER: "1", DISABLE_TELEMETRY: "1",
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "false" };

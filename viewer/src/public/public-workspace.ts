@@ -105,7 +105,7 @@ function unattributedChangeSummary(surface: Surface): string | undefined {
 }
 
 function buildKey(review: PublicReview, side: Side): string {
-  // These are viewer keys, not EAS build IDs. A changes-only baseline can have no build.
+  // These are viewer keys, not Expo Build IDs. A changes-only baseline can have no build.
   return `public-${side}:${review.pullRequest[side].sha}`;
 }
 
@@ -550,7 +550,7 @@ function runtimeEvidence(review: PublicReview, surface: Surface, side: Side): Re
         // The legacy map needs time bounds, but PNG timestamps are not session start/end times.
         { label: "Session started", value: "Not included in this publication" },
         { label: "Session completed", value: "Not included in this publication" },
-        ...(image ? [{ label: "EAS build", value: image.buildId, copyable: true }] : []),
+        ...(image ? [{ label: "Expo Build", value: image.buildId, copyable: true }] : []),
       ],
     },
   };

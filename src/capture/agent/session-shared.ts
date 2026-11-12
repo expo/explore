@@ -53,7 +53,7 @@ export function classifySessionError(config: CiAgentSessionConfig, error: unknow
       ...(providerError ? { providerError } : {}), ...(providerStatus ? { providerStatus } : {}) } });
 }
 
-/** Only the selected model credential enters the CLI. App inputs and EAS/GitHub credentials remain in the host. */
+/** Only the selected model credential enters the CLI. App inputs and Expo Services/GitHub credentials remain in the host. */
 export function validateSessionEnvironment(config: CiAgentSessionConfig, inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   if (!["openai", "anthropic"].includes(config.provider) || typeof config.model !== "string" || !config.model.trim()
     || config.model.length > 256 || /[\u0000-\u0020\u007f]/.test(config.model)) {

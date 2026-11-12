@@ -127,13 +127,13 @@ async function fixture(t, settings = {}) {
   const requests = [];
   let current = '/'; let snapshots = 0; let sessionName; let screenshotAttempts = 0; let splashLeft = 0; let recordingPath = ''; let alert = null; let appearance = 'light'; let alertReads = 0;
   let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let deviceLost = false; let relaunchedAfterForeign = false; let serverStarts = 0; let unreadableLeft = settings.unreadableAfterFold ?? 0;
-  // startsErrored / startsUnnamed: how many session starts EAS fails, after naming the session (it ERRORS) or before.
+  // startsErrored / startsUnnamed: how many session starts Expo Services fails, after naming the session (it ERRORS) or before.
   let starts = 0; let currentSession = 'session-1'; let workflowRuns = 0; const workflowRunRecords = new Map(); const cancelledRuns = []; const erroredSessions = new Set(); let foldUnverifiedLeft = settings.foldUnverified ?? 0;
   // listFailures: the first so many `simulator:control --list` calls fail, as a host that drops the connection does.
   let listFailuresLeft = settings.listFailures ?? 0;
   // focusedField: the screen at `path` focuses its text field, and the keyboard is up from the `keyboardFrom`th read of it.
   let focusedReads = 0;
-  // blackAfterFold: the first so many folds of an EAS agent-device session light the panel but draw nothing.
+  // blackAfterFold: the first so many folds of an Expo Simulators agent-device session light the panel but draw nothing.
   let folds = 0;
   const deviceName = settings.android ? 'Pixel 7' : 'iPhone 17 Pro';
   const platform = settings.android ? 'android' : 'ios';
@@ -219,7 +219,7 @@ async function fixture(t, settings = {}) {
       }
       if (command === 'fingerprint:generate') return json({ hash: 'source-fingerprint' });
       const buildMetadata = settings.buildMetadata ? { appVersion: '2.1.0', appBuildVersion: '42' } : {};
-      // eas: the project's builds on EAS, shared by the fixtures of one test as the matrix jobs of one run share EAS.
+      // eas: the project's builds on Expo Services, shared by the fixtures of one test as the matrix jobs of one run share Expo Services.
       // A list without a fingerprint is a target looking for a repack another job of its run made (onList moves it on).
       if (command === 'build:list' && !request.args.includes('--fingerprint-hash')) {
         assert.ok(settings.eas, 'only a shared repack lists builds without a fingerprint');
@@ -262,7 +262,7 @@ async function fixture(t, settings = {}) {
         assert.ok(existsSync(join(request.cwd, 'package.json')), 'tracked files are staged');
         assert.ok(!existsSync(join(request.cwd, 'node_modules')), 'untracked files are not staged');
         assert.equal(request.args.includes('--wait'), false, 'Explore waits on the run itself');
-        // repackFailures: how EAS ends the first runs, as { status, message, logs } of the repack job, its build and its logs.
+        // repackFailures: how Expo Services ends the first runs, as { status, message, logs } of the repack job, its build and its logs.
         // repackStart: what workflow:run prints instead of the run's JSON (a start that failed, or a run with no JSON).
         workflowRuns += 1;
         const id = `run-${workflowRuns}`, url = `https://expo.dev/accounts/acme/projects/example/workflows/${id}`;
@@ -384,7 +384,7 @@ async function fixture(t, settings = {}) {
       if (command === 'close') return ok({});
       // claimedSerials: device claims an interrupted run left behind, which agent-device hides as stale but still enforces.
       if (command === 'device') return ok({ claims: [], hiddenStaleClaims: (settings.claimedSerials ?? []).includes(value(request, '--serial')) ? 1 : 0 });
-      // An EAS session starts empty while the app is repacked; the controller installs the app from this machine.
+      // An Expo Simulators session starts empty while the app is repacked; the controller installs the app from this machine.
       if (command === 'install') { assert.ok(existsSync(request.args[1]), 'the repacked app is on this machine'); return ok({ installed: true, appBundleId: 'com.example.app' }); }
       // agent-device 0.21.15 cannot read Xcode 27.1's hinge angle back, so a local fold reports a failure after folding.
       // foldUnverified: the bridge's reader stayed on the dark panel through its own reset, for that many folds.
@@ -416,7 +416,7 @@ async function fixture(t, settings = {}) {
             return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'alert get: Android snapshot helper failed: Android snapshot helper failed before returning parseable output: adb: device offline' } });
           }
           // agent-device 0.21.15 matches a form sheet's "dismiss popup" window and titles it with the
-          // sheet's first text, the route observer (seen on EAS Simulator with Expo Router form sheets).
+          // sheet's first text, the route observer (seen on Expo Simulators with Expo Router form sheets).
           if (settings.formSheetPopup) return ok({ message: JSON.stringify({ provider: 'expo-router', pathname: current,
             segments: current.split('/').filter(Boolean), parameters: {} }), items: ['Sheet Grabber', 'Close', 'None'] });
           if (settings.android) return ok({ kind: 'alertStatus', platform: 'android', action: 'get', alert: alert ? { message: alert.message, buttons: alert.items } : null, message: alert ? 'Alert visible' : 'No alert visible' });
@@ -467,7 +467,7 @@ async function fixture(t, settings = {}) {
         if (request.args[1] === 'appearance') appearance = request.args[2];
         return ok({ setting: request.args[1], value: request.args[2] });
       }
-      // The display after a fold, as agent-device's screenshot shows it on EAS: in the pose's shape, drawn or black.
+      // The display after a fold, as agent-device's screenshot shows it on Expo Services: in the pose's shape, drawn or black.
       if (command === 'screenshot' && request.args[1]?.endsWith('/pose.png')) {
         const display = new PNG(settings.devicePose === 'open' ? { width: 30, height: 20 } : { width: 20, height: 30 });
         if (folds > (settings.blackAfterFold ?? 0)) display.data[0] = 255;
@@ -637,7 +637,7 @@ test('an Argent capture starts an argent session, drives it through the bridge, 
   assert.equal(execution.controllerPackageVersion, '0.29.0');
 });
 
-test('on an EAS iOS session with serve-sim\'s appearance.set, an Argent capture records every appearance', async t => {
+test('on an iOS Expo Simulators session with serve-sim\'s appearance.set, an Argent capture records every appearance', async t => {
   const f = await fixture(t, { argent: true, userInterfaceStyle: 'automatic', controlActions: ['appearance.set'] });
   const lines = [];
   assert.equal((await runCiMap({ ...f.options, progress: line => lines.push(line) })).runStatus, 'complete');
@@ -647,7 +647,7 @@ test('on an EAS iOS session with serve-sim\'s appearance.set, an Argent capture 
   assert.deepEqual(map.run.environment.colorSchemes, ['light', 'dark']);
 });
 
-test('an EAS iOS session approves the app\'s link scheme after installing it and before any link opens', async t => {
+test('an iOS Expo Simulators session approves the app\'s link scheme after installing it and before any link opens', async t => {
   for (const argent of [false, true]) {
     const f = await fixture(t, { argent, controlActions: ['app.approveUrlScheme'] });
     assert.equal((await runCiMap(f.options)).runStatus, 'complete');
@@ -665,7 +665,7 @@ test('an EAS iOS session approves the app\'s link scheme after installing it and
   assert.equal(older.requests.some(request => request.args[0] === 'simulator:control' && !request.args.includes('--list')), false);
 });
 
-test('when Argent cannot read the app after a fold on EAS, the capture resets its device helpers, then restarts SpringBoard, and never stops the tool-server', async t => {
+test('when Argent cannot read the app after a fold on Expo Services, the capture resets its device helpers, then restarts SpringBoard, and never stops the tool-server', async t => {
   const actions = ['springboard.restart'];
   for (const [unreadable, completes, resets, restarts] of [[1, true, 1, 0], [2, true, 2, 1], [3, false, 2, 1]]) {
     const f = await fixture(t, { argent: true, devicePose: 'open', unreadableAfterFold: unreadable, controlActions: actions });
@@ -683,7 +683,7 @@ test('when Argent cannot read the app after a fold on EAS, the capture resets it
   await assert.rejects(runCiMap({ ...older.options, sleep: () => {} }), error => JSON.stringify(error).includes('CONTROLLER_READER_STUCK'));
 });
 
-test('when a fold on EAS leaves Argent reading the dark panel, the capture restarts SpringBoard and folds again, once', async t => {
+test('when a fold on Expo Services leaves Argent reading the dark panel, the capture restarts SpringBoard and folds again, once', async t => {
   for (const [unverified, completes] of [[1, true], [2, false]]) {
     const f = await fixture(t, { argent: true, devicePose: 'open', foldUnverified: unverified, controlActions: ['springboard.restart'] });
     const run = runCiMap({ ...f.options, sleep: () => {} });
@@ -749,7 +749,7 @@ test('a session given only dark that cannot switch to it stops before installing
   assert.equal(primary.requests.some(request => request.command.endsWith('/argent-controller') && request.args[0] === 'fold'), false);
 });
 
-test('a session EAS ends while starting is replaced by a new one, under a name of its own, up to five times with a growing wait', async t => {
+test('a session Expo Services ends while starting is replaced by a new one, under a name of its own, up to five times with a growing wait', async t => {
   const f = await fixture(t, { startsErrored: 1 });
   const lines = []; const waits = [];
   const result = await runCiMap({ ...f.options, progress: line => lines.push(line), sleep: ms => { waits.push(ms); } });
@@ -757,7 +757,7 @@ test('a session EAS ends while starting is replaced by a new one, under a name o
   const started = f.requests.filter(request => request.args[0] === 'simulator:start').map(request => value(request, '--name'));
   assert.equal(started.length, 2);
   assert.notEqual(started[0], started[1], 'the new session has a name of its own');
-  assert.ok(lines.some(line => /EAS ended simulator session session-1 \(ERRORED\) before it was ready; starting a new EAS Simulator session in 10 s \(1\/5\)/.test(line)), lines.join('\n'));
+  assert.ok(lines.some(line => /Expo Services ended simulator session session-1 \(ERRORED\) before it was ready; starting a new Expo Simulators session in 10 s \(1\/5\)/.test(line)), lines.join('\n'));
   assert.equal(lines.filter(line => /while the app is repacked/.test(line)).length, 1, 'only the first start runs beside the repack');
   assert.equal(result.simulatorSessionId, 'session-2');
   assert.ok(waits.includes(10_000));
@@ -783,7 +783,7 @@ test('new sessions stay within 30 minutes of the first failed start, each start 
   let clock = Date.parse('2026-10-18T00:00:00Z');
   const timeouts = [];
   await assert.rejects(runCiMap({ ...f.options, now: () => clock, sleep: ms => { clock += ms; }, runner: request => {
-    // Each start takes 10 minutes before EAS ends the session.
+    // Each start takes 10 minutes before Expo Services ends the session.
     if (request.args[0] === 'simulator:start') { timeouts.push(request.timeoutMs); clock += 10 * 60_000; }
     return f.options.runner(request);
   } }), error => error.code === 'SIMULATOR_START_FAILED');
@@ -868,7 +868,7 @@ test('device.pose with Argent folds the device first, before the app is opened, 
   for (const request of controller) assert.equal(request.environment.EXPLORE_ARGENT_POSE, 'open');
 });
 
-test('device.pose with agent-device on EAS opens the app, folds, and checks the display it lit', async t => {
+test('device.pose with agent-device on Expo Services opens the app, folds, and checks the display it lit', async t => {
   const f = await fixture(t, { devicePose: 'open' });
   assert.equal((await runCiMap({ ...f.options, sleep: () => {} })).runStatus, 'complete');
   const controller = f.requests.filter(request => request.command === 'fake-controller').map(request => request.args[0] === 'screenshot' && request.args[1].endsWith('/pose.png') ? 'pose' : request.args[0]);
@@ -877,7 +877,7 @@ test('device.pose with agent-device on EAS opens the app, folds, and checks the 
   assert.equal(f.requests.some(request => request.args[0] === 'simulator:control' && request.args[1] === 'springboard.restart'), false);
 });
 
-test('when an agent-device fold on EAS lights a black panel, the capture restarts SpringBoard, reopens the app and folds again, once', async t => {
+test('when an agent-device fold on Expo Services lights a black panel, the capture restarts SpringBoard, reopens the app and folds again, once', async t => {
   for (const [black, completes] of [[1, true], [2, false]]) {
     const f = await fixture(t, { devicePose: 'open', blackAfterFold: black, controlActions: ['springboard.restart'] });
     const lines = [];
@@ -901,7 +901,7 @@ test('a local simulator capture creates its own iOS simulator, installs the repa
     const result = await runCiMap({ ...f.options, sessionStatePath: join(f.root, `session-${repack}`) });
     assert.equal(result.runStatus, 'complete', JSON.stringify(result.outcomes));
     const eas = f.requests.filter(request => request.command === 'fake-eas').map(request => request.args[0]);
-    assert.equal(eas.some(command => command.startsWith('simulator:')), false, 'no EAS Simulator session or availability check');
+    assert.equal(eas.some(command => command.startsWith('simulator:')), false, 'no Expo Simulators session or availability check');
     // A local repack's app stays on this machine; a hosted one is downloaded back.
     assert.equal(eas.includes('upload'), false);
     if (repack === 'eas') assert.ok(eas.includes('workflow:run') && eas.includes('build:download'));
@@ -1182,12 +1182,12 @@ test('a local simulator capture deletes its simulator when the capture fails', a
   assert.deepEqual(simctl.slice(-2), ['shutdown', 'delete']);
 });
 
-test('an EAS session asks for the capture minutes plus a repack allowance, and a plan that refuses them gets its own maximum', async t => {
+test('an Expo Simulators session asks for the capture minutes plus a repack allowance, and a plan that refuses them gets its own maximum', async t => {
   const minutes = request => Number(value(request, '--max-duration-minutes'));
   const f = await fixture(t);
   await runCiMap(f.options);
   assert.deepEqual(f.requests.filter(request => request.args[0] === 'simulator:start').map(minutes), [50]);
-  // EAS names the plan's maximum when it refuses; the start is retried once, never with less than the capture's own 30.
+  // Expo Services names the plan's maximum when it refuses; the start is retried once, never with less than the capture's own 30.
   for (const [limit, retried] of [[40, 40], [20, 30]]) {
     const f = await fixture(t);
     const starts = [];
@@ -1949,13 +1949,13 @@ test('UI filling and scrolling both consume the capture action budget', async t 
   assert.equal(f.operations().filter(operation => operation === 'simulator:stop').length, 1);
 });
 
-test('fresh and reusable native builds are repacked on EAS from a staged copy with the automatic observer', async t => {
+test('fresh and reusable native builds are repacked on Expo Services from a staged copy with the automatic observer', async t => {
   for (const reuse of [false, true]) {
     const f = await fixture(t, { reuse, buildMetadata: true });
     const result = await runCiMap(f.options);
     assert.equal(result.reusedEasBuild, reuse);
     assert.equal(result.easBuildId, 'repacked-app');
-    // The app config declares neither, so the PR comment reads them from the EAS build either way.
+    // The app config declares neither, so the PR comment reads them from the Expo Build either way.
     assert.equal(result.app.version, '2.1.0');
     assert.equal(result.app.buildNumber, '42');
     assert.equal(f.operations().includes('workflow:run'), true);
@@ -2014,14 +2014,14 @@ test('a repack the app broke, a refused credential, a build timeout or a cancell
   }
 });
 
-test('a hosted repack EAS ended before it saved the app starts again, and the capture goes on (brentvatne/euxy#176)', async t => {
+test('a hosted repack Expo Services ended before it saved the app starts again, and the capture goes on (brentvatne/euxy#176)', async t => {
   const f = await fixture(t, { repackFailures: [uploadRefused] });
   const lines = [];
   const result = await runCiMap({ ...f.options, progress: line => lines.push(line) });
   assert.equal(result.runStatus, 'complete');
   assert.equal(result.easBuildId, 'repacked-app');
   assert.equal(runs(f), 2);
-  assert.ok(lines.some(line => /the hosted EAS repack https:\/\/expo\.dev\/accounts\/acme\/projects\/example\/workflows\/run-1 failed \(The hosted EAS repack of the ios build finished with status FAILURE: Failed to upload application archive\.\); starting another repack \(1\/2\)/.test(line)), lines.join('\n'));
+  assert.ok(lines.some(line => /the hosted Expo Workflows repack https:\/\/expo\.dev\/accounts\/acme\/projects\/example\/workflows\/run-1 failed \(The hosted Expo Workflows repack of the ios build finished with status FAILURE: Failed to upload application archive\.\); starting another repack \(1\/2\)/.test(line)), lines.join('\n'));
   // Explore waits on each run itself, and reads the failed job's logs once.
   assert.equal(f.requests.some(request => request.args[0] === 'workflow:run' && request.args.includes('--wait')), false);
   assert.equal(f.operations().filter(operation => operation === 'workflow:logs').length, 1);
@@ -2029,7 +2029,7 @@ test('a hosted repack EAS ended before it saved the app starts again, and the ca
   assert.deepEqual(sessionOperations(f), ['simulator:start', 'simulator:stop']);
 });
 
-test('a repack EAS keeps failing is started twice more, one nothing explains once more, and one near the end of the budget not again', async t => {
+test('a repack Expo Services keeps failing is started twice more, one nothing explains once more, and one near the end of the budget not again', async t => {
   const cases = [{ failures: [uploadRefused, uploadRefused, uploadRefused], runs: 3 }, { failures: [{ status: 'ERRORED' }, { status: 'ERRORED' }], runs: 2 },
     // A failure 26 minutes in leaves less of the 30-minute budget than another repack needs.
     { failures: [uploadRefused], runs: 1, repackMs: 26 * 60_000 }];
@@ -2041,7 +2041,7 @@ test('a repack EAS keeps failing is started twice more, one nothing explains onc
   }
 });
 
-test('a run whose state EAS keeps failing to report is cancelled, and no other is started beside it', async t => {
+test('a run whose state Expo Services keeps failing to report is cancelled, and no other is started beside it', async t => {
   const f = await fixture(t, { unreadableViews: 6 });
   await assert.rejects(runCiMap(f.options), error => error.code === 'EAS_REPACK_FAILED' && error.details.failure === 'unconfirmed'
     && /did not report the state of the hosted ios repack 6 times in a row; Explore cancelled the run/.test(error.message));
@@ -2087,7 +2087,7 @@ test('a capture stopped while its repack runs cancels the run, and a start that 
   const unnamed = await fixture(t, { repackStart: [{ throws: true }] });
   await assert.rejects(runCiMap(unnamed.options), error => error.code === 'EAS_REPACK_FAILED' && error.details.failure === 'unconfirmed' && /one may have started, so Explore does not start another/.test(error.message));
   assert.equal(runs(unnamed), 1);
-  // A run whose cancel EAS refuses says so.
+  // A run whose cancel Expo Services refuses says so.
   const refused = await fixture(t, { repackViews: 10_000, cancelFails: true });
   await assert.rejects(runCiMap(refused.options), error => /it could not be cancelled/.test(error.message));
 });
@@ -2143,7 +2143,7 @@ test('two jobs of one run attempt that repack the same app share one hosted repa
   assert.deepEqual(downloaded(f), ['repacked-app']);
   assert.equal(result.easBuildId, 'repacked-app');
   assert.equal(result.runStatus, 'complete');
-  assert.ok(lines.some(line => /using EAS build repacked-app, the hosted repack of this commit another target of this run made/.test(line)), lines.join('\n'));
+  assert.ok(lines.some(line => /using Expo Build repacked-app, the hosted repack of this commit another target of this run made/.test(line)), lines.join('\n'));
 });
 
 test('a target that starts after the shared repack finished, and finds that repack as its build to repack, joins it', async t => {
@@ -2159,7 +2159,7 @@ test('a target that starts after the shared repack finished, and finds that repa
   assert.equal(shareLists(f), 1, 'its first look finds the finished repack');
   assert.deepEqual(downloaded(f), ['repacked-app']);
   assert.equal(result.easBuildId, 'repacked-app');
-  assert.ok(lines.some(line => /using EAS build repacked-app, the hosted repack of this commit another target of this run made/.test(line)), lines.join('\n'));
+  assert.ok(lines.some(line => /using Expo Build repacked-app, the hosted repack of this commit another target of this run made/.test(line)), lines.join('\n'));
 });
 
 test("a target follows the leader's repack by its id while it runs, even once newer builds push it off the list", async t => {
@@ -2176,7 +2176,7 @@ test("a target follows the leader's repack by its id while it runs, even once ne
   assert.deepEqual(downloaded(f), ['leader-repack']);
   assert.equal(result.easBuildId, 'leader-repack');
   assert.deepEqual([eas.lists, eas.views], [1, 3]);
-  assert.ok(lines.some(line => /waiting for EAS build leader-repack, the hosted repack of this commit another target of this run started/.test(line)), lines.join('\n'));
+  assert.ok(lines.some(line => /waiting for Expo Build leader-repack, the hosted repack of this commit another target of this run started/.test(line)), lines.join('\n'));
 });
 
 test("a target whose leader's repack failed follows the leader's retry", async t => {
@@ -2194,7 +2194,7 @@ test("a target whose leader's repack failed follows the leader's retry", async t
   assert.equal(runs(f), 0, 'no fourth repack beside the retry');
   assert.deepEqual(downloaded(f), ['leader-retry']);
   assert.equal(result.easBuildId, 'leader-retry');
-  assert.ok(lines.some(line => /the shared repack \(EAS build leader-repack\) ended ERRORED; looking for another for up to 60 s before repacking here/.test(line)), lines.join('\n'));
+  assert.ok(lines.some(line => /the shared repack \(Expo Build leader-repack\) ended ERRORED; looking for another for up to 60 s before repacking here/.test(line)), lines.join('\n'));
 });
 
 test("a target whose leader's repack failed and was not retried repacks itself, with the same key for the others", async t => {
@@ -2214,7 +2214,7 @@ test("a target whose leader's repack failed and was not retried repacks itself, 
 test('a repack of other inputs is never used, and the wait for one ends after three minutes of modest polling', async t => {
   const message = await leaderMessage(t);
   const otherAttempt = await leaderMessage(t, 'acme/example#39506405687.2');
-  // Another value in the EAS environment, and another commit of the app.
+  // Another value in the Expo Services environment, and another commit of the app.
   const otherVariables = await leaderMessage(t, SCOPE, { envList: { project: 'Environment: preview\nVariables for this project:\nName EXPO_PUBLIC_API\nValue https://api.example.com\nUpdated at Oct 20 10:00:00\n' } });
   const changedEas = easBuilds();
   const changedLeader = await fixture(t, { reuse: true, eas: changedEas });
@@ -2243,7 +2243,7 @@ test('three unreadable lists in a row end the wait, and so does an abort', async
   const { f, lines, run } = await follow(t, unreadable);
   assert.equal((await run).easBuildId, 'repacked-app');
   assert.deepEqual([unreadable.lists, runs(f)], [3, 1]);
-  assert.ok(lines.some(line => /EAS did not answer three times in a row; repacking here/.test(line)), lines.join('\n'));
+  assert.ok(lines.some(line => /Expo Services did not answer three times in a row; repacking here/.test(line)), lines.join('\n'));
   const stop = new AbortController();
   const waiting = easBuilds(); waiting.onList = state => { if (state.lists === 2) stop.abort(new CiError({ code: 'CAPTURE_CANCELLED', stage: 'build', message: 'Stopped.', nextAction: 'Rerun.' })); };
   const aborted = await follow(t, waiting, {}, { signal: stop.signal });
@@ -2294,7 +2294,7 @@ test('targets whose leader makes no repack join the first of them to start one i
   assert.equal(result.easBuildId, 'half-open-repack');
 });
 
-test('a native build this job made, or an environment EAS cannot list, is repacked here without sharing', async t => {
+test('a native build this job made, or an environment Expo Services cannot list, is repacked here without sharing', async t => {
   const fresh = await fixture(t, { eas: easBuilds() });
   await runCiMap({ ...fresh.options, ...share('duo-open') });
   assert.equal(fresh.operations().includes('build'), true);
@@ -2306,7 +2306,7 @@ test('a native build this job made, or an environment EAS cannot list, is repack
   await runCiMap({ ...unlisted.options, ...share('duo-open'), progress: line => lines.push(line) });
   assert.deepEqual([shareLists(unlisted), runs(unlisted)], [0, 1]);
   assert.equal(shared(eas.builds[0].message), undefined, 'a repack without a snapshot carries no key');
-  assert.ok(lines.some(line => /EAS did not list the preview environment's variables; repacking here without sharing the repack/.test(line)), lines.join('\n'));
+  assert.ok(lines.some(line => /Expo Services did not list the preview environment's variables; repacking here without sharing the repack/.test(line)), lines.join('\n'));
 });
 
 test("the build to repack is the newest one Explore did not repack itself", async () => {
@@ -2345,7 +2345,7 @@ test('partial cached evidence captures only missing selected targets', async t =
   assert.deepEqual(after.images[f.ids.home], before.images[first.ids.home]);
 });
 
-test('a complete cache hit preserves original images without EAS allocation', async t => {
+test('a complete cache hit preserves original images without Expo Services allocation', async t => {
   const first = await fixture(t);
   await runCiMap(first.options);
   const f = await fixture(t);
@@ -2426,7 +2426,7 @@ test('setup reads again while a system prompt briefly returns an incomplete tree
   }
 });
 
-test('an exhausted EAS build plan is reported as EAS_PLAN_LIMIT_REACHED with the reset date', async t => {
+test('an exhausted Expo Build plan is reported as EAS_PLAN_LIMIT_REACHED with the reset date', async t => {
   const f = await fixture(t, { workflowPlanLimit: true });
   await assert.rejects(runCiMap(f.options), error => {
     assert.equal(error.code, 'EAS_PLAN_LIMIT_REACHED');
@@ -3488,7 +3488,7 @@ test('agent coordinate fallback maps a uniformly scaled Retina image to verified
   assert.deepEqual(press[0].args.slice(0, 3), ['press', '2', '3']);
 });
 
-test('a failed EAS start preserves its actionable cause without exposing private handoff data or guessing a session', async t => {
+test('a failed Expo Simulators start preserves its actionable cause without exposing private handoff data or guessing a session', async t => {
   const f = await fixture(t);
   const opaqueToken = 'opaque-short-token';
   const privateUrl = 'https://private-controller.example/secret-session?token=url-token';
@@ -3941,7 +3941,7 @@ test('an Android capture builds an APK, repacks it with the SDK build-tools, and
     assert.equal(value(request, '--platform'), 'android');
   }
   const firstOpen = f.requests.find(request => request.command === 'fake-controller' && request.args[0] === 'open');
-  assert.equal(firstOpen.args.includes('--device'), false, 'the EAS AVD profile id is not an agent-device device name; the session has one booted emulator');
+  assert.equal(firstOpen.args.includes('--device'), false, 'the Expo Simulators AVD profile id is not an agent-device device name; the session has one booted emulator');
   const bundle = JSON.parse(await readFile(join(f.options.outputDirectory, 'bundle.json'), 'utf8'));
   assert.equal(bundle.platform, 'android');
 });

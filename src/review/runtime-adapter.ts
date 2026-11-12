@@ -15,7 +15,7 @@ import { ARGENT_VERSION } from "../shared/argent-version.js";
 
 /** Strict, non-secret subset written after a successful simulator cleanup. */
 export type RuntimeExecutionContext = {
-  /** EAS Simulator, or a simulator Explore created on the capturing Mac (`capture.simulator: local`). */
+  /** Expo Simulators, or a simulator Explore created on the capturing Mac (`capture.simulator: local`). */
   provider: "eas-simulator" | "local-simulator";
   controller: "agent-device" | "argent";
   /** The pinned package of the controller that drove the session. */
@@ -163,7 +163,7 @@ function compareEnvironment(
 ): void {
   if (!observed) throw new Error(`Map runtime environment is missing ${label}`);
   if (observed !== expected) {
-    throw new Error(`Map runtime environment ${label} does not match EAS Simulator context`);
+    throw new Error(`Map runtime environment ${label} does not match Expo Simulators context`);
   }
 }
 
@@ -248,7 +248,7 @@ export function runtimeEvidenceInputFromMap(
     throw new Error(`Runtime map must have finished capture, received ${map.run.status}`);
   }
   if (map.run.controller !== execution.controller || map.run.platform !== execution.platform) {
-    throw new Error("Map controller or platform does not match EAS Simulator context");
+    throw new Error("Map controller or platform does not match Expo Simulators context");
   }
   compareEnvironment(map.run.environment.deviceModel, execution.deviceModel, "device model");
   compareEnvironment(map.run.environment.osVersion, execution.osVersion, "OS version");

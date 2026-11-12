@@ -44,10 +44,10 @@ export type SourceCapturePlan = {
   excludedSurfaceIds?: string[];
 };
 
-// App-wide inputs that no route imports: package/lock files, Expo and bundler config, the EAS
-// build profile, bundled environment files, and style tooling config.
+// App-wide inputs that no route imports: package/lock files, Expo and bundler config, the Expo Build
+// profile, bundled environment files, and style tooling config.
 const globalFiles = /^(?:package\.json|(?:package-lock|npm-shrinkwrap)\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|app\.json|app\.config\.[cm]?[jt]s|(?:babel|metro|tailwind|postcss)\.config\.[cm]?[jt]s|react-native\.config\.[cm]?js|eas\.json|\.env(?:\.[^/]+)?|tsconfig[^/]*\.json)$/;
-// npm runs these during install; EAS Build runs its eas-build-* hooks.
+// npm runs these during install; Expo Build runs its eas-build-* hooks.
 const buildScripts = /^(?:(?:pre|post)?(?:install|prepare)|prepublish|eas-build-.+)$/;
 
 const parseObject = (text: string | undefined): Record<string, unknown> | undefined => {
@@ -57,7 +57,7 @@ const parseObject = (text: string | undefined): Record<string, unknown> | undefi
   } catch { return undefined; }
 };
 
-/** Whether an EAS build profile runs a custom build, whose steps can call any package script. */
+/** Whether an Expo Build profile runs a custom build, whose steps can call any package script. */
 function customEasBuild(text: string | undefined): boolean {
   if (text === undefined) return false;
   const build = parseObject(text)?.build;

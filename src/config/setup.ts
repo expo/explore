@@ -9,7 +9,7 @@ import { explorationSecretNames } from "./exploration-inputs.js";
 import type { RouteEntryReport } from "../ci/route-entry.js";
 import type { CiInstallResult } from "../ci/workflow-install.js";
 
-/** Simulator models observed on EAS (iOS 26.5, 2026-09-08). Suggestions only; capture checks availability. */
+/** Simulator models observed on Expo Services (iOS 26.5, 2026-09-08). Suggestions only; capture checks availability. */
 const CAPTURE_DEVICE_MODELS = [
   "iPhone 17", "iPhone 17 Pro", "iPhone 17 Pro Max", "iPhone 17e", "iPhone Air",
   "iPad (A16)", "iPad Air 11-inch (M4)", "iPad Air 13-inch (M4)", "iPad mini (A17 Pro)",
@@ -116,11 +116,11 @@ export async function appConfig(project: string): Promise<ObjectValue> {
 
 export function simulatorProfiles(eas: ObjectValue, platform: "ios" | "android" = "ios"): string[] {
   const profiles = object(eas.build);
-  // Android: a profile that EAS builds as an APK (android.buildType: apk, or internal distribution
+  // Android: a profile that Expo Services builds as an APK (android.buildType: apk, or internal distribution
   // without a buildType) and not as a development client, so the emulator opens the app itself.
   function resolvedProfile(name: string, visited = new Set<string>()): ObjectValue {
-    if (visited.has(name)) throw new Error(`Circular EAS profile inheritance at ${name}. Fix eas.json and rerun setup.`);
-    if (!profiles[name]) throw new Error(`Missing inherited EAS profile ${name}. Fix eas.json and rerun setup.`);
+    if (visited.has(name)) throw new Error(`Circular Expo Build profile inheritance at ${name}. Fix eas.json and rerun setup.`);
+    if (!profiles[name]) throw new Error(`Missing inherited Expo Build profile ${name}. Fix eas.json and rerun setup.`);
     visited.add(name);
     const profile = object(profiles[name]);
     const parent = typeof profile.extends === "string" ? resolvedProfile(profile.extends, visited) : {};
@@ -134,8 +134,8 @@ export function simulatorProfiles(eas: ObjectValue, platform: "ios" | "android" 
   }
   if (platform === "android") return Object.keys(profiles).filter((name) => isEmulatorApk(name));
   function isSimulator(name: string, visited = new Set<string>()): boolean {
-    if (visited.has(name)) throw new Error(`Circular EAS profile inheritance at ${name}. Fix eas.json and rerun setup.`);
-    if (!profiles[name]) throw new Error(`Missing inherited EAS profile ${name}. Fix eas.json and rerun setup.`);
+    if (visited.has(name)) throw new Error(`Circular Expo Build profile inheritance at ${name}. Fix eas.json and rerun setup.`);
+    if (!profiles[name]) throw new Error(`Missing inherited Expo Build profile ${name}. Fix eas.json and rerun setup.`);
     visited.add(name);
     const profile = object(profiles[name]);
     const inherited = typeof profile.extends === "string" ? isSimulator(profile.extends, visited) : false;
@@ -270,10 +270,10 @@ export async function runExploreSetup(options: SetupOptions = {}, interaction?: 
   const hint = platform === "android" ? ANDROID_PROFILE_HINT : SIMULATOR_PROFILE_HINT;
   const defaultDevice = platform === "android" ? ANDROID_DEVICE_PROFILES[0] : CAPTURE_DEVICE_MODELS[0];
   if (!await exists(join(project, "eas.json"))) {
-    throw new Error(`No eas.json found. Explore builds the app for the ${platform === "android" ? "Android Emulator" : "iOS Simulator"} with an EAS build profile. ${hint}`);
+    throw new Error(`No eas.json found. Explore builds the app for the ${platform === "android" ? "Android Emulator" : "iOS Simulator"} with an Expo Build profile. ${hint}`);
   }
   const profiles = simulatorProfiles(await readJson(join(project, "eas.json")), platform);
-  if (!profiles.length) throw new Error(platform === "android" ? `No EAS build profile in eas.json builds an Android APK (android.buildType: apk) without developmentClient. ${hint}` : `No EAS build profile in eas.json has ios.simulator: true. ${hint}`);
+  if (!profiles.length) throw new Error(platform === "android" ? `No Expo Build profile in eas.json builds an Android APK (android.buildType: apk) without developmentClient. ${hint}` : `No Expo Build profile in eas.json has ios.simulator: true. ${hint}`);
   if (options.nonInteractive && options.mode === "agent" && (!options.provider || !options.model)) {
     throw new Error("Non-interactive agent setup requires --provider (anthropic or openai) and --model.");
   }
@@ -300,7 +300,7 @@ export async function runExploreSetup(options: SetupOptions = {}, interaction?: 
     }
     const schemes = Array.isArray(app.scheme) ? app.scheme.filter((value): value is string => typeof value === "string") : undefined;
     const scheme = await choose("URL scheme (optional)", options.scheme, schemes?.[0] ?? string(app.scheme), schemes);
-    const profile = await choose(platform === "android" ? "EAS emulator (APK) build profile" : "EAS simulator build profile", options.profile,
+    const profile = await choose(platform === "android" ? "Expo Build emulator (APK) profile" : "Expo Build simulator profile", options.profile,
       // With several, the one named explore, the name the README and the explore-setup skill give it.
       profiles.length === 1 ? profiles[0]! : profiles.includes("explore") ? "explore" : "", profiles);
     if (!profiles.includes(profile)) throw new Error(`Choose ${platform === "android" ? "an Android APK" : "a simulator"} profile from eas.json with --profile: ${profiles.join(", ")}.`);

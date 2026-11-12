@@ -43,7 +43,7 @@ export type DoctorReport = { ok: boolean; mode: ExploreConfig["mode"] | null; ch
 export type DoctorRun = (command: string, args: readonly string[], cwd: string) => { status: number | null; stdout: string; stderr: string };
 export type DoctorOptions = {
   project: string;
-  /** EAS account, project, simulator access and build environment. */
+  /** Expo account, project, simulator access and build environment. */
   online?: boolean;
   /** Repository settings through an authenticated GitHub CLI. */
   github?: boolean;
@@ -158,7 +158,7 @@ function routeChecks(config: ExploreConfig, report: RouteEntryReport): DoctorChe
   return checks;
 }
 
-/** Every target, resolved, once per platform, EAS profile and app: targets that differ only by device or pose share these checks. */
+/** Every target, resolved, once per platform, Expo Build profile and app: targets that differ only by device or pose share these checks. */
 function resolvedTargets(config: ExploreConfig, by: (target: ExploreConfig) => string = target => `${target.app.platform}:${target.app.easProfile}:${target.app.bundleId}`): ExploreConfig[] {
   const seen = new Set<string>();
   return configTargets(config).map(target => resolveTargetConfig(config, { target: target.id })).filter(target => !seen.has(by(target)) && !!seen.add(by(target)));
@@ -173,7 +173,7 @@ function runTargets(config: ExploreConfig, overrides: { controller?: string | un
 }
 
 /**
- * The targets that run on a local simulator, in place of EAS Simulator access: this Mac's Xcode can create each iOS
+ * The targets that run on a local simulator, in place of Expo Simulators access: this Mac's Xcode can create each iOS
  * target's device, and the Android SDK can start each Android target's device profile with a system image this machine runs.
  */
 async function localSimulatorChecks(project: string, targets: readonly ExploreConfig[], run: DoctorRun, environment: NodeJS.ProcessEnv): Promise<DoctorCheck[]> {
@@ -216,7 +216,7 @@ async function localSimulatorChecks(project: string, targets: readonly ExploreCo
         ? { step: 1, id: "local-repack", status: "pass", message: `This machine can repack the APK (build-tools ${buildTools.sort().at(-1)}, ${(java.stderr || java.stdout).trim().split("\n")[0] || "Java"}).` }
         : { step: 1, id: "local-repack", status: "fail", code: "LOCAL_REPACK_UNAVAILABLE",
           message: buildTools.length ? "Repacking the APK on this machine needs Java, and java -version did not run." : "Repacking the APK on this machine needs the Android SDK build-tools, and none are installed.",
-          nextAction: "Install the build-tools (sdkmanager \"build-tools;35.0.0\") and a JDK 17, or set capture.repack: eas to repack in a hosted EAS job, then rerun doctor." });
+          nextAction: "Install the build-tools (sdkmanager \"build-tools;35.0.0\") and a JDK 17, or set capture.repack: eas to repack in a hosted Expo Workflows job, then rerun doctor." });
     }
   }
   return checks;
@@ -238,10 +238,10 @@ async function easChecks(project: string, config: ExploreConfig, run: DoctorRun,
   checks.push({ step: 1, id: "eas-login", status: "pass", message: `Signed in to Expo as ${account}.` });
   const info = run(eas, ["project:info"], project);
   checks.push(info.status === 0
-    ? { step: 1, id: "eas-project", status: "pass", message: "The app is linked to an EAS project this account can access." }
-    : { step: 1, id: "eas-project", status: "fail", code: "EAS_PROJECT_UNAVAILABLE", message: `EAS project check failed: ${lastLine(info.stderr || info.stdout)}`,
+    ? { step: 1, id: "eas-project", status: "pass", message: "The app is linked to an Expo Services project this account can access." }
+    : { step: 1, id: "eas-project", status: "fail", code: "EAS_PROJECT_UNAVAILABLE", message: `Expo Services project check failed: ${lastLine(info.stderr || info.stdout)}`,
       nextAction: "Run eas init in the app directory to link it, or ask the project's owner for access. The CI EXPO_TOKEN must belong to an account with the same access." });
-  // The targets on a local simulator need this machine's tools, and EAS Simulator access is checked when any target uses it.
+  // The targets on a local simulator need this machine's tools, and Expo Simulators access is checked when any target uses it.
   const targets = runTargets(config, { simulator });
   const local = targets.filter(target => target.capture.simulator === "local");
   if (local.length) checks.push(...await localSimulatorChecks(project, local, run, environment));
@@ -250,10 +250,10 @@ async function easChecks(project: string, config: ExploreConfig, run: DoctorRun,
     try {
       if (availability.status !== 0) throw new Error(lastLine(availability.stderr || availability.stdout));
       assertSimulatorAvailable(availability.stdout);
-      checks.push({ step: 1, id: "eas-simulator", status: "pass", message: "EAS Simulator is available for this account." });
+      checks.push({ step: 1, id: "eas-simulator", status: "pass", message: "Expo Simulators is available for this account." });
     } catch (error) {
       checks.push({ ...fromError(1, "eas-simulator", error, { code: "SIMULATOR_UNAVAILABLE", nextAction: "" }),
-        code: "SIMULATOR_UNAVAILABLE", nextAction: `Join the EAS Simulator waitlist at ${WAITLIST} with ${account}, the account the CI EXPO_TOKEN must use. Capture cannot run until access is granted.` });
+        code: "SIMULATOR_UNAVAILABLE", nextAction: `Join the Expo Simulators waitlist at ${WAITLIST} with ${account}, the account the CI EXPO_TOKEN must use. Capture cannot run until access is granted.` });
     }
   }
   const checkedEnvironments = new Set<string>();
@@ -272,8 +272,8 @@ async function easChecks(project: string, config: ExploreConfig, run: DoctorRun,
       assertCaptureEasProfile(value, bundleId, platform);
       environment = repackProfileFrom(resolved.stdout).easEnvironment;
       environmentSource = value.buildProfile.environment === undefined
-        ? `the EAS environment that profile ${easProfile} uses by default`
-        : `the EAS environment that profile ${easProfile} selects`;
+        ? `the Expo Services environment that profile ${easProfile} uses by default`
+        : `the Expo Services environment that profile ${easProfile} selects`;
       const schemes = [value.appConfig.scheme].flat().filter((scheme): scheme is string => typeof scheme === "string").map(scheme => scheme.toLowerCase());
       checks.push(config.app.scheme && schemes.length && !schemes.includes(config.app.scheme)
         ? { step: 2, id: "eas-profile", status: "fail", code: "APP_SCHEME_MISMATCH",
@@ -296,11 +296,11 @@ async function easChecks(project: string, config: ExploreConfig, run: DoctorRun,
     }
     checks.push(names.size
       ? { step: 2, id: "eas-environment", status: "fail", code: "CAPTURE_OBSERVER_BUILD_UNSUPPORTED",
-        message: `EAS environment ${environment} has secret-visibility or file variables that capture cannot rebuild with: ${[...names].sort().join(", ")}.`,
+        message: `Expo Services environment ${environment} has secret-visibility or file variables that capture cannot rebuild with: ${[...names].sort().join(", ")}.`,
         nextAction: `Change them to plain text or sensitive visibility, or point profile ${easProfile} at an environment without them (build.${easProfile}.environment in eas.json).` }
       : listed
-        ? { step: 2, id: "eas-environment", status: "pass", message: `EAS environment ${environment} (${environmentSource}) has no variables that stop capture from rebuilding the app.` }
-        : { step: 2, id: "eas-environment", status: "warn", code: "EAS_ENVIRONMENT_UNCHECKED", message: `Could not list the variables of EAS environment ${environment}.`,
+        ? { step: 2, id: "eas-environment", status: "pass", message: `Expo Services environment ${environment} (${environmentSource}) has no variables that stop capture from rebuilding the app.` }
+        : { step: 2, id: "eas-environment", status: "warn", code: "EAS_ENVIRONMENT_UNCHECKED", message: `Could not list the variables of Expo Services environment ${environment}.`,
           nextAction: "Check that it has no secret-visibility or file variables; capture cannot rebuild with them." });
   }
   return checks;
@@ -442,8 +442,8 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   }
   if (!await exists(join(project, DEFAULT_EXPLORE_CONFIG_PATH))) {
     checks.push({ step: 1, id: "eas", status: "skip", message: options.online === false
-      ? "EAS login, project, simulator access and build profile were not checked (--offline)."
-      : "EAS login, project, simulator access and build profile are checked once a config exists." });
+      ? "Expo Services login, project, simulator access and build profile were not checked (--offline)."
+      : "Expo Services login, project, simulator access and build profile are checked once a config exists." });
     checks.push({ step: 4, id: "config", status: "fail", code: "CONFIG_MISSING", message: `${DEFAULT_EXPLORE_CONFIG_PATH} does not exist.`,
       nextAction: "Run expo-explore setup, or ask your coding agent to set up Explore with the explore-setup skill." });
     // Route analysis before a config exists, so the capture mode can be chosen from it.
@@ -560,7 +560,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
       nextAction: "Commit them, push, and merge them into the default branch." });
   }
   if (options.online !== false) checks.push(...await easChecks(project, config, run, environment, options.simulator));
-  else checks.push({ step: 1, id: "eas", status: "skip", message: "EAS login, project, simulator access and build profile were not checked (--offline)." });
+  else checks.push({ step: 1, id: "eas", status: "skip", message: "Expo Services login, project, simulator access and build profile were not checked (--offline)." });
   if (options.github !== false && files.root) checks.push(...githubChecks(files.root, config, secretNames, run));
   else if (files.root) checks.push({ step: 7, id: "github", status: "skip", message: `Repository settings were not checked (${options.online === false ? "--offline" : "--no-github"}).` });
   checks.sort((a, b) => a.step - b.step);
@@ -628,12 +628,12 @@ export function summarizeCaptureCheck(plan: SourceCapturePlan, bundle: CaptureBu
 }
 
 /**
- * Capture the committed HEAD the way the baseline workflow does, with the local EAS login. This is
- * the only doctor step that starts an EAS build and a simulator session.
+ * Capture the committed HEAD the way the baseline workflow does, with the local Expo Services login. This is
+ * the only doctor step that starts an Expo Build and a simulator session.
  */
 /**
  * Argent fetches its pinned release on first use, and cannot switch the appearance itself (software-mansion/argent#1509):
- * the host does, through `simulator:control` on an iOS EAS session or simctl and adb on this Mac. Only an Android EAS
+ * the host does, through `simulator:control` on an iOS Expo Simulators session or simctl and adb on this Mac. Only an Android Expo Simulators
  * session has no host to ask, so its captures record one appearance. agent-device, the default, is not reported.
  */
 function argentCheck(environment: NodeJS.ProcessEnv, androidOnEas: boolean): DoctorCheck {
@@ -641,7 +641,7 @@ function argentCheck(environment: NodeJS.ProcessEnv, androidOnEas: boolean): Doc
   const release = `Device controller: Argent ${ARGENT_VERSION} (${cached ? "cached on this machine" : "fetched from npm on the first capture, about 27 MB"}). `;
   return androidOnEas
     ? { step: 3, id: "controller", status: "warn", code: "CONTROLLER_APPEARANCE_FIXED",
-      message: `${release}Argent cannot switch the appearance on an Android EAS Simulator session yet (software-mansion/argent#1509), so those captures record one appearance: the app's forced one, else light.`,
+      message: `${release}Argent cannot switch the appearance on an Android Expo Simulators session yet (software-mansion/argent#1509), so those captures record one appearance: the app's forced one, else light.`,
       nextAction: "Nothing to do unless you need dark-mode screenshots on Android; use agent-device (the default) for those." }
     : { step: 3, id: "controller", status: "pass",
       message: `${release}The simulator's host switches the appearance, so every appearance the config asks for is captured.` };
