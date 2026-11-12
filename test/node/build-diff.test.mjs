@@ -130,7 +130,7 @@ test("catalog route context contains only the two real builds", async () => {
     ...fixture.catalog,
     builds: [
       ...fixture.catalog.builds,
-      { id: "placeholder-update", kind: "build", version: "EAS Update", mapDir: "unused" },
+      { id: "placeholder-update", kind: "build", version: "Expo Update", mapDir: "unused" },
       { id: "placeholder-pr", kind: "build", version: "PR 482", mapDir: "unused" },
     ],
   };

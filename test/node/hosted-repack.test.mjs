@@ -32,7 +32,7 @@ test('a failed repack job becomes EAS_REPACK_FAILED with the build error and the
   const job = { key: 'repack', status: 'FAILURE', turtleBuild: { status: 'ERRORED', error: { errorCode: 'UNKNOWN_CUSTOM_BUILD_ERROR', message: 'Build step "Repack" failed.' } }, outputs: {} };
   assert.throws(() => hostedRepackBuildId(run(job), stderr, 'android'), error => {
     assert.ok(error instanceof CiError); assert.equal(error.code, 'EAS_REPACK_FAILED');
-    assert.match(error.message, /hosted EAS repack of the android build finished with status FAILURE: Build step "Repack" failed\./);
+    assert.match(error.message, /hosted Expo Workflows repack of the android build finished with status FAILURE: Build step "Repack" failed\./);
     assert.match(error.nextAction, /https:\/\/expo\.dev\/accounts\/acme\/projects\/example\/workflows\/run-1/);
     return true;
   });
@@ -49,7 +49,7 @@ test('non-JSON output from eas workflow:run is reported with the CLI tail', () =
 
 const failed = (job, stderr = '') => { try { hostedRepackBuildId(run(job), stderr, 'ios'); } catch (error) { return error; } assert.fail('the repack did not fail'); };
 
-test('a repack EAS failed around is repacked twice more, an unexplained one once, and one the app, a credential, a timeout or a person ended never', () => {
+test('a repack Expo Services failed around is repacked twice more, an unexplained one once, and one the app, a credential, a timeout or a person ended never', () => {
   // brentvatne/euxy#176 (review run 39506405687): the upload step's report of "Turtle build is not in progress".
   const upload = failed({ key: 'repack', status: 'FAILURE', turtleBuild: { status: 'ERRORED', error: { errorCode: 'UNKNOWN_CUSTOM_BUILD_ERROR', message: 'Failed to upload application archive.' } } });
   assert.equal(upload.details.failure, 'infrastructure'); assert.equal(hostedRepackRetries(upload), 2);
@@ -78,7 +78,7 @@ test('a repack EAS failed around is repacked twice more, an unexplained one once
     error => error.details.logs === 'https://expo.dev/accounts/acme/projects/example/workflows/run-2');
 });
 
-test('only exact EAS words make a failure infrastructure, and a refused credential is never retried', () => {
+test('only exact Expo Services words make a failure infrastructure, and a refused credential is never retried', () => {
   const cases = {
     infrastructure: ["Error: Cannot find module '/opt/eas/node_modules/@expo/build-tools/dist/index.js'", 'Turtle build is not in progress, it cannot save artifacts.', 'Unexpected response from server (503): Service Unavailable', 'Error: socket hang up',
       'getaddrinfo EAI_AGAIN api.expo.dev', 'Failed to start the workflow with the API.', 'Build step "Upload artifact" failed', 'Build step "Download build" failed'],

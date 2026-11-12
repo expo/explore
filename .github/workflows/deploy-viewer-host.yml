@@ -1,10 +1,10 @@
 name: Deploy the hosted Viewer
 
-# Deploys viewer-host (the central explore-viewer EAS Hosting app behind explore-preview.expo.app)
+# Deploys viewer-host (the central explore-viewer Expo Hosting app behind explore-preview.expo.app)
 # to production on every push to main. The export step is the same one CI verifies on pull
 # requests, so main only deploys what already passed review.
 #
-# Needs the EXPO_TOKEN repository secret: an EAS access token (Expo account settings → Access
+# Needs the EXPO_TOKEN repository secret: an Expo access token (Expo account settings → Access
 # tokens, ideally for a robot user) for the expo-public account that owns the explore-viewer project.
 on:
   push:
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy to EAS Hosting
+    name: Deploy to Expo Hosting
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

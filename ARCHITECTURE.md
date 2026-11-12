@@ -24,7 +24,7 @@ This file describes the source layout and the rules that keep it in order.
 | `config` | Reads and validates `.expo-explore/config.yaml`, the exploration inputs, and the `setup` command. | `explore-config.ts`, `exploration-inputs.ts`, `setup.ts` |
 | `source` | Source analysis: the route inventory, navigation extraction, git diff and dependency impact, and the deterministic capture plan. | `route-inventory.ts`, `navigation.ts`, `git-diff.ts`, `impact.ts`, `capture-plan.ts` |
 | `source/route-providers` | Route discovery for Expo Router and React Navigation. | `expo-router.ts`, `react-navigation.ts` |
-| `capture` | Runs the capture on EAS Simulator. | `run.ts` (entry), `eas-build.ts`, `simulator.ts`, `controller.ts`, `route-capture.ts`, `setup-actions.ts`, `observer.ts`, `health.ts` |
+| `capture` | Runs the capture on Expo Simulators. | `run.ts` (entry), `eas-build.ts`, `simulator.ts`, `controller.ts`, `route-capture.ts`, `setup-actions.ts`, `observer.ts`, `health.ts` |
 | `capture/agent` | Agent mode: Claude or Codex sessions, the pinned runtimes, the navigation runtime, readiness checks and change notes. | `session.ts`, `codex-config.ts`, `claude-runtime.ts`, `runtime.ts`, `readiness.ts`, `change-notes.ts` |
 | `review` | Compares base and head evidence, and prepares the local report assets. `ci` calls `evidence-assessment.ts` and `capture-review.ts`. | `evidence-assessment.ts`, `capture-review.ts`, `visual-evidence.ts`, `runtime-evidence.ts`, `evidence-comparator.ts`, `reviewer-changes.ts` |
 | `report` | The report artifact, the pull-request comment, and the Viewer links. | `artifact.ts`, `pr-comment*.ts`, `viewer-links.ts` |

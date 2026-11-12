@@ -10,7 +10,7 @@ const cli = join(root, "dist", "cli.js");
 const { defaultOutputDirectory } = await import(join(root, "dist", "cli", "binary-commands.js"));
 
 function fail(args) {
-  // Without an EAS login (as on CI) argument and archive errors must still come first.
+  // Without an Expo Services login (as on CI) argument and archive errors must still come first.
   const result = spawnSync(process.execPath, [cli, "explore:binary", ...args, "--json"], { cwd: root, encoding: "utf8", env: { ...process.env, EXPO_TOKEN: "", EXPO_SESSION_SECRET: "" } });
   assert.notEqual(result.status, 0, result.stdout);
   // Progress lines precede the structured error on stderr.
@@ -25,12 +25,12 @@ test("explore:binary is in the short help with its archive kinds and --no-upload
   assert.match(help.stdout, /explore:binary <app\.apk \| app\.app \| app\.tar\.gz \| simulator \.ipa>.*--simulator eas\|local.*--no-upload/);
 });
 
-test("explore:binary validates its arguments before touching EAS or a model", () => {
+test("explore:binary validates its arguments before touching Expo Services or a model", () => {
   assert.match(fail([]), /Pass the app archive/);
   assert.match(fail(["./app.apk", "--upload", "--no-upload"]), /either --upload or --no-upload/);
   assert.match(fail(["./app.apk", "--platform", "web"]), /platform/);
   assert.match(fail(["./app.apk", "--simulator", "cloud"]), /simulator/);
-  // A local run needs no EAS login, so the archive is the first thing it checks.
+  // A local run needs no Expo Services login, so the archive is the first thing it checks.
   assert.match(fail(["./does-not-exist.apk", "--simulator", "local"]), /Archive not found: .*does-not-exist\.apk/);
   assert.match(fail(["./does-not-exist.apk", "--no-upload"]), /Archive not found: .*does-not-exist\.apk/);
   assert.match(fail(["./package.json", "--no-upload"]), /Unsupported archive: package\.json/);
@@ -41,7 +41,7 @@ test("explore:binary validates its arguments before touching EAS or a model", ()
 
 test("--expires-in is accepted from older scripts and says it no longer applies; output directory defaults", () => {
   const ignored = spawnSync(process.execPath, [cli, "explore:binary", "./does-not-exist.apk", "--no-upload", "--expires-in", "400d"], { cwd: root, encoding: "utf8", env: { ...process.env, EXPO_TOKEN: "", EXPO_SESSION_SECRET: "", GITHUB_ACTIONS: "" } });
-  assert.match(ignored.stderr, /^--expires-in no longer applies: a hosted preview lasts as long as its EAS Hosting deployment/m);
+  assert.match(ignored.stderr, /^--expires-in no longer applies: a hosted preview lasts as long as its Expo Hosting deployment/m);
   assert.match(ignored.stderr, /Archive not found/, "and the run goes on");
   const now = new Date("2026-10-11T16:28:48.123Z");
   assert.equal(defaultOutputDirectory("/builds/euxy-ios.tar.gz", now), "explore-euxy-ios-20261011-1628");
@@ -57,17 +57,17 @@ function failSession(args, env = {}) {
   return payload.error;
 }
 
-test("explore:session is in the help and validates its inputs before touching EAS", () => {
+test("explore:session is in the help and validates its inputs before touching Expo Services", () => {
   const help = spawnSync(process.execPath, [cli, "help"], { cwd: root, encoding: "utf8" });
   assert.match(help.stdout, /explore:session \[SESSION_ID\] \[--bundle-id ID\].*--upload/);
-  assert.match(failSession([]), /No EAS Simulator session connection was found/);
+  assert.match(failSession([]), /No Expo Simulators session connection was found/);
   assert.match(failSession(["--bundle-id", "bad id"]), /not a bundle or package id/);
-  assert.match(failSession(["--bundle-id", "dev.example.app"]), /No EAS Simulator session connection was found/);
+  assert.match(failSession(["--bundle-id", "dev.example.app"]), /No Expo Simulators session connection was found/);
   assert.match(failSession(["01a1-other", "--bundle-id", "dev.example.app"], { EAS_SIMULATOR_SESSION_ID: "01a1-mine", AGENT_DEVICE_DAEMON_BASE_URL: "https://daemon.example", AGENT_DEVICE_DAEMON_AUTH_TOKEN: "t" }),
     /EAS_SIMULATOR_SESSION_ID is 01a1-mine, not 01a1-other/);
   const human = spawnSync(process.execPath, [cli, "explore:session", "--bundle-id", "dev.example.app"], { cwd: root, encoding: "utf8", env: { ...process.env, EAS_SIMULATOR_SESSION_ID: "" } });
   assert.notEqual(human.status, 0);
-  assert.match(human.stderr, /No EAS Simulator session connection was found[^\n]*\n→ Start one with `eas simulator:start --type agent-device --out-config-type dotenv`/);
+  assert.match(human.stderr, /No Expo Simulators session connection was found[^\n]*\n→ Start one with `eas simulator:start --type agent-device --out-config-type dotenv`/);
 });
 
 test("explore:session picks up ./.env.eas-simulator from the current directory", async () => {

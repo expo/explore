@@ -299,7 +299,7 @@ test("existing route-family presentation groups query variants without losing th
     const evidence = projection.runtimeEvidence[`public:${id}`].current;
     assert.equal(evidence.groups.screen.find((row) => row.label === "Route").value, source.head.route);
     assert.equal(evidence.groups.screen.some((row) => row.label === "Fixture"), false, "source routes do not imply runtime fixtures");
-    assert.equal(evidence.groups.environment.find((row) => row.label === "EAS build").value, source.headImage.buildId);
+    assert.equal(evidence.groups.environment.find((row) => row.label === "Expo Build").value, source.headImage.buildId);
   }
   assert.deepEqual(projection.surfaces["games-free"].reviewerChanges, []);
   assert.equal(projection.surfaces["games-pro"].noVisibleChange, false);
@@ -398,7 +398,7 @@ test("a missing selected image remains an explicit gap without changing source c
   assert.equal(diff.beforeScreenshot, review.surfaces[0].baseImage.url);
 });
 
-test("changes-only reviews without baseline captures do not invent a baseline EAS build", () => {
+test("changes-only reviews without baseline captures do not invent a baseline Expo Build", () => {
   const review = fixture("changes");
   review.surfaces = review.surfaces.filter(({ status }) => status === "unchanged");
   const workspace = publicReviewToWorkspace(review);
@@ -541,7 +541,7 @@ test("exact-commit baseline evidence can retain different build IDs after partia
   const workspace = publicReviewToWorkspace(review);
   assert.ok(workspace.comparison.entries.length > 0);
   const evidence = publicReviewProjection(review).runtimeEvidence["public:games-free"].baseline;
-  assert.equal(evidence.groups.environment.find(row => row.label === "EAS build").value, "earlier-compatible-base-build");
+  assert.equal(evidence.groups.environment.find(row => row.label === "Expo Build").value, "earlier-compatible-base-build");
   review.surfaces[0].baseImage.sourceCommit = "f".repeat(40);
   opensWithGap(t, review, /capture provenance/, review.surfaces[0].id);
 });

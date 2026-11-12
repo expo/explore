@@ -364,7 +364,7 @@ test("the manifest route answers each target's static manifest, the shell preloa
   assert.match(manifest.headers.get("content-type") ?? "", /^application\/json/);
   assert.equal(manifest.headers.get("cache-control"), "private, no-store");
   assert.equal(await manifest.text(), new TextDecoder().decode(site.files[reviewEnv.EXPLORE_PREVIEW_REPORT!]), "the static manifest, byte for byte");
-  // Screenshots are static files EAS Hosting serves itself; a path the deployment does not hold is the Worker's 404.
+  // Screenshots are static files Expo Hosting serves itself; a path the deployment does not hold is the Worker's 404.
   for (const path of ["/assets/" + "0".repeat(64) + ".png", "/report.zip", "/targets/report.json"]) {
     assert.equal((await site.get(path)).status, 404, path);
   }

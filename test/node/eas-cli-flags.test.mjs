@@ -5,8 +5,8 @@ import { join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-// A fake EAS accepts any flag, so a flag the pinned eas-cli does not have passes every other test and fails only on a
-// real runner: 0.20.6 sent `env:list --non-interactive`, which eas-cli 25.2.0 refuses, so every capture logged "EAS did
+// A fake `eas` accepts any flag, so a flag the pinned eas-cli does not have passes every other test and fails only on a
+// real runner: 0.20.6 sent `env:list --non-interactive`, which eas-cli 25.2.0 refuses, so every capture logged "Expo Services did
 // not list the development environment's variables" and never shared a repack (brentvatne/euxy review run 39517635857).
 // Every literal `eas` command in src is checked against the command manifest of the eas-cli package.json pins.
 const root = fileURLToPath(new URL("../..", import.meta.url));

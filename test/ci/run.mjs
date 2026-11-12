@@ -106,7 +106,7 @@ export async function writeUsageSummary(run) {
     '| Phase | Source | Model | Accounting | Input | Output | Cached input | Cache creation | Thinking (within output) | Estimated USD |', '|---|---|---|---|---|---|---|---|---|---|', ...rows, '',
     estimates.length ? `Reported estimates total: $${estimates.reduce((sum, value) => sum + value, 0).toFixed(6)}. Receipts without a cost estimate: ${receipts.length - estimates.length}.` : 'Total estimated cost: unknown (no reported estimates).', '',
     `Tolerated unknown tool calls: ${tolerated.length ? tolerated.join(', ') : 'none'}.`, '',
-    receipts.length ? 'Detailed receipts: artifacts/capture/agent-usage.jsonl. EAS charges are not included.' : 'No provider receipt was retained. Consult run.json to distinguish a request that was never started from unavailable accounting.', ''].join('\n'));
+    receipts.length ? 'Detailed receipts: artifacts/capture/agent-usage.jsonl. Expo Services charges are not included.' : 'No provider receipt was retained. Consult run.json to distinguish a request that was never started from unavailable accounting.', ''].join('\n'));
 }
 
 export async function zipReport(directory, output) {
@@ -255,7 +255,7 @@ export async function runLocalCi(input) {
       const plan = await buildVerifiedPlan({ baseProject: snapshot.projects.base, headProject: snapshot.projects.head, baseSha: snapshot.commits.base,
         headSha: snapshot.commits.head, config, output });
       metadata.plan = { baseCaptures: plan.baseCaptureSurfaceIds.length, headCaptures: plan.headCaptureSurfaceIds.length };
-      // Capture validates setup routes per revision; do it here so a bad config fails before any EAS work.
+      // Capture validates setup routes per revision; do it here so a bad config fails before any Expo Services work.
       for (const side of ['base', 'head']) revisionSetup(config.setup ?? [], plan, side);
       if (scenario.expected) metadata.expectations = checkExpectations({ surfaces: plan.surfaces, expected: scenario.expected, level: 'plan' });
       metadata.status = 'planned';
@@ -278,10 +278,10 @@ export async function runLocalCi(input) {
           }
           const availability = spawnSync(process.execPath, [join(repository, 'node_modules/eas-cli-preview/bin/run'), 'simulator:availability', '--json', '--non-interactive'],
             { cwd: snapshot.projects.head, env: process.env, encoding: 'utf8', timeout: 60_000, maxBuffer: 1024 * 1024 });
-          if (availability.status !== 0) throw new Error('EAS Simulator availability check failed; verify project access with eas simulator:availability --json in the app checkout.');
+          if (availability.status !== 0) throw new Error('Expo Simulators availability check failed; verify project access with eas simulator:availability --json in the app checkout.');
           const access = JSON.parse(availability.stdout);
           metadata.easSimulatorAvailable = access.available === true;
-          if (!metadata.easSimulatorAvailable) throw new Error('EAS Simulator is not enabled for the selected app account.');
+          if (!metadata.easSimulatorAvailable) throw new Error('Expo Simulators is not enabled for the selected app account.');
           metadata.status = 'running'; await update();
         },
         agentSessionFactory: (configuration, options) => {

@@ -8,14 +8,14 @@ Setup follows these numbered steps. `expo-explore setup`, `expo-explore doctor`,
 
 | Step | What | Who |
 | --- | --- | --- |
-| 1. Accounts and access | Expo account and EAS project, EAS Simulator access, GitHub admin access; agent mode: a provider API key | You |
-| 2. App readiness | Supported Expo and navigation versions, a URL scheme, a capture EAS profile per platform (iOS simulator, Android APK) | `doctor` checks; you or your agent fix |
+| 1. Accounts and access | Expo account and Expo Services project, Expo Simulators access, GitHub admin access; agent mode: a provider API key | You |
+| 2. App readiness | Supported Expo and navigation versions, a URL scheme, a capture Expo Build profile per platform (iOS simulator, Android APK) | `doctor` checks; you or your agent fix |
 | 3. Capture mode | Deterministic or agent | You |
 | 4. Base config | App identity, navigation, device, scope | `expo-explore setup` |
 | 5. Screen entry | Route parameters, and the app state each screen needs | Your coding agent, from your source (or you) |
 | 6. CI files | Both workflows, pinned to an exact `@expo/explore` version | `expo-explore setup` (or `setup --workflows` later) |
 | 7. Repository settings | `EXPO_TOKEN`, provider key, app-test secrets; workflows on the default branch | You, with commands from `doctor` |
-| 8. Capture check | Capture the committed app on EAS, then run the baseline workflow | `expo-explore doctor --capture`, then Actions |
+| 8. Capture check | Capture the committed app on Expo Services, then run the baseline workflow | `expo-explore doctor --capture`, then Actions |
 
 Step 5 decides whether the full map works. Explore finds every screen and the redirects (guards) in front of it. Only your app's code says what a guard needs, such as a signed-in account. Without that, Explore captures the screen it redirects to, or fails.
 
@@ -31,7 +31,7 @@ expo-explore setup --project apps/mobile
 
 Choose a menu number or type a value, then press Enter. Enter accepts a displayed default. The wizard analyzes the app's committed routes, then asks for the app identity, the capture mode, device and scope, a real value for each dynamic route, and how to prepare screens behind source redirects (deterministic) or the provider, model and a first draft of the instructions (agent). It previews and validates `.expo-explore/config.yaml` before writing it, can install both workflows, and ends with the remaining steps as commands. It preserves existing configs; `expo-explore setup --workflows` adds or updates only the CI files for an existing config. Device choices are suggestions; availability is checked when capture runs. Dynamic Expo config requires the app's dependencies and any environment variables used by that config.
 
-Config evaluation uses your current shell environment; the wizard does not load an EAS profile's environment or remote secrets. If a build profile changes the bundle identifier or scheme, evaluate setup with the matching environment or supply `--bundle-id` and `--scheme` explicitly.
+Config evaluation uses your current shell environment; the wizard does not load an Expo Build profile's environment or remote secrets. If a build profile changes the bundle identifier or scheme, evaluate setup with the matching environment or supply `--bundle-id` and `--scheme` explicitly.
 
 For scripts or agents, supply the choices explicitly:
 
@@ -50,10 +50,10 @@ Use `--project` for another app directory. `--platform ios|android` selects the 
 expo-explore doctor               # every setup step; exits 1 until ready
 expo-explore doctor --json        # the same, for agents, including the route analysis
 expo-explore doctor --check-model # agent mode: one small request with the exported provider key
-expo-explore doctor --capture     # capture the committed HEAD on EAS with your eas login
+expo-explore doctor --capture     # capture the committed HEAD on Expo Services with your eas login
 ```
 
-`doctor` groups its checks by setup step and prints, for each problem, the error code CI would report and the next action. It runs the bundled EAS CLI read-only (`whoami`, `project:info`, `simulator:availability`, `config`, `env:list`) and, when the GitHub CLI is signed in, reads repository variable and secret **names**, never values. `--offline` skips EAS and GitHub; `--no-github` skips only GitHub.
+`doctor` groups its checks by setup step and prints, for each problem, the error code CI would report and the next action. It runs the bundled EAS CLI read-only (`whoami`, `project:info`, `simulator:availability`, `config`, `env:list`) and, when the GitHub CLI is signed in, reads repository variable and secret **names**, never values. `--offline` skips Expo Services and GitHub; `--no-github` skips only GitHub.
 
 Its route analysis reads the committed source at HEAD, as CI does for a pushed commit. For each route it reports whether the app link is complete, which parameters are missing, whether the screen has no link, and the source redirects (guards) that can send it elsewhere, with the file that declares each.
 
@@ -61,9 +61,9 @@ Its route analysis reads the committed source at HEAD, as CI does for a pushed c
 
 The following examples document the generated fields and optional additions.
 
-### EAS profile reference
+### Expo Build profile reference
 
-Link the app to its EAS project and use a capture profile in its existing `eas.json`: `ios.simulator: true` for iOS, `android.buildType: apk` for Android (one profile can set both):
+Link the app to its Expo Services project and use a capture profile in its existing `eas.json`: `ios.simulator: true` for iOS, `android.buildType: apk` for Android (one profile can set both):
 
 ```json
 {
@@ -73,7 +73,7 @@ Link the app to its EAS project and use a capture profile in its existing `eas.j
 }
 ```
 
-Android captures need an APK profile (EAS Android Emulators install APKs, not AABs):
+Android captures need an APK profile (Expo Simulators Android Emulators install APKs, not AABs):
 
 ```json
 {
@@ -105,14 +105,14 @@ device:
 exploration:
   scope: changes # changes | all
 capture:
-  # controller: agent-device # agent-device (default) | argent (one appearance per capture on Android EAS Simulator until Argent can switch it; --controller overrides it for one run)
-  # simulator: eas # eas (EAS Simulator, default) | local (a simulator or emulator Explore starts on this machine with Xcode or the Android SDK; --simulator overrides it for one run)
+  # controller: agent-device # agent-device (default) | argent (one appearance per capture on Android Expo Simulators until Argent can switch it; --controller overrides it for one run)
+  # simulator: eas # eas (Expo Simulators, default) | local (a simulator or emulator Explore starts on this machine with Xcode or the Android SDK; --simulator overrides it for one run)
   maxMinutes: 30
   maxActions: 500
-  # maxSessions: 5 # the most EAS Simulator sessions one review runs at once, across all its targets and sides (default: 5, a typical plan's concurrent simulator limit). Each target's job gets floor(maxSessions / targets) sessions, at least one, and sessions left over go to foldable targets (pose): one target gets 5 (head and base at once, light and dark in their own sessions when that pays), two get 2 each, five get 1 each (head, then base). Below the number of targets, only that many target jobs run at once (the workflow's max-parallel, and a local review's targets), one session each. A side spreads its light and dark passes over separate sessions only when that saves it at least a minute, so the ceiling is a limit, not a target: a 3-route target stays on two sessions. euxy's four targets: 8 is two per target, 16 captures each appearance in its own session (measured: an iPhone side 6:12 → 4:26, one repack shared by its sessions, ~3.5 session-minutes more per side).
+  # maxSessions: 5 # the most Expo Simulators sessions one review runs at once, across all its targets and sides (default: 5, a typical plan's concurrent simulator limit). Each target's job gets floor(maxSessions / targets) sessions, at least one, and sessions left over go to foldable targets (pose): one target gets 5 (head and base at once, light and dark in their own sessions when that pays), two get 2 each, five get 1 each (head, then base). Below the number of targets, only that many target jobs run at once (the workflow's max-parallel, and a local review's targets), one session each. A side spreads its light and dark passes over separate sessions only when that saves it at least a minute, so the ceiling is a limit, not a target: a 3-route target stays on two sessions. euxy's four targets: 8 is two per target, 16 captures each appearance in its own session (measured: an iPhone side 6:12 → 4:26, one repack shared by its sessions, ~3.5 session-minutes more per side).
   # On a starter plan (one simulator per platform), set maxSessions to the plan's limit, e.g. 2 for an iOS and an Android target.
   # baselineWaitMinutes: 15 # a review that starts while the default branch's baseline run of its base commit is still capturing (right after a merge) waits up to this long for that target's baseline instead of capturing the base too (default 15; 0 never waits). Head captures meanwhile; base waits only where it would start, and captures itself if the baseline job fails or is cancelled, or the time runs out.
-  repack: eas # eas (hosted EAS workflow job, the default on EAS Simulator) | local (repack-app on the runner, the default with simulator: local; --repack overrides it for one run)
+  repack: eas # eas (hosted Expo Workflows job, the default on Expo Simulators) | local (repack-app on the runner, the default with simulator: local; --repack overrides it for one run)
   appearance: auto # auto (follow the app's userInterfaceStyle: automatic captures light and dark) | dark | light | [dark, light]
   launch: screenshot # screenshot (relaunch the app per appearance and keep its splash and first settled frame, default) | video (also keep a launch recording in the report) | off
   reset: root-link # root-link (open the app's root link and let it settle before every route link, default) | none (each link opens from whatever the previous route left on screen)
@@ -224,7 +224,7 @@ Capture handles iOS's confirmation to open a link in the expected app. After a f
 
 ### Stable captures (optional)
 
-Screenshots are compared pixel by pixel, so anything that changes between runs shows up as a Screen variant or noise: the current time and relative dates, animations and loading indicators that can be caught mid-frame, screens that move on by themselves, and permission prompts that depend on earlier runs. When both builds capture light and dark, text that differs between each build's own two captures (a clock, a relative date, a random name) is reported as runtime state, never as the change that makes a screen Modified; text that only follows the appearance, or a word beside it that changed, is still a change. If your app has these, consider making the capture profile's build fix them, for example with an environment variable in that EAS profile that the app reads. What to fix depends on your app; your coding agent can find candidates in the source, and each change is an app change for you to approve. The [example app's `explore` profile](../test/ci/apps/wallet/README.md#explore-build-profile) is one example.
+Screenshots are compared pixel by pixel, so anything that changes between runs shows up as a Screen variant or noise: the current time and relative dates, animations and loading indicators that can be caught mid-frame, screens that move on by themselves, and permission prompts that depend on earlier runs. When both builds capture light and dark, text that differs between each build's own two captures (a clock, a relative date, a random name) is reported as runtime state, never as the change that makes a screen Modified; text that only follows the appearance, or a word beside it that changed, is still a change. If your app has these, consider making the capture profile's build fix them, for example with an environment variable in that Expo Build profile that the app reads. What to fix depends on your app; your coding agent can find candidates in the source, and each change is an app change for you to approve. The [example app's `explore` profile](../test/ci/apps/wallet/README.md#explore-build-profile) is one example.
 
 ### Agent usage and reuse
 
@@ -289,7 +289,7 @@ The provider selects the runtime that owns the navigation loop:
 | `anthropic` | Claude Code through `@anthropic-ai/claude-agent-sdk` 0.3.285 and its platform-native package | `ANTHROPIC_API_KEY` |
 | `openai` | Codex app-server from `@openai/codex` 0.159.2 and its platform-native package | `OPENAI_API_KEY` |
 
-Both runtimes use Explore's device tools to operate the existing EAS Simulator through official `agent-device` 0.21.29-nightly.20261018.74. The runtime and native binaries come from the pinned tools installation. CI does not use the development-only `node_modules/.bin/claude` executable or an interactive subscription login.
+Both runtimes use Explore's device tools to operate the existing Expo Simulators session through official `agent-device` 0.21.29-nightly.20261018.74. The runtime and native binaries come from the pinned tools installation. CI does not use the development-only `node_modules/.bin/claude` executable or an interactive subscription login.
 
 Create and commit the nonempty English prose file named by `agent.instructions`. The shared setup skill authors it from source and asks for missing test data or environment inputs. Describe how to reach the app's screens, necessary prerequisites, the representative state to use on both revisions, readiness signals, and actions to avoid. This file guides the runtime agent; it is not a list of mandatory YAML steps or a second screen inventory.
 
@@ -325,7 +325,7 @@ The agent controls navigation and recovery throughout capture, including login/l
 
 The static plan still determines every required route; missing targets fail CI. AI explanations are added to the report after fixed comparison verdicts are computed, and cannot change those verdicts. Agent mode uses the existing PR comment and report interface. Extra captures for themes, personas, or modal/sheet states are not part of this version.
 
-`source:verify` performs static validation without provider credentials. Capture commands check the installed runtime and referenced test-input secrets before building, then make a small tool-free model request with the selected runtime, key, and model. This exercises real provider access and incurs API usage; it does not prove navigation or image/tool behavior. Instructions are shared across the base and head runs, and their content affects capture-cache compatibility. Model requests share the capture time budget; mutating device actions also count toward the action limit. Provider errors fail CI with an actionable code. API usage is billed by the selected provider separately from EAS and GitHub Actions usage.
+`source:verify` performs static validation without provider credentials. Capture commands check the installed runtime and referenced test-input secrets before building, then make a small tool-free model request with the selected runtime, key, and model. This exercises real provider access and incurs API usage; it does not prove navigation or image/tool behavior. Instructions are shared across the base and head runs, and their content affects capture-cache compatibility. Model requests share the capture time budget; mutating device actions also count toward the action limit. Provider errors fail CI with an actionable code. API usage is billed by the selected provider separately from Expo Services and GitHub Actions usage.
 
 ## 2. Pin the Explore version
 
@@ -353,13 +353,13 @@ The Explore tools install with `npm ci --omit=dev --include=optional --ignore-sc
 
 | Setting | Location | Purpose |
 | --- | --- | --- |
-| `EXPO_TOKEN` | Repository secret | EAS Build and Simulator access; create it in [Expo Access tokens](https://expo.dev/settings/access-tokens). With `report.preview` enabled it also deploys the hosted preview, so it must be a [robot user](https://docs.expo.dev/accounts/programmatic-access/) token that can create projects |
+| `EXPO_TOKEN` | Repository secret | Expo Build and Expo Simulators access; create it in [Expo Access tokens](https://expo.dev/settings/access-tokens). With `report.preview` enabled it also deploys the hosted preview, so it must be a [robot user](https://docs.expo.dev/accounts/programmatic-access/) token that can create projects |
 | `GITHUB_TOKEN` | Automatic job token | Templates pass `${{ github.token }}` explicitly; do not create a repository secret |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | Repository secret; agent mode only | Selected provider's API credential, forwarded to capture steps |
 | `ANTHROPIC_WORKSPACE_ID` | Optional repository variable | Anthropic workspace selection when the API key is not workspace-scoped; capture steps only |
 | App-test secret names from setup or instructions | Repository secrets; when referenced | Inputs such as fixture credentials, forwarded to capture steps only |
 
-Create an Expo access token for an account with access to the app's EAS project. In the GitHub repository, open **Settings → Secrets and variables → Actions → New repository secret**, name it `EXPO_TOKEN`, and paste the token there. Local `eas login` does not authenticate GitHub Actions. See [Expo's token authentication guide](https://docs.expo.dev/accounts/programmatic-access/).
+Create an Expo access token for an account with access to the app's Expo Services project. In the GitHub repository, open **Settings → Secrets and variables → Actions → New repository secret**, name it `EXPO_TOKEN`, and paste the token there. Local `eas login` does not authenticate GitHub Actions. See [Expo's token authentication guide](https://docs.expo.dev/accounts/programmatic-access/).
 
 Capture uses the automatic GitHub token with `pull-requests: write`, so it can keep the sticky comment current while the run works; publication rewrites that comment from a separate job. `GITHUB_TOKEN_MISSING` means the workflow environment is missing the automatic token mapping.
 
@@ -408,7 +408,7 @@ Changes, Map, Screens, inspectors, and downloads share the existing Viewer. Agen
 
 ## Diagnose a failed run
 
-Capture and baseline jobs always retry cleanup for retained, verified session IDs. Cleanup never lists or stops unrelated sessions. A hard runner termination can still prevent cleanup; the configured EAS session duration bounds that case.
+Capture and baseline jobs always retry cleanup for retained, verified session IDs. Cleanup never lists or stops unrelated sessions. A hard runner termination can still prevent cleanup; the configured Expo Simulators session duration bounds that case.
 
 Read the error annotation and job summary for a stable code, affected stage, explanation, and next action. Determinism failures include both plans and a focused diff. A screen the run could not capture is reported as unavailable (`::warning` annotation, **Incomplete** PR comment, *Unavailable* in the Viewer) and the report still publishes; evidence-integrity failures fail the job with `CAPTURE_INCOMPLETE`; unfinished required comparisons fail with `COMPARISON_INCOMPLETE`. Per-target evidence and diagnostics remain available in the failure artifacts. Configuration/build/package failures also fail the job. The same applies to a screenshot pair whose comparison failed and to a baseline run that could not reach a screen: the baseline is still cached, and a review that reuses it captures that screen itself.
 
@@ -419,9 +419,9 @@ Read the error annotation and job summary for a stable code, affected stage, exp
 | `EXPLORATION_SECRET_REFERENCE_INVALID` / `EXPLORATION_SECRET_UNDECLARED` | Declare a supported app-test environment reference; provider and CI credentials are not allowed |
 | `EXPLORATION_SECRET_MISSING` / `EXPLORATION_SECRET_INVALID` | Supply the named nonempty, single-line app-test secret to capture steps |
 | `CAPTURE_SENSITIVE_INPUT` | Clear or submit the sensitive input, then reach a reviewable screen before capture |
-| `SIMULATOR_UNAVAILABLE` | Join the EAS Simulator waitlist at [expo.dev/services/simulators](https://expo.dev/services/simulators) with the Expo account that `EXPO_TOKEN` uses |
+| `SIMULATOR_UNAVAILABLE` | Join the Expo Simulators waitlist at [expo.dev/services/simulators](https://expo.dev/services/simulators) with the Expo account that `EXPO_TOKEN` uses |
 | `CAPTURE_OBSERVER_UNSUPPORTED` | Use a supported Expo SDK and navigation version; see the README requirements |
-| `CAPTURE_OBSERVER_BUILD_UNSUPPORTED` | Remove secret-visibility variables from the capture profile's EAS environment, or use a profile without them |
+| `CAPTURE_OBSERVER_BUILD_UNSUPPORTED` | Remove secret-visibility variables from the capture profile's Expo Services environment, or use a profile without them |
 | `AGENT_API_KEY_MISSING` | Add and pass the provider secret, or select deterministic mode |
 | `AGENT_API_KEY_INVALID` | Replace the rejected provider API key |
 | `AGENT_WORKSPACE_REQUIRED` | Use an Anthropic workspace-scoped key or set the optional `ANTHROPIC_WORKSPACE_ID` repository variable |
@@ -463,10 +463,10 @@ Read the error annotation and job summary for a stable code, affected stage, exp
 | `WORKFLOW_APP_DIR_MISMATCH` / `WORKFLOW_INSTALL_MISMATCH` | Set `APP_PROJECT_DIR`, `APP_INSTALL_DIR`, and the install command to the app's layout and package manager |
 | `WORKFLOW_NOT_ON_DEFAULT_BRANCH` | Merge both workflows into the default branch |
 | `EXPO_TOKEN_MISSING` | Create a token at [expo.dev/settings/access-tokens](https://expo.dev/settings/access-tokens) and `gh secret set EXPO_TOKEN` |
-| `PREVIEW_PROJECT_FAILED` | `ci:deploy` could not create or link the preview EAS project: give `EXPO_TOKEN`'s robot user permission to create projects, or set `report.preview.project` to a project it can deploy to |
-| `PREVIEW_DEPLOY_FAILED` / `PREVIEW_VERIFY_FAILED` | Rerun the deploy job; if a verified deployment answered without its token, delete it in the EAS Hosting dashboard and report the issue |
+| `PREVIEW_PROJECT_FAILED` | `ci:deploy` could not create or link the preview Expo Services project: give `EXPO_TOKEN`'s robot user permission to create projects, or set `report.preview.project` to a project it can deploy to |
+| `PREVIEW_DEPLOY_FAILED` / `PREVIEW_VERIFY_FAILED` | Rerun the deploy job; if a verified deployment answered without its token, delete it in the Expo Hosting dashboard and report the issue |
 | `PREVIEW_EXPORT_MISSING` | The installed `@expo/explore` lacks `dist/hosting-preview`; reinstall the pinned release |
-| `EAS_ENVIRONMENT_UNCHECKED` | Check manually that the profile's EAS environment has no secret-visibility or file variables |
+| `EAS_ENVIRONMENT_UNCHECKED` | Check manually that the profile's Expo Services environment has no secret-visibility or file variables |
 | `CAPTURE_CHECK_UNCOMMITTED` | Commit the app and `.expo-explore` (locally is enough), then rerun `doctor --capture` |
 | `CAPTURE_LANDING_UNVERIFIED` | The screen redirected before capture: prepare the state it needs with setup steps or instructions |
 

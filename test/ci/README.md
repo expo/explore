@@ -1,6 +1,6 @@
 # Local CI tests
 
-Run the production planner, EAS build/repack, EAS Simulator, agent-device capture,
+Run the production planner, Expo Build/repack, Expo Simulators, agent-device capture,
 evidence validation, comparison, notes, and report export from a terminal.
 Claude Code or Codex owns its model/tool loop using your CLI subscription login.
 No Orca, editor integration, GitHub PR, or external app checkout is required.
@@ -39,11 +39,11 @@ Use Node >=24.12 and run `npm ci` in this repository. Apps need an npm lockfile;
 runs `npm ci --ignore-scripts` independently in each frozen checkout, as the review workflow
 template does. When the app has a `typecheck` script, the harness then runs it in both
 checkouts (`logs/typecheck-<side>.log`), so a scenario head that does not compile fails before
-any EAS work; overlay files are compiled nowhere else.
-The app must be configured for EAS, with a simulator build profile and an account
-that can use EAS Simulator. Run `eas login` or supply `EXPO_TOKEN`. Availability is
-checked before creating a remote session. EAS compute still uses that account.
-The wallet app uses the EAS project `@expo/explore-example-app`.
+any Expo Services work; overlay files are compiled nowhere else.
+The app must be configured for Expo Services, with a simulator build profile and an account
+that can use Expo Simulators. Run `eas login` or supply `EXPO_TOKEN`. Availability is
+checked before creating a remote session. Expo Services compute still uses that account.
+The wallet app uses the Expo Services project `@expo/explore-example-app`.
 
 For Anthropic, install Claude Code and use `claude auth login` with a subscription.
 For OpenAI, install Codex and use `codex login` with ChatGPT. The runner records
@@ -78,7 +78,7 @@ npm run ci:local -- \
 overrides the config's `exploration.scope`. `--run-id NAME` selects a readable ID and refuses
 overwrite. `--plan-only` runs the production planner, checks the expectations at plan level, and
 validates each setup step's `requiresRoute` against both revisions, without installation,
-model calls, or EAS; use it before spending a device run on a new
+model calls, or Expo Services; use it before spending a device run on a new
 scenario. Both sides use fresh app sandboxes; capture cache reuse is disabled for this harness.
 Ctrl+C requests cancellation and lets the owned capture/session cleanup finish.
 
@@ -124,7 +124,7 @@ The matrix builds the CLI once, prefixes each cell's output, and writes
 agent cost per cell. A cell passes only when its process exits 0 and its own record passed.
 The matrix refuses to start when any of its run directories already exists, so rerun with a new
 `--prefix`. Ctrl+C cancels every cell; a second Ctrl+C stops them. Run one cell alone
-first after a native change: parallel cells that find no EAS build for a new fingerprint each
+first after a native change: parallel cells that find no Expo Build for a new fingerprint each
 start their own.
 
 Agent capture now excludes revision-specific source literals from shared
@@ -157,7 +157,7 @@ A failed run retains partial evidence when a source plan exists. No-image failur
 remain uncovered, and failure reports cannot be interpreted as a successful CI run.
 Failure before planning still writes status, comment, issues, and usage records.
 Cost figures are CLI estimates, not subscription invoices; unknown usage is not
-zero. EAS charges are not included.
+zero. Expo Services charges are not included.
 
 ## Wallet fixture
 

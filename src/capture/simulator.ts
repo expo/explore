@@ -16,12 +16,12 @@ import type { Platform } from "../types.js";
  */
 export type SimulatorConnection = { sessionId: string; daemonBaseUrl: string; daemonAuthToken: string; controller?: "argent" };
 
-/** The controller a connection reaches: the session `--type` EAS started. */
+/** The controller a connection reaches: the session `--type` Expo Services started. */
 export function connectionController(connection: Pick<SimulatorConnection, "controller">): "agent-device" | "argent" {
   return connection.controller ?? "agent-device";
 }
 
-/** The controller's pinned version: what EAS installs on the session (`--package-version`) and what runs here. */
+/** The controller's pinned version: what Expo Services installs on the session (`--package-version`) and what runs here. */
 export function controllerVersion(controller: "agent-device" | "argent"): string {
   return controller === "argent" ? ARGENT_VERSION : AGENT_DEVICE_VERSION;
 }
@@ -117,13 +117,13 @@ export function simulatorStartFailure(error: unknown, secrets: readonly string[]
   // escaped delimiters before redaction; never deserialize arbitrary error objects.
   const failure = serializeCiError(new CiError({ code: source.code, stage: "session",
     message: source.message.replace(/\\+(["'/])/g, "$1"),
-    nextAction: "Inspect the EAS simulator start failure." }), { secrets });
+    nextAction: "Inspect the Expo Simulators start failure." }), { secrets });
   const message = failure.message
     .replace(/\b(?:AGENT_DEVICE_[A-Z_]+|ARGENT_[A-Z_]+|EAS_SIMULATOR_[A-Z_]+|EXPO_TOKEN|agentDeviceRemoteSession(?:Token|Url)|toolsUrl|toolsAuthToken|webPreviewUrl|previewApiUrl)["']?\s*[:=][^\r\n]*/g, "[REDACTED_HANDOFF]")
     .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>"']+/g, "[REDACTED_URL]")
     .slice(0, 1600);
   return { code: failure.code, stage: "session", message,
-    nextAction: "Inspect the EAS start rejection and verify session ownership before cleanup or another capture attempt.", retryable: false };
+    nextAction: "Inspect the Expo Simulators start rejection and verify session ownership before cleanup or another capture attempt.", retryable: false };
 }
 
 const EGRESS_ASSIGNMENTS = new Set([
@@ -139,17 +139,17 @@ export async function readSimulatorDotenvHandoff(path: string): Promise<Simulato
   const info = await lstatIfExists(path);
   if (!info) return {};
   if (info.isSymbolicLink() || !info.isFile() || info.size > SIMULATOR_DOTENV_MAX_BYTES) {
-    return { validationError: new Error("EAS Simulator dotenv handoff is not a safe regular file") };
+    return { validationError: new Error("Expo Simulators dotenv handoff is not a safe regular file") };
   }
   if (
     typeof process.getuid === "function"
     && info.uid !== process.getuid()
   ) {
-    return { validationError: new Error("EAS Simulator dotenv handoff has an unexpected owner") };
+    return { validationError: new Error("Expo Simulators dotenv handoff has an unexpected owner") };
   }
   const contents = await readFile(path, "utf8");
   if (!contents.startsWith(SIMULATOR_DOTENV_HEADER)) {
-    return { validationError: new Error("EAS Simulator dotenv handoff has an invalid header") };
+    return { validationError: new Error("Expo Simulators dotenv handoff has an invalid header") };
   }
   const assignments: Record<string, string> = Object.create(null);
   const seenAssignments = new Set<string>();
@@ -158,7 +158,7 @@ export async function readSimulatorDotenvHandoff(path: string): Promise<Simulato
     if (!line) continue;
     const match = /^([A-Z][A-Z0-9_]*)='([^'\r\n]*)'$/.exec(line);
     if (!match) {
-      validationError ??= new Error("EAS Simulator dotenv handoff contains a malformed assignment");
+      validationError ??= new Error("Expo Simulators dotenv handoff contains a malformed assignment");
       continue;
     }
     const name = match[1]!;
@@ -171,11 +171,11 @@ export async function readSimulatorDotenvHandoff(path: string): Promise<Simulato
       "ARGENT_TOOLS_URL",
       "ARGENT_AUTH_TOKEN",
     ].includes(name)) {
-      validationError ??= new Error("EAS Simulator dotenv handoff contains an unexpected assignment");
+      validationError ??= new Error("Expo Simulators dotenv handoff contains an unexpected assignment");
       continue;
     }
     if (seenAssignments.has(name)) {
-      validationError ??= new Error("EAS Simulator dotenv handoff contains a duplicate assignment");
+      validationError ??= new Error("Expo Simulators dotenv handoff contains a duplicate assignment");
       if (name === "EAS_SIMULATOR_SESSION_ID") {
         delete assignments.EAS_SIMULATOR_SESSION_ID;
       }
@@ -257,7 +257,7 @@ function sessionProjectProven(value: Record<string, unknown>, sessionId: string,
 }
 
 /**
- * The status (ERRORED or STOPPED) of a session `eas simulator:get` shows EAS ended before Explore could use it, when it
+ * The status (ERRORED or STOPPED) of a session `eas simulator:get` shows Expo Services ended before Explore could use it, when it
  * is provably this capture's own: the exact id, name, type, platform and project. Only such a session is replaced by a
  * new one; anything less certain (undefined here) stays a handoff failure.
  */
@@ -271,7 +271,7 @@ export function endedOwnSimulatorSession(stdout: string, expected: { sessionId: 
 }
 
 /**
- * This project's sessions with exactly this name that EAS may still be starting or running, from
+ * This project's sessions with exactly this name that Expo Services may still be starting or running, from
  * `eas simulator:list --json`: their ids when every one is provably this project's, or undefined when the listing
  * cannot be read or a session by that name cannot be proven Explore's, so a caller never assumes none exist.
  */
@@ -306,7 +306,7 @@ export async function resolveAttachedSimulatorSession(
   if (dotenvPath !== undefined) {
     const handoff = await readSimulatorDotenvHandoff(dotenvPath);
     if (handoff.validationError) throw handoff.validationError;
-    if (!handoff.connection) throw new Error(`${dotenvPath} does not describe an EAS Simulator session`);
+    if (!handoff.connection) throw new Error(`${dotenvPath} does not describe an Expo Simulators session`);
     if (requestedSessionId && handoff.connection.sessionId !== requestedSessionId) {
       throw new Error(`${dotenvPath} describes session ${handoff.connection.sessionId}, not ${requestedSessionId}`);
     }
@@ -336,11 +336,11 @@ export function assertAttachedSimulatorSession(
     throw new Error(`eas simulator:get did not describe the attached ${connectionController(connection)} session`);
   }
   if (value.status !== "IN_PROGRESS") {
-    throw new Error(`EAS Simulator session ${sessionId} is ${String(value.status).toLowerCase()}, not in progress`);
+    throw new Error(`Expo Simulators session ${sessionId} is ${String(value.status).toLowerCase()}, not in progress`);
   }
   const platform = value.platform === "IOS" ? "ios" : value.platform === "ANDROID" ? "android" : undefined;
   if (!platform || (expectedPlatform && platform !== expectedPlatform)) {
-    throw new Error(`EAS Simulator session ${sessionId} is ${String(value.platform).toLowerCase()}${expectedPlatform ? `, not ${expectedPlatform}` : ""}`);
+    throw new Error(`Expo Simulators session ${sessionId} is ${String(value.platform).toLowerCase()}${expectedPlatform ? `, not ${expectedPlatform}` : ""}`);
   }
   if (!remoteConfigMatches(value.remoteConfig, connection)) {
     throw new Error(`eas simulator:get returned a different ${connectionController(connection)} connection than the one provided`);
@@ -382,7 +382,7 @@ function remoteDaemonDomain(value: string, controller: "agent-device" | "argent"
 }
 
 export function collectRuntime(options: CiMapOptions & { platform: NonNullable<CiMapOptions["platform"]> }, environment: NodeJS.ProcessEnv,
-  /** The local simulator (UDID) or emulator (adb serial) Explore started; absent for an EAS session. */
+  /** The local simulator (UDID) or emulator (adb serial) Explore started; absent for an Expo Simulators session. */
   local?: { id: string }): ActiveSimulatorRuntime {
   const runner = options.runner ?? defaultRunner;
   const controller = options.controller ?? "agent-device";
@@ -402,7 +402,7 @@ export function collectRuntime(options: CiMapOptions & { platform: NonNullable<C
     nextAction: "Rerun capture; if it happens again, check xcrun simctl list devices for leftover Explore simulators." });
   // A local simulator is named for Explore; its model is the configured device it was created as.
   if (!local && options.platform === "ios" && device.deviceModel !== options.device) throw new CiError({ code: "DEVICE_MISMATCH", stage: "runtime",
-    message: `EAS opened ${device.deviceModel} instead of the configured ${options.device}.`,
+    message: `Expo Services opened ${device.deviceModel} instead of the configured ${options.device}.`,
     nextAction: "Select an available exact device name in config.yaml and rerun capture." });
   const data = controllerData(opened.stdout, "initial app open");
   const deviceData = isRecord(data.device) ? data.device : {};
@@ -420,7 +420,7 @@ export function collectRuntime(options: CiMapOptions & { platform: NonNullable<C
 /**
  * agent-device drops the simulator runtime from its device record, so `open` never names the iOS version.
  * The session's preview server lists each simulator with its runtime (`iOS-26-5`), keyed by the same UDID.
- * EAS publishes that server either directly or as an expo.dev page that frames it
+ * Expo Services publishes that server either directly or as an expo.dev page that frames it
  * (see framedSimulatorPreviewServer).
  */
 export async function simulatorOsVersion(session: string, deviceId: string, transport: typeof fetch, platform: "ios" | "android" = "ios"): Promise<string> {
@@ -430,7 +430,7 @@ export async function simulatorOsVersion(session: string, deviceId: string, tran
   // session started with --public-link; its webPreviewUrl is then an expo.dev page with the token in the fragment.
   // Earlier versions folded the token into webPreviewUrl's query. A private session's output has no token at all.
   const published = typeof remote.previewApiUrl === "string" ? remote.previewApiUrl : remote.webPreviewUrl;
-  if (typeof published !== "string") throw new Error("EAS did not publish the simulator preview URL");
+  if (typeof published !== "string") throw new Error("Expo Services did not publish the simulator preview URL");
   const preview = new URL(published);
   if (preview.protocol !== "https:" || preview.username || preview.password) throw new Error("The simulator preview URL is not HTTPS");
   // The catalog takes the preview token as a bearer credential.

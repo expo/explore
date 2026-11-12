@@ -216,7 +216,7 @@ test('a matrix never reads an older run as its own result', async t => {
   assert.match(matrixTable([{ name: 'c', status: 'no record', exitCode: 1 }]), /\| no record \(exit 1\) \|/);
 });
 
-test('local model environment cannot inherit API, EAS, GitHub or app credentials', () => {
+test('local model environment cannot inherit API, Expo Services, GitHub or app credentials', () => {
   const env = localAgentEnvironment({ HOME: '/home/test', PATH: '/bin', CODEX_HOME: '/home/test/.codex', ANTHROPIC_API_KEY: 'secret', OPENAI_API_KEY: 'secret', EXPO_TOKEN: 'secret', GITHUB_TOKEN: 'secret', LOGIN_PASSWORD: 'secret' });
   assert.equal(env.HOME, '/home/test'); assert.equal(env.CODEX_HOME, '/home/test/.codex');
   assert.equal(Object.values(env).includes('secret'), false);

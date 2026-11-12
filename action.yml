@@ -21,7 +21,7 @@ inputs:
     description: Fresh absolute output directory strictly inside runner.temp, outside both application checkouts; symlink ancestors are not allowed.
     required: true
   expo_token:
-    description: Expo credential for the selected EAS project.
+    description: Expo credential for the selected Expo Services project.
     required: true
   openai_api_key:
     description: OpenAI API credential when agent mode selects OpenAI.
@@ -59,7 +59,7 @@ runs:
       run: |
         set -euo pipefail
         if [[ "$(uname -s)" != Linux ]]; then
-          echo '::error title=UNSUPPORTED_RUNNER::EAS Simulator capture requires Linux. Use an Ubuntu runner.'; exit 1
+          echo '::error title=UNSUPPORTED_RUNNER::Expo Simulators capture requires Linux. Use an Ubuntu runner.'; exit 1
         fi
         if [[ "$CONFIRM_TRUSTED_SOURCE" != true ]]; then
           echo '::error title=SOURCE_NOT_TRUSTED::Review the exact source commits and set confirm_trusted_source to true.'; exit 1

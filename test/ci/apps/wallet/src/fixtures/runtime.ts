@@ -1,7 +1,7 @@
 /**
  * Runtime profile of this example app.
  *
- * The `explore` EAS build profile sets EXPO_PUBLIC_EXPLORE_MODE=true. In that profile the app
+ * The `explore` Expo Build profile sets EXPO_PUBLIC_EXPLORE_MODE=true. In that profile the app
  * uses a fixed clock and static progress indicators so that two captures of the same screen are
  * comparable; everything else (accounts, balances, transfers) behaves exactly as in a normal build.
  */

@@ -10,7 +10,7 @@ export type DecodedFrame = { width: number; height: number; data: Buffer };
 
 /**
  * Whether a screenshot is a single flat colour: a capture-protected screen (black on Android), or a display that is lit
- * but not drawn (an iPhone Duo's inner panel after its first fold on EAS). Every 97th pixel is enough to tell.
+ * but not drawn (an iPhone Duo's inner panel after its first fold on Expo Services). Every 97th pixel is enough to tell.
  */
 export function solidColour(png: Buffer): boolean {
   let frame: DecodedFrame;

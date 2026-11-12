@@ -21,13 +21,13 @@ import { CiError, toCiError } from "../shared/ci-errors.js";
 import { TOOL_ROOT, packageBin } from "../shared/package-paths.js";
 
 /**
- * `ci:deploy`: publish one token-gated EAS Hosting deployment for a packaged review.
+ * `ci:deploy`: publish one token-gated Expo Hosting deployment for a packaged review.
  *
  * The deployment is the prebuilt preview export of viewer-host (routes `/p/[token]`, see viewer-host/README.md) plus
  * the report as static files under the link's token: each target's manifest at `p/<token>/targets/<target>.json` and
  * every screenshot at `p/<token>/assets/<sha256>.<ext>`. Nothing is encrypted; the 160-bit token in every path is what
  * keeps them private. The Worker serves the Viewer at `/p/<token>` and answers 404 to everything else. A deployment
- * lasts as long as EAS Hosting keeps it (it deletes deployments without an alias after 30 days on Free, 90 on paid
+ * lasts as long as Expo Hosting keeps it (it deletes deployments without an alias after 30 days on Free, 90 on paid
  * plans); Explore sets no expiry of its own. The report job already published the GitHub artifact links, so a failed
  * deployment leaves the comment on the download-and-drop flow.
  */
@@ -145,7 +145,7 @@ const ALIAS_LIMIT = /reached the limit of \d+ aliases[^\n]*/;
 const DEPLOY_RETRY_DELAYS_MS = [5_000, 15_000] as const;
 
 /**
- * EAS Hosting serves static files with its own headers, so the screenshots and manifests cannot carry the Worker's
+ * Expo Hosting serves static files with its own headers, so the screenshots and manifests cannot carry the Worker's
  * `noindex`; this keeps crawlers from fetching them. The page and API stay crawlable, so a crawler still sees their `noindex`.
  */
 export const PREVIEW_ROBOTS = "User-agent: *\nDisallow: /p/*/assets/\nDisallow: /p/*/targets/\n";
@@ -440,7 +440,7 @@ export type HostedDeployment = { previewUrl: string; expiresAt: string | null; d
   /** The link is the alias, which still served an earlier deployment when the wait for it ran out. */
   aliasBehind?: true; project: string; owner: string };
 
-/** EAS Hosting alias names: lowercase slugs, as `eas deploy --alias` normalises them. */
+/** Expo Hosting alias names: lowercase slugs, as `eas deploy --alias` normalises them. */
 export const HOSTING_ALIAS = /^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$/;
 /** The `/p/<token>` segment the Worker gates on (viewer-host PREVIEW_TOKEN). */
 export const HOSTED_TOKEN = /^[a-z2-7]{32}$/;
@@ -486,7 +486,7 @@ async function writeReportFiles(client: string, token: string, reports: HostedRe
 }
 
 /**
- * Write the report ZIPs as static files under the token, deploy the exported Viewer around them to EAS Hosting, and
+ * Write the report ZIPs as static files under the token, deploy the exported Viewer around them to Expo Hosting, and
  * verify what the Viewer opens. Shared by the PR preview (`ci:deploy`) and standalone reports; it knows nothing about GitHub.
  */
 async function deployReports(options: {
@@ -532,8 +532,8 @@ async function deployReports(options: {
     const who = run(process.execPath, [eas, "whoami"], { cwd: work, env: easEnvironment });
     const accounts = who.status === 0 ? whoamiAccounts(who.stdout) : [];
     // On a laptop without EXPO_TOKEN the deploy uses your `eas login`, and the messages say so.
-    const login = environment.EXPO_TOKEN?.trim() ? "EXPO_TOKEN" : "Your EAS login";
-    if (!accounts.length) throw deployError("EAS_NOT_AUTHENTICATED", login === "EXPO_TOKEN" ? "The EAS CLI could not sign in with EXPO_TOKEN." : "You are not logged in to EAS.",
+    const login = environment.EXPO_TOKEN?.trim() ? "EXPO_TOKEN" : "Your Expo Services login";
+    if (!accounts.length) throw deployError("EAS_NOT_AUTHENTICATED", login === "EXPO_TOKEN" ? "The EAS CLI could not sign in with EXPO_TOKEN." : "You are not logged in to Expo Services.",
       login === "EXPO_TOKEN" ? "Use a valid EXPO_TOKEN for a robot user of the app's Expo account." : "Run eas login (or set EXPO_TOKEN), then rerun.", { details: { stderr: lastLine(who.stderr) } });
     const owner = options.owner ?? (accounts.length === 1 ? accounts[0]! : undefined);
     if (!owner || !accounts.includes(owner)) throw deployError("PREVIEW_OWNER_AMBIGUOUS",
@@ -542,7 +542,7 @@ async function deployReports(options: {
     await writeFile(join(work, "package.json"), JSON.stringify({ name: project, version: "0.0.0", private: true }));
     await writeFile(join(work, "app.json"), JSON.stringify({ expo: { name: `${project}`, slug: project, owner, web: { output: "server" } } }));
     const init = run(process.execPath, [eas, "init", "--force", "--non-interactive", "--json"], { cwd: work, env: easEnvironment });
-    if (init.status !== 0) throw deployError("PREVIEW_PROJECT_FAILED", `EAS could not create or link the preview project @${owner}/${project}: ${lastLine(init.stderr || init.stdout)}`,
+    if (init.status !== 0) throw deployError("PREVIEW_PROJECT_FAILED", `Expo Services could not create or link the preview project @${owner}/${project}: ${lastLine(init.stderr || init.stdout)}`,
       options.projectHint, { details: { project, owner } });
     const hostedOrigin = (value: string | undefined): URL | undefined => {
       const url = value ? new URL(value) : undefined;
@@ -564,7 +564,7 @@ async function deployReports(options: {
       // An account at its alias quota rejects every attempt the same way, and each attempt has already created a deployment.
       const aliasLimit = ALIAS_LIMIT.exec(deploy.stderr || deploy.stdout);
       if (aliasLimit) {
-        throw deployError("PREVIEW_ALIAS_LIMIT", `EAS Hosting could not assign the alias ${options.alias}: ${aliasLimit[0]}`,
+        throw deployError("PREVIEW_ALIAS_LIMIT", `Expo Hosting could not assign the alias ${options.alias}: ${aliasLimit[0]}`,
           `Delete the aliases of closed pull requests on @${owner}/${project} (eas deploy:alias:delete pr-<n> --non-interactive) or raise the account's plan, then rerun the deploy job.`,
           { retryable: false, details: { project, owner, alias: options.alias, output: commandOutput(deploy, [environment.EXPO_TOKEN, token]) } });
       }
@@ -572,14 +572,14 @@ async function deployReports(options: {
       if (attempt < DEPLOY_ATTEMPTS) await sleep(DEPLOY_RETRY_DELAYS_MS[attempt - 1] ?? DEPLOY_RETRY_DELAYS_MS.at(-1)!);
     }
     if (!deploymentUrl) {
-      throw deployError("PREVIEW_DEPLOY_FAILED", `EAS Hosting deployment failed ${DEPLOY_ATTEMPTS} times: ${lastLine(deploy.stderr || deploy.stdout)}`,
-        "Check the EAS Hosting status for the preview project and rerun the deploy job; the eas output of every attempt is in the job log.",
+      throw deployError("PREVIEW_DEPLOY_FAILED", `Expo Hosting deployment failed ${DEPLOY_ATTEMPTS} times: ${lastLine(deploy.stderr || deploy.stdout)}`,
+        "Check the Expo Hosting status for the preview project and rerun the deploy job; the eas output of every attempt is in the job log.",
         { retryable: true, details: { project, owner, attempts: DEPLOY_ATTEMPTS, output: commandOutput(deploy, [environment.EXPO_TOKEN, token]) } });
     }
     const aliasUrl = options.alias ? hostedOrigin(deployment.aliases?.find(candidate => candidate.name === options.alias)?.url) : undefined;
     if (options.alias && !aliasUrl) {
-      throw deployError("PREVIEW_DEPLOY_FAILED", `EAS Hosting deployed ${deploymentUrl.origin} but did not report the alias ${options.alias}.`,
-        "Check the deployment's aliases in the EAS Hosting dashboard and rerun.", { retryable: true, details: { project, owner, alias: options.alias } });
+      throw deployError("PREVIEW_DEPLOY_FAILED", `Expo Hosting deployed ${deploymentUrl.origin} but did not report the alias ${options.alias}.`,
+        "Check the deployment's aliases in the Expo Hosting dashboard and rerun.", { retryable: true, details: { project, owner, alias: options.alias } });
     }
     const verify = (origin: string, alias = false) => verifyDeployment({ origin, token, transport, now, alias,
       timeoutMs: alias ? options.aliasWaitMs ?? options.verifyTimeoutMs : options.verifyTimeoutMs,
@@ -634,7 +634,7 @@ export type ExplorationDeployOptions = {
   random?: (bytes: number) => Uint8Array;
   onSecret?: (secret: string) => void;
   verifyTimeoutMs?: number;
-  /** EAS Hosting alias for the deployment (`eas deploy --alias`): one host per app that always serves the newest run. */
+  /** Expo Hosting alias for the deployment (`eas deploy --alias`): one host per app that always serves the newest run. */
   alias?: string;
   /** A fixed `/p/<token>` (32 base32 characters); with `alias` the link never changes between runs. */
   token?: string;
@@ -644,9 +644,9 @@ export type ExplorationDeployOptions = {
 export async function deployExplorationReport(options: ExplorationDeployOptions): Promise<HostedDeployment & { reportSha256: string; reportBytes: number }> {
   const environment = options.environment ?? process.env;
   if (!environment.EXPO_TOKEN?.trim() && !environment.EXPO_SESSION_SECRET?.trim() && !environment.HOME) throw new CiError({ code: "EXPO_LOGIN_REQUIRED", stage: "preflight",
-    message: "An EAS login is required to host the report", nextAction: "Run `eas login` or set EXPO_TOKEN, then rerun with --upload." });
-  if (!/^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$/.test(options.project)) throw previewError("PREVIEW_PROJECT_INVALID", `Invalid EAS project slug: ${options.project}`, "Pass --project as a lowercase slug such as expo-explore.");
-  if (options.alias !== undefined && !HOSTING_ALIAS.test(options.alias)) throw previewError("PREVIEW_ALIAS_INVALID", `Invalid EAS Hosting alias: ${options.alias}`, "Pass --alias as a lowercase slug such as bluesky.");
+    message: "An Expo Services login is required to host the report", nextAction: "Run `eas login` or set EXPO_TOKEN, then rerun with --upload." });
+  if (!/^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$/.test(options.project)) throw previewError("PREVIEW_PROJECT_INVALID", `Invalid Expo Services project slug: ${options.project}`, "Pass --project as a lowercase slug such as expo-explore.");
+  if (options.alias !== undefined && !HOSTING_ALIAS.test(options.alias)) throw previewError("PREVIEW_ALIAS_INVALID", `Invalid Expo Hosting alias: ${options.alias}`, "Pass --alias as a lowercase slug such as bluesky.");
   if (options.token !== undefined && !HOSTED_TOKEN.test(options.token)) throw previewError("PREVIEW_TOKEN_INVALID", "EXPLORE_PREVIEW_TOKEN must be 32 characters of a-z and 2-7.", "Generate one with `LC_ALL=C tr -dc a-z2-7 </dev/urandom | head -c 32` and set EXPLORE_PREVIEW_TOKEN, or unset it for a random token.");
   const exportPath = resolve(options.exportPath ?? PREVIEW_EXPORT_PATH);
   await assertExport(exportPath);
@@ -661,7 +661,7 @@ export async function deployExplorationReport(options: ExplorationDeployOptions)
   const hosted = await deployReports({ reports: [{ zip, sha256, file, query: target ? targetQuery(target) : "" }],
     ...(target ? { listing: [listingEntry(target)] } : {}), project: options.project,
     ...(options.owner ? { owner: options.owner } : {}), ownerHint: "Pass --owner with the Expo account that should host the report.",
-    projectHint: "Give this EAS login permission to create projects under the owner, or pass --project with an existing slug.",
+    projectHint: "Give this Expo Services login permission to create projects under the owner, or pass --project with an existing slug.",
     exportPath, environment, run: options.run ?? defaultRun, ...(options.sleep ? { sleep: options.sleep } : {}),
     transport: options.transport ?? fetch, now, random, ...(options.onSecret ? { onSecret: options.onSecret } : {}), verifyTimeoutMs: options.verifyTimeoutMs ?? 180_000,
     ...(options.alias ? { alias: options.alias } : {}), ...(options.token ? { token: options.token } : {}) });
@@ -690,7 +690,7 @@ export type FixturePreviewOptions = {
 };
 
 /**
- * How long a fixture preview waits for its alias. An edge of EAS Hosting that served an alias keeps serving the
+ * How long a fixture preview waits for its alias. An edge of Expo Hosting that served an alias keeps serving the
  * deployment it named for about five minutes (307–314 s, measured 2026-10-19 redeploying back to back from one machine),
  * so a deploy whose check reaches an edge that served the alias in the last five minutes, to the previous deploy's check
  * or to a reviewer, finds it behind; otherwise it has moved within seconds. Waiting the whole verification budget for
@@ -706,8 +706,8 @@ export const FIXTURE_ALIAS_WAIT_MS = 20_000;
 export async function deployFixturePreview(options: FixturePreviewOptions): Promise<HostedDeployment> {
   const environment = options.environment ?? process.env;
   if (!environment.EXPO_TOKEN?.trim() && !environment.EXPO_SESSION_SECRET?.trim() && !environment.HOME) throw new CiError({ code: "EXPO_LOGIN_REQUIRED", stage: "preflight",
-    message: "An EAS login is required to deploy the Viewer preview", nextAction: "Run `eas login` or set EXPO_TOKEN." });
-  if (!HOSTING_ALIAS.test(options.alias)) throw previewError("PREVIEW_ALIAS_INVALID", `Invalid EAS Hosting alias: ${options.alias}`, "Pass --alias as a lowercase slug such as pr-123.");
+    message: "An Expo Services login is required to deploy the Viewer preview", nextAction: "Run `eas login` or set EXPO_TOKEN." });
+  if (!HOSTING_ALIAS.test(options.alias)) throw previewError("PREVIEW_ALIAS_INVALID", `Invalid Expo Hosting alias: ${options.alias}`, "Pass --alias as a lowercase slug such as pr-123.");
   if (options.token !== undefined && !HOSTED_TOKEN.test(options.token)) throw previewError("PREVIEW_TOKEN_INVALID", "The preview token must be 32 characters of a-z and 2-7.", "Pass the /p/<token> segment of the previous preview link, or none for a new one.");
   assertTargets(options.reports.map(report => report.target ?? platformTarget(report.platform)), "A fixture preview needs one report per target", "Pass each target's report ZIP once.");
   const exportPath = resolve(options.exportPath ?? PREVIEW_EXPORT_PATH);
@@ -754,7 +754,7 @@ export function fixtureReports(listing: unknown, directory: string): FixturePrev
 
 /**
  * Report ZIPs on this machine behind one token (`capture:review --upload`, `report:upload`), one per target: the same
- * sealed deployment as a PR preview, from ZIPs instead of GitHub artifacts, with the local EAS login or EXPO_TOKEN.
+ * sealed deployment as a PR preview, from ZIPs instead of GitHub artifacts, with the local Expo Services login or EXPO_TOKEN.
  */
 export async function deployLocalReports(options: {
   /** One per target; an entry without `target` is its platform's target, as before targets. */
@@ -895,7 +895,7 @@ async function verifyDeployment(check: { origin: string; token: string; reports:
         headers: { accept } });
     } catch (error) {
       throw deployError("PREVIEW_VERIFY_FAILED", "The hosted preview could not be reached after deployment.",
-        "Check EAS Hosting availability and rerun the deploy job.", { retryable: true, cause: error });
+        "Check Expo Hosting availability and rerun the deploy job.", { retryable: true, cause: error });
     }
   };
   // What the token serves differs from what was deployed: a listing or report that does not match, or undefined.
@@ -910,7 +910,7 @@ async function verifyDeployment(check: { origin: string; token: string; reports:
       const sha = expected.asset ? PREVIEW_ASSET.exec(expected.asset)?.[1] : undefined;
       if (body !== expected.manifest || (sha && createHash("sha256").update(assetBytes).digest("hex") !== sha)) {
         return deployError("PREVIEW_VERIFY_FAILED", "The hosted preview did not serve the report's manifest and screenshots, which the Viewer opens.",
-          "Rerun the deploy job; if it keeps failing, inspect the deployment in the EAS Hosting dashboard.",
+          "Rerun the deploy job; if it keeps failing, inspect the deployment in the Expo Hosting dashboard.",
           { details: { status: manifest.status, ...(served ? { assetStatus: served.status } : {}), report: expected.query } });
       }
     }
@@ -940,18 +940,18 @@ async function verifyDeployment(check: { origin: string; token: string; reports:
         : `The alias ${check.origin} still answers HTTP ${shell.status} ${Math.round(waitedMs / 1000)} s after eas deploy returned.`,
         "Nothing to do: the alias catches up on its own, and the next push verifies it again.", { retryable: true, details: { origin: check.origin, status: shell.status, waitedMs } });
       throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview did not become available (HTTP ${shell.status}).`,
-        "Rerun the deploy job; if the deployment keeps failing verification, inspect it in the EAS Hosting dashboard.", { retryable: true, details: { origin: check.origin, status: shell.status, waitedMs } });
+        "Rerun the deploy job; if the deployment keeps failing verification, inspect it in the Expo Hosting dashboard.", { retryable: true, details: { origin: check.origin, status: shell.status, waitedMs } });
     }
     await new Promise(done => setTimeout(done, 3_000));
   }
   const api = await get(`/p/${check.token}/api/v1`);
   if (api.status !== 200 || !(api.headers.get("content-type") ?? "").startsWith("application/json")) {
-    throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview did not answer the agent API (HTTP ${api.status}).`, "Rerun the deploy job; if the deployment keeps failing verification, inspect it in the EAS Hosting dashboard.", { retryable: true });
+    throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview did not answer the agent API (HTTP ${api.status}).`, "Rerun the deploy job; if the deployment keeps failing verification, inspect it in the Expo Hosting dashboard.", { retryable: true });
   }
   const robots = await get("/robots.txt");
   if (robots.status !== 200 || await robots.text() !== PREVIEW_ROBOTS) {
     throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview did not serve its robots.txt (HTTP ${robots.status}), which keeps crawlers away from the screenshots.`,
-      "Rerun the deploy job; if it keeps failing, inspect the deployment in the EAS Hosting dashboard.", { retryable: true });
+      "Rerun the deploy job; if it keeps failing, inspect the deployment in the Expo Hosting dashboard.", { retryable: true });
   }
   // The deployment itself serves exactly what was deployed or it failed; the alias was checked while it was polled.
   if (!check.alias) { const failure = await mismatch(); if (failure) throw failure; }
@@ -961,7 +961,7 @@ async function verifyDeployment(check: { origin: string; token: string; reports:
     [`/p/${check.token}/viewer/index.html`, "/p/<token>/viewer/index.html"]] as const) {
     const response = await get(path);
     if (response.status !== 404) throw deployError("PREVIEW_VERIFY_FAILED", `The hosted preview answered HTTP ${response.status} without a valid token at ${shape}.`,
-      "Do not share this deployment; delete it in the EAS Hosting dashboard and report the issue to Explore.", { details: { path: shape, status: response.status } });
+      "Do not share this deployment; delete it in the Expo Hosting dashboard and report the issue to Explore.", { details: { path: shape, status: response.status } });
   }
   return { liveAfterMs };
 }

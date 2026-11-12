@@ -296,7 +296,7 @@ jobs:
           path: ${{ runner.temp }}/explore-diagnostics
           retention-days: 7
           if-no-files-found: ignore
-  # Hosted preview (opt-in, report.preview in config.yaml): one token-gated EAS Hosting deployment per review, serving every target's report.
+  # Hosted preview (opt-in, report.preview in config.yaml): one token-gated Expo Hosting deployment per review, serving every target's report.
   # This is the only job after capture that holds EXPO_TOKEN; the report job stays credential-free and has already
   # published the Download report link, so a failed deployment leaves the comment on the download-and-drop flow.
   # It runs once any target published its report, and serves the targets that did; a failed target has no report to wait for.

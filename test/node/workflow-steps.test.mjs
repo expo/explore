@@ -97,7 +97,7 @@ test("doctor names a workflow that sets the app directory in one job but not ano
 test("ci:after-capture stops the sessions a side's appearance passes recorded, not only the side's own", async t => {
   const output = await mkdtemp(join(tmpdir(), "explore-steps-sessions-"));
   t.after(() => rm(output, { recursive: true, force: true }));
-  // Unreadable ids make the cleanup report each file it was handed without calling EAS.
+  // Unreadable ids make the cleanup report each file it was handed without calling Expo Services.
   for (const name of ["head-session-dark", "base-session-dark", "baseline-session-light"]) await writeFile(join(output, name), "not a session id\n");
   await writeFile(join(output, "head-session-sepia"), "not a session id\n");
   const result = await cleanupAfterCapture({ output, checkouts: [], environment: { RUNNER_TEMP: output, EXPO_TOKEN: "token" } });

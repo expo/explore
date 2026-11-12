@@ -14,7 +14,7 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
   setup --check [--project DIRECTORY]
   doctor [--project DIRECTORY] [--offline] [--no-github] [--check-model] [--json]
        (checks every setup step and prints the next action for each problem; exits 1 until ready)
-       (--offline skips EAS and GitHub; --check-model sends one small request with the local provider key)
+       (--offline skips Expo Services and GitHub; --check-model sends one small request with the local provider key)
   doctor --capture [--project DIRECTORY] [--output DIRECTORY] [--target ID | --platform ios|android] [--controller agent-device|argent] [--simulator eas|local] [--repack eas|local] [--yes]
        (captures the committed HEAD like the baseline workflow, with your eas login, and reports each route)
   capture [--base REF] [--head REF | --committed] [--target ID | --platform ios|android] [--parallel N] [--scope all|changes]
@@ -26,11 +26,11 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
         without .expo-explore/config.yaml it uses the defaults setup would write;
         it runs both commits' code as you, so review only commits you would run; capture:review is the same command;
         --controller argent drives the simulator with Argent instead of agent-device, the default (or set
-        capture.controller in config.yaml); on EAS Simulator Argent captures one appearance, since it cannot switch it yet;
+        capture.controller in config.yaml); on Expo Simulators Argent captures one appearance, since it cannot switch it yet;
         --simulator local runs each commit on a simulator (Xcode) or emulator (Android SDK) Explore starts on this
-        machine, instead of EAS Simulator, and removes it afterwards (or set capture.simulator in config.yaml); builds
-        still run on EAS, and the host switches appearance for either controller; the app is repacked with the route
-        observer on this machine too (--repack eas, or capture.repack, keeps the hosted EAS job);
+        machine, instead of Expo Simulators, and removes it afterwards (or set capture.simulator in config.yaml); builds
+        still run on Expo Services, and the host switches appearance for either controller; the app is repacked with the route
+        observer on this machine too (--repack eas, or capture.repack, keeps the hosted Expo Workflows job);
         with targets in config.yaml it reviews them at once, up to capture.maxSessions (--parallel N at most N at a time; the targets of a platform
         share each commit's build), --target ID one of them, --platform those of a platform)
   view [--catalog FILE] [--port N] [--no-open]
@@ -40,14 +40,14 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
         in a terminal, an arrow-key picker: Enter opens a run in the local Viewer, u hosts it, d deletes it;
         ID is a run's id from reports list, or latest; EXPLORE_INTRO=off skips the title animation)
   report:upload <report.zip | report directory>... [--owner ACCOUNT] [--project SLUG] [--config FILE] [--json]
-       (hosts reports already on this machine on EAS Hosting behind one link, with your eas login: one per platform
+       (hosts reports already on this machine on Expo Hosting behind one link, with your eas login: one per platform
         of the same review, from capture:review --output or a downloaded explore-review artifact, or one explore:binary report)`;
 
 const BINARY = `Prebuilt apps (no source needed; runs with your local claude or codex login):
   explore:binary <app.apk | app.app | app.tar.gz | simulator .ipa> [--output DIRECTORY] [--simulator eas|local] [--no-upload] [--json]
-       (installs the archive in a fresh EAS Simulator session, lets the model explore it, writes a map
-        and report under --output, hosts the report on EAS Hosting, and prints the link)
-       --simulator local runs it on a simulator or emulator it starts on this machine instead, with no EAS login,
+       (installs the archive in a fresh Expo Simulators session, lets the model explore it, writes a map
+        and report under --output, hosts the report on Expo Hosting, and prints the link)
+       --simulator local runs it on a simulator or emulator it starts on this machine instead, with no Expo Services login,
         and opens the report in the local Viewer (--upload hosts it instead, --no-open skips the Viewer, --port N);
         iOS needs Xcode, Android the SDK (ANDROID_HOME) with platform-tools, cmdline-tools, the emulator and a system image for this Mac
        Flags, all optional: --device NAME --bundle-id ID --launch-url URL --hints "what to focus on"
@@ -57,11 +57,11 @@ const BINARY = `Prebuilt apps (no source needed; runs with your local claude or 
         --max-duration-minutes N --max-screens N --max-actions N --provider anthropic|openai --model ID
         --owner ACCOUNT --project SLUG --allow-destructive "Label,Other label"
         --replay FILE (takes the steps in FILE instead of a model's, so every run and device takes the same path; no model access needed, and not with --provider, --model or --hints)
-        --alias NAME (one EAS Hosting host per app that always serves the newest run; with EXPLORE_PREVIEW_TOKEN
+        --alias NAME (one Expo Hosting host per app that always serves the newest run; with EXPLORE_PREVIEW_TOKEN
         set to a fixed 32-character token, the hosted link is the same every run)
        (iOS needs a simulator build; a device .ipa and Android .aab are rejected before any device starts)
   explore:session [SESSION_ID] [--bundle-id ID] [--output DIRECTORY] [--upload] [--json]
-       (explores an app that is already installed on an EAS Simulator session you started — run it where
+       (explores an app that is already installed on an Expo Simulators session you started — run it where
         "eas simulator:start --type agent-device --out-config-type dotenv" (or --type argent) wrote .env.eas-simulator,
         or pass --env-file FILE, or export EAS_SIMULATOR_SESSION_ID with AGENT_DEVICE_DAEMON_BASE_URL and
         AGENT_DEVICE_DAEMON_AUTH_TOKEN, or with ARGENT_TOOLS_URL and ARGENT_AUTH_TOKEN; writes the map and report, then opens them in the local Viewer;
@@ -71,7 +71,7 @@ const BINARY = `Prebuilt apps (no source needed; runs with your local claude or 
        Extra flags: --app-name NAME --app-version X.Y --port N, plus the explore:binary budget/model flags
        Afterwards: view --dir DIRECTORY, screen:list --dir DIRECTORY, gap:list --dir DIRECTORY`;
 
-const CI = `CI (the installed workflows run these; they manage remote EAS Simulator sessions):
+const CI = `CI (the installed workflows run these; they manage remote Expo Simulators sessions):
   config:targets [--project DIRECTORY] [--config FILE]
        (lists the targets config.yaml captures, with their platforms and labels; the review workflow's matrix)
   config:platforms [--project DIRECTORY] [--config FILE]
@@ -97,7 +97,7 @@ const CI = `CI (the installed workflows run these; they manage remote EAS Simula
   ci:find-baseline --sha COMMIT [--target ID | --platform ios|android]
        (a finished baseline's artifact of the commit, or else the default branch's baseline run still capturing it)
   ci:after-capture --output TEMP_DIRECTORY --checkout DIRECTORY...
-       (stops the capture's EAS Simulator sessions and checks capture left each checkout unchanged)
+       (stops the capture's Expo Simulators sessions and checks capture left each checkout unchanged)
        (the ci:* commands write their results to $GITHUB_OUTPUT for the next steps)`;
 
 const MAP_QUERIES = `Map queries (for coding agents reading a local exploration map; JSON output, never provision devices):

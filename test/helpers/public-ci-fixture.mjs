@@ -120,7 +120,7 @@ const Navigation=createStaticNavigation(Root); export default function App(){ret
     GITHUB_RUN_ID: '1234', GITHUB_RUN_ATTEMPT: '1', GITHUB_REPOSITORY: pr.repository, TOOLS_COMMIT: 'c'.repeat(40), EXPLORE_VIEWER_ORIGIN: 'https://viewer.example' };
   const requests = []; const comments = []; const sessions = new Map(); let currentSession; const idleDevice = { path: '/', scheme: 'light' }; let sessionCounter = 0; let repackedSha; let openFailed = false;
   const identity = (session) => ({ session: 'expo-explore-runtime', appBundleId: config.app.bundleId,
-    // The device the session was started with, as EAS starts the one a target names.
+    // The device the session was started with, as Expo Services starts the one a target names.
     device: { id: 'device-1', name: session?.device ?? config.device.name, platform, target: 'mobile', osVersion: '26.0', locale: 'en-US', orientation: 'portrait', colorScheme: 'light' },
     identifiers: { session: 'expo-explore-runtime', appBundleId: config.app.bundleId, deviceId: 'device-1', deviceName: session?.device ?? config.device.name } });
   // The fixture's clock: every controller round trip advances it by one poll interval, as a device snapshot would, so a

@@ -43,7 +43,7 @@ export type PublicEvidenceSide = {
   bundle: CaptureBundle;
   /** The exported `screen-map.json`; absent when only cached screenshots were restored. */
   map?: ExploreMap;
-  /** The EAS Simulator execution context recorded for that capture. */
+  /** The Expo Simulators execution context recorded for that capture. */
   execution?: RuntimeExecutionContext;
   /** Why `execution` is absent although the export shipped an `execution.json`. */
   executionIssue?: string;

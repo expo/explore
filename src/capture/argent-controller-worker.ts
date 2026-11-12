@@ -1,6 +1,6 @@
 /**
  * The Argent controller's command line: Explore runs it where it would run agent-device, with the same
- * arguments. Each command becomes `argent run <tool> --args <json>` calls, as EAS Simulator recommends
+ * arguments. Each command becomes `argent run <tool> --args <json>` calls, as Expo Simulators recommends
  * driving an `argent` session, with the session's ARGENT_TOOLS_URL and ARGENT_AUTH_TOKEN in the environment.
  * A capture keeps the same bridge on a worker thread instead (argent-bridge-host); this entry serves the callers
  * that run one command at a time.

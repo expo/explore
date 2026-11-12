@@ -510,7 +510,7 @@ test("fold moves a foldable to a pose and forgets the old panel's geometry", asy
 test("a reader stuck on the dark panel after a fold is reset once more before the fold is called unverified", async () => {
   const fold = { activeScreen: 3, screen: { id: 3, panel: "inner panel", width: 2007, height: 2853 }, posture: "open", hingeAngle: 180 };
   const stopped = { stopped: ["AXService:74195B53-4DBC-4EAA-9991-F98E5BB86BA8"] };
-  // Ten reads still in the cover panel's shape (as on EAS, 2026-10-17), then the inner panel once the helpers restart.
+  // Ten reads still in the cover panel's shape (as on Expo Services, 2026-10-17), then the inner panel once the helpers restart.
   const recovers = harness("ios", { "list-devices": DUO_DEVICES, fold, "stop-all-simulator-servers": stopped, "ui-tree": [...Array(10).fill(DUO_HOME), DUO_OPEN_EDIT_LANE] });
   assert.deepEqual((await recovers.run(["fold", "open", ...flags("ios")])).json.data, { action: "fold", pose: "open" });
   assert.deepEqual(recovers.calls.filter(call => call.tool === "stop-all-simulator-servers").map(call => call.args), Array(2).fill({ devices: ["74195B53-4DBC-4EAA-9991-F98E5BB86BA8"] }));

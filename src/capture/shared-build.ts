@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { CiError, serializeCiError, toCiError } from "../shared/ci-errors.js";
 
 /**
- * Several targets of one review run the same commit of one platform and EAS profile: they need one build and one
+ * Several targets of one review run the same commit of one platform and Expo Build profile: they need one build and one
  * repack, not one each. The captures run in parallel, in worker threads, so they meet in a directory: the first to
  * claim a build's folder builds it and writes the result there, and the others wait for that result (or its failure).
  */

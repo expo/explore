@@ -62,13 +62,13 @@ export type CiMapOptions = {
   /** Host-side pause used while a controller read is resent; tests pair it with `now` so recovery waits are not real time. */
   sleep?: (milliseconds: number) => void;
   easCommand: string; repackCommand: string; agentDeviceCommand: string;
-  /** The device controller EAS starts on the session; agent-device unless the config chose Argent. */
+  /** The device controller Expo Services starts on the session; agent-device unless the config chose Argent. */
   controller?: "agent-device" | "argent";
   /** A foldable's pose (device.pose), set with the controller's `fold` before anything is captured. */
   devicePose?: DevicePose;
-  /** Where the app runs: an EAS Simulator session (default), or a simulator created on this Mac for the capture. */
+  /** Where the app runs: an Expo Simulators session (default), or a simulator created on this Mac for the capture. */
   simulator?: "eas" | "local";
-  /** Where the route observer is bundled into the app: a hosted EAS repack job (default) or repack-app on this machine. */
+  /** Where the route observer is bundled into the app: a hosted Expo Workflows repack job (default) or repack-app on this machine. */
   repack?: RepackMode;
   /** A folder the review's captures share builds through: targets of one platform, profile and commit build and repack once. */
   buildShare?: string;
@@ -115,7 +115,7 @@ export type CiMapResult = {
 };
 
 
-/** New EAS sessions a capture starts in place of one EAS failed to start (ERRORED while booting, or never named). */
+/** New Expo Simulators sessions a capture starts in place of one Expo Services failed to start (ERRORED while booting, or never named). */
 const SESSION_START_RETRIES = 5;
 /**
  * The most time, from the first failed start, that replacement sessions may take, waits included. It keeps a review
@@ -130,13 +130,13 @@ export function sessionRetryDelayMs(retry: number): number {
 }
 
 /**
- * Minutes an EAS session is asked for beyond the capture's own budget. The session starts beside the repack, and the
+ * Minutes an Expo Simulators session is asked for beyond the capture's own budget. The session starts beside the repack, and the
  * capture deadline only starts once the app is installed, so the session also has to outlast a slow or queued hosted
  * repack, the app's upload and its install; 20 minutes covers a typical repack with room for a queue.
  */
 const SESSION_PREPARATION_MINUTES = 20;
 /**
- * EAS refuses (before allocating anything) a session longer than the plan allows, naming that maximum. Only that exact
+ * Expo Services refuses (before allocating anything) a session longer than the plan allows, naming that maximum. Only that exact
  * rejection is recognized; any other start failure is kept as it is.
  */
 function sessionDurationLimit(error: unknown): number | undefined {
@@ -145,7 +145,7 @@ function sessionDurationLimit(error: unknown): number | undefined {
 }
 
 /**
- * A start failure EAS may not repeat on the next try: a failed request, a dropped connection, a timeout, or no capacity
+ * A start failure Expo Services may not repeat on the next try: a failed request, a dropped connection, a timeout, or no capacity
  * right now. An account's quota, plan or permissions are not, and fail at once rather than after every retry.
  */
 function transientSessionStartFailure(error: unknown): boolean {
@@ -211,7 +211,7 @@ export async function runCiMap(input: Omit<CiMapOptions, "platform"> & { platfor
 }
 
 async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => void, timings: Timings): Promise<CiMapResult> {
-  if (!options.confirmExternalRun || !options.confirmTrustedSource) throw new Error("EAS capture requires authorized external execution of the selected source commit.");
+  if (!options.confirmExternalRun || !options.confirmTrustedSource) throw new Error("Expo Services capture requires authorized external execution of the selected source commit.");
   positiveInteger(options.maxScreens, "maxScreens");
   positiveInteger(options.maxActions, "maxActions");
   positiveInteger(options.maxDurationMinutes, "maxDurationMinutes");
@@ -399,8 +399,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       await copyFile(source, join(outputDirectory, "capture-diagnostics", name));
     }
     const images: CaptureBundle["images"] = {};
-    // The build a frame came from: the repacked app's EAS build, or for a repack on this machine, which is never
-    // uploaded, the native EAS build it repacked. The bundle names it too, as the review's build.
+    // The build a frame came from: the repacked app's Expo Build, or for a repack on this machine, which is never
+    // uploaded, the native Expo Build it repacked. The bundle names it too, as the review's build.
     const frameBuildId = easBuildId ?? nativeEasBuildId;
     for (const observation of map.observations) {
       // A secondary-appearance screen (`<route>@<scheme>`) exports under its route's outcome, with its own frame, or
@@ -465,7 +465,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     return finish();
   }
   setStage("configuration");
-  say(`reading EAS build profile ${options.easProfile}`);
+  say(`reading Expo Build profile ${options.easProfile}`);
   const eas = (args: string[], timeoutMs = 5 * 60_000, cwd = project) => runner({ command: options.easCommand, args,
     cwd, environment: easEnvironment, timeoutMs });
   // `eas simulator:control` names the session by id, from the session's own project directory.
@@ -473,14 +473,14 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     timeoutMs: commandOptions?.timeoutMs ?? 5 * 60_000, ...(commandOptions?.allowFailure ? { allowFailure: true } : {}) });
   // A failed simulator:control action is sent again after a pause, which a test's clock replaces.
   const controlOptions = { sleep: options.sleep };
-  // What the EAS session's host can do through simulator:control (iOS sessions on serve-sim 0.10.0 or later).
+  // What the Expo Simulators session's host can do through simulator:control (iOS sessions on serve-sim 0.10.0 or later).
   let controlActions = new Set<string>();
   const configResult = timings.measure("configuration", () => eas(["config", "--platform", options.platform, "--profile", options.easProfile, "--json", "--non-interactive"]));
   const profile = repackProfileFrom(configResult.stdout);
   const configValue = parseJson(configResult.stdout, "eas config") as { appConfig: Record<string, unknown>; buildProfile: Record<string, unknown> };
   scheme ??= appScheme(configValue.appConfig.scheme);
   colorSchemes = resolveColorSchemes(options.appearance ?? "auto", configValue.appConfig, options.platform);
-  // Argent cannot switch the appearance itself. On a local device the host switches it (simctl, adb); on an EAS iOS
+  // Argent cannot switch the appearance itself. On a local device the host switches it (simctl, adb); on an iOS Expo Simulators
   // session serve-sim does (appearance.set), which is known once the session starts; otherwise one appearance is captured.
   let argentSchemes = controller === "argent" && !local ? argentColorSchemes(colorSchemes, configValue.appConfig, options.platform) : undefined;
   const narrowToArgentScheme = () => {
@@ -518,12 +518,12 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   // A local device starts booting now and finishes while the app is built and repacked; the session waits for it.
   let localEmulatorStart: Awaited<ReturnType<typeof startLocalEmulator>> | undefined;
   const localName = `Explore ${options.device} (${side} ${options.gitCommit.slice(0, 8)})`;
-  // An EAS session's start, once begun (startSession): it resolves with the start command's failure, if any.
+  // An Expo Simulators session's start, once begun (startSession): it resolves with the start command's failure, if any.
   let sessionStart: Promise<unknown> | undefined;
   // When the current session was asked for, so a session whose app took longer than its allowance can be replaced.
   let sessionStartedAt: number | undefined;
   const stopEarlyDevice = async () => {
-    // An EAS session started beside a repack that then failed: stop the exact session its handoff names.
+    // An Expo Simulators session started beside a repack that then failed: stop the exact session its handoff names.
     if (sessionStart) {
       await sessionStart;
       const handoff = await readSimulatorDotenvHandoff(dotenvPath).catch(() => undefined);
@@ -537,7 +537,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   };
   const earlyCleanupFailure = (original: unknown, cleanup: unknown) => new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup",
     message: "A simulator Explore started before the app was ready could not be confirmed stopped.",
-    nextAction: "Stop the EAS Simulator session or local device this capture started (eas simulator:list), and verify its status.",
+    nextAction: "Stop the Expo Simulators session or local device this capture started (eas simulator:list), and verify its status.",
     details: { originalFailure: serializeCiError(original, { secrets: [options.expoToken] }) }, cause: cleanup });
   // What this side starts on this machine, so a later review cleans up after it if this process is stopped hard.
   const localRecord = local ? await openLocalCaptureRecord(sourceEnvironment, simulatorProject) : undefined;
@@ -565,22 +565,22 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       localOsVersion = created.osVersion;
     }
   } catch (error) { await stopEarlyDevice().catch(cleanup => { throw earlyCleanupFailure(error, cleanup); }); throw error; }
-  // The session is named before its app exists: an EAS session starts while the app is repacked (startSession).
-  // A session EAS failed to start is replaced once (see the session block), under a name of its own.
+  // The session is named before its app exists: an Expo Simulators session starts while the app is repacked (startSession).
+  // A session Expo Services failed to start is replaced once (see the session block), under a name of its own.
   const sessionNameFor = (retry: number) => simulatorSessionName({ mapName: options.name, mapId: options.buildId, gitCommit: options.gitCommit, easBuildId: local ? "local" : "installed",
     runIdentity: JSON.stringify({ mapDirectory, outputDirectory, run: sourceEnvironment.GITHUB_RUN_ID, attempt: sourceEnvironment.GITHUB_RUN_ATTEMPT, ...(retry ? { sessionRetry: retry } : {}) }) });
   let sessionRetries = 0;
   let sessionName = sessionNameFor(0);
   /**
-   * Starts the EAS Simulator session in the background, empty, once the build to repack is known (not while a native
+   * Starts the Expo Simulators session in the background, empty, once the build to repack is known (not while a native
    * build runs, which can take most of an hour of session time). The app is installed through the controller when both
-   * are ready. Resolves with the start command's failure, if any; the session block verifies what EAS handed over.
+   * are ready. Resolves with the start command's failure, if any; the session block verifies what Expo Services handed over.
    */
   const startSession = (retry?: { timeoutMs: number }) => {
     if (local || sessionStart) return;
-    if (!retry) say(`starting an EAS Simulator session (${options.device}) while the app is repacked`);
+    if (!retry) say(`starting an Expo Simulators session (${options.device}) while the app is repacked`);
     sessionStartedAt = (options.now ?? Date.now)();
-    // From the request to the session EAS hands over, beside the repack: the queue and boot time of the session.
+    // From the request to the session Expo Services hands over, beside the repack: the queue and boot time of the session.
     const started = timings.span("session-start", { attempt: sessionRetries });
     const request = (minutes: number) => ({ command: options.easCommand, args: ["simulator:start", "--name", sessionName, "--platform", options.platform, "--device", options.device,
       "--type", controller, "--package-version", controllerVersion(controller), "--public-link",
@@ -593,14 +593,14 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         // A plan that cannot give the allowance gets as much of it as the plan allows, and never less than the capture's own minutes.
         const limit = sessionDurationLimit(error);
         if (limit === undefined) throw error;
-        say(`EAS allows ${limit}-minute sessions on this plan; starting the session again without the full repack allowance`);
+        say(`Expo Services allows ${limit}-minute sessions on this plan; starting the session again without the full repack allowance`);
         return start(Math.max(options.maxDurationMinutes, limit));
       }))
       .then(() => undefined, (error: unknown) => error)
       .then(error => { started(error ? "failed" : "ok"); return error; });
   };
   setStage("build");
-  // The instrumented app stays on this machine: a local device installs it, and an EAS session gets it through the
+  // The instrumented app stays on this machine: a local device installs it, and an Expo Simulators session gets it through the
   // controller. It goes in this capture's own directory, or in the review's shared build folder when other targets use it.
   const appName = options.platform === "android" ? "app.apk" : "app.app";
   const appDirectory = !options.buildShare ? await realpath(await mkdtemp(join(tmpdir(), "expo-explore-app-"))) : undefined;
@@ -608,7 +608,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   type BuiltApp = { fingerprint: string; nativeEasBuildId: string | null; easBuildId: string | null; app?: string; reused: boolean; version?: string; buildNumber?: string };
   // What a hosted repack waits with and reports through: one deadline from the moment the session starts beside it, for
   // the wait for another job's repack and every repack of its own. The repack is shared with this run's other matrix
-  // jobs only when it repacks a build EAS already had: a native build this job made is its own, so its repack carries no key and is never shared.
+  // jobs only when it repacks a build Expo Services already had: a native build this job made is its own, so its repack carries no key and is never shared.
   const repackWaits = (shared: boolean) => ({ ...(shared ? { share: options.repackShare } : {}), progress: say, now: options.now, sleep: options.sleep, timings, onBlocking: options.onBlocking,
     signal: options.signal, deadline: (options.now ?? Date.now)() + HOSTED_REPACK_BUDGET_MS });
   // `repacking` tells the captures sharing this build that their sessions can start too (sharedBuild).
@@ -621,7 +621,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       ? undefined : existingBuild(timings.measure("build-lookup", () => eas(["build:list", "--platform", options.platform, "--status", "finished", "--build-profile", options.easProfile,
         "--fingerprint-hash", sourceFingerprint, ...(options.platform === "ios" ? ["--simulator"] : []), "--limit", "20", "--json", "--non-interactive"])).stdout);
     if (reusable) {
-      say(`reusing EAS build ${reusable.id} (fingerprint ${sourceFingerprint.slice(0, 12)}); repacking it with this commit's JavaScript and the route observer`);
+      say(`reusing Expo Build ${reusable.id} (fingerprint ${sourceFingerprint.slice(0, 12)}); repacking it with this commit's JavaScript and the route observer`);
       startSession(); await repacking?.();
       const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
         project, nativeBuildId: reusable.id, fingerprint: sourceFingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp, ...repackWaits(true) });
@@ -632,11 +632,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         ...(reusable.appVersion ? { version: reusable.appVersion } : {}), ...(reusable.appBuildVersion ? { buildNumber: reusable.appBuildVersion } : {}) };
     }
     options.signal?.throwIfAborted();
-    say(options.forceFreshBuild ? "building on EAS (a fresh build was requested); waiting up to 45 minutes for it to finish"
-      : `no finished simulator build has fingerprint ${sourceFingerprint.slice(0, 12)}; building on EAS and waiting up to 45 minutes for it to finish`);
+    say(options.forceFreshBuild ? "building on Expo Services (a fresh build was requested); waiting up to 45 minutes for it to finish"
+      : `no finished simulator build has fingerprint ${sourceFingerprint.slice(0, 12)}; building on Expo Services and waiting up to 45 minutes for it to finish`);
     const built = nativeBuildFrom(blockingCall(timings, options.onBlocking, "native-build", 45 * 60_000,
       () => eas(["build", "--platform", options.platform, "--profile", options.easProfile, "--wait", "--json", "--non-interactive"], 45 * 60_000)).stdout);
-    say(`EAS build ${built.id} finished; repacking it with the route observer`);
+    say(`Expo Build ${built.id} finished; repacking it with the route observer`);
     startSession(); await repacking?.();
     const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
       project, nativeBuildId: built.id, fingerprint: built.fingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: options.repack, easProfile: options.easProfile, keepApp, ...repackWaits(false) });
@@ -708,12 +708,12 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     } else if (local) {
       throw new Error("The local device did not start before capture");
     } else {
-      if (!localApp || !sessionStart) throw new Error("An EAS Simulator session needs the instrumented app on this machine");
+      if (!localApp || !sessionStart) throw new Error("An Expo Simulators session needs the instrumented app on this machine");
       let startError = await sessionStart;
       let handoff = await readSimulatorDotenvHandoff(dotenvPath);
-      // EAS sometimes fails to start a session: it errors while booting, or the start request fails before a session is
+      // Expo Services sometimes fails to start a session: it errors while booting, or the start request fails before a session is
       // named. After every failed start, whatever it may have left running is accounted for; then, when the failure is
-      // provably EAS's, a new session replaces it, up to SESSION_START_RETRIES times within SESSION_RETRY_BUDGET_MS, with
+      // provably Expo Services', a new session replaces it, up to SESSION_START_RETRIES times within SESSION_RETRY_BUDGET_MS, with
       // a growing wait. A session Explore cannot prove is its own is never replaced or stopped: that stays a handoff
       // failure below, as does a lookup that fails.
       const clock = options.now ?? Date.now;
@@ -733,7 +733,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           if (status) {
             ended = { sessionId: handoff.sessionId, status };
             endedSessions.push(handoff.sessionId);
-            reason = `EAS ended simulator session ${handoff.sessionId} (${status}) before it was ready`;
+            reason = `Expo Services ended simulator session ${handoff.sessionId} (${status}) before it was ready`;
           }
         } else if (startError && transientSessionStartFailure(startError)) {
           // The failed request may still have created a session: any by this exact name is stopped, so none is left running.
@@ -745,10 +745,10 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
             for (const id of live) {
               try { assertSimulatorStopped(eas(["simulator:stop", "--id", id, "--json", "--non-interactive"], 2 * 60_000).stdout, id); }
               catch (error) { throw new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup",
-                message: `EAS Simulator session ${id}, started by a request that failed, could not be confirmed stopped.`,
-                nextAction: `Stop EAS Simulator session ${id} and verify its status.`, details: { sessionId: id }, cause: error }); }
+                message: `Expo Simulators session ${id}, started by a request that failed, could not be confirmed stopped.`,
+                nextAction: `Stop Expo Simulators session ${id} and verify its status.`, details: { sessionId: id }, cause: error }); }
             }
-            reason = `EAS could not start the simulator session (${simulatorStartFailure(startError, [options.expoToken]).message})`;
+            reason = `Expo Services could not start the simulator session (${simulatorStartFailure(startError, [options.expoToken]).message})`;
           }
         }
         if (!reason || sessionRetries >= SESSION_START_RETRIES) break;
@@ -758,7 +758,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         const startTimeoutMs = Math.min(SESSION_START_TIMEOUT_MS, retryDeadline - clock() - delayMs);
         if (startTimeoutMs < 60_000) break;
         sessionRetries += 1;
-        say(`${reason}; starting a new EAS Simulator session in ${Math.round(delayMs / 1000)} s (${sessionRetries}/${SESSION_START_RETRIES})`);
+        say(`${reason}; starting a new Expo Simulators session in ${Math.round(delayMs / 1000)} s (${sessionRetries}/${SESSION_START_RETRIES})`);
         options.signal?.throwIfAborted();
         // Asynchronous and cancellable, so targets capturing beside this one keep running and Ctrl+C stops the wait.
         if (options.sleep) options.sleep(delayMs);
@@ -775,11 +775,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         startError = await sessionStart;
         handoff = await readSimulatorDotenvHandoff(dotenvPath);
       }
-      // Every session EAS ended is its own failure to start, never a question of ownership.
+      // Every session Expo Services ended is its own failure to start, never a question of ownership.
       if (ended) throw new CiError({ code: "SIMULATOR_START_FAILED", stage: "session",
-        message: `EAS could not start a simulator session: ${endedSessions.length === 1 ? `session ${ended.sessionId} ended (${ended.status}) before it was ready`
+        message: `Expo Services could not start a simulator session: ${endedSessions.length === 1 ? `session ${ended.sessionId} ended (${ended.status}) before it was ready`
           : `${endedSessions.length} sessions ended before they were ready (the last, ${ended.sessionId}, ${ended.status})`}.`,
-        nextAction: "Rerun Explore. If sessions keep failing to start, check the EAS Simulator status and the sessions' logs on expo.dev.",
+        nextAction: "Rerun Explore. If sessions keep failing to start, check the Expo Simulators status and the sessions' logs on expo.dev.",
         retryable: true, details: { attempts: sessionRetries + 1, endedSessions, ...(startError ? { startFailure: simulatorStartFailure(startError, [options.expoToken]) } : {}) },
         ...(startError ? { cause: startError } : {}) });
       const startSecrets = [options.expoToken, ...(handoff.connection ? [handoff.connection.daemonAuthToken] : [])];
@@ -788,23 +788,23 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         try { assertSimulatorSessionIdentity(eas(["simulator:get", "--id", handoff.sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout,
           handoff.sessionId, sessionName, profile.projectIdentity, handoff.connection, options.platform); }
         catch (error) { throw new CiError({ code: "SESSION_HANDOFF_UNVERIFIED", stage: "session",
-          message: "The EAS handoff could not prove ownership of the exact simulator session. The private handoff was preserved.",
-          nextAction: "Inspect the EAS session logs and preserved handoff; confirm ownership before cleaning up the reported session.",
+          message: "The Expo Simulators handoff could not prove ownership of the exact simulator session. The private handoff was preserved.",
+          nextAction: "Inspect the Expo Simulators session logs and preserved handoff; confirm ownership before cleaning up the reported session.",
           details: { handoffDirectory: simulatorProject, reportedSessionId: handoff.sessionId,
             ...(startFailure ? { startFailure } : {}), verificationFailure: simulatorStartFailure(error, startSecrets) }, cause: error }); }
         sessionId = handoff.sessionId;
         if (statePath) await writeFile(statePath, `${sessionId}\n`, { flag: "wx", mode: 0o600 });
       }
       if (!sessionId) throw new CiError({ code: startFailure ? "SIMULATOR_START_FAILED" : "SESSION_HANDOFF_UNVERIFIED", stage: "session",
-        message: startFailure ? `EAS simulator:start failed before a session identity could be verified: ${startFailure.message}`
-          : "EAS did not provide an exact verifiable simulator session. The private handoff was preserved.",
-        nextAction: "Inspect the recorded start failure and EAS session list. Allocation status is unknown; verify a session's exact ID and ownership before cleanup.",
+        message: startFailure ? `eas simulator:start failed before a session identity could be verified: ${startFailure.message}`
+          : "Expo Services did not provide an exact verifiable simulator session. The private handoff was preserved.",
+        nextAction: "Inspect the recorded start failure and Expo Simulators session list. Allocation status is unknown; verify a session's exact ID and ownership before cleanup.",
         details: { handoffDirectory: simulatorProject, command: "eas simulator:start", startCommandStatus: startFailure ? "failed" : "completed", allocation: "unknown",
           ...(startFailure ? { startFailure } : {}),
           ...(handoff.validationError ? { handoffFailure: simulatorStartFailure(handoff.validationError, startSecrets) } : {}) },
         cause: startError ?? handoff.validationError });
       if (startFailure) throw new CiError({ code: "SIMULATOR_START_FAILED", stage: "session",
-        message: `EAS simulator:start failed after the session identity was verified: ${startFailure.message}`,
+        message: `eas simulator:start failed after the session identity was verified: ${startFailure.message}`,
         nextAction: "Inspect the recorded start failure; Explore will stop the exact verified session before returning this error.",
         details: { reportedSessionId: sessionId, command: "eas simulator:start", startCommandStatus: "failed", allocation: "verified", startFailure }, cause: startError });
       if (handoff.validationError) throw handoff.validationError;
@@ -878,7 +878,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       // controller's accessibility reader starts on the lit panel: Argent's, started on the outer panel, can stay there.
       say(`folding ${options.device} ${options.devicePose}`);
       const target = deviceArgs({ platform: options.platform, deviceModel: options.device, ...(localDevice() ? { provider: "local-simulator" as const, controllerDeviceId: localDevice()! } : {}) });
-      // agent-device reads the hinge back after folding and fails to (locally and on EAS); its display is checked instead.
+      // agent-device reads the hinge back after folding and fails to (locally and on Expo Services); its display is checked instead.
       const easAgentDevice = !!sessionId && controller === "agent-device";
       // Argent's bridge sends a fold again, twice, when the simulator-server it needs did not start within Argent's 30 s,
       // so a fold can take three of those waits and the panel checks after it: 4 minutes covers that.
@@ -903,13 +903,13 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           message: `${options.device} did not show the ${options.devicePose} display after folding: ${(folded.stderr || folded.stdout).trim().split("\n").at(-1) ?? ""}`.trim(),
           nextAction: "Rerun; if it persists, check that this Xcode's simulator supports folding the device." });
       } else if (easAgentDevice && sessionId) {
-        // On EAS, agent-device also folds only inside a session, so the app opens first. The first fold of a fresh session
+        // On Expo Services, agent-device also folds only inside a session, so the app opens first. The first fold of a fresh session
         // can leave the panel it lights black, as it does for Argent: the controller then reads the old panel and a
         // relaunch draws nothing. The display is the check, through the controller's own screenshot: in the pose's shape
         // and drawn. If it is not, SpringBoard is restarted, the app reopened and the device folded again, once.
-        // The open pose's shape is taken to be landscape. That is unverified for agent-device on EAS: local agent-device
+        // The open pose's shape is taken to be landscape. That is unverified for agent-device on Expo Services: local agent-device
         // runs returned the opened inner panel on its portrait axes (2007×2853), as explore:binary turns it from; the
-        // landscape shots seen on EAS (2853×2007) were Argent's, taken with its LandscapeRight rotation.
+        // landscape shots seen on Expo Services (2853×2007) were Argent's, taken with its LandscapeRight rotation.
         const open = (relaunch: boolean) => runner({ command: controllerCommand, args: ["open", options.bundleId, ...(relaunch ? ["--relaunch"] : []), "--session", CONTROLLER_SESSION,
           ...target, "--platform", options.platform, "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 15 * 60_000 });
         const shown = async () => {
@@ -942,7 +942,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
             nextAction: "Rerun the capture; if it keeps happening, report it to Explore with the session's link." });
         }
       } else if (controller === "argent" && sessionId && controlActions.has("springboard.restart")) {
-        // The bridge has already reset Argent's device helpers once when its reader stayed on the dark panel. On EAS the
+        // The bridge has already reset Argent's device helpers once when its reader stayed on the dark panel. On Expo Services the
         // tool-server cannot be restarted, so the next step is SpringBoard, then the same fold and check again.
         try { fold(); }
         catch (error) {
@@ -955,7 +955,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
             if (toCiError(retry).code !== "CONTROLLER_FOLD_UNVERIFIED") throw retry;
             throw new CiError({ code: "CONTROLLER_READER_STUCK", stage: "session",
               message: `Argent's accessibility reader kept reading the panel the fold turned off, after its device helpers were reset and SpringBoard was restarted.`,
-              nextAction: "Rerun the capture; if it keeps happening, report it to Explore: this session's Argent tool-server needs a restart that EAS cannot do yet.", cause: retry });
+              nextAction: "Rerun the capture; if it keeps happening, report it to Explore: this session's Argent tool-server needs a restart that Expo Services cannot do yet.", cause: retry });
           }
         }
       } else fold();
@@ -968,7 +968,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     // (APP_NOT_READY). On this machine the capture runs that reader, so it recovers in two steps, each followed by one more
     // open: a fresh tool-server, whose reader starts on the lit panel; then, as XcodeBuildMCP#537 found for this panel,
     // SpringBoard restarted as well. The bridge's cached view of the device goes with the old server.
-    // On EAS the tool-server is the session's and must never be stopped, so the recovery there resets Argent's device
+    // On Expo Services the tool-server is the session's and must never be stopped, so the recovery there resets Argent's device
     // helpers (reset-reader), then restarts SpringBoard as well, and then gives up with a reason rather than retrying.
     const easArgentRecovery = !local && controller === "argent" && !!sessionId && options.platform === "ios";
     for (let recovery = 0; ; recovery += 1) try { runtime = collect(); break; }
@@ -978,7 +978,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         if (recovery === 2 || recovery === 1 && !controlActions.has("springboard.restart")) throw new CiError({ code: "CONTROLLER_READER_STUCK", stage: "session",
           message: "Argent's accessibility reader kept reading the panel the fold turned off, after its device helpers were reset"
             + `${recovery === 2 ? " and SpringBoard was restarted" : ""}.`,
-          nextAction: "Rerun the capture; if it keeps happening, report it to Explore: this session's Argent tool-server needs a restart that EAS cannot do yet.", cause: error });
+          nextAction: "Rerun the capture; if it keeps happening, report it to Explore: this session's Argent tool-server needs a restart that Expo Services cannot do yet.", cause: error });
         if (recovery === 1) {
           say("Argent still did not read the app; restarting SpringBoard, then resetting Argent's device helpers and opening the app again");
           simulatorControl(sessionEas, sessionId, "springboard.restart", [], controlOptions);
@@ -1014,7 +1014,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       runtime.osVersion = await simulatorOsVersion(eas(["simulator:get", "--id", sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout,
         runtime.controllerDeviceId, options.fetch ?? fetch, options.platform);
     } catch (error) {
-      process.stderr.write(`The EAS Simulator OS version is unavailable (${(error as Error).message}); the review records it as unknown.\n`);
+      process.stderr.write(`The Expo Simulators OS version is unavailable (${(error as Error).message}); the review records it as unknown.\n`);
     }
     if (await store.exists()) { map.run = newCaptureMap(options, runtime, fingerprint).run; await store.write(map); }
     else { map = newCaptureMap(options, runtime, fingerprint); await store.initialize(map, false); }
@@ -1036,7 +1036,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       const passTimings = colorSchemes.length > 1 ? timings.labelled({ pass: colorScheme }) : timings;
       const capturePass = async () => {
         // Argent cannot switch the appearance yet (software-mansion/argent#1509): the host does, simctl or adb on this
-        // machine and serve-sim on an EAS iOS session; elsewhere its single pass runs as the device starts.
+        // machine and serve-sim on an iOS Expo Simulators session; elsewhere its single pass runs as the device starts.
         if (controller !== "argent") runner({ command: controllerCommand, args: [...appearanceArgs(colorScheme), "--session", CONTROLLER_SESSION, ...deviceArgs(activeRuntime), "--platform", options.platform],
           cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
         else if (sessionId && controlActions.has("appearance.set")) simulatorControl(sessionEas, sessionId, "appearance.set", [colorScheme], controlOptions);
@@ -1144,7 +1144,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         if (statePath) await rm(statePath, { force: true });
         await rm(simulatorProject, { recursive: true, force: true });
       } catch (error) { throw new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup",
-        message: "The exact EAS session could not be confirmed stopped.", nextAction: `Stop EAS Simulator session ${sessionId} and verify its status.`,
+        message: "The exact Expo Simulators session could not be confirmed stopped.", nextAction: `Stop Expo Simulators session ${sessionId} and verify its status.`,
         details: { sessionId, ...(primaryError ? { originalFailure: serializeCiError(primaryError, { secrets: [options.expoToken] }) } : {}) }, cause: error }); }
     }
   }

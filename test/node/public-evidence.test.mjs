@@ -612,7 +612,7 @@ test("text that varies between both builds' own verified appearances is runtime 
 });
 
 test("a foldable's rail clock pill is left out of the verdict like a phone's status bar", () => {
-  // Measured on EAS Simulator captures of an iPhone Duo (iOS 27.1): a 40×64 pt clock + Wi-Fi pill 28 pt from the right edge.
+  // Measured on Expo Simulators captures of an iPhone Duo (iOS 27.1): a 40×64 pt clock + Wi-Fi pill 28 pt from the right edge.
   const closed = systemRegions({ platform: "ios", device: "iPhone Duo", pose: "closed" });
   const open = systemRegions({ platform: "ios", device: "iPhone Duo", pose: "open" });
   assert.deepEqual(closed, [{ kind: "status-bar", x: 84.55, y: 12.24, width: 10.3, height: 10.62 }, { kind: "home-indicator", x: 0, y: 97, width: 100, height: 3 }]);

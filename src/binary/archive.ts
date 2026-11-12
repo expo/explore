@@ -54,7 +54,7 @@ export function archiveKind(path: string): ArchiveKind {
   if (name.endsWith(".ipa")) return "ios-ipa";
   if (name.endsWith(".apk")) return "android-apk";
   if (name.endsWith(".aab")) throw archiveError("ARCHIVE_AAB_UNSUPPORTED", "Android App Bundles cannot be installed on an emulator.",
-    "Build an APK (for example an EAS profile with buildType apk, or bundletool build-apks --mode universal) and pass that .apk.");
+    "Build an APK (for example an Expo Build profile with buildType apk, or bundletool build-apks --mode universal) and pass that .apk.");
   throw archiveError("ARCHIVE_KIND_UNKNOWN", `Unsupported archive: ${basename(path)}`,
     "Pass an iOS simulator .app directory, a .tar.gz of one, a simulator .ipa, or an Android .apk.");
 }
@@ -76,7 +76,7 @@ export async function inspectArchive(input: string, options: { maxBytes?: number
   const digest = { sha256, bytes: info.size };
   if (kind === "ios-tgz") {
     const plist = await tarEntry(path, name => /^(\.\/)?[^/]+\.app\/Info\.plist$/.test(name));
-    if (!plist) throw archiveError("ARCHIVE_INVALID", "The tarball has no top-level <name>.app/Info.plist.", "Pass an EAS iOS simulator build archive (.tar.gz containing one .app).");
+    if (!plist) throw archiveError("ARCHIVE_INVALID", "The tarball has no top-level <name>.app/Info.plist.", "Pass an Expo Build iOS simulator build archive (.tar.gz containing one .app).");
     return { path, kind, platform: "ios", ...iosMetadata(parsePlist(plist.contents), path), abis: [], ...digest };
   }
   if (kind === "ios-ipa") {
@@ -165,13 +165,13 @@ export async function readArchiveIcon(archive: InspectedArchive): Promise<Buffer
 }
 
 /**
- * Explore's EAS Android emulator is x86_64 with no 32-bit support, and a local one runs this Mac's ABI; an APK that
+ * Explore's Expo Simulators Android emulator is x86_64 with no 32-bit support, and a local one runs this Mac's ABI; an APK that
  * ships native libraries only for other ABIs fails to install there.
  */
 export function assertEmulatorCompatible(archive: InspectedArchive, emulatorAbis: readonly string[] = ["x86_64"]): void {
   if (archive.platform === "ios") {
     if (!archive.simulator) throw archiveError("ARCHIVE_NOT_SIMULATOR", `${basename(archive.path)} is an iOS device build; it cannot run on a simulator.`,
-      "Build for the simulator (an EAS profile with ios.simulator: true) and pass that .app, .tar.gz, or simulator .ipa.");
+      "Build for the simulator (an Expo Build profile with ios.simulator: true) and pass that .app, .tar.gz, or simulator .ipa.");
     return;
   }
   if (archive.signed === false) {

@@ -1,6 +1,6 @@
 name: Viewer preview
 
-# Deploys each pull request's Viewer to its own EAS Hosting alias (explore-viewer-pr--pr-<number>.expo.app), serving
+# Deploys each pull request's Viewer to its own Expo Hosting alias (explore-viewer-pr--pr-<number>.expo.app), serving
 # fixed reports from a real app, and keeps one comment on the pull request that links it. The reports are the assets
 # of the viewer-preview-fixtures release; refresh them with scripts/refresh-viewer-preview-fixtures.sh. Every push
 # replaces what the alias serves, and the comment's /p/<token> is reused, so the link never changes.
@@ -67,7 +67,7 @@ jobs:
         shell: bash
         env:
           COMMENT_ID: ${{ steps.comment.outputs.id }}
-          # How long an alias can keep serving the previous push: an EAS Hosting edge that served it keeps it for about
+          # How long an alias can keep serving the previous push: an Expo Hosting edge that served it keeps it for about
           # five minutes (FIXTURE_ALIAS_WAIT_MS in src/report/preview-deploy.ts).
           ALIAS_CATCH_UP: 5 minutes
         run: |
@@ -132,4 +132,4 @@ jobs:
           cd "$work"
           npx --prefix "$GITHUB_WORKSPACE" eas init --force --non-interactive > /dev/null
           npx --prefix "$GITHUB_WORKSPACE" eas deploy:alias:delete "pr-$PR" --non-interactive \
-            || echo "::warning::The alias pr-$PR was not deleted (it may never have been assigned); delete it in the EAS Hosting dashboard if it exists."
+            || echo "::warning::The alias pr-$PR was not deleted (it may never have been assigned); delete it in the Expo Hosting dashboard if it exists."

@@ -61,7 +61,7 @@ test("a list that fails once is asked for again after a pause, and its actions a
   }
 });
 
-test("a list that keeps failing throws a retryable error naming the session and EAS's reason, never an empty set", () => {
+test("a list that keeps failing throws a retryable error naming the session and Expo Services' reason, never an empty set", () => {
   const { calls, eas } = flakyList(Infinity);
   const pauses = [];
   assert.throws(() => simulatorControlActions(eas, "session-1", { sleep: milliseconds => pauses.push(milliseconds) }), error =>
@@ -108,7 +108,7 @@ test("an action that fails once is sent again after a pause", () => {
   assert.equal(pauses.length, 1);
 });
 
-test("an action that keeps failing throws EAS's reason after its last attempt, with no pause after it", () => {
+test("an action that keeps failing throws Expo Services' reason after its last attempt, with no pause after it", () => {
   const { calls, eas } = flakyEas(Infinity);
   const pauses = [];
   assert.throws(() => simulatorControl(eas, "session-1", "app.approveUrlScheme", ["dev.example.app", "example"], { sleep: milliseconds => pauses.push(milliseconds) }),

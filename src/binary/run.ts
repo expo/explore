@@ -50,13 +50,13 @@ export type BinaryExploreOptions = {
   maxActions?: number;
   provider?: CiAgentProviderName;
   model?: string;
-  /** EAS account that owns the simulator session (and the hosted report); defaults to the token's primary account. */
+  /** Expo account that owns the simulator session (and the hosted report); defaults to the token's primary account. */
   owner?: string;
-  /** EAS project slug the sessions run under; created on first use. */
+  /** Expo Services project slug the sessions run under; created on first use. */
   project?: string;
   /** The session's device controller; agent-device unless Argent is chosen. explore:session takes it from the session. */
   controller?: "agent-device" | "argent";
-  /** Where the app runs: an EAS Simulator session (the default), or a simulator or emulator this run starts on this machine, with no EAS login. */
+  /** Where the app runs: an Expo Simulators session (the default), or a simulator or emulator this run starts on this machine, with no Expo Services login. */
   simulator?: "eas" | "local";
   environment?: NodeJS.ProcessEnv;
   runner?: typeof defaultRunner;
@@ -264,7 +264,7 @@ export async function preflightModelSession(options: ModelSessionOptions, enviro
 export type SessionExploreOptions = Omit<BinaryExploreOptions, "archive" | "bundleId" | "owner" | "project"> & {
   /** App to explore; defaults to the app in the foreground, else the only user-installed app. */
   bundleId?: string;
-  /** EAS Simulator session id; defaults to EAS_SIMULATOR_SESSION_ID (or the dotenv file's). */
+  /** Expo Simulators session id; defaults to EAS_SIMULATOR_SESSION_ID (or the dotenv file's). */
   session?: string;
   /** `.env.eas-simulator` written by `eas simulator:start --out-config-type dotenv`; otherwise the AGENT_DEVICE_DAEMON_* variables are used. */
   envFile?: string;
@@ -308,11 +308,11 @@ export type ConnectedSessionExploration = {
   /** The app's icon from the archive for the Viewer header. */
   appIcon?: Buffer;
   /**
-   * A simulator or emulator on this machine instead of an EAS session: the controller drives it by its UDID or adb
+   * A simulator or emulator on this machine instead of an Expo Simulators session: the controller drives it by its UDID or adb
    * serial (agent-device with a daemon of its own in `stateDirectory`, or a local Argent tool-server pinned to it).
    */
   local?: { deviceId: string; osVersion: string; stateDirectory: string };
-  /** Runs once the app is installed and before anything opens it, as an EAS session's link approval must. */
+  /** Runs once the app is installed and before anything opens it, as an Expo Simulators session's link approval must. */
   afterInstall?: () => void;
 };
 
@@ -330,7 +330,7 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
   } else {
     const controllerConfig = join(work, "agent-device.json");
     await writeFile(controllerConfig, "{}\n", { flag: "wx", mode: 0o400 });
-    // A local device has no EAS daemon: agent-device runs its own, in a state directory of this run's.
+    // A local device has no Expo Simulators daemon: agent-device runs its own, in a state directory of this run's.
     controllerEnvironment = { ...baseEnvironment(environment), AGENT_DEVICE_CONFIG: controllerConfig,
       ...(local ? { AGENT_DEVICE_STATE_DIR: local.stateDirectory } : { AGENT_DEVICE_DAEMON_BASE_URL: connection.daemonBaseUrl, AGENT_DEVICE_DAEMON_AUTH_TOKEN: connection.daemonAuthToken }),
       AGENT_DEVICE_SESSION: controllerSession, AGENT_DEVICE_SESSION_LOCK: "reject", AGENT_DEVICE_PLATFORM: platform };
@@ -428,7 +428,7 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
     let leftApp = false;
     try { nodes = snapshot(); }
     catch {
-      // A transient controller failure (adb "device offline" mid-animation on EAS Android) is retried once before Explore assumes the app left the foreground.
+      // A transient controller failure (adb "device offline" mid-animation on Expo Simulators Android) is retried once before Explore assumes the app left the foreground.
       await new Promise(resolve => setTimeout(resolve, 1500));
       try { nodes = snapshot(); } catch { reopen(); leftApp = true; nodes = snapshot(); }
     }
@@ -564,7 +564,7 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
   let connection: SimulatorConnection;
   try { connection = await resolveAttachedSimulatorSession(environment, options.envFile, options.session); }
   catch (error) {
-    throw binaryError("SESSION_NOT_PROVIDED", `No EAS Simulator session connection was found: ${error instanceof Error ? error.message : String(error)}`,
+    throw binaryError("SESSION_NOT_PROVIDED", `No Expo Simulators session connection was found: ${error instanceof Error ? error.message : String(error)}`,
       "Start one with `eas simulator:start --type agent-device --out-config-type dotenv` (or `--type argent`) and run explore:session in that directory (or pass --env-file / set EAS_SIMULATOR_SESSION_ID with AGENT_DEVICE_DAEMON_BASE_URL and AGENT_DEVICE_DAEMON_AUTH_TOKEN, or ARGENT_TOOLS_URL).");
   }
   const sessionController = connectionController(connection);
@@ -574,7 +574,7 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
       `Drop --controller, or start a session with \`eas simulator:start --type ${options.controller}\`.`, { sessionId: connection.sessionId });
   }
   if (!environment.EXPO_TOKEN?.trim() && !environment.EXPO_SESSION_SECRET?.trim() && !(await easLoggedIn(runner, environment))) {
-    throw binaryError("EXPO_LOGIN_REQUIRED", "No EAS login was found.", "Run `eas login` or set EXPO_TOKEN, then rerun explore:session.");
+    throw binaryError("EXPO_LOGIN_REQUIRED", "No Expo Services login was found.", "Run `eas login` or set EXPO_TOKEN, then rerun explore:session.");
   }
   const work = await realpath(await mkdtemp(join(tmpdir(), "expo-explore-session-")));
   const easEnvironment = { ...baseEnvironment(environment), ...(environment.EXPO_TOKEN ? { EXPO_TOKEN: environment.EXPO_TOKEN } : {}), ...(environment.HOME ? { HOME: environment.HOME } : {}), CI: "1", EXPO_NO_TELEMETRY: "1" };
@@ -596,11 +596,11 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
     createdAt: new Date(now()).toISOString(), updatedAt: new Date(now()).toISOString(), build: { ...(app.version ? { version: app.version } : {}), source: "unknown" }, environment: {}, limits },
     artifacts: [], screens: [], variants: [], observations: [], elements: [], actionAttempts: [], transitions: [], journeys: [], frontier: [], gaps: [] };
   try {
-    say(`checking EAS Simulator session ${connection.sessionId}`);
+    say(`checking Expo Simulators session ${connection.sessionId}`);
     let info: ReturnType<typeof assertAttachedSimulatorSession>;
     try { info = assertAttachedSimulatorSession(sessionJson(), connection, options.platform); }
     catch (error) {
-      throw binaryError("SESSION_UNAVAILABLE", `EAS Simulator session ${connection.sessionId} cannot be explored: ${lastLine(redactSecrets(error instanceof Error ? error.message : String(error), secrets))}`,
+      throw binaryError("SESSION_UNAVAILABLE", `Expo Simulators session ${connection.sessionId} cannot be explored: ${lastLine(redactSecrets(error instanceof Error ? error.message : String(error), secrets))}`,
         `Check \`eas simulator:list\`; the session must be in progress, of type ${sessionController}, and match the connection you passed.`, { sessionId: connection.sessionId });
     }
     platform = info.platform;
@@ -719,14 +719,14 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
   const replay = replayPlan(options);
   const inputs = hintInputs(options.hints, environment, replay);
   const local = options.simulator === "local";
-  // A local emulator runs this Mac's ABI (arm64-v8a on Apple silicon); EAS's runs x86_64.
+  // A local emulator runs this Mac's ABI (arm64-v8a on Apple silicon); Expo Services' runs x86_64.
   const emulatorAbi = local ? hostEmulatorAbi() : "x86_64";
   say("inspecting the archive");
   const archive = await inspectArchive(options.archive);
   assertEmulatorCompatible(archive, [emulatorAbi]);
   if (options.platform && options.platform !== archive.platform) throw binaryError("ARCHIVE_PLATFORM_MISMATCH", `The archive is an ${archive.platform} build but --platform ${options.platform} was requested.`, "Drop --platform or pass a matching archive.");
   if (!local && !environment.EXPO_TOKEN?.trim() && !environment.EXPO_SESSION_SECRET?.trim() && !(await easLoggedIn(runner, environment))) {
-    throw binaryError("EXPO_LOGIN_REQUIRED", "No EAS login was found.", "Run `eas login` or set EXPO_TOKEN, then rerun explore:binary.");
+    throw binaryError("EXPO_LOGIN_REQUIRED", "No Expo Services login was found.", "Run `eas login` or set EXPO_TOKEN, then rerun explore:binary.");
   }
   const platform = archive.platform;
   const bundleId = options.bundleId ?? archive.bundleId;
@@ -788,18 +788,18 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
       if (!owner) {
         const who = eas(["whoami"], 60_000);
         owner = who.status === 0 ? whoamiAccounts(who.stdout)[0] ?? "" : "";
-        if (!owner) throw binaryError("EXPO_LOGIN_REQUIRED", "EAS did not report an account for this login.", "Run `eas login` (or set EXPO_TOKEN) and rerun, or pass --owner.");
+        if (!owner) throw binaryError("EXPO_LOGIN_REQUIRED", "Expo Services did not report an account for this login.", "Run `eas login` (or set EXPO_TOKEN) and rerun, or pass --owner.");
       }
       await writeFile(join(work, "package.json"), JSON.stringify({ name: project, version: "0.0.0", private: true }), { mode: 0o600 });
       await writeFile(join(work, "app.json"), JSON.stringify({ expo: { name: project, slug: project, owner, web: { output: "server" } } }), { mode: 0o600 });
       const init = eas(["init", "--force", "--non-interactive", "--json"], 2 * 60_000);
       const appJson = JSON.parse(await readFile(join(work, "app.json"), "utf8")) as { expo?: { extra?: { eas?: { projectId?: string } } } };
       const projectId = appJson.expo?.extra?.eas?.projectId;
-      if (init.status !== 0 || !projectId) throw binaryError("EXPLORE_PROJECT_FAILED", `EAS could not create or link @${owner}/${project}: ${lastLine(init.stderr || init.stdout)}`,
+      if (init.status !== 0 || !projectId) throw binaryError("EXPLORE_PROJECT_FAILED", `Expo Services could not create or link @${owner}/${project}: ${lastLine(init.stderr || init.stdout)}`,
         "Give this login permission to create projects under the owner, or pass --project with an existing slug.", { owner, project });
       const projectIdentity = { name: project, slug: project, owner, projectId };
 
-      say(`starting an EAS Simulator session (${device}, ${limits.maxDurationMinutes} min)`);
+      say(`starting an Expo Simulators session (${device}, ${limits.maxDurationMinutes} min)`);
       const sessionName = `explore-binary-${createHash("sha256").update(`${archive.sha256}:${map.run.id}`).digest("hex").slice(0, 16)}`;
       const dotenvPath = join(work, SIMULATOR_DOTENV_FILE_NAME);
       await writeFile(dotenvPath, SIMULATOR_DOTENV_HEADER, { flag: "wx", mode: 0o600 });
@@ -814,14 +814,14 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
       const startFailure = startError ? simulatorStartFailure(startError, secrets) : undefined;
       if (handoff.sessionId) {
         try { assertSimulatorSessionIdentity(eas(["simulator:get", "--id", handoff.sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout, handoff.sessionId, sessionName, projectIdentity, handoff.connection, platform); }
-        catch (error) { throw new CiError({ code: "SESSION_HANDOFF_UNVERIFIED", stage: "session", message: "The EAS handoff could not prove ownership of the exact simulator session. The private handoff was preserved.",
-          nextAction: "Inspect the EAS session list; confirm ownership before stopping the reported session.", details: { handoffDirectory: work, reportedSessionId: handoff.sessionId, ...(startFailure ? { startFailure } : {}) }, cause: error }); }
+        catch (error) { throw new CiError({ code: "SESSION_HANDOFF_UNVERIFIED", stage: "session", message: "The Expo Simulators handoff could not prove ownership of the exact simulator session. The private handoff was preserved.",
+          nextAction: "Inspect the Expo Simulators session list; confirm ownership before stopping the reported session.", details: { handoffDirectory: work, reportedSessionId: handoff.sessionId, ...(startFailure ? { startFailure } : {}) }, cause: error }); }
         sessionId = handoff.sessionId;
       }
       if (!sessionId) throw new CiError({ code: startFailure ? "SIMULATOR_START_FAILED" : "SESSION_HANDOFF_UNVERIFIED", stage: "session",
-        message: startFailure ? `EAS simulator:start failed: ${startFailure.message}` : "EAS did not provide a verifiable simulator session.",
-        nextAction: "Inspect the EAS start failure and session list; verify a session's exact ID and ownership before cleanup.", details: { handoffDirectory: work, ...(startFailure ? { startFailure } : {}) }, cause: startError });
-      if (startFailure) throw new CiError({ code: "SIMULATOR_START_FAILED", stage: "session", message: `EAS simulator:start failed after the session was verified: ${startFailure.message}`,
+        message: startFailure ? `eas simulator:start failed: ${startFailure.message}` : "Expo Services did not provide a verifiable simulator session.",
+        nextAction: "Inspect the Expo Simulators start failure and session list; verify a session's exact ID and ownership before cleanup.", details: { handoffDirectory: work, ...(startFailure ? { startFailure } : {}) }, cause: startError });
+      if (startFailure) throw new CiError({ code: "SIMULATOR_START_FAILED", stage: "session", message: `eas simulator:start failed after the session was verified: ${startFailure.message}`,
         nextAction: "Inspect the start failure; Explore stops the verified session before returning.", details: { sessionId, startFailure }, cause: startError });
       if (handoff.validationError) throw handoff.validationError;
       if (!handoff.connection) throw new Error("Simulator handoff is missing its controller connection");
@@ -850,7 +850,7 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
         assertSimulatorStopped(eas(["simulator:stop", "--id", sessionId, "--json", "--non-interactive"], 2 * 60_000).stdout, sessionId);
         await rm(work, { recursive: true, force: true });
       } catch (error) {
-        throw new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup", message: "The exact EAS session could not be confirmed stopped.", nextAction: `Stop EAS Simulator session ${sessionId} (eas simulator:stop --id ${sessionId}) and verify its status.`,
+        throw new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup", message: "The exact Expo Simulators session could not be confirmed stopped.", nextAction: `Stop Expo Simulators session ${sessionId} (eas simulator:stop --id ${sessionId}) and verify its status.`,
           details: { sessionId, ...(primaryError ? { originalFailure: serializeCiError(primaryError, { secrets: [environment.EXPO_TOKEN ?? "", ...inputs.values] }) } : {}) }, cause: error });
       }
     } else await rm(work, { recursive: true, force: true });
@@ -927,7 +927,7 @@ const KEYBOARD_RETURN_KEY = /^(return|next|done|go|continue|join)$/i;
  * How a frame's screenshot is stored. An opened (or half-open) iPhone Duo lights its inner panel, whose native axes are
  * portrait, and shows a landscape UI on it: the tree and taps stay on the portrait axes (a 669×951 pt root, the transpose
  * of `DUO_PANELS.inner`), and a screenshot on those axes is sideways to a person, so it is turned ("turn"). Local
- * agent-device runs returned exactly that (2007×2853 px). Capture's Argent screenshots on EAS, taken with Argent's
+ * agent-device runs returned exactly that (2007×2853 px). Capture's Argent screenshots on Expo Services, taken with Argent's
  * LandscapeRight rotation, came back upright (2853×2007); an image that is already the root's transpose is left as it is.
  * The root is the full-screen Application node capture takes its coordinate space from, matched to within a pixel and a
  * point. A Duo frame on neither panel is "unmatched": it is stored as taken, and the caller says so. An empty tree, read

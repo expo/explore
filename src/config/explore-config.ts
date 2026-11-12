@@ -42,7 +42,7 @@ export const DEFAULT_ANDROID_DEVICE = "pixel_7";
 
 /**
  * One platform's capture target. `platforms.ios` fields default to the flat `app`/`device` fields;
- * `platforms.android` needs its own package and EAS profile (an `android.buildType: apk` profile).
+ * `platforms.android` needs its own package and Expo Build profile (an `android.buildType: apk` profile).
  */
 /** The poses a foldable device can be captured in (`fold` in agent-device and Argent). */
 export const DEVICE_POSES = ["closed", "half-open", "open"] as const;
@@ -95,7 +95,7 @@ export type ExploreConfig = {
   exploration: { scope: "changes" | "all"; exclude?: string[] };
   capture: { maxMinutes: number; maxActions: number;
     /**
-     * The most EAS Simulator sessions one review may run at once, across its targets and sides; absent:
+     * The most Expo Simulators sessions one review may run at once, across its targets and sides; absent:
      * DEFAULT_MAX_SESSIONS (5). Below the number of targets, that many target jobs run at once, one session each.
      */
     maxSessions?: number;
@@ -108,12 +108,12 @@ export type ExploreConfig = {
     repack?: "eas" | "local"; appearance: AppearanceSetting; launch: LaunchSetting; reset: RouteResetSetting; unattributed: UnattributedSetting; readinessSeconds?: number;
     /** The device controller; absent means agent-device, so configs that never chose one keep their cache recipes. */
     controller?: "argent";
-    /** Where the app runs: EAS Simulator when absent, or `local`, a simulator Explore creates on this Mac for the run. */
+    /** Where the app runs: Expo Simulators when absent, or `local`, a simulator Explore creates on this Mac for the run. */
     simulator?: "local" };
   parameters?: Record<string, Record<string, string>>;
   setup?: ExploreSetupAction[];
   agent?: { provider: "openai" | "anthropic"; model: string; instructions?: string };
-  /** Hosted previews: one token-gated EAS Hosting deployment per review, see docs/private-review.md. */
+  /** Hosted previews: one token-gated Expo Hosting deployment per review, see docs/private-review.md. */
   report?: { preview?: { hosting: "eas"; /** `expiresAfter` was set; it no longer applies (see IGNORED_EXPIRY). */ expiresAfterIgnored?: true; owner?: string; project?: string };
     /** `map`: the PR comment draws a Mermaid map of the changed screens and the screens that lead to them. Off by default. */
     comment?: { map: boolean } };
@@ -127,9 +127,9 @@ export type ExploreConfig = {
 
 /**
  * What `report.preview.expiresAfter` and `--expires-in` say now that Explore sets no expiry: a hosted preview lasts as long
- * as its EAS Hosting deployment. Both are still accepted, so configs and copied workflows keep working.
+ * as its Expo Hosting deployment. Both are still accepted, so configs and copied workflows keep working.
  */
-export const IGNORED_EXPIRY = "no longer applies: a hosted preview lasts as long as its EAS Hosting deployment, which EAS deletes after 30 days on Free and 90 on paid plans unless an alias points at it. Delete the deployment (eas deploy:delete) to remove it sooner.";
+export const IGNORED_EXPIRY = "no longer applies: a hosted preview lasts as long as its Expo Hosting deployment, which Expo Services deletes after 30 days on Free and 90 on paid plans unless an alias points at it. Delete the deployment (eas deploy:delete) to remove it sooner.";
 
 /** Says once, on stderr (a warning annotation in GitHub Actions), that an expiry setting is ignored. */
 export function warnIgnoredExpiry(setting: string, environment: NodeJS.ProcessEnv = process.env): void {
@@ -489,7 +489,7 @@ export function resolveTargetConfig(config: ExploreConfig, selection: { target?:
   const primary = entry.platform === config.app.platform;
   const { targets: _targets, platforms: _platforms, ...rest } = config;
   void _targets; void _platforms;
-  // A target's own controller and simulator; agent-device and EAS Simulator are the defaults, which leave the config as it was.
+  // A target's own controller and simulator; agent-device and Expo Simulators are the defaults, which leave the config as it was.
   const { controller: _controller, simulator: _simulator, ...capture } = config.capture;
   void _controller; void _simulator;
   const controller = entry.controller ?? config.capture.controller ?? "agent-device";
@@ -565,14 +565,14 @@ export function withRunOverrides(config: ExploreConfig, overrides: { scope?: str
 
 /**
  * Where a capture repacks the app with the route observer: the config's choice, else on this machine when the app runs on
- * a local simulator (which already needs Xcode or the Android SDK), and in a hosted EAS job otherwise.
+ * a local simulator (which already needs Xcode or the Android SDK), and in a hosted Expo Workflows job otherwise.
  */
 export function captureRepack(config: ExploreConfig): "eas" | "local" {
   return config.capture.repack ?? (config.capture.simulator === "local" ? "local" : "eas");
 }
 
 /**
- * The targets, in config order, whose captures repack the same app as `selected` on EAS: one platform, EAS profile and
+ * The targets, in config order, whose captures repack the same app as `selected` on Expo Services: one platform, Expo Build profile and
  * bundle id. Their matrix jobs make one hosted repack per commit between them, led by the first (RepackShare); a target
  * no other one shares an app with gets just itself.
  */
@@ -640,7 +640,7 @@ function previewConfig(value: unknown): NonNullable<ExploreConfig["report"]>["pr
   }
   const project = optionalText(preview.project, "report.preview.project", 64);
   if (project !== undefined && !/^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(project)) {
-    fail("report.preview.project must be a lowercase EAS project slug", "report.preview.project");
+    fail("report.preview.project must be a lowercase Expo Services project slug", "report.preview.project");
   }
   return {
     hosting: literal(preview.hosting, ["eas"] as const, "report.preview.hosting"),

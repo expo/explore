@@ -59,7 +59,7 @@ test("a run's scope overrides the reviewed config only where the workflow set it
   const config = { exploration: { scope: "changes" }, report: { preview: { hosting: "eas" } } };
   assert.deepEqual(withRunOverrides(config, {}), config);
   assert.deepEqual(withRunOverrides(config, { scope: "all", expiresIn: "never" }), { exploration: { scope: "all" }, report: { preview: { hosting: "eas" } } });
-  // A hosted preview lasts as long as its EAS Hosting deployment, so --expires-in is accepted from older workflows and ignored, whatever it says.
+  // A hosted preview lasts as long as its Expo Hosting deployment, so --expires-in is accepted from older workflows and ignored, whatever it says.
   assert.deepEqual(withRunOverrides(config, { expiresIn: "forever" }), config);
   assert.throws(() => withRunOverrides(config, { scope: "everything" }), /--scope must be changes or all/);
 });

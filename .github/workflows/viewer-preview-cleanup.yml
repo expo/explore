@@ -1,6 +1,6 @@
 name: Viewer preview cleanup
 
-# Deletes the pr-<number> EAS Hosting alias that viewer-preview.yml deployed, a week after the pull request closed,
+# Deletes the pr-<number> Expo Hosting alias that viewer-preview.yml deployed, a week after the pull request closed,
 # so links in merged pull requests keep working for a while and the expo-public account's aliases do not pile up.
 # Each run looks at pull requests closed 7 to 30 days ago; an alias that is already gone, or was never deployed,
 # counts as deleted. The pull request's preview comment then says the preview was deleted, so its links are not

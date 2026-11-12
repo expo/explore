@@ -10,13 +10,13 @@ import { isRecord, parseJson } from "./common.js";
 import type { CommandRunner } from "./run.js";
 
 /**
- * A simulator Explore creates on this Mac for one capture (`capture.simulator: local`), in place of an EAS Simulator
+ * A simulator Explore creates on this Mac for one capture (`capture.simulator: local`), in place of an Expo Simulators
  * session. Each capture gets its own device, so head and base run side by side without sharing app state, and the
  * device is deleted when the capture ends.
  */
 export type LocalSimulator = { udid: string; name: string; deviceType: string; runtime: string; osVersion: string };
 
-/** A session state file names a local simulator with this prefix, so an interrupted review deletes it rather than calling EAS. */
+/** A session state file names a local simulator with this prefix, so an interrupted review deletes it rather than calling Expo Services. */
 export const LOCAL_SIMULATOR_STATE_PREFIX = "simctl-";
 
 const UDID = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/;
@@ -82,7 +82,7 @@ export function waitForLocalSimulator(options: { runner: CommandRunner; udid: st
 
 /**
  * Lets the app open its own links without iOS asking "Open in “App”?" first, as a person would have approved it once.
- * EAS Simulator gives no access to the device, so its captures still answer the prompt (route-capture.ts); a local
+ * Expo Simulators gives no access to the device, so its captures still answer the prompt (route-capture.ts); a local
  * simulator never shows it.
  */
 export function approveLinkScheme(options: { runner: CommandRunner; udid: string; scheme: string; bundleId: string; cwd: string; environment: NodeJS.ProcessEnv }): void {
@@ -128,7 +128,7 @@ export function deleteLocalSimulator(options: { runner: CommandRunner; udid: str
   simctl(options.runner, ["delete", options.udid], options.cwd, options.environment, 2 * 60_000);
 }
 
-/** The UDID a session state file records for a local simulator, or undefined when it names an EAS session. */
+/** The UDID a session state file records for a local simulator, or undefined when it names an Expo Simulators session. */
 export function localSimulatorFromState(state: string): string | undefined {
   if (!state.startsWith(LOCAL_SIMULATOR_STATE_PREFIX)) return undefined;
   const udid = state.slice(LOCAL_SIMULATOR_STATE_PREFIX.length);
@@ -183,7 +183,7 @@ export async function assertLocalEmulatorCompatible(apk: string, abi: string): P
   const abis = await apkAbis(apk);
   if (abis.length && !abis.includes(abi)) throw new CiError({ code: "LOCAL_EMULATOR_ABI_UNSUPPORTED", stage: "session",
     message: `The APK ships native libraries only for ${abis.join(", ")}; this machine's emulator runs ${abi}.`,
-    nextAction: `Build an APK that includes ${abi} (a universal build does), or capture Android on EAS Simulator with --simulator eas.` });
+    nextAction: `Build an APK that includes ${abi} (a universal build does), or capture Android on Expo Simulators with --simulator eas.` });
 }
 
 /**

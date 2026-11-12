@@ -16,7 +16,7 @@ const contentTypes: Record<string, string> = {
 // The root is the report page; /r is its address in earlier pull-request comments.
 for (const reportPath of ["/", "/r"]) test(`exported report page ${reportPath} opens a dropped report and resolves Viewer assets beneath its hosted base`, async ({ page }) => {
   // Serve only actual exported files. A root-relative asset request must fail,
-  // matching EAS Hosting instead of the root-mounted local Viewer server.
+  // matching Expo Hosting instead of the root-mounted local Viewer server.
   const missingAssets: string[] = [];
   const hostRequests: string[] = [];
   const errors: string[] = [];

@@ -71,7 +71,7 @@ test("existing config, including parameters and setup, is preserved", async (t) 
   assert.equal(checked.config.parameters["/cats/[id]"].id, "kitten");
 });
 
-test("EAS profile inheritance is respected and device builds cannot be selected", async (t) => {
+test("Expo Build profile inheritance is respected and device builds cannot be selected", async (t) => {
   const { project, json, path } = await fixture(t);
   await json("eas.json", { build: {
     base: { ios: { simulator: true } },
@@ -114,11 +114,11 @@ test("setup fails before writing for missing prerequisites and invalid choices",
   const { project, json, path } = await fixture(t);
   await assert.rejects(runExploreSetup({ project, ...options, bundleId: "invalid" }), /reverse-DNS/);
   await json("eas.json", { build: { a: { extends: "b" }, b: { extends: "a" } } });
-  await assert.rejects(runExploreSetup({ project, ...options }), /Circular EAS/);
+  await assert.rejects(runExploreSetup({ project, ...options }), /Circular Expo Build/);
   await json("eas.json", { build: { explore: { extends: "missing" } } });
-  await assert.rejects(runExploreSetup({ project, ...options }), /Missing inherited EAS/);
+  await assert.rejects(runExploreSetup({ project, ...options }), /Missing inherited Expo Build/);
   await json("eas.json", { build: { production: {} } });
-  await assert.rejects(runExploreSetup({ project, ...options }), /No EAS build profile/);
+  await assert.rejects(runExploreSetup({ project, ...options }), /No Expo Build profile/);
   await rm(join(project, "eas.json"));
   await assert.rejects(runExploreSetup({ project, ...options }), /No eas.json/);
   await json("package.json", { private: true });

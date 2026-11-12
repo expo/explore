@@ -230,7 +230,7 @@ test("package.json changes are app-wide unless they only touch scripts that inst
   assert.deepEqual(selected(hooked({ prebuild: "a" }), hooked({ prebuild: "b" })), ["/one", "/two"]);
   assert.deepEqual(selected(hooked({ gen2: "x" }), manifest({ postinstall: "npm run build", build: "npm run gen", gen: "y", gen2: "x" })), ["/one", "/two"]);
   assert.deepEqual(selected(hooked({ lint: "a" }), hooked({ lint: "b" })), []);
-  // An EAS custom build can run any package script.
+  // An Expo Build custom build can run any package script.
   const custom = [["eas.json", JSON.stringify({ build: { explore: { config: "explore.yml" } } })]];
   assert.deepEqual(selectedPaths(plan({ base: [...files(base), ...custom], head: [...files(manifest({ test: "vitest", postinstall: "patch-package" })), ...custom],
     changes: [{ status: "modified", path: "package.json" }] })), ["/one", "/two"]);

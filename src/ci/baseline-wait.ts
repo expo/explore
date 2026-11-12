@@ -15,7 +15,7 @@ import { baselineLookup, githubContext, trustedBaselineRun, type GithubArtifact,
  * A review that waits for main's baseline of its base commit instead of capturing the base itself. Right after a
  * merge, the next pull request's review starts while the baseline workflow is still capturing the new base: in
  * brentvatne/euxy's review run 39348956443 it had started 15 s before, so every target captured its base too, about
- * 10–14 minutes per target instead of 6, on twice the EAS Simulator sessions. A baseline job takes 6–8 minutes and
+ * 10–14 minutes per target instead of 6, on twice the Expo Simulators sessions. A baseline job takes 6–8 minutes and
  * head capture 5–8, so `runCiReview` starts head at once and waits here only where base would start.
  */
 

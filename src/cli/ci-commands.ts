@@ -47,10 +47,10 @@ Fix the problems in steps 1–5 before a capture check.`);
     return;
   }
   if (!has("yes")) {
-    if (!process.stdin.isTTY || has("json")) argumentError("A capture check starts an EAS build and simulator session; pass --yes to confirm.", "yes");
-    reportStatus("blocked", { kind: "question", message: "Start a capture check on EAS?" });
+    if (!process.stdin.isTTY || has("json")) argumentError("A capture check starts an Expo Build and simulator session; pass --yes to confirm.", "yes");
+    reportStatus("blocked", { kind: "question", message: "Start a capture check on Expo Services?" });
     const terminal = createInterface({ input: process.stdin, output: process.stderr });
-    const answer = await terminal.question(`This builds the app on EAS and runs an EAS Simulator session (EAS usage applies${report.mode === "agent" ? "; agent mode also uses your model API key or local claude/codex login" : ""}). Continue? (yes/no) `);
+    const answer = await terminal.question(`This builds the app on Expo Services and runs an Expo Simulators session (Expo Services usage applies${report.mode === "agent" ? "; agent mode also uses your model API key or local claude/codex login" : ""}). Continue? (yes/no) `);
     terminal.close();
     if (!/^(y|yes)$/i.test(answer.trim())) { reportStatus("clear"); return; }
     reportStatus("working");
@@ -60,7 +60,7 @@ Fix the problems in steps 1–5 before a capture check.`);
     const platform = platformFlag();
     result = await runCaptureCheck({ project, ...(platform ? { platform } : {}), target: targetFlag(), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack"), output: resolve(flag("output") ?? await mkdtemp(join(tmpdir(), "expo-explore-capture-"))), progress: stderrProgress() });
   } catch (error) {
-    // A refusal before any EAS work: show it with its next action next to the static report.
+    // A refusal before any Expo Services work: show it with its next action next to the static report.
     if (!(error instanceof CiError)) throw error;
     if (has("json")) output({ ...report, capture: { ok: false, failure: { code: error.code, message: error.message, nextAction: error.nextAction } } });
     else console.log(`${formatDoctorReport(report)}\n\nCapture check not started: ${error.message} [${error.code}]\n  → ${error.nextAction}`);
@@ -76,7 +76,7 @@ export async function ciReport(): Promise<void> {
   output({ ok: true, ...await exportCiReport({ inputPath: required("input"), outputPath: required("output") }) });
 }
 
-/** Deploy the packaged review as a token-gated EAS Hosting preview and link it from the PR comment as Explore report. */
+/** Deploy the packaged review as a token-gated Expo Hosting preview and link it from the PR comment as Explore report. */
 export async function ciDeploy(): Promise<void> {
   const onSecret = (secret: string) => { if (process.env.GITHUB_ACTIONS) console.log(`::add-mask::${secret}`); };
   // Matrix workflows fan several platforms' artifacts into one deployment; the single-platform flags predate them.
@@ -236,7 +236,7 @@ export async function sourceVerify(): Promise<void> {
 /**
  * Stops a CI capture GitHub cancels: the runner sends SIGINT, then SIGTERM. The first stops the captures between steps,
  * so each stops its session and cancels a hosted repack run it waits on (a blocked eas-cli command gets the signal too
- * and returns); the second quits at once. Without it a cancelled job left its EAS workflow run repacking.
+ * and returns); the second quits at once. Without it a cancelled job left its Expo Workflows run repacking.
  */
 function ciInterrupt(): AbortSignal {
   const controller = new AbortController();

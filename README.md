@@ -1,6 +1,6 @@
 # Expo Explore
 
-Explore maps your app: a screenshot of every screen, connected by the taps between them. On each pull request it captures the screens the PR changes, before and after, on EAS Simulator, and posts a visual review. On your Mac it can also run on a local simulator.
+Explore maps your app: a screenshot of every screen, connected by the taps between them. On each pull request it captures the screens the PR changes, before and after, on Expo Simulators, and posts a visual review. On your Mac it can also run on a local simulator.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-hero-dark.svg">
@@ -59,9 +59,9 @@ which look like regressions. For each regression, name the source file to fix.
 <details>
 <summary><strong>Requirements</strong></summary>
 
-- To review a change: Expo SDK 57 or newer, with Expo Router (57 or newer) or React Navigation (6 or newer), and an Expo account, since Explore builds the app on EAS. An EAS build profile per platform: `ios.simulator: true` for iOS, `android.buildType: apk` (not a development build) for Android. Its EAS environment cannot have secret-visibility or file variables.
+- To review a change: Expo SDK 57 or newer, with Expo Router (57 or newer) or React Navigation (6 or newer), and an Expo account, since Explore builds the app on Expo Services. An Expo Build profile per platform: `ios.simulator: true` for iOS, `android.buildType: apk` (not a development build) for Android. Its Expo Services environment cannot have secret-visibility or file variables.
 - To explore a build: a simulator build of any app, and a Claude Code or Codex login (or an API key). On a local simulator it needs no Expo account.
-- Somewhere to run the app: EAS Simulator (in preview, [join the waitlist](https://expo.dev/services/simulators)), which CI uses; or a [local simulator](#simulator) on your Mac: Xcode 26 or newer for iOS (the default devices are iPhone 17 models) and, for Android, the Android SDK with `ANDROID_HOME` set (emulator, platform-tools, cmdline-tools and a system image; to review a change, also build-tools and a JDK 17).
+- Somewhere to run the app: Expo Simulators (in preview, [join the waitlist](https://expo.dev/services/simulators)), which CI uses; or a [local simulator](#simulator) on your Mac: Xcode 26 or newer for iOS (the default devices are iPhone 17 models) and, for Android, the Android SDK with `ANDROID_HOME` set (emulator, platform-tools, cmdline-tools and a system image; to review a change, also build-tools and a JDK 17).
 - Node.js 24.12 or newer. For CI, admin access to the GitHub repository.
 
 </details>
@@ -77,19 +77,19 @@ https://unpkg.com/@expo/explore/skills/explore-binary/SKILL.md. If this is not a
 project, ask me for a simulator build and explore that. Otherwise review a change to
 this app: follow the "Review a change on this machine" section of
 https://unpkg.com/@expo/explore/skills/explore-setup/SKILL.md. If the app cannot build
-for the iOS Simulator on EAS yet, set that up (an EAS project, ios.bundleIdentifier, an
+for the iOS Simulator on Expo Services yet, set that up (an Expo Services project, ios.bundleIdentifier, an
 "explore" profile with ios.simulator: true) and ask me before you commit it. If I have
-no EAS Simulator access, pass --simulator local (it needs Xcode; exploring an .apk needs
+no Expo Simulators access, pass --simulator local (it needs Xcode; exploring an .apk needs
 the Android SDK instead). If I have no uncommitted changes, change some text near the
 top of a screen. If the app needs a sign-in, ask me for a test account the way the skill
 describes, never for a password in chat. Open the report, and if I need to log in to
 something first, tell me the command.
 ```
 
-You need Node.js 24.12+. Reviewing a change needs an Expo account and an Expo SDK 57+ app with Expo Router or React Navigation: it is built on EAS and captured on EAS Simulator or, with Xcode, on a simulator on your Mac. Exploring a build needs a Claude Code or Codex login, and EAS Simulator or a simulator on your Mac; on your Mac, no Expo account. No API keys, no CI.
+You need Node.js 24.12+. Reviewing a change needs an Expo account and an Expo SDK 57+ app with Expo Router or React Navigation: it is built on Expo Services and captured on Expo Simulators or, with Xcode, on a simulator on your Mac. Exploring a build needs a Claude Code or Codex login, and Expo Simulators or a simulator on your Mac; on your Mac, no Expo account. No API keys, no CI.
 
 > [!NOTE]
-> EAS Simulator is in preview. [Join the waitlist](https://expo.dev/services/simulators), or pass `--simulator local` to capture on a simulator on your Mac.
+> Expo Simulators is in preview. [Join the waitlist](https://expo.dev/services/simulators), or pass `--simulator local` to capture on a simulator on your Mac.
 
 <details>
 <summary><strong>Run it yourself</strong></summary>
@@ -98,7 +98,7 @@ There are two ways to use Explore: review a change to your Expo app, which needs
 
 **Review a change**, from your app's directory:
 
-1. Make the app buildable on EAS, if it is not yet:
+1. Make the app buildable on Expo Services, if it is not yet:
 
    ```sh
    npx eas-cli@latest login
@@ -114,11 +114,11 @@ There are two ways to use Explore: review a change to your Expo app, which needs
 2. Edit some text near the top of a screen (Explore captures the first screenful) and run:
 
    ```sh
-   npx @expo/explore capture                     # on EAS Simulator
+   npx @expo/explore capture                     # on Expo Simulators
    npx @expo/explore capture --simulator local   # or on a simulator on your Mac
    ```
 
-   Explore builds your last commit and your uncommitted changes on EAS, captures the screens the changes can affect, before and after, and opens the report in your browser. The first run waits for an EAS build; later runs reuse it while your native code is unchanged. A [local simulator](#simulator) is one Explore creates on your Mac and removes afterwards.
+   Explore builds your last commit and your uncommitted changes on Expo Services, captures the screens the changes can affect, before and after, and opens the report in your browser. The first run waits for an Expo Build; later runs reuse it while your native code is unchanged. A [local simulator](#simulator) is one Explore creates on your Mac and removes afterwards.
 
 **Explore a build:**
 
@@ -128,7 +128,7 @@ npx @expo/explore explore:binary ./my-app.app                     # iOS simulato
 npx @expo/explore explore:binary ./my-app.app --simulator local   # on a simulator on your Mac
 ```
 
-Explore starts an EAS Simulator, installs the build, taps through the app with your Claude Code or Codex login, and prints a link to the hosted report. With `--simulator local` it runs on a simulator or emulator it creates on your Mac, needs no Expo account, and opens the report in your browser. Its [options](#options) are below.
+Explore starts an Expo Simulators session, installs the build, taps through the app with your Claude Code or Codex login, and prints a link to the hosted report. With `--simulator local` it runs on a simulator or emulator it creates on your Mac, needs no Expo account, and opens the report in your browser. Its [options](#options) are below.
 
 </details>
 
@@ -151,11 +151,11 @@ npx @expo/explore capture --committed   # HEAD alone
 npx @expo/explore capture --base v1.3.0 --head v1.4.0 --scope all --upload
 ```
 
-- It checks out both commits as temporary worktrees, installs their dependencies, captures every configured platform or [target](#targets) on EAS Simulator or a [local simulator](#simulator), and opens the report in a local Viewer. `--target` or `--platform` picks some; they run at once, at most `--parallel N` at a time. `--upload` hosts it and prints the link; `report:upload <report.zip>` hosts one you already have.
+- It checks out both commits as temporary worktrees, installs their dependencies, captures every configured platform or [target](#targets) on Expo Simulators or a [local simulator](#simulator), and opens the report in a local Viewer. `--target` or `--platform` picks some; they run at once, at most `--parallel N` at a time. `--upload` hosts it and prints the link; `report:upload <report.zip>` hosts one you already have.
 - Your checkout, index and branches are never touched. Your uncommitted changes, untracked files included, are reviewed as `eas build` would upload them; `--committed`, or `cli.requireCommit: true` in `eas.json`, leaves them out.
 - Installs run without credential environment variables, which keeps tokens out of reach of a registry a commit's `.npmrc` names; that is not a sandbox. A registry that needs `${NPM_TOKEN}` in the project's `.npmrc` must be authenticated in your own `~/.npmrc`.
 - Captures are cached in `~/.cache/expo-explore`, so the same base is not captured twice (`--no-cache` skips it); a capture unused for 30 days goes, and the cache stays under 2 GB. Ctrl+C stops the run's simulator sessions and local devices; when a run is stopped harder than that, the next local run stops what it left running.
-- Like a CI review, it builds on EAS (reusing a matching build) and, unless it captures on a local simulator, runs EAS Simulator sessions: expect several minutes and EAS usage. A terminal that supports [OSC 7501](https://superlogical.com/rex/docs/build/program-status) shows whether the run is working, done or failed while you are in another tab; `explore:binary`, `report:upload` and `doctor --capture` report it too.
+- Like a CI review, it builds on Expo Services (reusing a matching build) and, unless it captures on a local simulator, runs Expo Simulators sessions: expect several minutes and Expo Services usage. A terminal that supports [OSC 7501](https://superlogical.com/rex/docs/build/program-status) shows whether the run is working, done or failed while you are in another tab; `explore:binary`, `report:upload` and `doctor --capture` report it too.
 - Saved runs take up to 2 GB in all, the oldest going first. `reports add <report.zip>` keeps a report you downloaded, such as a PR's `explore-review` artifact.
 
 </details>
@@ -170,15 +170,15 @@ Pointed to a build, the [quick start](#quick-start) maps every screen of it, wit
 <summary id="options"><strong>What it needs, and its options</strong></summary>
 
 - A `claude` or `codex` login, or `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
-- EAS Simulator access and an EAS login (`eas whoami`), or `--simulator local` to run on a [local simulator](#simulator) with no EAS login.
-- A simulator build. A device `.ipa`, an `.aab`, an unsigned APK, or an APK without native libraries for the emulator (x86_64 on EAS Simulator, `arm64-v8a` locally on Apple silicon; a universal APK has both) is rejected before a device starts.
+- Expo Simulators access and an Expo Services login (`eas whoami`), or `--simulator local` to run on a [local simulator](#simulator) with no Expo Services login.
+- A simulator build. A device `.ipa`, an `.aab`, an unsigned APK, or an APK without native libraries for the emulator (x86_64 on Expo Simulators, `arm64-v8a` locally on Apple silicon; a universal APK has both) is rejected before a device starts.
 - Platform, bundle id, name, and version are read from the build; you pass nothing else.
 - A run stops after 15 minutes, 40 screens, or 150 actions (`--max-duration-minutes`, `--max-screens`, `--max-actions`).
 - Buttons that delete, pay, sign out, send, or leave the app are never tapped. `--allow-destructive "Reset filters"` allows one by its exact label.
 - `--hints "…"` tells the model what to focus on or how to sign in ([details](#sign-in-and-other-app-state)).
-- On EAS Simulator the report is hosted, and the link lasts as long as its EAS Hosting deployment (see [report access](docs/private-review.md#hosted-previews)); `--no-upload` keeps it local. On a local simulator it opens in the local Viewer (`--no-open` or `--json` skips that; `view --dir <folder>` opens it later), and `--upload` hosts it, which needs an EAS login. `--json` prints the result for scripts.
+- On Expo Simulators the report is hosted, and the link lasts as long as its Expo Hosting deployment (see [report access](docs/private-review.md#hosted-previews)); `--no-upload` keeps it local. On a local simulator it opens in the local Viewer (`--no-open` or `--json` skips that; `view --dir <folder>` opens it later), and `--upload` hosts it, which needs an Expo Services login. `--json` prints the result for scripts.
 - For a link that stays the same from run to run, pass `--alias NAME` and set `EXPLORE_PREVIEW_TOKEN` to a fixed token of 32 characters from a–z and 2–7 (`LC_ALL=C tr -dc a-z2-7 </dev/urandom | head -c 32`).
-- EAS Simulator sessions and hosted reports run under an EAS project named `expo-explore` in your account, created on first use (`--owner` and `--project` pick another).
+- Expo Simulators sessions and hosted reports run under an Expo Services project named `expo-explore` in your account, created on first use (`--owner` and `--project` pick another).
 - Read a local result with `npx @expo/explore view --dir <folder>`, `screen:list`, or `gap:list`.
 
 </details>
@@ -186,7 +186,7 @@ Pointed to a build, the [quick start](#quick-start) maps every screen of it, wit
 <details>
 <summary><strong>Explore a simulator session you already started</strong></summary>
 
-If the app is already running on an EAS Simulator session (`--type agent-device` or `--type argent`), Explore can start from there, with the session's controller. It leaves your session running.
+If the app is already running on an Expo Simulators session (`--type agent-device` or `--type argent`), Explore can start from there, with the session's controller. It leaves your session running.
 
 ```sh
 eas simulator:start --type agent-device --out-config-type dotenv   # then agent-device install / open
@@ -274,8 +274,8 @@ report:
 - The generated workflows already have the `deploy` job; it runs once `hosting: eas` is set.
 - A [comparison of two commits](#compare-any-two-commits) links its hosted report from the run's summary instead of a PR comment. `capture --upload` on your machine deploys to the same project with your `eas login`.
 - `expo-explore report:upload <report.zip>...` hosts reports already on your machine the same way: a review's reports (one per platform or target, from `capture --output` or a downloaded `explore-review` artifact) or an `explore:binary` report.
-- `EXPO_TOKEN` must be able to create the EAS project, so use a [robot user's](https://docs.expo.dev/accounts/programmatic-access/) token.
-- Every file of the report sits under the link's 160-bit token, so only someone with the link can open it. Treat the link like a shared file link. It works as long as its EAS Hosting deployment does: EAS deletes one without an alias after 30 days on the Free plan and 90 on paid plans, and you can delete it sooner (`eas deploy:delete`) or on your own schedule. Explore sets no expiry of its own; see [report access](docs/private-review.md#hosted-previews).
+- `EXPO_TOKEN` must be able to create the Expo Services project, so use a [robot user's](https://docs.expo.dev/accounts/programmatic-access/) token.
+- Every file of the report sits under the link's 160-bit token, so only someone with the link can open it. Treat the link like a shared file link. It works as long as its Expo Hosting deployment does: Expo Services deletes one without an alias after 30 days on the Free plan and 90 on paid plans, and you can delete it sooner (`eas deploy:delete`) or on your own schedule. Explore sets no expiry of its own; see [report access](docs/private-review.md#hosted-previews).
 
 </details>
 
@@ -301,7 +301,7 @@ A failed run shows an error code and a next action in the PR comment; see [CI tr
 
 | | **Deterministic** (recommended to start) | **Agent** |
 | --- | --- | --- |
-| Cost | EAS and GitHub Actions only | Also model usage billed by [OpenAI](https://developers.openai.com/api/docs/pricing) or [Anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
+| Cost | Expo Services and GitHub Actions only | Also model usage billed by [OpenAI](https://developers.openai.com/api/docs/pricing) or [Anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
 | Reaching screens | Opens each screen by deep link, with route parameters from the config | Claude Code or Codex navigates the UI |
 | App state (signed in, onboarded) | Fixed setup steps in the config | English instructions that the agent follows |
 | Unexpected UI | Capture stops with diagnostics | The agent tries to recover |
@@ -361,9 +361,9 @@ targets:
 - A target takes the `app` fields it does not set, and `device.name` when it is of `app.platform`; a target of another platform sets its own `bundleId` and `easProfile` (an Android one's device defaults to `pixel_7`). `pose` is `closed`, `half-open` or `open`. `label` names it in reports (by default its device and pose).
 - Ids are up to 32 lowercase letters, digits and dashes, start with a letter, and are not `base`, `head` or `report`. A config names at most 8 targets. A config with `platforms` has one target per platform, named `ios` and `android`.
 - The workflows run one capture job per target. The PR comment links each target's report and says which targets a change is on, and each report links its sibling targets' reports.
-- A review runs at most `capture.maxSessions` EAS Simulator sessions at once across its targets (default 5, a typical plan's limit); see the [config reference](docs/quickstart-ci.md#config-reference).
+- A review runs at most `capture.maxSessions` Expo Simulators sessions at once across its targets (default 5, a typical plan's limit); see the [config reference](docs/quickstart-ci.md#config-reference).
 - A target can also set its own `controller` and `simulator` over `capture`'s, such as Android on agent-device beside iOS targets on Argent. `--controller` and `--simulator` override every target's for one run.
-- `capture --target duo-open` reviews one target on this machine; `--platform ios` the iOS ones. On your machine a review's targets run at once (at most `--parallel N`), and targets of one platform and EAS profile share each commit's build; in CI each target is its own job. A target that fails outright costs only its own report.
+- `capture --target duo-open` reviews one target on this machine; `--platform ios` the iOS ones. On your machine a review's targets run at once (at most `--parallel N`), and targets of one platform and Expo Build profile share each commit's build; in CI each target is its own job. A target that fails outright costs only its own report.
 - A device controller that stops answering on one screen costs that route, up to three times per capture: Explore restarts the app, goes on with the next route, and records what happened in `capture-diagnostics/controller-recoveries.jsonl`.
 
 </details>
@@ -383,18 +383,18 @@ npx @expo/explore capture --controller argent
 npx @expo/explore explore:binary ./app.apk --controller argent
 ```
 
-Explore pins each controller's version and starts the EAS session with it. Reports and baselines record the controller, and a review compares captures made with the same one.
+Explore pins each controller's version and starts the Expo Simulators session with it. Reports and baselines record the controller, and a review compares captures made with the same one.
 
 Neither controller is installed with Explore. The first run that needs one downloads its pinned npm release (agent-device 1.6 MB, Argent 27 MB), checks it against the integrity hash Explore pins, and keeps it in `~/.cache/expo-explore/controllers` (`EXPLORE_CONTROLLER_CACHE` moves it). Behind a private registry, set `EXPLORE_NPM_REGISTRY` to a mirror of it.
 
-Argent cannot switch the simulator's appearance yet ([software-mansion/argent#1509](https://github.com/software-mansion/argent/pull/1509)), so the host switches it: on an iOS EAS Simulator session (`eas simulator:control appearance.set`) and on a [local simulator](#simulator), every appearance the config asks for is captured. An Argent capture on an Android EAS Simulator session records one appearance: the one the app forces, else light. Explore warns when it skips one.
+Argent cannot switch the simulator's appearance yet ([software-mansion/argent#1509](https://github.com/software-mansion/argent/pull/1509)), so the host switches it: on an iOS Expo Simulators session (`eas simulator:control appearance.set`) and on a [local simulator](#simulator), every appearance the config asks for is captured. An Argent capture on an Android Expo Simulators session records one appearance: the one the app forces, else light. Explore warns when it skips one.
 
 </details>
 
 <details>
-<summary id="simulator"><strong>Local simulator instead of EAS Simulator</strong></summary>
+<summary id="simulator"><strong>Local simulator instead of Expo Simulators</strong></summary>
 
-To capture on your Mac instead of EAS Simulator, pass it for one run, or set it in a config you use only on your Mac:
+To capture on your Mac instead of Expo Simulators, pass it for one run, or set it in a config you use only on your Mac:
 
 ```yaml
 capture:
@@ -405,20 +405,20 @@ capture:
 npx @expo/explore capture --simulator local
 ```
 
-CI runs on GitHub's Ubuntu runners and captures on EAS Simulator, so keep `simulator: local` out of the config you commit.
+CI runs on GitHub's Ubuntu runners and captures on Expo Simulators, so keep `simulator: local` out of the config you commit.
 
 For each commit, Explore starts a device of its own and removes it afterwards; head and base each get one:
 
 - **iOS:** a simulator of the configured device with Xcode's newest runtime that runs it. `DEVELOPER_DIR` picks another Xcode, such as one that adds iPhone Duo. Explore approves the app's URL scheme on it, so links open without iOS asking "Open in …?", and checks a foldable's pose by the shape of its lit display.
 - **Android:** an emulator of the configured device profile (such as `pixel_7`), from the newest Google APIs system image installed for this machine (`arm64-v8a` on Apple silicon), in a private AVD folder. The APK must ship native libraries for that ABI; a universal build does. It needs the SDK's emulator, platform-tools and cmdline-tools, with `ANDROID_HOME` set.
 
-`explore:binary --simulator local` starts one the same way for the build it explores, needs no EAS login, and opens the report in the local Viewer (`--upload` hosts it).
+`explore:binary --simulator local` starts one the same way for the build it explores, needs no Expo Services login, and opens the report in the local Viewer (`--upload` hosts it).
 
-For a review, builds still run on EAS. The app is repacked with the route observer on your machine as well, so it is never uploaded; on Android that needs the SDK's build-tools and a JDK. `capture.repack: eas` (or `--repack eas`) keeps the repack in a hosted EAS job. `doctor --simulator local` checks that Xcode and the Android SDK can start each device, and that Android can be repacked locally.
+For a review, builds still run on Expo Services. The app is repacked with the route observer on your machine as well, so it is never uploaded; on Android that needs the SDK's build-tools and a JDK. `capture.repack: eas` (or `--repack eas`) keeps the repack in a hosted Expo Workflows job. `doctor --simulator local` checks that Xcode and the Android SDK can start each device, and that Android can be repacked locally.
 
 With `--controller argent`, Explore installs Argent's tool-server on first use with `npm ci` from a lockfile Explore ships, so every dependency is pinned (about 160 MB, in the controller cache), and starts one per device. The host switches the appearance, so a local Argent capture records every appearance the config asks for. Reports record where they were captured, and a baseline is reused only by a review captured the same way.
 
-A foldable folds before the app first opens (`pose` on a [target](#targets)); with agent-device on a local simulator it folds just after, since agent-device folds only inside a session. With Argent, an opened iPhone Duo is captured upright, in landscape. After a fold, Argent's reader can stay on the panel that went dark, so Explore checks that the lit panel is read. If it isn't, Explore restarts the tool-server on a local simulator. On EAS Simulator, where the tool-server is the session's, it resets Argent's device helpers, then restarts SpringBoard and folds again. On EAS Simulator, an opened iPhone Duo usually needs that SpringBoard restart, which adds about a minute.
+A foldable folds before the app first opens (`pose` on a [target](#targets)); with agent-device on a local simulator it folds just after, since agent-device folds only inside a session. With Argent, an opened iPhone Duo is captured upright, in landscape. After a fold, Argent's reader can stay on the panel that went dark, so Explore checks that the lit panel is read. If it isn't, Explore restarts the tool-server on a local simulator. On Expo Simulators, where the tool-server is the session's, it resets Argent's device helpers, then restarts SpringBoard and folds again. On Expo Simulators, an opened iPhone Duo usually needs that SpringBoard restart, which adds about a minute.
 
 Each capture records what it starts on your Mac (simulators, emulators, controller daemons, tool-servers) and removes it when it ends. If a review or a local `explore:binary` run is stopped hard, the next local one stops what it left running; nothing Explore did not record is touched.
 
@@ -492,7 +492,7 @@ jobs:
 - The run summary links each target's report (**Open** and **zip**, like a PR comment) and, with hosting, the hosted report.
 - `setup --workflows` installs it from 0.19.0; `npx @expo/explore@latest setup --workflows` adds it to an existing setup. The caller grants `contents: read` and `actions: read`; `secrets: inherit` passes `EXPO_TOKEN` and any app-test secrets.
 - Call it once per workflow run. A called workflow runs inside its caller's run, so a second call in the same run would reuse the first one's artifact names; use separate workflows instead.
-- When the baseline workflow captured `base` in the last 30 days, with the same config and Explore version, that capture is reused and only `head` is captured. When it is still capturing `base` (right after a merge), the review waits for it while `head` captures, up to `capture.baselineWaitMinutes` (15 by default). The report artifact is kept 30 days; a hosted link lasts as long as its EAS Hosting deployment (an aliased one until the alias moves).
+- When the baseline workflow captured `base` in the last 30 days, with the same config and Explore version, that capture is reused and only `head` is captured. When it is still capturing `base` (right after a merge), the review waits for it while `head` captures, up to `capture.baselineWaitMinutes` (15 by default). The report artifact is kept 30 days; a hosted link lasts as long as its Expo Hosting deployment (an aliased one until the alias moves).
 
 </details>
 
@@ -562,8 +562,8 @@ sequenceDiagram
   autonumber
   participant PR as Pull request
   participant GA as GitHub Actions
-  participant B as EAS Build
-  participant S as EAS Simulator
+  participant B as Expo Build
+  participant S as Expo Simulators
   PR->>GA: opened or updated
   GA->>GA: read the diff and router source, pick the affected screens
   GA->>B: build base and head
@@ -578,7 +578,7 @@ sequenceDiagram
 
 - The review workflow runs on open, non-draft PRs from the repository whose author has write access. Bots such as Devin go under `ci.trustedAuthors` in `.expo-explore/config.yaml`.
 - A screen with a source change is **Modified** if its captures differ.
-- If EAS fails to start a session, Explore starts a new one, up to five times within 30 minutes. On your machine, a local simulator can stand in for EAS Simulator.
+- If Expo Services fails to start a session, Explore starts a new one, up to five times within 30 minutes. On your machine, a local simulator can stand in for Expo Simulators.
 - Each capture job's summary shows where its time went, phase by phase, and its diagnostics artifact keeps the timings (`timings.jsonl`). When a review waits for the baseline of its base commit, its log and the PR comment name the step that baseline job is in.
 
 The same review runs for any two commits without a PR ([`explore-compare.yml`](#compare-any-two-commits), linking the report from the run summary) and on your machine (`capture`, [above](#quick-start)). The workflows' logic lives in `expo-explore ci:*` commands, so a fix reaches CI with the `@expo/explore` version the workflows pin.
@@ -596,9 +596,9 @@ Reports and baselines are kept for 30 days and diagnostics for 7. Hosted deploym
 - The launch is captured once per appearance and compared like any screen. The comment says how long the splash stayed as it first appeared, when it first changed (a native launch screen handing over to an app-drawn one, an animation starting on it), and when the first screen settled. `capture.launch: video` adds a recording; a launch too fast to observe is reported as "no splash observed".
 - On Android the splash usually shows only in the recording, which needs `ffmpeg`. The generated workflows install it.
 - Hosted acceptance of agent mode with an API key is incomplete.
-- With `capture.controller: argent` on an Android EAS Simulator session, each capture records one appearance (see [device controller](#controller)).
-- A local simulator runs only on your machine; the CI workflows capture on EAS Simulator.
-- `explore:session` explores EAS Simulator sessions only.
+- With `capture.controller: argent` on an Android Expo Simulators session, each capture records one appearance (see [device controller](#controller)).
+- A local simulator runs only on your machine; the CI workflows capture on Expo Simulators.
+- `explore:session` explores Expo Simulators sessions only.
 
 </details>
 

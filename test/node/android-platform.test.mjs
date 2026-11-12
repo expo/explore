@@ -43,7 +43,7 @@ test("Android capture profiles build an APK without a development client", () =>
   assert.throws(() => simulatorProfiles({ build: { a: { extends: "b" }, b: { extends: "a" } } }, "android"), /Circular/);
 });
 
-test("EAS profile errors name the side and commit that resolved them", () => {
+test("Expo Build profile errors name the side and commit that resolved them", () => {
   const appConfig = { android: { package: "dev.brent.euxy" }, ios: { bundleIdentifier: "dev.brent.euxy" } };
   const base = { side: "base", commit: "a".repeat(40) };
   assert.throws(() => assertCaptureEasProfile({ appConfig, buildProfile: { distribution: "store" } }, "dev.brent.euxy", "android", base), error =>
@@ -55,10 +55,10 @@ test("EAS profile errors name the side and commit that resolved them", () => {
     error.code === "APP_BUNDLE_ID_MISMATCH" && error.message.includes("resolved at the base commit aaaaaaaa") && /default branch first/.test(error.nextAction));
   // Without a source (doctor) the wording is unchanged.
   assert.throws(() => assertCaptureEasProfile({ appConfig, buildProfile: { simulator: false } }, "dev.brent.euxy"), error =>
-    error.message === "The selected EAS build profile does not produce an iOS Simulator application.");
+    error.message === "The selected Expo Build profile does not produce an iOS Simulator application.");
 });
 
-test("the resolved Android EAS profile must produce an APK for the configured package", () => {
+test("the resolved Android Expo Build profile must produce an APK for the configured package", () => {
   const appConfig = { android: { package: "dev.brent.euxy" }, ios: { bundleIdentifier: "dev.brent.euxy" } };
   assertCaptureEasProfile({ appConfig, buildProfile: { distribution: "internal", buildType: "apk" } }, "dev.brent.euxy", "android");
   assertCaptureEasProfile({ appConfig, buildProfile: { distribution: "internal" } }, "dev.brent.euxy", "android");
@@ -74,7 +74,7 @@ test("the resolved Android EAS profile must produce an APK for the configured pa
 });
 
 test("the Android controller open response is accepted only for the Android platform", () => {
-  // Shape observed from agent-device 0.21.15 against an EAS Android emulator session.
+  // Shape observed from agent-device 0.21.15 against an Expo Simulators Android emulator session.
   const response = JSON.stringify({ success: true, data: {
     session: CONTROLLER_SESSION, appName: "dev.brent.euxy", appBundleId: "dev.brent.euxy", appId: "dev.brent.euxy",
     device: { platform: "android", target: "mobile", id: "emulator-5554", name: "EasAndroidDevice01",
@@ -104,7 +104,7 @@ test("the PR comment names the Android target while it captures", () => {
   assert.doesNotMatch(body, /iOS/);
 });
 
-test("an Android EAS Simulator session proves its identity for the Android platform only", () => {
+test("an Android Expo Simulators session proves its identity for the Android platform only", () => {
   const session = { id: "01a124bc-bce6-7d04-bf47-a87f41f28339", name: "Explore map: euxy [c_DJk2lOZSVuvYQCv0Fq]", type: "agent-device",
     status: "IN_PROGRESS", platform: "ANDROID",
     deviceRunSessionUrl: "https://expo.dev/accounts/brent-org/projects/euxy/simulator-sessions/01a124bc-bce6-7d04-bf47-a87f41f28339" };
