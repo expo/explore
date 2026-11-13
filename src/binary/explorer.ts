@@ -69,6 +69,8 @@ export type BlackBoxExplorerResult = {
 const DESTRUCTIVE = /\b(delete|remove|erase|reset|wipe|clear all|sign ?out|log ?out|unsubscribe|cancel subscription|deactivate|close account|purchase|buy|subscribe|pay|checkout|send|post|publish|report|block|submit order|confirm order|place order)\b/i;
 // A bare "Map" is usually the app's own map tab or screen; only a named maps app or directions leave the app.
 const EXTERNAL = /\b(open in|safari|chrome|browser|app store|play store|share|mail|call|sms|(apple|google) maps|directions)\b/i;
+/** For the person running Explore, who sees blocked steps in flow and replay results; the model cannot pass it. */
+const ALLOW_HINT = "(Whoever runs Explore can allow a safe control with --allow-destructive and its exact label.)";
 const VOLATILE = /\d|[:%$€£]|\b(am|pm)\b/gi;
 const INTERACTIVE = new Set(["button", "link", "cell", "switch", "tab", "menuitem", "textfield", "securetextfield", "searchfield", "textview", "edittext", "slider", "checkbox", "radiobutton", "segmentedcontrol", "toggle"]);
 
@@ -185,12 +187,19 @@ function isInteractive(node: Record<string, unknown>): boolean {
   return traits.some(trait => /button|link|tab|adjustable/i.test(trait));
 }
 
+const allowed = (label: string, allow: readonly string[]) => allow.some(item => item.toLowerCase() === label.toLowerCase());
+
 export function riskOf(label: string, allow: readonly string[]): ActionRisk {
-  if (allow.some(allowed => allowed.toLowerCase() === label.toLowerCase())) return "safe";
-  if (DESTRUCTIVE.test(label)) return "destructive";
-  if (EXTERNAL.test(label)) return "external";
+  if (allowed(label, allow)) return "safe";
+  // Identifiers join their words (btn_delete, deleteAccount, sign-out), which \b does not split.
+  const words = label.replace(/(\p{Ll}|\d)(\p{Lu})/gu, "$1 $2").replace(/[_.-]+/g, " ");
+  if (DESTRUCTIVE.test(words)) return "destructive";
+  if (EXTERNAL.test(words)) return "external";
   return "safe";
 }
+
+const RISK_ORDER: readonly ActionRisk[] = ["safe", "unknown", "external", "destructive"];
+const worstRisk = (...risks: ActionRisk[]): ActionRisk => risks.reduce((worst, risk) => RISK_ORDER.indexOf(risk) > RISK_ORDER.indexOf(worst) ? risk : worst, "safe");
 
 /** Structure plus stable text, with values and numerals masked, so a clock tick or a counter does not create a new screen. */
 /**
@@ -660,7 +669,11 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
         if (input.frameId !== undefined) {
           const point = { action: "tap" as const, frameId: text(input.frameId, "frameId", 256), x: Number(input.x), y: Number(input.y) };
           const target = input.target !== undefined ? cleanLabel(text(input.target, "target", 80)) : "";
-          return { action: point, kind: "press", label: target || placeUnder(point) || `tap ${point.x.toFixed(2)},${point.y.toFixed(2)}`, risk: target ? riskOf(target, allow) : "unknown" };
+          // The control under the point is judged by its own label and identifier too, not only by the model's description of it.
+          const under = nodeUnder(point), underLabel = str(under?.label);
+          const risk = underLabel && allowed(underLabel, allow) ? "safe"
+            : worstRisk(target ? riskOf(target, allow) : "unknown", ...[underLabel, str(under?.identifier)].flatMap(name => name ? [riskOf(name, allow)] : []));
+          return { action: point, kind: "press", label: target || placeUnder(point) || `tap ${point.x.toFixed(2)},${point.y.toFixed(2)}`, risk };
         }
         if (!selector) throw failure("AGENT_ACTION_INVALID", "tap needs a label, an identifier, or frame coordinates.");
         return { action: { action: "tap", ...selector } as BlackBoxAction, kind: "press", label, risk };
@@ -714,13 +727,12 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
     return { action: "tap", frameId: latest.frameId ?? "current", x: (bounds.x + bounds.width / 2) / extent.width, y: (bounds.y + bounds.height / 2) / extent.height };
   };
 
-  /** A coordinate tap the model did not describe, on a node the map has no name for (an icon-font button in a header), is
-   * named by what it is and where it sits: "icon button, top right" says more than the coordinates did. */
-  const placeUnder = (point: { x: number; y: number }): string | undefined => {
+  /** The smallest hittable control at a frame point in the latest tree, whether or not the map has recorded it. */
+  const nodeUnder = (point: { x: number; y: number }): Record<string, unknown> | undefined => {
     const extent = latest ? frameExtent(latest.nodes) : undefined;
     if (!extent) return undefined;
     const x = point.x * extent.width, y = point.y * extent.height;
-    const under = latest!.nodes
+    return latest!.nodes
       .filter(node => {
         const rect = node.rect as { x: number; y: number; width: number; height: number } | undefined;
         return !!rect && node.hittable === true && x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height
@@ -730,6 +742,12 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
         const ra = a.rect as { width: number; height: number }, rb = b.rect as { width: number; height: number };
         return ra.width * ra.height - rb.width * rb.height;
       })[0];
+  };
+
+  /** A coordinate tap the model did not describe, on a node the map has no name for (an icon-font button in a header), is
+   * named by what it is and where it sits: "icon button, top right" says more than the coordinates did. */
+  const placeUnder = (point: { x: number; y: number }): string | undefined => {
+    const under = nodeUnder(point);
     if (!under) return undefined;
     const role = roleOf(under);
     const label = str(under.label) ?? "";
@@ -805,7 +823,8 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
                 : elementUnder(chosen.action, fromScreenId);
               const { action, kind } = chosen;
               const label = named ? named.label : chosen.label;
-              const risk = named && chosen.risk !== "destructive" && chosen.risk !== "external" ? riskOf(named.label, allow) : chosen.risk;
+              // A control allowed by its label is allowed however it is targeted, even when its identifier reads as risky.
+              const risk = named && allowed(named.label, allow) ? "safe" : named && chosen.risk !== "destructive" && chosen.risk !== "external" ? riskOf(named.label, allow) : chosen.risk;
               const startedAt = timestamp();
               const attemptId = `att_${randomUUID().slice(0, 12)}`;
               const matched = map.frontier.find(item => item.status === "pending" && item.screenId === fromScreenId && item.actionKind === kind
@@ -817,8 +836,8 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
                   startedAt, completedAt: timestamp(), reason });
                 await persist();
                 return toolResult({ ok: false, blocked: true, reason: risk === "destructive"
-                  ? `"${label}" looks destructive (delete/reset/sign out/purchase/send). Explore does not activate such controls. Choose another control.`
-                  : `"${label}" looks like it opens another app (browser/store/share/mail/maps). Explore does not activate such controls. Choose another control.` });
+                  ? `"${label}" looks destructive (delete/reset/sign out/purchase/send). Explore does not activate such controls. Choose another control. ${ALLOW_HINT}`
+                  : `"${label}" looks like it opens another app (browser/store/share/mail/maps). Explore does not activate such controls. Choose another control. ${ALLOW_HINT}` });
               }
               // The map keeps the reference the model typed; only the device gets the value.
               const typed = action.action === "fill" || action.action === "type" ? { ...action, text: inputs.resolve(action.text) } : action;
