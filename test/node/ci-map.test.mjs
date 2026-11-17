@@ -382,8 +382,17 @@ async function fixture(t, settings = {}) {
       }
       if (command === 'wait') return ok({});
       if (command === 'close') return ok({});
-      // claimedSerials: device claims an interrupted run left behind, which agent-device hides as stale but still enforces.
-      if (command === 'device') return ok({ claims: [], hiddenStaleClaims: (settings.claimedSerials ?? []).includes(value(request, '--serial')) ? 1 : 0 });
+      // claimedSerials: a claim an interrupted run left behind whose owner process still runs, so a new session is refused.
+      // reclaimableSerials: a claim whose owner died; both are hidden as stale, and only the first is a refusal (device status 0.21.40).
+      if (command === 'device') {
+        const serial = value(request, '--serial');
+        const blocked = (settings.claimedSerials ?? []).includes(serial);
+        const reclaimable = (settings.reclaimableSerials ?? []).includes(serial);
+        const owner = { session: 'explore', workspace: '/work', stateDir: '/state' };
+        return ok({ claims: [], hiddenStaleClaims: blocked || reclaimable ? 1 : 0,
+          devices: blocked || reclaimable ? [{ deviceKey: `local:android:none:${serial}`, device: { id: serial }, acquirable: !blocked,
+            ...(blocked ? { blockedBy: 'owner-process-still-running' } : {}), owner }] : [] });
+      }
       // An Expo Simulators session starts empty while the app is repacked; the controller installs the app from this machine.
       if (command === 'install') { assert.ok(existsSync(request.args[1]), 'the repacked app is on this machine'); return ok({ installed: true, appBundleId: 'com.example.app' }); }
       // agent-device 0.21.15 cannot read Xcode 27.1's hinge angle back, so a local fold reports a failure after folding.
@@ -1043,6 +1052,13 @@ test('a local emulator skips a port whose serial agent-device still claims for a
   assert.equal((await runCiMap(f.options)).runStatus, 'complete');
   const start = f.requests.find(request => request.command === '/bin/sh');
   assert.equal(start.args[start.args.indexOf('-port') + 1], '5558');
+});
+
+test('a local emulator takes a port whose stale claim agent-device would reclaim', async t => {
+  const f = await fixture(t, { local: true, android: true, repack: 'local', reclaimableSerials: ['emulator-5556'] });
+  assert.equal((await runCiMap(f.options)).runStatus, 'complete');
+  const start = f.requests.find(request => request.command === '/bin/sh');
+  assert.equal(start.args[start.args.indexOf('-port') + 1], '5556');
 });
 
 test('a local Android capture refuses an APK without libraries for this machine before installing it, and stops its emulator', async t => {

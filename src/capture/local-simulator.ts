@@ -186,16 +186,13 @@ export async function assertLocalEmulatorCompatible(apk: string, abi: string): P
     nextAction: `Build an APK that includes ${abi} (a universal build does), or capture Android on Expo Simulators with --simulator eas.` });
 }
 
-/**
- * Whether agent-device still holds a claim on an emulator serial, one an interrupted run left behind: it refuses
- * such a serial even when it reports the claim as stale, so startLocalEmulator skips that port.
- */
-export function agentDeviceClaims(options: { runner: CommandRunner; agentDevice: string; serial: string; cwd: string; environment: NodeJS.ProcessEnv }): boolean {
+/** Whether agent-device would refuse a new session on an emulator serial, such as one an interrupted run left claimed. */
+export function agentDeviceRefuses(options: { runner: CommandRunner; agentDevice: string; serial: string; cwd: string; environment: NodeJS.ProcessEnv }): boolean {
   const status = options.runner({ command: options.agentDevice, args: ["device", "status", "--platform", "android", "--serial", options.serial, "--json"],
     cwd: options.cwd, environment: options.environment, timeoutMs: 30_000, allowFailure: true });
-  let data: { claims?: unknown[]; hiddenStaleClaims?: number } | undefined;
+  let data: { devices?: { acquirable?: boolean }[] } | undefined;
   try { data = (JSON.parse(status.stdout) as { data?: typeof data }).data; } catch { return false; }
-  return (data?.claims?.length ?? 0) + (data?.hiddenStaleClaims ?? 0) > 0;
+  return data?.devices?.some(device => device.acquirable === false) ?? false;
 }
 
 /**

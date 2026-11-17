@@ -14,7 +14,7 @@ import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, assertSimulatorSes
   assertAttachedSimulatorSession, connectionController, controllerVersion, resolveAttachedSimulatorSession, simulatorOsVersion, simulatorStartFailure, type ActiveSimulatorRuntime, type SimulatorConnection } from "../capture/simulator.js";
 import { argentControllerInvocation } from "../capture/controller-invocation.js";
 import { agentDeviceLauncher, ensureArgentToolServer, ensureController } from "../shared/controller-cache.js";
-import { agentDeviceClaims, approveLinkScheme, createLocalSimulator, deleteLocalEmulator, deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, startLocalArgentServer,
+import { agentDeviceRefuses, approveLinkScheme, createLocalSimulator, deleteLocalEmulator, deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, startLocalArgentServer,
   startLocalEmulator, stopLocalAgentDevice, stopLocalArgentServer, waitForLocalEmulator, waitForLocalSimulator, type LocalArgentServer } from "../capture/local-simulator.js";
 import { openLocalCaptureRecord, sweepLocalCaptures } from "../capture/local-registry.js";
 import { screenSpace } from "../capture/route-capture.js";
@@ -685,7 +685,7 @@ async function withLocalDevice(options: { archive: InspectedArchive; installPath
       say(`starting a local ${device} emulator`);
       const name = `explore-binary-${tag}`;
       const started = await startLocalEmulator({ runner, device, name, directory: work, cwd: work, environment,
-        ...(controller === "agent-device" ? { claimed: (candidate: string) => agentDeviceClaims({ runner, agentDevice, serial: candidate, cwd: work, environment }) } : {}),
+        ...(controller === "agent-device" ? { claimed: (candidate: string) => agentDeviceRefuses({ runner, agentDevice, serial: candidate, cwd: work, environment }) } : {}),
         started: async id => { serial = id; await record.update({ serial: id, avd: name }); } });
       osVersion = waitForLocalEmulator({ runner, serial: started.serial, device, apiLevel: started.apiLevel, directory: work, cwd: work, environment, ...(options.now ? { now: options.now } : {}) });
       say("installing the APK");
