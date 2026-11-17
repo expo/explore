@@ -13,7 +13,7 @@ import { ExploreStore, recordObservation } from "../map/store.js";
 import { parseControllerOutput } from "./controller-output.js";
 import type { SourceRoute } from "../contracts/source-route.js";
 import { CiError, serializeCiError, toCiError } from "../shared/ci-errors.js";
-import { type CaptureSetupSnapshot, credentialSavePromptDecline, describeSetupAction, executeCaptureSetup, isUnreadableSystemSurface, setupReadinessHolds } from "./setup-actions.js";
+import { type CaptureSetupSnapshot, credentialSavePromptDecline, describeSetupAction, executeCaptureSetup, setupReadinessHolds } from "./setup-actions.js";
 import { silentProgress } from "../shared/progress.js";
 import { silentTimings, type Timings } from "../shared/timings.js";
 import type { CaptureSetupReady } from "../config/explore-config.js";
@@ -23,7 +23,7 @@ import { CAPTURE_OBSERVER_IDENTIFIER, captureObserverMarkers, parseCaptureDestin
 import { type CiAgentRuntimeOptions, runCiAgentNavigation, assertAgentCaptureContext } from "./agent/runtime.js";
 import { createExplorationInputs } from "../config/exploration-inputs.js";
 import { isRecord, captureError, CONTROLLER_SESSION, parseJson } from "./common.js";
-import { MAX_ACCESSIBILITY_EVIDENCE_BYTES, adbDeviceOffline, remoteDaemonUnavailable, controllerData, defaultRunner, type ControllerReadRecovery, type RemoteDaemonRetry, runControllerRead, controllerCommandFailure, runControllerReadAsync, runAgentControllerCommand, wedgedControllerReadFailure, openedSimulatorDevice, alertWatchdogFailure, backLeftScreenUnchanged, loneBackDismissControl } from "./controller.js";
+import { MAX_ACCESSIBILITY_EVIDENCE_BYTES, adbDeviceOffline, remoteDaemonUnavailable, controllerData, defaultRunner, type ControllerReadRecovery, type RemoteDaemonRetry, runControllerRead, controllerCommandFailure, runControllerReadAsync, runAgentControllerCommand, wedgedControllerReadFailure, openedSimulatorDevice, alertWatchdogFailure, backLeftScreenUnchanged, loneBackDismissControl, unreadableSystemSurfaceFailure } from "./controller.js";
 import { riskOf } from "../binary/explorer.js";
 import type { ActiveSimulatorRuntime, SimulatorConnection } from "./simulator.js";
 import { androidTools } from "./local-simulator.js";
@@ -356,8 +356,9 @@ export async function capturePlannedRoutes(options: {
     }
     try {
       // alert accept targets the inspected modal, never an application button named Open.
-      // The pinned controller recognizes Open and verifies that the modal disappears.
-      // alert has no --timeout flag in agent-device 0.21.15; bound the process instead.
+      // The controller recognizes Open and verifies that the modal disappears. It runs accept's own
+      // retry window (a 2 s window whose last read may still be in flight), so this stays the outer
+      // bound on the process: a controller that stops answering must not spend the capture budget.
       controller(["alert", "accept", "--level", "full", "--json"], false, 15_000);
     } catch (error) {
       if (error instanceof CiError && error.code === "CAPTURE_BUDGET_EXHAUSTED") throw error;
@@ -422,7 +423,7 @@ export async function capturePlannedRoutes(options: {
       catch (error) {
         // A system surface the controller cannot read yet (the Save Password prompt while
         // agent-device defers its XCTest tiers): wait it out, then decline it as usual.
-        if (isUnreadableSystemSurface(error)) {
+        if (unreadableSystemSurfaceFailure(error)) {
           surfaceWaitStarted ??= clock();
           const waited = clock() - surfaceWaitStarted;
           if (waited >= UNREADABLE_SURFACE_WAIT_MS) {
@@ -828,10 +829,10 @@ export async function capturePlannedRoutes(options: {
       }
     };
     /**
-     * agent-device 0.21.x routes a snapshot to a system surface such as the SafariViewService
-     * password prompt. While its XCTest tiers are deferred after slow accessibility work, no backend
-     * can read that surface and the snapshot is refused (observed for about 40 s in r10). Wait for
-     * the deferral to end rather than hand the agent a frame without accessibility.
+     * agent-device routes a snapshot to a system surface such as the SafariViewService password
+     * prompt. While its XCTest tiers are deferred after slow accessibility work, no backend can read
+     * that surface and the snapshot refuses with a missing viewport (observed for about 40 s in r10).
+     * Wait for the deferral to end rather than hand the agent a frame without accessibility.
      */
     const readSnapshotThroughDeferral = async (signal: AbortSignal) => {
       const started = clock();
@@ -840,8 +841,7 @@ export async function capturePlannedRoutes(options: {
         try { return { ...(await readSnapshot(signal)), retries: attempt, deferredMs: clock() - started }; }
         catch (error) {
           const delayMs = delays[attempt];
-          if (!(error instanceof CiError) || !/requires a (?:valid|positive finite) viewport/.test(error.message)
-            || delayMs === undefined || deadline - clock() <= delayMs) throw error;
+          if (!unreadableSystemSurfaceFailure(error) || delayMs === undefined || deadline - clock() <= delayMs) throw error;
           await sleep(delayMs, undefined, { signal: liveSignal(signal) });
         }
       }

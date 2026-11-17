@@ -75,8 +75,9 @@ export function canTypeAfterFocus(intent: CaptureInputFocus | undefined, snapsho
 }
 
 /**
- * Older controllers report one Keyboard element; agent-device 0.21.15 reports only its
- * Key elements, which its own occlusion check also treats as the keyboard.
+ * The controller's keyboard elements: a `Keyboard` container, its `Key` children, or both. A real
+ * agent-device 0.21.40 capture projects the `Keyboard` plane (role UIKeyboardAutomatic) together
+ * with its keys, and its own keyboard-chrome check treats either as the keyboard.
  */
 export function isKeyboardNode(node: Record<string, unknown>): boolean {
   const type = typeof node.type === "string" ? node.type.toLowerCase() : "";
@@ -138,20 +139,6 @@ export function credentialSavePromptDecline(nodes: readonly Record<string, unkno
   if (!visible.some(node => typeof node.label === "string" && /^(?:Save|Update) Password\?$/.test(node.label))) return undefined;
   const buttons = visible.filter(node => String(node.type).toLowerCase() === "button" && node.label === "Not Now" && node.enabled !== false);
   return buttons.length === 1 && typeof buttons[0]!.ref === "string" ? buttons[0] : undefined;
-}
-
-/**
- * agent-device could not read the surface in front of the app. iOS 26 hosts the Save Password
- * prompt in com.apple.SafariViewService, and only agent-device's XCTest snapshot tiers can read it;
- * after a slow accessibility read agent-device defers those tiers for the app for 120 s, and the
- * snapshot then fails with "requires a valid viewport". Waiting out the deferral makes the prompt
- * readable again, so capture can decline it as usual.
- */
-export function isUnreadableSystemSurface(error: unknown): boolean {
-  if (!(error instanceof CiError) || error.code !== "COMMAND_FAILED") return false;
-  const text = `${error.message}\n${error.nextAction ?? ""}`;
-  return /requires a valid viewport/i.test(text) || /XCTest-backed snapshot tiers were deferred/i.test(text)
-    || /com\.apple\.SafariViewService hosts the surface/i.test(text);
 }
 
 /** Whether a snapshot satisfies a setup action's readiness condition. */

@@ -46,13 +46,16 @@ const route = (id, path = `/${id}`) => ({ id, kind: 'screen', route: path ?? '/i
   routeFile: path === null ? `app/item/[id].tsx` : `app/${id}.tsx`, sourceFiles: [`app/${id}.tsx`], variant: 'default', provider: 'expo-router', logicalPath: id });
 const ok = data => ({ stdout: JSON.stringify({ success: true, data }), stderr: '' });
 const json = value => ({ stdout: JSON.stringify(value), stderr: '' });
-// agent-device 0.21.15 iOS RunnerTests+Alert.swift uses message/items for alerts. When none
+// agent-device 0.21.40's iOS RunnerTests+Alert.swift answers a read alert as message/items. When none
 // exists, the runner reports ALERT_NOT_FOUND and the CLI maps it to this public envelope.
 const noAlert = () => json({ success: false, error: { code: 'COMMAND_FAILED', message: 'alert not found',
   details: { runnerErrorCode: 'ALERT_NOT_FOUND' } } });
+// agent-device 0.21.40's refusal of a command it never sent: classifyRunnerReportedError publishes
+// runnerErrorCode, reason and dispatched for the runner's RUNNER_BUSY wire code, and normalizeError
+// lifts retriable out of details onto the error itself.
 const busyRead = (changes = {}) => json({ success: false, error: { code: 'COMMAND_FAILED',
   message: 'The iOS runner is still finishing a previous command that exceeded its execution watchdog (usually an accessibility capture on a heavy or animating screen).',
-  details: { runnerErrorCode: 'RUNNER_BUSY', retriable: true }, ...changes } });
+  retriable: true, details: { runnerErrorCode: 'RUNNER_BUSY', reason: 'runner_busy', dispatched: 'no' }, ...changes } });
 // A fresh helper's first XCTest-backed snapshot reports its quality; the fixture's plain snapshots do not.
 const recoveredSnapshot = result => {
   const value = JSON.parse(result.stdout);
@@ -62,11 +65,15 @@ const recoveredSnapshot = result => {
 const daemonUnavailable = () => json({ success: false, error: { code: 'COMMAND_FAILED', message: 'Remote daemon is unavailable',
   details: { reason: 'remote_daemon_unavailable', dispatched: 'no', daemonBaseUrl: 'https://daemon.example.invalid', attempts: 1 } } });
 const value = (request, name) => request.args[request.args.indexOf(name) + 1];
-// agent-device 0.21.15 while its XCTest snapshot tiers are deferred and iOS shows the Save Password
-// prompt, which com.apple.SafariViewService hosts.
+// agent-device 0.21.40 while its XCTest snapshot tiers are deferred and iOS shows the Save Password
+// prompt, which com.apple.SafariViewService hosts. The engine reason, the deferred verdict and the
+// surface host travel as typed details; the CLI lifts `hint` out of them.
 const unreadableSurface = () => json({ success: false, error: { code: 'COMMAND_FAILED',
   message: 'snapshot: regular iOS snapshot presentation requires a valid viewport',
-  details: { hint: 'com.apple.SafariViewService hosts the surface presented over the app, and this capture targeted that surface. No snapshot backend could read this screen (XCTest-backed snapshot tiers were deferred after recent slow accessibility work on this screen).' } } });
+  hint: 'com.apple.SafariViewService hosts the surface presented over the app, and this capture targeted that surface. No snapshot backend could read this screen (XCTest-backed snapshot tiers were deferred after recent slow accessibility work on this screen).',
+  details: { reason: 'missing-viewport', field: 'viewport',
+    systemSurface: { bundleId: 'com.apple.SafariViewService', kind: 'web-auth' },
+    snapshotQuality: { state: 'sparse', backend: 'private-ax', reasonCode: 'deferred' } } } });
 
 
 /**
@@ -2761,11 +2768,17 @@ test('explicit busy reads back off on the host and retry within the same capture
   assert.equal(calls, 2);
 });
 
-test('watchdog and retained busy read envelopes receive the same bounded observation recovery', () => {
+test('a busy refusal and the watchdog expiry receive the same bounded observation recovery', () => {
   let now = 0, calls = 0;
-  const lifecycleBusy = busyRead({ details: { recovery: 'runner_reported_failure', lifecycleState: 'failed',
-    transportError: 'The iOS runner is still finishing a previous command that exceeded its execution watchdog (usually an accessibility capture on a heavy or animating screen).' } });
-  const watchdog = busyRead({ message: 'main thread execution timed out', details: { runnerFailureReason: 'runner_main_thread_execution_timeout' } });
+  // agent-device 0.21.40's runner-command-recovery.ts re-publishes the journal's code through
+  // classifyRunnerReportedError, so a busy refusal recovered after a lost response keeps its typed fields.
+  const lifecycleBusy = busyRead({ details: { runnerErrorCode: 'RUNNER_BUSY', reason: 'runner_busy', dispatched: 'no',
+    recovery: 'runner_reported_failure', lifecycleState: 'failed' } });
+  // The command that tripped the watchdog: runner-contract.ts types its expiry as MAIN_THREAD_TIMEOUT
+  // with reason runner_main_thread_timeout, and runner-failure-diagnostics.ts can add its log-derived reason.
+  const watchdog = busyRead({ message: 'main thread execution timed out', retriable: undefined,
+    details: { runnerErrorCode: 'MAIN_THREAD_TIMEOUT', reason: 'runner_main_thread_timeout', dispatched: 'unknown',
+      runnerFailureReason: 'runner_main_thread_execution_timeout' } });
   const replies = [watchdog, lifecycleBusy, ok({ nodes: [] })];
   const response = runControllerRead({ args: ['snapshot'], deadlineMs: 10_000, timeoutMs: 10_000, now: () => now,
     sleep: milliseconds => { now += milliseconds; }, run: () => replies[calls++] });
@@ -2776,7 +2789,7 @@ test('watchdog and retained busy read envelopes receive the same bounded observa
   let queries = 0;
   const alert = runControllerRead({ args: ['alert', 'get'], deadlineMs: 10_000, timeoutMs: 10_000, now: () => now,
     sleep: () => assert.fail('a timed-out alert query is not replayed'), run: () => { queries++; return watchdog; } });
-  assert.equal(JSON.parse(alert.stdout).error.details.runnerFailureReason, 'runner_main_thread_execution_timeout');
+  assert.equal(JSON.parse(alert.stdout).error.details.runnerErrorCode, 'MAIN_THREAD_TIMEOUT');
   assert.equal(queries, 1);
   // Busy refusals still wait for the runner to drain, for alert queries as for snapshots.
   let busyQueries = 0;
@@ -2786,9 +2799,11 @@ test('watchdog and retained busy read envelopes receive the same bounded observa
   assert.equal(busyQueries, 2);
 });
 
-test('the typed runner watchdog code retries reads only', () => {
-  // agent-device 0.21.x types its watchdog expiry with this code; the message is not the contract.
-  const typed = () => busyRead({ message: 'XCTest stalled on the current screen', details: { runnerErrorCode: 'MAIN_THREAD_TIMEOUT' } });
+test('the watchdog expiry is read from its typed code and reason, not from message text', () => {
+  // agent-device 0.21.40 types the expiry as runnerErrorCode MAIN_THREAD_TIMEOUT and reason
+  // runner_main_thread_timeout; the prose the runner writes beside it is not the contract.
+  const typed = () => busyRead({ message: 'XCTest stalled on the current screen', retriable: undefined,
+    details: { runnerErrorCode: 'MAIN_THREAD_TIMEOUT', reason: 'runner_main_thread_timeout', dispatched: 'unknown' } });
   let now = 0, calls = 0;
   const response = runControllerRead({ args: ['snapshot'], deadlineMs: 10_000, timeoutMs: 10_000, now: () => now,
     sleep: milliseconds => { now += milliseconds; }, run: () => ++calls === 1 ? typed() : ok({ nodes: [] }) });
@@ -3983,9 +3998,11 @@ test('agent observation waits out a deferred system-surface snapshot instead of 
     if (request.command === 'fake-controller' && request.args[0] === 'snapshot' && ++snapshots && refusals > 0) {
       refusals -= 1;
       now += 3_000;
-      // agent-device 0.21.15 while the SafariViewService password prompt is presented.
+      // agent-device 0.21.40 while the SafariViewService password prompt is presented.
       return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'regular iOS snapshot presentation requires a valid viewport',
-        details: { hint: 'com.apple.SafariViewService hosts the surface presented over the app. No snapshot backend could read this screen.' } } });
+        hint: 'com.apple.SafariViewService hosts the surface presented over the app. No snapshot backend could read this screen.',
+        details: { reason: 'missing-viewport', field: 'viewport',
+          systemSurface: { bundleId: 'com.apple.SafariViewService', kind: 'web-auth' } } } });
     }
     return f.options.runner(request);
   } });

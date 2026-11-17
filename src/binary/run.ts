@@ -7,7 +7,7 @@ import { createLocalCiAgentSession } from "../capture/agent/session-local.js";
 import type { CiAgentProviderName } from "../capture/agent/provider.js";
 import { assertReplayFits, createReplaySession, parseReplayPlan, replaySetup, type ReplayPlan } from "./replay.js";
 import { CONTROLLER_SESSION, baseEnvironment, isRecord } from "../capture/common.js";
-import { controllerData, controllerFailureReason, defaultRunner, loneBackDismissControl, openedSimulatorDevice } from "../capture/controller.js";
+import { controllerData, controllerFailureReason, defaultRunner, loneBackDismissControl, openedSimulatorDevice, runnerBusyRefusal } from "../capture/controller.js";
 import type { CommandRequest, CommandResult } from "../capture/run.js";
 import { executeCaptureSetup } from "../capture/setup-actions.js";
 import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, assertSimulatorSessionIdentity, assertSimulatorStopped, readSimulatorDotenvHandoff,
@@ -887,8 +887,6 @@ async function easLoggedIn(runner: typeof defaultRunner, environment: NodeJS.Pro
 /** Schemes the OS routes to a browser, the store, Settings, or another app: opening one hands the session away from the app under test. */
 const SYSTEM_URL_SCHEMES = /^(https?|ftp|file|javascript|data|blob|mailto|tel|telprompt|facetime(-audio)?|sms|mms|imessage|itms(-apps|-services|-beta)?|macappstore|app-settings|prefs|shortcuts|maps|music|videos|photos-redirect|x-apple-[a-z-]+|market|intent|content|android-app|geo|package):$/i;
 
-/** The model may only open app-owned URLs; an https page or a store link would hand the session to another app. */
-const RUNNER_BUSY = /still finishing a previous command/i;
 const sleepSync = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
 /**
@@ -900,12 +898,13 @@ export function retryWhileBusy<T>(run: () => T, pause: (ms: number) => void, bud
   for (;;) {
     try { return run(); }
     catch (error) {
-      if (!RUNNER_BUSY.test(error instanceof Error ? error.message : String(error)) || clock() - started >= budgetMs) throw error;
+      if (!runnerBusyRefusal(error) || clock() - started >= budgetMs) throw error;
       pause(stepMs);
     }
   }
 }
 
+/** The model may only open app-owned URLs; an https page or a store link would hand the session to another app. */
 export function assertAppUrl(url: string, appSchemes: readonly string[] = []): void {
   let parsed: URL;
   try { parsed = new URL(url); } catch { throw binaryError("AGENT_URL_INVALID", `Not a URL: ${url}`, "Pass a custom-scheme app URL."); }
