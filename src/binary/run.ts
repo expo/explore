@@ -29,7 +29,7 @@ import { packageBin } from "../shared/package-paths.js";
 import { assertDecodedPng, solidColour } from "../shared/png-evidence.js";
 import { CONTRACT, type ExploreMap, type Platform } from "../types.js";
 import { assertEmulatorCompatible, extractIosBundle, inspectArchive, type ArchiveKind, type InspectedArchive, readArchiveIcon } from "./archive.js";
-import { riskOf, runBlackBoxExploration, type BlackBoxExplorerResult, type BlackBoxFrame, SYSTEM_DIALOG_PACKAGES } from "./explorer.js";
+import { riskOf, runBlackBoxExploration, screenEvidenceKey, type BlackBoxExplorerResult, type BlackBoxFrame, SYSTEM_DIALOG_PACKAGES } from "./explorer.js";
 
 export const DEFAULT_IOS_DEVICE = "iPhone 17 Pro";
 export const DEFAULT_BINARY_PROJECT = "expo-explore";
@@ -508,7 +508,13 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
           try { controller(["back", "--in-app", "--level", "full", "--json"], 120_000); }
           catch (error) {
             const control = loneBackDismissControl(error);
-            if (control && riskOf(control.label, allowDestructive ?? []) === "safe") controller(["press", "--level", "full", "--json", "--", control.selector], 120_000);
+            if (control && riskOf(control.label, allowDestructive ?? []) === "safe") {
+              // As in source-driven capture, the press counts as back only when the screen changed.
+              const before = screenEvidenceKey((await observe(false)).nodes);
+              controller(["press", "--level", "full", "--json", "--", control.selector], 120_000);
+              await settled();
+              if (screenEvidenceKey((await observe(false)).nodes) === before) throw error;
+            }
             else if (controllerFailureReason(error) === "back_swipe_not_dispatched") controller(["back", "--system", "--level", "full", "--json"], 120_000);
             else throw error;
           }
