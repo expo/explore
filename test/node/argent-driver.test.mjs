@@ -222,11 +222,11 @@ test("keyboard dismiss matches agent-device: Android presses back; iOS taps a di
   assert.deepEqual(dismissed.json.data, { platform: "android", action: "dismiss", wasVisible: true, dismissed: true, visible: false });
   assert.deepEqual(android.calls.find(call => call.tool === "button").args, { udid: "emulator-5554", button: "back" });
 
-  // agent-device fails with this message when the keyboard has no dismiss key, and callers fall back to the return key.
+  // agent-device refuses with this reason when the keyboard has no dismiss key, and callers fall back to the return key.
   const noKey = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": { ...IOS_HOME, keyboardVisible: true } });
   const failed = await noKey.run(["keyboard", "dismiss", ...flags("ios")]);
   assert.equal(failed.exitCode, 1);
-  assert.match(failed.json.error.message, /^Unable to dismiss the iOS keyboard/);
+  assert.equal(failed.json.error.details.reason, "keyboard_dismiss_unavailable");
 
   const hidden = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": IOS_HOME });
   assert.equal((await hidden.run(["keyboard", "dismiss", ...flags("ios")])).json.data.wasVisible, false);
@@ -237,6 +237,7 @@ test("iOS back with no navigation bar back control fails with agent-device's mes
   const back = await run(["back", ...flags("ios")]);
   assert.equal(back.exitCode, 1);
   assert.equal(back.json.error.message, "in-app back control is not available");
+  assert.equal(back.json.error.details.reason, "back_swipe_not_dispatched");
 });
 
 test("alerts read and answer in each platform's agent-device shape", async () => {
@@ -298,7 +299,7 @@ test("a tool-server that is still starting is waited for before the action is se
 test("an unreachable tool-server before a UI action is the retryable 'Remote daemon is unavailable'", async () => {
   const { run, calls } = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": IOS_HOME, "gesture-tap": {} }, { reachable: false });
   const pressed = await run(["press", "10", "10", ...flags("ios")]);
-  assert.deepEqual(pressed.json.error, { code: "COMMAND_FAILED", message: "Remote daemon is unavailable" });
+  assert.deepEqual(pressed.json.error, { code: "COMMAND_FAILED", message: "Remote daemon is unavailable", details: { reason: "remote_daemon_unavailable", dispatched: "no" } });
   assert.ok(!calls.some(call => call.tool === "gesture-tap"));
 });
 

@@ -106,6 +106,36 @@ export function controllerCommandFailure(stdout: string, command: string): CiErr
   return failure;
 }
 
+/** agent-device's typed refusal reason (`error.details.reason`), when the failure carries one. */
+export function controllerFailureReason(error: unknown): string | undefined {
+  if (!(error instanceof CiError)) return undefined;
+  const details = nativeControllerFailures.get(error)?.details;
+  return isRecord(details) && typeof details.reason === "string" ? details.reason : undefined;
+}
+
+/**
+ * A back that left the screen as it was: agent-device swiped from the left edge and nothing changed
+ * (`back_swipe_no_change`), or sent nothing (`back_swipe_not_dispatched`, also the Argent bridge's answer
+ * when the screen has no back control).
+ */
+export function backLeftScreenUnchanged(error: unknown): boolean {
+  const reason = controllerFailureReason(error);
+  return reason === "back_swipe_no_change" || reason === "back_swipe_not_dispatched";
+}
+
+/**
+ * The one dismiss control (Close, Cancel, Back) agent-device saw in the screen's top bar when its back changed
+ * nothing (`details.dismissControls`). agent-device never presses it: on iOS back only pops the navigation stack.
+ * Undefined when it listed none or several.
+ */
+export function loneBackDismissControl(error: unknown): { selector: string; label: string } | undefined {
+  if (controllerFailureReason(error) !== "back_swipe_no_change") return undefined;
+  const controls = (nativeControllerFailures.get(error as CiError)?.details as Record<string, unknown> | undefined)?.dismissControls;
+  if (!Array.isArray(controls) || controls.length !== 1 || !isRecord(controls[0])) return undefined;
+  const { selector, label } = controls[0];
+  return typeof selector === "string" && selector.trim() && typeof label === "string" ? { selector, label } : undefined;
+}
+
 function busyControllerReadFailure(error: unknown): boolean {
   if (!(error instanceof CiError)) return false;
   const native = nativeControllerFailures.get(error);
@@ -158,14 +188,14 @@ function responsiveAccessibilityRead(args: readonly string[], result: CommandRes
 }
 
 /**
- * agent-device checks the remote daemon's /health, with a 3 s timeout, before it sends a command,
- * and fails with this error when the check gets no answer or a 5xx. The command itself was never
- * sent, so sending it again cannot repeat anything, even a UI action.
+ * agent-device checks the remote daemon's /health before it sends a command, and refuses with
+ * `remote_daemon_unavailable` and `dispatched: "no"` when the check gets no answer or a 5xx. The
+ * command itself was never sent, so sending it again cannot repeat anything, even a UI action.
  */
 export function remoteDaemonUnavailable(error: unknown): boolean {
-  if (!(error instanceof CiError)) return false;
-  const native = nativeControllerFailures.get(error);
-  return !!native && native.code === "COMMAND_FAILED" && native.message === "Remote daemon is unavailable";
+  if (controllerFailureReason(error) !== "remote_daemon_unavailable") return false;
+  const details = nativeControllerFailures.get(error as CiError)?.details;
+  return isRecord(details) && details.dispatched === "no";
 }
 
 /**

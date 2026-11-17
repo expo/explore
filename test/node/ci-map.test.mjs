@@ -58,9 +58,9 @@ const recoveredSnapshot = result => {
   const value = JSON.parse(result.stdout);
   return { ...result, stdout: JSON.stringify({ ...value, data: { ...value.data, snapshotQuality: { state: 'recovered', backend: 'tree' } } }) };
 };
-// agent-device 0.21.15 raises this before sending a command when the remote daemon's /health check fails.
+// agent-device 0.21.39 raises this before sending a command when the remote daemon's /health check fails.
 const daemonUnavailable = () => json({ success: false, error: { code: 'COMMAND_FAILED', message: 'Remote daemon is unavailable',
-  details: { daemonBaseUrl: 'https://daemon.example.invalid', hint: 'Verify AGENT_DEVICE_DAEMON_BASE_URL points to a reachable daemon.' } } });
+  details: { reason: 'remote_daemon_unavailable', dispatched: 'no', daemonBaseUrl: 'https://daemon.example.invalid', attempts: 1 } } });
 const value = (request, name) => request.args[request.args.indexOf(name) + 1];
 // agent-device 0.21.15 while its XCTest snapshot tiers are deferred and iOS shows the Save Password
 // prompt, which com.apple.SafariViewService hosts.
@@ -3706,7 +3706,8 @@ function sheetRunner(f, { dismissible = true, sheetOrigin = 72 } = {}) {
     if (request.command === 'fake-controller') {
       const [command] = request.args;
       if (command === 'open' && request.args[2]?.startsWith('sample://')) { path = '/' + request.args[2].slice('sample://'.length); sheet = path === '/settings'; }
-      if (command === 'back' && sheet) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'in-app back control is not available' } });
+      // agent-device 0.21.39 swipes from the left edge when there is no navigation back button; a sheet stays.
+      if (command === 'back' && sheet) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'The back swipe changed nothing.', details: { reason: 'back_swipe_no_change', runnerErrorCode: 'BACK_SWIPE_NO_CHANGE', dispatched: 'unknown' } } });
       if (command === 'swipe') { swipes.push(request.args.slice(1, 5)); if (dismissible) { sheet = false; path = '/home'; } return ok({}); }
     }
     const response = f.options.runner(request);
@@ -3780,8 +3781,64 @@ test('agent back reports a sheet that stays open, and never swipes without sheet
   const plainTrace = (await readFile(join(plain.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
   const unavailable = plainTrace.find(event => event.action === 'back');
   assert.equal(unavailable.result.error.code, 'COMMAND_FAILED');
-  assert.match(unavailable.result.error.message, /in-app back control is not available/);
+  assert.match(unavailable.result.error.message, /The back swipe changed nothing/);
   assert.equal(screen.swipes.length, 0);
+});
+
+/** A full-screen modal whose only exit is a header control agent-device names when its back changes nothing. */
+function modalRunner(f, { label = 'Close' } = {}) {
+  let path = '/', modal = false;
+  const presses = [];
+  const selector = `role=button label="${label}"`;
+  const runner = request => {
+    if (request.command === 'fake-controller') {
+      const [command] = request.args;
+      if (command === 'open' && request.args[2]?.startsWith('sample://')) { path = '/' + request.args[2].slice('sample://'.length); modal = path === '/settings'; }
+      if (command === 'back' && modal) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'The back swipe changed nothing.',
+        details: { reason: 'back_swipe_no_change', runnerErrorCode: 'BACK_SWIPE_NO_CHANGE', dispatched: 'unknown', dismissControls: [{ selector, label }] } } });
+      if (command === 'press' && request.args[1] === selector) { presses.push(request.args[1]); modal = false; path = '/home'; return ok({}); }
+    }
+    const response = f.options.runner(request);
+    if (request.command === 'fake-controller' && request.args[0] === 'snapshot') {
+      const value = JSON.parse(response.stdout);
+      for (const node of value.data.nodes) if (node.identifier === CAPTURE_OBSERVER_IDENTIFIER) {
+        node.label = JSON.stringify({ provider: 'expo-router', pathname: path, segments: path.split('/').filter(Boolean), parameters: {} });
+        node.rect = { x: 0, y: 0, width: 1, height: 1 };
+      }
+      value.data.nodes.unshift({ type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 }, visible: true });
+      return { ...response, stdout: JSON.stringify(value) };
+    }
+    return response;
+  };
+  return { runner, presses };
+}
+
+const modalBackAgent = f => agentFixture([
+  { action: 'capture', targetId: f.ids.home, description: 'Loaded home.', requiredLabels: ['screen-title'] },
+  { action: 'open', url: 'sample://settings' },
+  { action: 'capture', targetId: f.ids.settings, description: 'Settings modal.', requiredLabels: ['screen-title'] },
+  { action: 'back' },
+  { action: 'done' },
+]);
+
+test('agent back presses the one dismiss control agent-device names when its back changes nothing', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f);
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.presses, ['role=button label="Close"']);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  const back = trace.find(event => event.action === 'back');
+  assert.equal(back.result.performed, 'back');
+  assert.equal(back.result.via, 'dismiss-control');
+});
+
+test('agent back never presses a named dismiss control that reads as destructive', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { label: 'Cancel subscription' });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.presses, []);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(trace.find(event => event.action === 'back').result.error.code, 'COMMAND_FAILED');
 });
 
 test('agent back swipes again when the first drag moves a sheet without closing it', async t => {

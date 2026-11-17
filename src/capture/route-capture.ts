@@ -23,7 +23,8 @@ import { CAPTURE_OBSERVER_IDENTIFIER, captureObserverMarkers, parseCaptureDestin
 import { type CiAgentRuntimeOptions, runCiAgentNavigation, assertAgentCaptureContext } from "./agent/runtime.js";
 import { createExplorationInputs } from "../config/exploration-inputs.js";
 import { isRecord, captureError, CONTROLLER_SESSION, parseJson } from "./common.js";
-import { MAX_ACCESSIBILITY_EVIDENCE_BYTES, adbDeviceOffline, remoteDaemonUnavailable, controllerData, defaultRunner, type ControllerReadRecovery, type RemoteDaemonRetry, runControllerRead, controllerCommandFailure, runControllerReadAsync, runAgentControllerCommand, wedgedControllerReadFailure, openedSimulatorDevice, alertWatchdogFailure } from "./controller.js";
+import { MAX_ACCESSIBILITY_EVIDENCE_BYTES, adbDeviceOffline, remoteDaemonUnavailable, controllerData, defaultRunner, type ControllerReadRecovery, type RemoteDaemonRetry, runControllerRead, controllerCommandFailure, runControllerReadAsync, runAgentControllerCommand, wedgedControllerReadFailure, openedSimulatorDevice, alertWatchdogFailure, backLeftScreenUnchanged, loneBackDismissControl } from "./controller.js";
+import { riskOf } from "../binary/explorer.js";
 import type { ActiveSimulatorRuntime, SimulatorConnection } from "./simulator.js";
 import { androidTools } from "./local-simulator.js";
 import type { CiMapOptions, CommandResult } from "./run.js";
@@ -771,14 +772,23 @@ export async function capturePlannedRoutes(options: {
     const toLogical = (space: { width: number; height: number; transposed: boolean }, x: number, y: number): [number, number] =>
       space.transposed ? [y * space.width, (1 - x) * space.height] : [x * space.width, y * space.height];
     /**
-     * agent-device's in-app back taps a navigation control and cannot leave a sheet without one.
-     * Swipe such a sheet down, then require the observed destination to change.
+     * agent-device's back presses the navigation bar back button, else swipes from the left edge, which
+     * cannot leave a modal or a sheet. Press the modal's one dismiss control that agent-device names, or swipe
+     * a sheet down, then require the observed destination to change.
      */
     const back = async (signal: AbortSignal): Promise<{ via: string } | undefined> => {
       try { await command(["back", "--level", "full", "--json"], signal); return; }
       catch (error) {
-        if (!(error instanceof CiError) || !/in-app back control is not available/.test(error.message)) throw error;
+        if (!backLeftScreenUnchanged(error)) throw error;
         const before = (await readSnapshot(signal)).snapshot.nodes;
+        const control = loneBackDismissControl(error);
+        if (control && riskOf(control.label, []) === "safe") {
+          await command(["press", control.selector, "--level", "full", "--json"], signal);
+          for (let attempt = 0; attempt < 4; attempt++) {
+            await sleep(500, undefined, { signal: liveSignal(signal) });
+            if (observerIdentity((await readSnapshot(signal)).snapshot.nodes) !== observerIdentity(before)) return { via: "dismiss-control" };
+          }
+        }
         let gesture = sheetDismissGesture(before);
         if (!gesture) throw error;
         const gestures: [number, number, number, number][] = [];

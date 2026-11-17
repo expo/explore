@@ -325,7 +325,7 @@ test("a review says its change is off-screen only on a modified verdict whose sc
   const offScreen = (status, verdict) => {
     const input = review();
     input.surfaces[0].review = { status, description: status === "modified" ? "Added text “lanes you add next”." : "No visible change", offScreen: true };
-    input.surfaces[0].visual = { verdict, reason: verdict === "unchanged" ? "matched" : "repeated-cross-build-delta", mismatchPercentage: verdict === "unchanged" ? 0 : 3, threshold: 0.1, tool: "agent-device@0.21.29" };
+    input.surfaces[0].visual = { verdict, reason: verdict === "unchanged" ? "matched" : "repeated-cross-build-delta", mismatchPercentage: verdict === "unchanged" ? 0 : 3, threshold: 0.1, tool: "agent-device@0.21.39" };
     return input;
   };
   assert.doesNotThrow(() => assertPublicReview(offScreen("modified", "unchanged")));
