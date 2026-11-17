@@ -3786,9 +3786,9 @@ test('agent back reports a sheet that stays open, and never swipes without sheet
 });
 
 /** A full-screen modal whose only exit is a header control agent-device names when its back changes nothing. */
-function modalRunner(f, { label = 'Close' } = {}) {
+function modalRunner(f, { label = 'Close', sameRoute = false, closes = true } = {}) {
   let path = '/', modal = false;
-  const presses = [];
+  const presses = [], swipes = [];
   const selector = `role=button label="${label}"`;
   const runner = request => {
     if (request.command === 'fake-controller') {
@@ -3796,7 +3796,8 @@ function modalRunner(f, { label = 'Close' } = {}) {
       if (command === 'open' && request.args[2]?.startsWith('sample://')) { path = '/' + request.args[2].slice('sample://'.length); modal = path === '/settings'; }
       if (command === 'back' && modal) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'The back swipe changed nothing.',
         details: { reason: 'back_swipe_no_change', runnerErrorCode: 'BACK_SWIPE_NO_CHANGE', dispatched: 'unknown', dismissControls: [{ selector, label }] } } });
-      if (command === 'press' && request.args[1] === selector) { presses.push(request.args[1]); modal = false; path = '/home'; return ok({}); }
+      if (command === 'press' && request.args[1] === selector) { presses.push(request.args[1]); if (closes) { modal = false; if (!sameRoute) path = '/home'; } return ok({}); }
+      if (command === 'swipe') swipes.push(request.args.slice(1, 5));
     }
     const response = f.options.runner(request);
     if (request.command === 'fake-controller' && request.args[0] === 'snapshot') {
@@ -3806,11 +3807,12 @@ function modalRunner(f, { label = 'Close' } = {}) {
         node.rect = { x: 0, y: 0, width: 1, height: 1 };
       }
       value.data.nodes.unshift({ type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 }, visible: true });
+      if (modal) value.data.nodes.push({ type: 'Button', label, rect: { x: 340, y: 60, width: 44, height: 44 }, visible: true });
       return { ...response, stdout: JSON.stringify(value) };
     }
     return response;
   };
-  return { runner, presses };
+  return { runner, presses, swipes };
 }
 
 const modalBackAgent = f => agentFixture([
@@ -3830,6 +3832,25 @@ test('agent back presses the one dismiss control agent-device names when its bac
   const back = trace.find(event => event.action === 'back');
   assert.equal(back.result.performed, 'back');
   assert.equal(back.result.via, 'dismiss-control');
+});
+
+test('a dismiss control that closes a modal without changing the route counts once the control is gone', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { sameRoute: true });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.presses, ['role=button label="Close"']);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(trace.find(event => event.action === 'back').result.via, 'dismiss-control');
+});
+
+test('a dismiss control press that changes nothing is reported, and no sheet swipe follows it', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { closes: false });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.presses, ['role=button label="Close"']);
+  assert.deepEqual(modal.swipes, []);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(trace.find(event => event.action === 'back').result.error.code, 'AGENT_DISMISS_CONTROL_FAILED');
 });
 
 test('agent back never presses a named dismiss control that reads as destructive', async t => {
