@@ -513,7 +513,9 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
               const before = screenEvidenceKey((await observe(false)).nodes);
               controller(["press", "--level", "full", "--json", "--", control.selector], 120_000);
               await settled();
-              if (screenEvidenceKey((await observe(false)).nodes) === before) throw error;
+              // A "Discard changes?" confirmation changes the screen too, but leaves it in place.
+              const after = (await observe(false)).nodes;
+              if (screenEvidenceKey(after) === before || after.some(node => node.type === "Alert")) throw error;
             }
             else if (controllerFailureReason(error) === "back_swipe_not_dispatched") controller(["back", "--system", "--level", "full", "--json"], 120_000);
             else throw error;

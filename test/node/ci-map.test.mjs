@@ -3786,7 +3786,7 @@ test('agent back reports a sheet that stays open, and never swipes without sheet
 });
 
 /** A full-screen modal whose only exit is a header control agent-device names when its back changes nothing. */
-function modalRunner(f, { label = 'Close', sameRoute = false, closes = true, confirms = false } = {}) {
+function modalRunner(f, { label = 'Close', sameRoute = false, closes = true, confirms = false, hidesObserver = false } = {}) {
   let path = '/', modal = false, confirming = false;
   const presses = [], swipes = [];
   const selector = `role=button label="${label}"`;
@@ -3807,6 +3807,7 @@ function modalRunner(f, { label = 'Close', sameRoute = false, closes = true, con
         node.rect = { x: 0, y: 0, width: 1, height: 1 };
       }
       value.data.nodes.unshift({ type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 }, visible: true });
+      if (confirming && hidesObserver) value.data.nodes = value.data.nodes.filter(node => node.identifier !== CAPTURE_OBSERVER_IDENTIFIER);
       if (confirming) value.data.nodes.push({ type: 'Alert', label: 'Discard changes?', rect: { x: 50, y: 300, width: 300, height: 200 }, visible: true });
       else if (modal) value.data.nodes.push({ type: 'Button', label, rect: { x: 340, y: 60, width: 44, height: 44 }, visible: true });
       return { ...response, stdout: JSON.stringify(value) };
@@ -3861,6 +3862,17 @@ test('a dismiss control press that brings up a confirmation is not reported as l
   assert.deepEqual(modal.swipes, []);
   const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
   assert.equal(trace.find(event => event.action === 'back').result.error.code, 'AGENT_DISMISS_CONTROL_FAILED');
+});
+
+test('a confirmation that hides the route observer is not reported as leaving the screen', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { sameRoute: true, confirms: true, hidesObserver: true });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.swipes, []);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  const back = trace.find(event => event.action === 'back');
+  assert.notEqual(back.result.via, 'dismiss-control');
+  assert.ok(back.result.error, 'back must fail while the confirmation is showing');
 });
 
 test('agent back never presses a named dismiss control that reads as destructive', async t => {

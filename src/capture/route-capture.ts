@@ -793,7 +793,7 @@ export async function capturePlannedRoutes(options: {
           for (let attempt = 0; attempt < 4; attempt++) {
             await sleep(500, undefined, { signal: liveSignal(signal) });
             after = (await readSnapshot(signal)).snapshot.nodes;
-            if (observerIdentity(after) !== observerIdentity(before) || !controlShown(after) && !alertShown(after)) return { via: "dismiss-control" };
+            if (!alertShown(after) && (observerIdentity(after) !== observerIdentity(before) || !controlShown(after))) return { via: "dismiss-control" };
           }
           // The press ran, so a sheet swipe from the geometry read before it could land on whatever is there now.
           throw new CiError({ code: "AGENT_DISMISS_CONTROL_FAILED", stage: "capture",
