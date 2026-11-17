@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tsImport } from "tsx/esm/api";
 
-const { runBinaryExploration } = await tsImport("../../src/binary/run.ts", import.meta.url);
+const { runBinaryExploration, commandOutcome } = await tsImport("../helpers/binary-controller.ts", import.meta.url);
 const { controllerVersion } = await tsImport("../../src/capture/simulator.ts", import.meta.url);
 const { CONTROLLER_SESSION } = await tsImport("../../src/capture/common.ts", import.meta.url);
 
@@ -115,4 +115,29 @@ test("an opened iPhone Duo's screenshots are stored upright, and the run records
   assert.deepEqual([...stored.data.subarray(0, 4)], [255, 255, 255, 255]);
   assert.equal(map.run.environment.orientation, "landscape");
   assert.equal(result.runtime.orientation, "landscape");
+});
+
+test("a keyboard with no dismiss key stays up: the return key is never pressed, whatever it reads", async t => {
+  const root = await mkdtemp(join(tmpdir(), "explore-binary-keyboard-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const field = { type: "TextField", label: "Password", rect: { x: 20, y: 100, width: 300, height: 44 } };
+  const doneKey = { type: "Key", label: "done", rect: { x: 280, y: 700, width: 80, height: 44 } };
+  const { requests, runner: base } = localRunner(undefined, { nodes: [field, { type: "Keyboard", rect: { x: 0, y: 600, width: 393, height: 250 } }, doneKey], png: PNG });
+  const runner = request => request.args[0] === "keyboard" && request.args[1] === "dismiss"
+    ? (requests.push(request), commandOutcome(request, { status: 1, stderr: "", stdout: JSON.stringify({ success: false, error: { code: "UNSUPPORTED_OPERATION",
+      message: "Unable to dismiss the keyboard: it exposes no dismiss key.", details: { reason: "keyboard_dismiss_unavailable", dispatched: "no" } } }) }))
+    : base(request);
+  let outcome;
+  const session = { provider: "anthropic", model: "test", async preflight() {}, async run(request) {
+    await request.callTool("observe", { includeImage: false }, request.signal);
+    outcome = await request.callTool("act", { action: "dismiss-keyboard" }, request.signal);
+    return { stopReason: "done" };
+  } };
+  await runBinaryExploration({ archive: await simulatorApp(root), output: join(root, "out"), simulator: "local", provider: "anthropic", runner,
+    createSession: () => session, environment: { PATH: process.env.PATH, HOME: root, ANTHROPIC_API_KEY: "key" } });
+
+  const controller = requests.filter(request => request.command !== "xcrun").map(request => request.args.filter(arg => !arg.startsWith("--")).slice(0, 2).join(" "));
+  assert.ok(controller.includes("keyboard dismiss"), "agent-device is asked to dismiss the keyboard");
+  assert.equal(controller.some(command => /^(press \d|keyboard (return|enter))/.test(command)), false, "and nothing taps the done key or the keyboard's return");
+  assert.match(outcome.content[0].text, /cannot be dismissed/);
 });
