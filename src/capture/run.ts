@@ -39,7 +39,7 @@ import { appScheme, hasConcreteRoutePath, unavailableRoute, capturePlannedRoutes
 
 export { assertDecodedPng } from "../shared/png-evidence.js";
 export { EAS_CLI_VERSION, AGENT_DEVICE_VERSION } from "./common.js";
-export { runAgentControllerCommand, controllerCommandFailure, runControllerRead, runControllerReadAsync } from "./controller.js";
+export { runAgentControllerCommand, controllerCommandFailure, runControllerRead, runControllerReadAsync, unreadableSystemSurfaceFailure, runnerBusyRefusal } from "./controller.js";
 export type { ControllerReadRecovery } from "./controller.js";
 export { captureDeepLink, capturePlannedRoutes } from "./route-capture.js";
 

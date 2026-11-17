@@ -9,7 +9,7 @@ const { runBlackBoxExploration, screenEvidenceKey, elementsOf, fieldName, system
 const { ExploreStore, validateMap } = await tsImport("../../src/map/store.ts", import.meta.url);
 const { CONTRACT } = await tsImport("../../src/types.ts", import.meta.url);
 const tsRun = await tsImport("../../src/binary/run.ts", import.meta.url);
-const { assertAppUrl, describeForeground, foreignNode, guardPositionals, leftForeground, retryWhileBusy } = tsRun;
+const { assertAppUrl, describeForeground, foreignNode, guardPositionals, leftForeground } = tsRun;
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 const SCREENS = {
@@ -358,15 +358,31 @@ test("evidence keys ignore a long, changing label on a role-less element", () =>
   assert.notEqual(screenEvidenceKey(banner("Short label")), screenEvidenceKey(banner("Other label")));
 });
 
-test("a controller command refused while the runner winds down a previous one is retried, within a budget", () => {
-  const busy = () => new Error("press: The iOS runner is still finishing a previous command that exceeded its execution watchdog.");
+test("a controller command refused while the runner winds down a previous one is retried, within a budget", async () => {
+  // agent-device 0.21.40's classifyRunnerReportedError publishes the typed busy refusal; the CLI's
+  // own JSON envelope is what Explore reads it from (controllerCommandFailure). Both sides come from
+  // one build so the failure carries the error class the retry helper looks up.
+  const { controllerCommandFailure } = await import("../../dist/capture/controller.js");
+  const { retryWhileBusy: retry } = await import("../../dist/binary/run.js");
+  const busy = () => controllerCommandFailure(JSON.stringify({ success: false, error: { code: "COMMAND_FAILED",
+    message: "The iOS runner is still finishing a previous command that exceeded its execution watchdog.",
+    retriable: true, details: { runnerErrorCode: "RUNNER_BUSY", reason: "runner_busy", dispatched: "no" } } }), "press");
   let attempts = 0; const pauses = [];
-  const result = retryWhileBusy(() => { attempts += 1; if (attempts < 3) throw busy(); return "ok"; }, ms => pauses.push(ms));
+  const result = retry(() => { attempts += 1; if (attempts < 3) throw busy(); return "ok"; }, ms => pauses.push(ms));
   assert.equal(result, "ok"); assert.deepEqual(pauses, [5000, 5000]);
   let clock = 0;
-  assert.throws(() => retryWhileBusy(() => { throw busy(); }, ms => { clock += ms; }, 12_000, 5_000, () => clock), /still finishing/);
+  assert.throws(() => retry(() => { throw busy(); }, ms => { clock += ms; }, 12_000, 5_000, () => clock),
+    error => error.code === "COMMAND_FAILED");
   assert.equal(clock, 15_000, "three pauses, then the budget is spent");
-  assert.throws(() => retryWhileBusy(() => { throw new Error("main thread execution timed out"); }, () => assert.fail("no pause")), /timed out/);
+  // The command that tripped the watchdog already spent its wait: Explore resends nothing on it.
+  const stalled = () => controllerCommandFailure(JSON.stringify({ success: false, error: { code: "COMMAND_FAILED",
+    message: "main thread execution timed out",
+    details: { runnerErrorCode: "MAIN_THREAD_TIMEOUT", reason: "runner_main_thread_timeout", dispatched: "unknown" } } }), "press");
+  assert.throws(() => retry(() => { throw stalled(); }, () => assert.fail("no pause")),
+    error => error.code === "COMMAND_FAILED" && /main thread execution timed out/.test(error.message));
+  // A failure with no typed busy refusal is never retried, whatever its prose says.
+  const notBusy = () => { throw new Error("press: The iOS runner is still finishing a previous command that exceeded its execution watchdog."); };
+  assert.throws(() => retry(notBusy, () => assert.fail("no pause")), /still finishing/);
 });
 
 test("a launch-blocked reason names what appstate found in front, not just \"another app\"", () => {
