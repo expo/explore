@@ -783,15 +783,17 @@ export async function capturePlannedRoutes(options: {
         const before = (await readSnapshot(signal)).snapshot.nodes;
         const control = loneBackDismissControl(error);
         if (control && riskOf(control.label, []) === "safe") {
-          // A modal kept in a screen's own state closes without a route change, so the control leaving counts too.
+          // A modal kept in a screen's own state closes without a route change, so the control leaving counts too,
+          // unless an alert took its place (a "Discard changes?" confirmation): that screen is not dismissed.
           const controlShown = (nodes: readonly Record<string, unknown>[]) => nodes.some(node =>
             node.label === control.label && /button/i.test(String(node.type ?? "")) && node.visible !== false);
+          const alertShown = (nodes: readonly Record<string, unknown>[]) => nodes.some(node => node.type === "Alert");
           await command(["press", control.selector, "--level", "full", "--json"], signal);
           let after = before;
           for (let attempt = 0; attempt < 4; attempt++) {
             await sleep(500, undefined, { signal: liveSignal(signal) });
             after = (await readSnapshot(signal)).snapshot.nodes;
-            if (observerIdentity(after) !== observerIdentity(before) || !controlShown(after)) return { via: "dismiss-control" };
+            if (observerIdentity(after) !== observerIdentity(before) || !controlShown(after) && !alertShown(after)) return { via: "dismiss-control" };
           }
           // The press ran, so a sheet swipe from the geometry read before it could land on whatever is there now.
           throw new CiError({ code: "AGENT_DISMISS_CONTROL_FAILED", stage: "capture",
