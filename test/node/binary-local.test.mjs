@@ -117,7 +117,7 @@ test("an opened iPhone Duo's screenshots are stored upright, and the run records
   assert.equal(result.runtime.orientation, "landscape");
 });
 
-test("a keyboard with no dismiss key stays up: the return key is never pressed, whatever it reads", async t => {
+test("a refused keyboard dismiss stays refused: the return key is never pressed, whatever it reads", async t => {
   const root = await mkdtemp(join(tmpdir(), "explore-binary-keyboard-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const field = { type: "TextField", label: "Password", rect: { x: 20, y: 100, width: 300, height: 44 } };
@@ -125,7 +125,8 @@ test("a keyboard with no dismiss key stays up: the return key is never pressed, 
   const { requests, runner: base } = localRunner(undefined, { nodes: [field, { type: "Keyboard", rect: { x: 0, y: 600, width: 393, height: 250 } }, doneKey], png: PNG });
   const runner = request => request.args[0] === "keyboard" && request.args[1] === "dismiss"
     ? (requests.push(request), commandOutcome(request, { status: 1, stderr: "", stdout: JSON.stringify({ success: false, error: { code: "UNSUPPORTED_OPERATION",
-      message: "Unable to dismiss the keyboard: it exposes no dismiss key.", details: { reason: "keyboard_dismiss_unavailable", dispatched: "no" } } }) }))
+      message: "The Apple runner cannot dismiss this keyboard automatically", details: { reason: "keyboard_dismiss_unavailable", dispatched: "no",
+      hint: "Press the visible Hide Keyboard key or an app control that ends editing." } } }) }))
     : base(request);
   let outcome;
   const session = { provider: "anthropic", model: "test", async preflight() {}, async run(request) {
@@ -139,5 +140,6 @@ test("a keyboard with no dismiss key stays up: the return key is never pressed, 
   const controller = requests.filter(request => request.command !== "xcrun").map(request => request.args.filter(arg => !arg.startsWith("--")).slice(0, 2).join(" "));
   assert.ok(controller.includes("keyboard dismiss"), "agent-device is asked to dismiss the keyboard");
   assert.equal(controller.some(command => /^(press \d|keyboard (return|enter))/.test(command)), false, "and nothing taps the done key or the keyboard's return");
-  assert.match(outcome.content[0].text, /cannot be dismissed/);
+  assert.match(outcome.content[0].text, /cannot dismiss this keyboard/);
+  assert.match(outcome.content[0].text, /Hide Keyboard key or an app control/, "the model gets agent-device's hint");
 });
