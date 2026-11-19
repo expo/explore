@@ -46,27 +46,34 @@ const route = (id, path = `/${id}`) => ({ id, kind: 'screen', route: path ?? '/i
   routeFile: path === null ? `app/item/[id].tsx` : `app/${id}.tsx`, sourceFiles: [`app/${id}.tsx`], variant: 'default', provider: 'expo-router', logicalPath: id });
 const ok = data => ({ stdout: JSON.stringify({ success: true, data }), stderr: '' });
 const json = value => ({ stdout: JSON.stringify(value), stderr: '' });
-// agent-device 0.21.15 iOS RunnerTests+Alert.swift uses message/items for alerts. When none
+// agent-device 0.21.40's iOS RunnerTests+Alert.swift answers a read alert as message/items. When none
 // exists, the runner reports ALERT_NOT_FOUND and the CLI maps it to this public envelope.
 const noAlert = () => json({ success: false, error: { code: 'COMMAND_FAILED', message: 'alert not found',
   details: { runnerErrorCode: 'ALERT_NOT_FOUND' } } });
+// agent-device 0.21.40's refusal of a command it never sent: classifyRunnerReportedError publishes
+// runnerErrorCode, reason and dispatched for the runner's RUNNER_BUSY wire code, and normalizeError
+// lifts retriable out of details onto the error itself.
 const busyRead = (changes = {}) => json({ success: false, error: { code: 'COMMAND_FAILED',
   message: 'The iOS runner is still finishing a previous command that exceeded its execution watchdog (usually an accessibility capture on a heavy or animating screen).',
-  details: { runnerErrorCode: 'RUNNER_BUSY', retriable: true }, ...changes } });
+  retriable: true, details: { runnerErrorCode: 'RUNNER_BUSY', reason: 'runner_busy', dispatched: 'no' }, ...changes } });
 // A fresh helper's first XCTest-backed snapshot reports its quality; the fixture's plain snapshots do not.
 const recoveredSnapshot = result => {
   const value = JSON.parse(result.stdout);
   return { ...result, stdout: JSON.stringify({ ...value, data: { ...value.data, snapshotQuality: { state: 'recovered', backend: 'tree' } } }) };
 };
-// agent-device 0.21.15 raises this before sending a command when the remote daemon's /health check fails.
+// agent-device 0.21.40 raises this before sending a command when the remote daemon's /health check fails.
 const daemonUnavailable = () => json({ success: false, error: { code: 'COMMAND_FAILED', message: 'Remote daemon is unavailable',
-  details: { daemonBaseUrl: 'https://daemon.example.invalid', hint: 'Verify AGENT_DEVICE_DAEMON_BASE_URL points to a reachable daemon.' } } });
+  details: { reason: 'remote_daemon_unavailable', dispatched: 'no', daemonBaseUrl: 'https://daemon.example.invalid', attempts: 1 } } });
 const value = (request, name) => request.args[request.args.indexOf(name) + 1];
-// agent-device 0.21.15 while its XCTest snapshot tiers are deferred and iOS shows the Save Password
-// prompt, which com.apple.SafariViewService hosts.
+// agent-device 0.21.40 while its XCTest snapshot tiers are deferred and iOS shows the Save Password
+// prompt, which com.apple.SafariViewService hosts. The engine reason, the deferred verdict and the
+// surface host travel as typed details; the CLI lifts `hint` out of them.
 const unreadableSurface = () => json({ success: false, error: { code: 'COMMAND_FAILED',
   message: 'snapshot: regular iOS snapshot presentation requires a valid viewport',
-  details: { hint: 'com.apple.SafariViewService hosts the surface presented over the app, and this capture targeted that surface. No snapshot backend could read this screen (XCTest-backed snapshot tiers were deferred after recent slow accessibility work on this screen).' } } });
+  hint: 'com.apple.SafariViewService hosts the surface presented over the app, and this capture targeted that surface. No snapshot backend could read this screen (XCTest-backed snapshot tiers were deferred after recent slow accessibility work on this screen).',
+  details: { reason: 'missing-viewport', field: 'viewport',
+    systemSurface: { bundleId: 'com.apple.SafariViewService', kind: 'web-auth' },
+    snapshotQuality: { state: 'sparse', backend: 'private-ax', reasonCode: 'deferred' } } } });
 
 
 /**
@@ -2761,11 +2768,17 @@ test('explicit busy reads back off on the host and retry within the same capture
   assert.equal(calls, 2);
 });
 
-test('watchdog and retained busy read envelopes receive the same bounded observation recovery', () => {
+test('a busy refusal and the watchdog expiry receive the same bounded observation recovery', () => {
   let now = 0, calls = 0;
-  const lifecycleBusy = busyRead({ details: { recovery: 'runner_reported_failure', lifecycleState: 'failed',
-    transportError: 'The iOS runner is still finishing a previous command that exceeded its execution watchdog (usually an accessibility capture on a heavy or animating screen).' } });
-  const watchdog = busyRead({ message: 'main thread execution timed out', details: { runnerFailureReason: 'runner_main_thread_execution_timeout' } });
+  // agent-device 0.21.40's runner-command-recovery.ts re-publishes the journal's code through
+  // classifyRunnerReportedError, so a busy refusal recovered after a lost response keeps its typed fields.
+  const lifecycleBusy = busyRead({ details: { runnerErrorCode: 'RUNNER_BUSY', reason: 'runner_busy', dispatched: 'no',
+    recovery: 'runner_reported_failure', lifecycleState: 'failed' } });
+  // The command that tripped the watchdog: runner-contract.ts types its expiry as MAIN_THREAD_TIMEOUT
+  // with reason runner_main_thread_timeout, and runner-failure-diagnostics.ts can add its log-derived reason.
+  const watchdog = busyRead({ message: 'main thread execution timed out', retriable: undefined,
+    details: { runnerErrorCode: 'MAIN_THREAD_TIMEOUT', reason: 'runner_main_thread_timeout', dispatched: 'unknown',
+      runnerFailureReason: 'runner_main_thread_execution_timeout' } });
   const replies = [watchdog, lifecycleBusy, ok({ nodes: [] })];
   const response = runControllerRead({ args: ['snapshot'], deadlineMs: 10_000, timeoutMs: 10_000, now: () => now,
     sleep: milliseconds => { now += milliseconds; }, run: () => replies[calls++] });
@@ -2776,7 +2789,7 @@ test('watchdog and retained busy read envelopes receive the same bounded observa
   let queries = 0;
   const alert = runControllerRead({ args: ['alert', 'get'], deadlineMs: 10_000, timeoutMs: 10_000, now: () => now,
     sleep: () => assert.fail('a timed-out alert query is not replayed'), run: () => { queries++; return watchdog; } });
-  assert.equal(JSON.parse(alert.stdout).error.details.runnerFailureReason, 'runner_main_thread_execution_timeout');
+  assert.equal(JSON.parse(alert.stdout).error.details.runnerErrorCode, 'MAIN_THREAD_TIMEOUT');
   assert.equal(queries, 1);
   // Busy refusals still wait for the runner to drain, for alert queries as for snapshots.
   let busyQueries = 0;
@@ -2786,9 +2799,11 @@ test('watchdog and retained busy read envelopes receive the same bounded observa
   assert.equal(busyQueries, 2);
 });
 
-test('the typed runner watchdog code retries reads only', () => {
-  // agent-device 0.21.x types its watchdog expiry with this code; the message is not the contract.
-  const typed = () => busyRead({ message: 'XCTest stalled on the current screen', details: { runnerErrorCode: 'MAIN_THREAD_TIMEOUT' } });
+test('the watchdog expiry is read from its typed code and reason, not from message text', () => {
+  // agent-device 0.21.40 types the expiry as runnerErrorCode MAIN_THREAD_TIMEOUT and reason
+  // runner_main_thread_timeout; the prose the runner writes beside it is not the contract.
+  const typed = () => busyRead({ message: 'XCTest stalled on the current screen', retriable: undefined,
+    details: { runnerErrorCode: 'MAIN_THREAD_TIMEOUT', reason: 'runner_main_thread_timeout', dispatched: 'unknown' } });
   let now = 0, calls = 0;
   const response = runControllerRead({ args: ['snapshot'], deadlineMs: 10_000, timeoutMs: 10_000, now: () => now,
     sleep: milliseconds => { now += milliseconds; }, run: () => ++calls === 1 ? typed() : ok({ nodes: [] }) });
@@ -3706,7 +3721,8 @@ function sheetRunner(f, { dismissible = true, sheetOrigin = 72 } = {}) {
     if (request.command === 'fake-controller') {
       const [command] = request.args;
       if (command === 'open' && request.args[2]?.startsWith('sample://')) { path = '/' + request.args[2].slice('sample://'.length); sheet = path === '/settings'; }
-      if (command === 'back' && sheet) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'in-app back control is not available' } });
+      // agent-device 0.21.40 swipes from the left edge when there is no navigation back button; a sheet stays.
+      if (command === 'back' && sheet) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'The back swipe changed nothing.', details: { reason: 'back_swipe_no_change', runnerErrorCode: 'BACK_SWIPE_NO_CHANGE', dispatched: 'unknown' } } });
       if (command === 'swipe') { swipes.push(request.args.slice(1, 5)); if (dismissible) { sheet = false; path = '/home'; } return ok({}); }
     }
     const response = f.options.runner(request);
@@ -3780,8 +3796,126 @@ test('agent back reports a sheet that stays open, and never swipes without sheet
   const plainTrace = (await readFile(join(plain.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
   const unavailable = plainTrace.find(event => event.action === 'back');
   assert.equal(unavailable.result.error.code, 'COMMAND_FAILED');
-  assert.match(unavailable.result.error.message, /in-app back control is not available/);
+  assert.match(unavailable.result.error.message, /The back swipe changed nothing/);
   assert.equal(screen.swipes.length, 0);
+});
+
+/** A full-screen modal whose only exit is a header control agent-device names when its back changes nothing. */
+function modalRunner(f, { label = 'Close', identifier, sameRoute = false, closes = true, confirms = false, hidesObserver = false } = {}) {
+  let path = '/', modal = false, confirming = false;
+  const presses = [], swipes = [];
+  // agent-device names a control by identifier when it has one no other button shares; its label may then be empty.
+  const selector = identifier ? `role=button id="${identifier}"` : `role=button label="${label}"`;
+  const named = identifier ? { selector, label, identifier } : { selector, label };
+  const runner = request => {
+    if (request.command === 'fake-controller') {
+      const [command] = request.args;
+      if (command === 'open' && request.args[2]?.startsWith('sample://')) { path = '/' + request.args[2].slice('sample://'.length); modal = path === '/settings'; }
+      if (command === 'back' && modal) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'The back swipe changed nothing.',
+        details: { reason: 'back_swipe_no_change', runnerErrorCode: 'BACK_SWIPE_NO_CHANGE', dispatched: 'unknown', dismissControls: [named] } } });
+      if (command === 'press' && request.args[1] === selector) { presses.push(request.args[1]); if (confirms) confirming = true; else if (closes) { modal = false; if (!sameRoute) path = '/home'; } return ok({}); }
+      if (command === 'swipe') swipes.push(request.args.slice(1, 5));
+    }
+    const response = f.options.runner(request);
+    if (request.command === 'fake-controller' && request.args[0] === 'snapshot') {
+      const value = JSON.parse(response.stdout);
+      for (const node of value.data.nodes) if (node.identifier === CAPTURE_OBSERVER_IDENTIFIER) {
+        node.label = JSON.stringify({ provider: 'expo-router', pathname: path, segments: path.split('/').filter(Boolean), parameters: {} });
+        node.rect = { x: 0, y: 0, width: 1, height: 1 };
+      }
+      value.data.nodes.unshift({ type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 }, visible: true });
+      if (confirming && hidesObserver) value.data.nodes = value.data.nodes.filter(node => node.identifier !== CAPTURE_OBSERVER_IDENTIFIER);
+      if (confirming) value.data.nodes.push({ type: 'Alert', label: 'Discard changes?', rect: { x: 50, y: 300, width: 300, height: 200 }, visible: true });
+      else if (modal) value.data.nodes.push({ type: 'Button', ...(label ? { label } : {}), ...(identifier ? { identifier } : {}), rect: { x: 340, y: 60, width: 44, height: 44 }, visible: true });
+      return { ...response, stdout: JSON.stringify(value) };
+    }
+    return response;
+  };
+  return { runner, presses, swipes };
+}
+
+const modalBackAgent = f => agentFixture([
+  { action: 'capture', targetId: f.ids.home, description: 'Loaded home.', requiredLabels: ['screen-title'] },
+  { action: 'open', url: 'sample://settings' },
+  { action: 'capture', targetId: f.ids.settings, description: 'Settings modal.', requiredLabels: ['screen-title'] },
+  { action: 'back' },
+  { action: 'done' },
+]);
+
+test('agent back presses the one dismiss control agent-device names when its back changes nothing', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f);
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.presses, ['role=button label="Close"']);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  const back = trace.find(event => event.action === 'back');
+  assert.equal(back.result.performed, 'back');
+  assert.equal(back.result.via, 'dismiss-control');
+});
+
+test('a dismiss control that closes a modal without changing the route counts once the control is gone', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { sameRoute: true });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.presses, ['role=button label="Close"']);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(trace.find(event => event.action === 'back').result.via, 'dismiss-control');
+});
+
+test('a dismiss control press that changes nothing is reported, and no sheet swipe follows it', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { closes: false });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.presses, ['role=button label="Close"']);
+  assert.deepEqual(modal.swipes, []);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(trace.find(event => event.action === 'back').result.error.code, 'AGENT_DISMISS_CONTROL_FAILED');
+});
+
+test('a dismiss control press that brings up a confirmation is not reported as leaving the screen', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { sameRoute: true, confirms: true });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.swipes, []);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(trace.find(event => event.action === 'back').result.error.code, 'AGENT_DISMISS_CONTROL_FAILED');
+});
+
+test('a confirmation that hides the route observer is not reported as leaving the screen', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { sameRoute: true, confirms: true, hidesObserver: true });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.swipes, []);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  const back = trace.find(event => event.action === 'back');
+  assert.notEqual(back.result.via, 'dismiss-control');
+  assert.ok(back.result.error, 'back must fail while the confirmation is showing');
+});
+
+test('an unlabeled dismiss control named by identifier counts only once that control is gone', async t => {
+  const closes = await fixture(t);
+  const closing = modalRunner(closes, { label: '', identifier: 'modal-close', sameRoute: true });
+  await runCiMap({ ...closes.options, runner: closing.runner, agent: modalBackAgent(closes), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(closing.presses, ['role=button id="modal-close"']);
+  const closed = (await readFile(join(closes.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(closed.find(event => event.action === 'back').result.via, 'dismiss-control');
+
+  const stays = await fixture(t);
+  const staying = modalRunner(stays, { label: '', identifier: 'modal-close', sameRoute: true, closes: false });
+  await runCiMap({ ...stays.options, runner: staying.runner, agent: modalBackAgent(stays), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(staying.presses, ['role=button id="modal-close"']);
+  assert.deepEqual(staying.swipes, []);
+  const stayed = (await readFile(join(stays.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(stayed.find(event => event.action === 'back').result.error.code, 'AGENT_DISMISS_CONTROL_FAILED');
+});
+
+test('agent back never presses a named dismiss control that reads as destructive', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { label: 'Cancel subscription' });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.presses, []);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(trace.find(event => event.action === 'back').result.error.code, 'COMMAND_FAILED');
 });
 
 test('agent back swipes again when the first drag moves a sheet without closing it', async t => {
@@ -3864,9 +3998,11 @@ test('agent observation waits out a deferred system-surface snapshot instead of 
     if (request.command === 'fake-controller' && request.args[0] === 'snapshot' && ++snapshots && refusals > 0) {
       refusals -= 1;
       now += 3_000;
-      // agent-device 0.21.15 while the SafariViewService password prompt is presented.
+      // agent-device 0.21.40 while the SafariViewService password prompt is presented.
       return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'regular iOS snapshot presentation requires a valid viewport',
-        details: { hint: 'com.apple.SafariViewService hosts the surface presented over the app. No snapshot backend could read this screen.' } } });
+        hint: 'com.apple.SafariViewService hosts the surface presented over the app. No snapshot backend could read this screen.',
+        details: { reason: 'missing-viewport', field: 'viewport',
+          systemSurface: { bundleId: 'com.apple.SafariViewService', kind: 'web-auth' } } } });
     }
     return f.options.runner(request);
   } });
