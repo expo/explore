@@ -7,7 +7,7 @@ import { createLocalCiAgentSession } from "../capture/agent/session-local.js";
 import type { CiAgentProviderName } from "../capture/agent/provider.js";
 import { assertReplayFits, createReplaySession, parseReplayPlan, replaySetup, type ReplayPlan } from "./replay.js";
 import { CONTROLLER_SESSION, baseEnvironment, isRecord } from "../capture/common.js";
-import { controllerData, defaultRunner, openedSimulatorDevice } from "../capture/controller.js";
+import { controllerData, controllerFailureReason, defaultRunner, loneBackDismissControl, openedSimulatorDevice } from "../capture/controller.js";
 import type { CommandRequest, CommandResult } from "../capture/run.js";
 import { executeCaptureSetup } from "../capture/setup-actions.js";
 import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, assertSimulatorSessionIdentity, assertSimulatorStopped, readSimulatorDotenvHandoff,
@@ -29,7 +29,7 @@ import { packageBin } from "../shared/package-paths.js";
 import { assertDecodedPng, solidColour } from "../shared/png-evidence.js";
 import { CONTRACT, type ExploreMap, type Platform } from "../types.js";
 import { assertEmulatorCompatible, extractIosBundle, inspectArchive, type ArchiveKind, type InspectedArchive, readArchiveIcon } from "./archive.js";
-import { runBlackBoxExploration, type BlackBoxExplorerResult, type BlackBoxFrame, SYSTEM_DIALOG_PACKAGES } from "./explorer.js";
+import { riskOf, runBlackBoxExploration, screenEvidenceKey, type BlackBoxExplorerResult, type BlackBoxFrame, SYSTEM_DIALOG_PACKAGES } from "./explorer.js";
 
 export const DEFAULT_IOS_DEVICE = "iPhone 17 Pro";
 export const DEFAULT_BINARY_PROJECT = "expo-explore";
@@ -502,11 +502,23 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
           const bounds = frameBounds(frame.nodes);
           controller(["press", String(Math.round(action.x * bounds.width)), String(Math.round(action.y * bounds.height)), "--level", "full", "--json"], 120_000);
         } else if (action.action === "back") {
-          // Onboarding steps, tabs and sheets have no back control; the platform gesture (iOS edge swipe, Android back) still works.
+          // On iOS agent-device's in-app back already falls back to the edge swipe, and names a modal's one dismiss
+          // control when that changed nothing. The Argent bridge sends nothing without a back control; Android's
+          // system back still works there.
           try { controller(["back", "--in-app", "--level", "full", "--json"], 120_000); }
           catch (error) {
-            if (!(error instanceof Error) || !/in-app back control is not available/.test(error.message)) throw error;
-            controller(["back", "--system", "--level", "full", "--json"], 120_000);
+            const control = loneBackDismissControl(error);
+            if (control && riskOf(control.label, allowDestructive ?? []) === "safe") {
+              // As in source-driven capture, the press counts as back only when the screen changed.
+              const before = screenEvidenceKey((await observe(false)).nodes);
+              controller(["press", "--level", "full", "--json", "--", control.selector], 120_000);
+              await settled();
+              // A "Discard changes?" confirmation changes the screen too, but leaves it in place.
+              const after = (await observe(false)).nodes;
+              if (screenEvidenceKey(after) === before || after.some(node => node.type === "Alert")) throw error;
+            }
+            else if (controllerFailureReason(error) === "back_swipe_not_dispatched") controller(["back", "--system", "--level", "full", "--json"], 120_000);
+            else throw error;
           }
         }
         else if (action.action === "dismiss-keyboard") await dismissKeyboard();
@@ -514,18 +526,9 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
         else await executeCaptureSetup([action], setupOptions);
         if (action.action !== "wait") await settled();
       };
-      const dismissKeyboard = async () => {
-        try { controller(["keyboard", "dismiss", "--level", "full", "--json"], 120_000); return; }
-        catch (error) { if (!(error instanceof Error) || !/Unable to dismiss the iOS keyboard/.test(error.message)) throw error; }
-        // The iOS keyboard has no dismiss key and agent-device never taps the background; its return key (next/done/go) closes it without touching the app.
-        const nodes = (await observe(false)).nodes;
-        // In a multi-line editor the return key inserts a newline instead of ending editing.
-        const multiline = nodes.some(node => /text-?view/i.test(String(node.type ?? "")));
-        const key = multiline ? undefined : nodes.find(node => /key$/i.test(String(node.type ?? "")) && KEYBOARD_RETURN_KEY.test(String(node.label ?? "")));
-        const rect = key?.rect as { x: number; y: number; width: number; height: number } | undefined;
-        if (!rect) throw binaryError("KEYBOARD_DISMISS_UNAVAILABLE", multiline ? "The keyboard cannot be dismissed from a multi-line editor: its return key inserts a newline." : "The keyboard cannot be dismissed: it has neither a dismiss nor a return key.", "Tap one of the app's own controls that is not behind the keyboard (Cancel, Done, Close), or go back.");
-        controller(["press", String(Math.round(rect.x + rect.width / 2)), String(Math.round(rect.y + rect.height / 2)), "--level", "full", "--json"], 120_000);
-      };
+      // A refusal reaches the model with agent-device's own hint. The return key is never a fallback: next moves focus to
+      // the following field, and done or go submits the form.
+      const dismissKeyboard = async () => { controller(["keyboard", "dismiss", "--level", "full", "--json"], 120_000); };
       try {
         try { await perform(); }
         catch (error) {
@@ -920,8 +923,6 @@ export function guardPositionals(args: readonly string[]): string[] {
   }
   return [positionals[0]!, ...flags, "--", ...positionals.slice(1)];
 }
-
-const KEYBOARD_RETURN_KEY = /^(return|next|done|go|continue|join)$/i;
 
 /**
  * How a frame's screenshot is stored. An opened (or half-open) iPhone Duo lights its inner panel, whose native axes are
