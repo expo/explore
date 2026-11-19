@@ -3786,16 +3786,18 @@ test('agent back reports a sheet that stays open, and never swipes without sheet
 });
 
 /** A full-screen modal whose only exit is a header control agent-device names when its back changes nothing. */
-function modalRunner(f, { label = 'Close', sameRoute = false, closes = true, confirms = false, hidesObserver = false } = {}) {
+function modalRunner(f, { label = 'Close', identifier, sameRoute = false, closes = true, confirms = false, hidesObserver = false } = {}) {
   let path = '/', modal = false, confirming = false;
   const presses = [], swipes = [];
-  const selector = `role=button label="${label}"`;
+  // agent-device names a control by identifier when it has one no other button shares; its label may then be empty.
+  const selector = identifier ? `role=button id="${identifier}"` : `role=button label="${label}"`;
+  const named = identifier ? { selector, label, identifier } : { selector, label };
   const runner = request => {
     if (request.command === 'fake-controller') {
       const [command] = request.args;
       if (command === 'open' && request.args[2]?.startsWith('sample://')) { path = '/' + request.args[2].slice('sample://'.length); modal = path === '/settings'; }
       if (command === 'back' && modal) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'The back swipe changed nothing.',
-        details: { reason: 'back_swipe_no_change', runnerErrorCode: 'BACK_SWIPE_NO_CHANGE', dispatched: 'unknown', dismissControls: [{ selector, label }] } } });
+        details: { reason: 'back_swipe_no_change', runnerErrorCode: 'BACK_SWIPE_NO_CHANGE', dispatched: 'unknown', dismissControls: [named] } } });
       if (command === 'press' && request.args[1] === selector) { presses.push(request.args[1]); if (confirms) confirming = true; else if (closes) { modal = false; if (!sameRoute) path = '/home'; } return ok({}); }
       if (command === 'swipe') swipes.push(request.args.slice(1, 5));
     }
@@ -3809,7 +3811,7 @@ function modalRunner(f, { label = 'Close', sameRoute = false, closes = true, con
       value.data.nodes.unshift({ type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 }, visible: true });
       if (confirming && hidesObserver) value.data.nodes = value.data.nodes.filter(node => node.identifier !== CAPTURE_OBSERVER_IDENTIFIER);
       if (confirming) value.data.nodes.push({ type: 'Alert', label: 'Discard changes?', rect: { x: 50, y: 300, width: 300, height: 200 }, visible: true });
-      else if (modal) value.data.nodes.push({ type: 'Button', label, rect: { x: 340, y: 60, width: 44, height: 44 }, visible: true });
+      else if (modal) value.data.nodes.push({ type: 'Button', ...(label ? { label } : {}), ...(identifier ? { identifier } : {}), rect: { x: 340, y: 60, width: 44, height: 44 }, visible: true });
       return { ...response, stdout: JSON.stringify(value) };
     }
     return response;
@@ -3873,6 +3875,23 @@ test('a confirmation that hides the route observer is not reported as leaving th
   const back = trace.find(event => event.action === 'back');
   assert.notEqual(back.result.via, 'dismiss-control');
   assert.ok(back.result.error, 'back must fail while the confirmation is showing');
+});
+
+test('an unlabeled dismiss control named by identifier counts only once that control is gone', async t => {
+  const closes = await fixture(t);
+  const closing = modalRunner(closes, { label: '', identifier: 'modal-close', sameRoute: true });
+  await runCiMap({ ...closes.options, runner: closing.runner, agent: modalBackAgent(closes), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(closing.presses, ['role=button id="modal-close"']);
+  const closed = (await readFile(join(closes.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(closed.find(event => event.action === 'back').result.via, 'dismiss-control');
+
+  const stays = await fixture(t);
+  const staying = modalRunner(stays, { label: '', identifier: 'modal-close', sameRoute: true, closes: false });
+  await runCiMap({ ...stays.options, runner: staying.runner, agent: modalBackAgent(stays), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(staying.presses, ['role=button id="modal-close"']);
+  assert.deepEqual(staying.swipes, []);
+  const stayed = (await readFile(join(stays.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(stayed.find(event => event.action === 'back').result.error.code, 'AGENT_DISMISS_CONTROL_FAILED');
 });
 
 test('agent back never presses a named dismiss control that reads as destructive', async t => {

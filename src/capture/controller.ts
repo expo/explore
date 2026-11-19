@@ -126,14 +126,16 @@ export function backLeftScreenUnchanged(error: unknown): boolean {
 /**
  * The one dismiss control (Close, Cancel, Back) agent-device saw in the screen's top bar when its back changed
  * nothing (`details.dismissControls`). agent-device never presses it: on iOS back only pops the navigation stack.
- * Undefined when it listed none or several.
+ * Undefined when it listed none or several. `identifier` is set when agent-device names the control by it; the
+ * label may then be empty.
  */
-export function loneBackDismissControl(error: unknown): { selector: string; label: string } | undefined {
+export function loneBackDismissControl(error: unknown): { selector: string; label: string; identifier?: string } | undefined {
   if (controllerFailureReason(error) !== "back_swipe_no_change") return undefined;
   const controls = (nativeControllerFailures.get(error as CiError)?.details as Record<string, unknown> | undefined)?.dismissControls;
   if (!Array.isArray(controls) || controls.length !== 1 || !isRecord(controls[0])) return undefined;
-  const { selector, label } = controls[0];
-  return typeof selector === "string" && selector.trim() && typeof label === "string" ? { selector, label } : undefined;
+  const { selector, label, identifier } = controls[0];
+  if (typeof selector !== "string" || !selector.trim() || typeof label !== "string") return undefined;
+  return typeof identifier === "string" && identifier ? { selector, label, identifier } : { selector, label };
 }
 
 function busyControllerReadFailure(error: unknown): boolean {

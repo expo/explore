@@ -782,24 +782,28 @@ export async function capturePlannedRoutes(options: {
         if (!backLeftScreenUnchanged(error)) throw error;
         const before = (await readSnapshot(signal)).snapshot.nodes;
         const control = loneBackDismissControl(error);
-        if (control && riskOf(control.label, []) === "safe") {
+        const controlName = control && (control.label || control.identifier);
+        if (control && controlName && riskOf(controlName, []) === "safe") {
           // A modal kept in a screen's own state closes without a route change, so the control leaving counts too,
           // unless an alert took its place (a "Discard changes?" confirmation): that screen is not dismissed.
+          // The control is matched the way agent-device named it: by identifier when it has one, else by label.
           const controlShown = (nodes: readonly Record<string, unknown>[]) => nodes.some(node =>
-            node.label === control.label && /button/i.test(String(node.type ?? "")) && node.visible !== false);
+            (control.identifier ? node.identifier === control.identifier : node.label === control.label)
+            && /button/i.test(String(node.type ?? "")) && node.visible !== false);
+          const controlWasShown = controlShown(before);
           const alertShown = (nodes: readonly Record<string, unknown>[]) => nodes.some(node => node.type === "Alert");
           await command(["press", control.selector, "--level", "full", "--json"], signal);
           let after = before;
           for (let attempt = 0; attempt < 4; attempt++) {
             await sleep(500, undefined, { signal: liveSignal(signal) });
             after = (await readSnapshot(signal)).snapshot.nodes;
-            if (!alertShown(after) && (observerIdentity(after) !== observerIdentity(before) || !controlShown(after))) return { via: "dismiss-control" };
+            if (!alertShown(after) && (observerIdentity(after) !== observerIdentity(before) || (controlWasShown && !controlShown(after)))) return { via: "dismiss-control" };
           }
           // The press ran, so a sheet swipe from the geometry read before it could land on whatever is there now.
           throw new CiError({ code: "AGENT_DISMISS_CONTROL_FAILED", stage: "capture",
-            message: `Pressed "${control.label}", the control agent-device named for leaving this screen, but the screen did not change.`,
+            message: `Pressed "${controlName}", the control agent-device named for leaving this screen, but the screen did not change.`,
             nextAction: "Inspect the returned accessibility: a confirmation may have appeared. Use an observed control rather than repeating back.",
-            details: { back: serializeCiError(error, { secrets }), control: control.label, destinationBefore: observerIdentity(before), destinationAfter: observerIdentity(after) } });
+            details: { back: serializeCiError(error, { secrets }), control: controlName, destinationBefore: observerIdentity(before), destinationAfter: observerIdentity(after) } });
         }
         let gesture = sheetDismissGesture(before);
         if (!gesture) throw error;
