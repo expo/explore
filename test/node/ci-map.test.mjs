@@ -58,7 +58,7 @@ const recoveredSnapshot = result => {
   const value = JSON.parse(result.stdout);
   return { ...result, stdout: JSON.stringify({ ...value, data: { ...value.data, snapshotQuality: { state: 'recovered', backend: 'tree' } } }) };
 };
-// agent-device 0.21.39 raises this before sending a command when the remote daemon's /health check fails.
+// agent-device 0.21.40 raises this before sending a command when the remote daemon's /health check fails.
 const daemonUnavailable = () => json({ success: false, error: { code: 'COMMAND_FAILED', message: 'Remote daemon is unavailable',
   details: { reason: 'remote_daemon_unavailable', dispatched: 'no', daemonBaseUrl: 'https://daemon.example.invalid', attempts: 1 } } });
 const value = (request, name) => request.args[request.args.indexOf(name) + 1];
@@ -3706,7 +3706,7 @@ function sheetRunner(f, { dismissible = true, sheetOrigin = 72 } = {}) {
     if (request.command === 'fake-controller') {
       const [command] = request.args;
       if (command === 'open' && request.args[2]?.startsWith('sample://')) { path = '/' + request.args[2].slice('sample://'.length); sheet = path === '/settings'; }
-      // agent-device 0.21.39 swipes from the left edge when there is no navigation back button; a sheet stays.
+      // agent-device 0.21.40 swipes from the left edge when there is no navigation back button; a sheet stays.
       if (command === 'back' && sheet) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'The back swipe changed nothing.', details: { reason: 'back_swipe_no_change', runnerErrorCode: 'BACK_SWIPE_NO_CHANGE', dispatched: 'unknown' } } });
       if (command === 'swipe') { swipes.push(request.args.slice(1, 5)); if (dismissible) { sheet = false; path = '/home'; } return ok({}); }
     }

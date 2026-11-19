@@ -746,10 +746,10 @@ const footnote = 'Added text “Changes apply live while playing. Base resolutio
 const footnoteText = 'Added text “Changes apply live while playing\\. Base resolution sets the step grid for lanes you add next\\.”';
 function euxyReview(target, options = {}) {
   const own = { sourceImpact: ['own'], sourceScope: 'screen' };
-  const matched = { verdict: 'unchanged', reason: 'matched', mismatchPercentage: 0, threshold: 0.1, tool: 'agent-device@0.21.39' };
+  const matched = { verdict: 'unchanged', reason: 'matched', mismatchPercentage: 0, threshold: 0.1, tool: 'agent-device@0.21.40' };
   const changed = (description, mismatchPercentage) => ({ ...own,
     review: { status: 'modified', description, facts: [{ category: 'element', templateId: 'element.added', bullet: description }] },
-    visual: { verdict: 'modified', reason: 'repeated-cross-build-delta', mismatchPercentage, threshold: 0.1, tool: 'agent-device@0.21.39' } });
+    visual: { verdict: 'modified', reason: 'repeated-cross-build-delta', mismatchPercentage, threshold: 0.1, tool: 'agent-device@0.21.40' } });
   const inTreeOnly = { ...changed(footnote, 0), visual: matched };
   if (options.offScreen !== false) inTreeOnly.review.offScreen = true;
   if (options.diffFailed) inTreeOnly.visual = { ...matched, reason: 'diff-failed' };
@@ -799,7 +799,7 @@ test('a change one platform has and another lacks keeps "only" and "not on"', as
   const iosOnly = target => {
     const reviewed = euxyReview(target);
     if (target === 'android') for (const entry of reviewed.surfaces) Object.assign(entry, { review: { status: 'unchanged', description: 'No visible change' },
-      visual: { verdict: 'unchanged', reason: 'matched', mismatchPercentage: 0, threshold: 0.1, tool: 'agent-device@0.21.39' } });
+      visual: { verdict: 'unchanged', reason: 'matched', mismatchPercentage: 0, threshold: 0.1, tool: 'agent-device@0.21.40' } });
     return reviewed;
   };
   const { rows } = await euxyRows(iosOnly);
