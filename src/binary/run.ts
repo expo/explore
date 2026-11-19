@@ -526,12 +526,9 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
         else await executeCaptureSetup([action], setupOptions);
         if (action.action !== "wait") await settled();
       };
-      const dismissKeyboard = async () => {
-        try { controller(["keyboard", "dismiss", "--level", "full", "--json"], 120_000); return; }
-        catch (error) { if (controllerFailureReason(error) !== "keyboard_dismiss_unavailable") throw error; }
-        // The return key never only closes the keyboard: next moves focus to the following field, and done or go submits the form.
-        throw binaryError("KEYBOARD_DISMISS_UNAVAILABLE", "The keyboard cannot be dismissed: it has no dismiss key, and its return key would move focus or submit the form.", "Tap one of the app's own controls that is not behind the keyboard (Cancel, Done, Close), or go back.");
-      };
+      // A refusal reaches the model with agent-device's own hint. The return key is never a fallback: next moves focus to
+      // the following field, and done or go submits the form.
+      const dismissKeyboard = async () => { controller(["keyboard", "dismiss", "--level", "full", "--json"], 120_000); };
       try {
         try { await perform(); }
         catch (error) {

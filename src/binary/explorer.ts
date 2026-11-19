@@ -827,17 +827,17 @@ export async function runBlackBoxExploration(options: BlackBoxExplorerOptions): 
               let error: string | undefined;
               try { await options.act(byCleanLabel(disambiguate(typed, matched, fromScreenId)), signal); }
               catch (caught) {
-                error = caught instanceof Error ? caught.message.slice(0, 500) : String(caught).slice(0, 500);
+                error = actionFailure(caught);
                 // agent-device names the label it would have accepted (a typographic apostrophe the model typed straight).
                 const similar = SIMILAR.exec(error)?.[1];
                 if (similar && action.action === "tap" && "label" in action && similar !== action.label) {
                   try { await options.act({ action: "tap", label: similar }, signal); error = undefined; }
-                  catch (again) { error = again instanceof Error ? again.message.slice(0, 500) : String(again).slice(0, 500); }
+                  catch (again) { error = actionFailure(again); }
                 }
                 const centre = error && COVERED.test(error) ? byCentre(action, matched, named) : undefined;
                 if (centre) {
                   try { await options.act(centre, signal); error = undefined; }
-                  catch (again) { error = again instanceof Error ? again.message.slice(0, 500) : String(again).slice(0, 500); }
+                  catch (again) { error = actionFailure(again); }
                 }
               }
               let view: Awaited<ReturnType<typeof observeNow>> | undefined;
@@ -920,4 +920,15 @@ function frameExtent(nodes: readonly Record<string, unknown>[]): { width: number
     if (rect && typeof rect.x === "number" && typeof rect.y === "number" && typeof rect.width === "number" && typeof rect.height === "number") { width = Math.max(width, rect.x + rect.width); height = Math.max(height, rect.y + rect.height); }
   }
   return width > 0 && height > 0 ? { width, height } : undefined;
+}
+
+/**
+ * What the model reads about a failed action: the message, then the controller's own next step. agent-device's hint
+ * says how to proceed (press a named dismiss control, an app control that ends editing), and the model has no other way
+ * to learn it.
+ */
+function actionFailure(caught: unknown): string {
+  if (!(caught instanceof Error)) return String(caught).slice(0, 500);
+  const next = caught instanceof CiError && caught.nextAction ? ` Next: ${caught.nextAction.slice(0, 400)}` : "";
+  return `${caught.message.slice(0, 500)}${next}`;
 }
