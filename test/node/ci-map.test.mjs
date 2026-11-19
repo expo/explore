@@ -58,9 +58,9 @@ const recoveredSnapshot = result => {
   const value = JSON.parse(result.stdout);
   return { ...result, stdout: JSON.stringify({ ...value, data: { ...value.data, snapshotQuality: { state: 'recovered', backend: 'tree' } } }) };
 };
-// agent-device 0.21.15 raises this before sending a command when the remote daemon's /health check fails.
+// agent-device 0.21.40 raises this before sending a command when the remote daemon's /health check fails.
 const daemonUnavailable = () => json({ success: false, error: { code: 'COMMAND_FAILED', message: 'Remote daemon is unavailable',
-  details: { daemonBaseUrl: 'https://daemon.example.invalid', hint: 'Verify AGENT_DEVICE_DAEMON_BASE_URL points to a reachable daemon.' } } });
+  details: { reason: 'remote_daemon_unavailable', dispatched: 'no', daemonBaseUrl: 'https://daemon.example.invalid', attempts: 1 } } });
 const value = (request, name) => request.args[request.args.indexOf(name) + 1];
 // agent-device 0.21.15 while its XCTest snapshot tiers are deferred and iOS shows the Save Password
 // prompt, which com.apple.SafariViewService hosts.
@@ -382,8 +382,17 @@ async function fixture(t, settings = {}) {
       }
       if (command === 'wait') return ok({});
       if (command === 'close') return ok({});
-      // claimedSerials: device claims an interrupted run left behind, which agent-device hides as stale but still enforces.
-      if (command === 'device') return ok({ claims: [], hiddenStaleClaims: (settings.claimedSerials ?? []).includes(value(request, '--serial')) ? 1 : 0 });
+      // claimedSerials: a claim an interrupted run left behind whose owner process still runs, so a new session is refused.
+      // reclaimableSerials: a claim whose owner died; both are hidden as stale, and only the first is a refusal (device status 0.21.40).
+      if (command === 'device') {
+        const serial = value(request, '--serial');
+        const blocked = (settings.claimedSerials ?? []).includes(serial);
+        const reclaimable = (settings.reclaimableSerials ?? []).includes(serial);
+        const owner = { session: 'explore', workspace: '/work', stateDir: '/state' };
+        return ok({ claims: [], hiddenStaleClaims: blocked || reclaimable ? 1 : 0,
+          devices: blocked || reclaimable ? [{ deviceKey: `local:android:none:${serial}`, device: { id: serial }, acquirable: !blocked,
+            ...(blocked ? { blockedBy: 'owner-process-still-running' } : {}), owner }] : [] });
+      }
       // An Expo Simulators session starts empty while the app is repacked; the controller installs the app from this machine.
       if (command === 'install') { assert.ok(existsSync(request.args[1]), 'the repacked app is on this machine'); return ok({ installed: true, appBundleId: 'com.example.app' }); }
       // agent-device 0.21.15 cannot read Xcode 27.1's hinge angle back, so a local fold reports a failure after folding.
@@ -1043,6 +1052,13 @@ test('a local emulator skips a port whose serial agent-device still claims for a
   assert.equal((await runCiMap(f.options)).runStatus, 'complete');
   const start = f.requests.find(request => request.command === '/bin/sh');
   assert.equal(start.args[start.args.indexOf('-port') + 1], '5558');
+});
+
+test('a local emulator takes a port whose stale claim agent-device would reclaim', async t => {
+  const f = await fixture(t, { local: true, android: true, repack: 'local', reclaimableSerials: ['emulator-5556'] });
+  assert.equal((await runCiMap(f.options)).runStatus, 'complete');
+  const start = f.requests.find(request => request.command === '/bin/sh');
+  assert.equal(start.args[start.args.indexOf('-port') + 1], '5556');
 });
 
 test('a local Android capture refuses an APK without libraries for this machine before installing it, and stops its emulator', async t => {
@@ -3706,7 +3722,8 @@ function sheetRunner(f, { dismissible = true, sheetOrigin = 72 } = {}) {
     if (request.command === 'fake-controller') {
       const [command] = request.args;
       if (command === 'open' && request.args[2]?.startsWith('sample://')) { path = '/' + request.args[2].slice('sample://'.length); sheet = path === '/settings'; }
-      if (command === 'back' && sheet) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'in-app back control is not available' } });
+      // agent-device 0.21.40 swipes from the left edge when there is no navigation back button; a sheet stays.
+      if (command === 'back' && sheet) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'The back swipe changed nothing.', details: { reason: 'back_swipe_no_change', runnerErrorCode: 'BACK_SWIPE_NO_CHANGE', dispatched: 'unknown' } } });
       if (command === 'swipe') { swipes.push(request.args.slice(1, 5)); if (dismissible) { sheet = false; path = '/home'; } return ok({}); }
     }
     const response = f.options.runner(request);
@@ -3780,8 +3797,126 @@ test('agent back reports a sheet that stays open, and never swipes without sheet
   const plainTrace = (await readFile(join(plain.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
   const unavailable = plainTrace.find(event => event.action === 'back');
   assert.equal(unavailable.result.error.code, 'COMMAND_FAILED');
-  assert.match(unavailable.result.error.message, /in-app back control is not available/);
+  assert.match(unavailable.result.error.message, /The back swipe changed nothing/);
   assert.equal(screen.swipes.length, 0);
+});
+
+/** A full-screen modal whose only exit is a header control agent-device names when its back changes nothing. */
+function modalRunner(f, { label = 'Close', identifier, sameRoute = false, closes = true, confirms = false, hidesObserver = false } = {}) {
+  let path = '/', modal = false, confirming = false;
+  const presses = [], swipes = [];
+  // agent-device names a control by identifier when it has one no other button shares; its label may then be empty.
+  const selector = identifier ? `role=button id="${identifier}"` : `role=button label="${label}"`;
+  const named = identifier ? { selector, label, identifier } : { selector, label };
+  const runner = request => {
+    if (request.command === 'fake-controller') {
+      const [command] = request.args;
+      if (command === 'open' && request.args[2]?.startsWith('sample://')) { path = '/' + request.args[2].slice('sample://'.length); modal = path === '/settings'; }
+      if (command === 'back' && modal) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'The back swipe changed nothing.',
+        details: { reason: 'back_swipe_no_change', runnerErrorCode: 'BACK_SWIPE_NO_CHANGE', dispatched: 'unknown', dismissControls: [named] } } });
+      if (command === 'press' && request.args[1] === selector) { presses.push(request.args[1]); if (confirms) confirming = true; else if (closes) { modal = false; if (!sameRoute) path = '/home'; } return ok({}); }
+      if (command === 'swipe') swipes.push(request.args.slice(1, 5));
+    }
+    const response = f.options.runner(request);
+    if (request.command === 'fake-controller' && request.args[0] === 'snapshot') {
+      const value = JSON.parse(response.stdout);
+      for (const node of value.data.nodes) if (node.identifier === CAPTURE_OBSERVER_IDENTIFIER) {
+        node.label = JSON.stringify({ provider: 'expo-router', pathname: path, segments: path.split('/').filter(Boolean), parameters: {} });
+        node.rect = { x: 0, y: 0, width: 1, height: 1 };
+      }
+      value.data.nodes.unshift({ type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 }, visible: true });
+      if (confirming && hidesObserver) value.data.nodes = value.data.nodes.filter(node => node.identifier !== CAPTURE_OBSERVER_IDENTIFIER);
+      if (confirming) value.data.nodes.push({ type: 'Alert', label: 'Discard changes?', rect: { x: 50, y: 300, width: 300, height: 200 }, visible: true });
+      else if (modal) value.data.nodes.push({ type: 'Button', ...(label ? { label } : {}), ...(identifier ? { identifier } : {}), rect: { x: 340, y: 60, width: 44, height: 44 }, visible: true });
+      return { ...response, stdout: JSON.stringify(value) };
+    }
+    return response;
+  };
+  return { runner, presses, swipes };
+}
+
+const modalBackAgent = f => agentFixture([
+  { action: 'capture', targetId: f.ids.home, description: 'Loaded home.', requiredLabels: ['screen-title'] },
+  { action: 'open', url: 'sample://settings' },
+  { action: 'capture', targetId: f.ids.settings, description: 'Settings modal.', requiredLabels: ['screen-title'] },
+  { action: 'back' },
+  { action: 'done' },
+]);
+
+test('agent back presses the one dismiss control agent-device names when its back changes nothing', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f);
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.presses, ['role=button label="Close"']);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  const back = trace.find(event => event.action === 'back');
+  assert.equal(back.result.performed, 'back');
+  assert.equal(back.result.via, 'dismiss-control');
+});
+
+test('a dismiss control that closes a modal without changing the route counts once the control is gone', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { sameRoute: true });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.presses, ['role=button label="Close"']);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(trace.find(event => event.action === 'back').result.via, 'dismiss-control');
+});
+
+test('a dismiss control press that changes nothing is reported, and no sheet swipe follows it', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { closes: false });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.presses, ['role=button label="Close"']);
+  assert.deepEqual(modal.swipes, []);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(trace.find(event => event.action === 'back').result.error.code, 'AGENT_DISMISS_CONTROL_FAILED');
+});
+
+test('a dismiss control press that brings up a confirmation is not reported as leaving the screen', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { sameRoute: true, confirms: true });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.swipes, []);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(trace.find(event => event.action === 'back').result.error.code, 'AGENT_DISMISS_CONTROL_FAILED');
+});
+
+test('a confirmation that hides the route observer is not reported as leaving the screen', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { sameRoute: true, confirms: true, hidesObserver: true });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.swipes, []);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  const back = trace.find(event => event.action === 'back');
+  assert.notEqual(back.result.via, 'dismiss-control');
+  assert.ok(back.result.error, 'back must fail while the confirmation is showing');
+});
+
+test('an unlabeled dismiss control named by identifier counts only once that control is gone', async t => {
+  const closes = await fixture(t);
+  const closing = modalRunner(closes, { label: '', identifier: 'modal-close', sameRoute: true });
+  await runCiMap({ ...closes.options, runner: closing.runner, agent: modalBackAgent(closes), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(closing.presses, ['role=button id="modal-close"']);
+  const closed = (await readFile(join(closes.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(closed.find(event => event.action === 'back').result.via, 'dismiss-control');
+
+  const stays = await fixture(t);
+  const staying = modalRunner(stays, { label: '', identifier: 'modal-close', sameRoute: true, closes: false });
+  await runCiMap({ ...stays.options, runner: staying.runner, agent: modalBackAgent(stays), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(staying.presses, ['role=button id="modal-close"']);
+  assert.deepEqual(staying.swipes, []);
+  const stayed = (await readFile(join(stays.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(stayed.find(event => event.action === 'back').result.error.code, 'AGENT_DISMISS_CONTROL_FAILED');
+});
+
+test('agent back never presses a named dismiss control that reads as destructive', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { label: 'Cancel subscription' });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.presses, []);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(trace.find(event => event.action === 'back').result.error.code, 'COMMAND_FAILED');
 });
 
 test('agent back swipes again when the first drag moves a sheet without closing it', async t => {
