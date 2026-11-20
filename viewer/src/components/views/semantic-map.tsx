@@ -242,13 +242,16 @@ function flatPositions(projection: GraphProjection, frame: MapFrame): { position
   const incoming = new Map<string, string[]>();
   for (const [from, targets] of outgoing) for (const to of targets) incoming.set(to, [...(incoming.get(to) ?? []), from]);
   const slot = new Map<string, number>();
+  // Siblings that share their parents (the tabs a hub screen leads to) keep the order the run reached them in.
+  const firstSeen = new Map(screenNodes.map((node) => [node.id, node.screen.firstSeenAt]));
+  const byFirstSeen = (left: string, right: string) => (firstSeen.get(left) ?? "").localeCompare(firstSeen.get(right) ?? "");
   for (const layer of [...layers.keys()].sort((left, right) => left - right)) {
     const members = layers.get(layer)!;
     const weight = (id: string) => {
       const parents = (incoming.get(id) ?? []).map((from) => slot.get(from)).filter((value): value is number => value !== undefined);
       return parents.length ? parents.reduce((sum, value) => sum + value, 0) / parents.length : Number.POSITIVE_INFINITY;
     };
-    members.sort((left, right) => weight(left) - weight(right) || left.localeCompare(right));
+    members.sort((left, right) => weight(left) - weight(right) || byFirstSeen(left, right) || left.localeCompare(right));
     members.forEach((id, index) => slot.set(id, index - (members.length - 1) / 2));
   }
   for (const [layer, members] of layers) {
