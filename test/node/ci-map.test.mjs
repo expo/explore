@@ -53,6 +53,8 @@ const noAlert = () => json({ success: false, error: { code: 'COMMAND_FAILED', me
 const busyRead = (changes = {}) => json({ success: false, error: { code: 'COMMAND_FAILED',
   message: 'The iOS runner is still finishing a previous command that exceeded its execution watchdog (usually an accessibility capture on a heavy or animating screen).',
   details: { runnerErrorCode: 'RUNNER_BUSY', retriable: true }, ...changes } });
+const alertWatchdog = () => json({ success: false, error: { code: 'COMMAND_FAILED', message: 'XCTest stalled on the current screen',
+  details: { runnerErrorCode: 'MAIN_THREAD_TIMEOUT' } } });
 // A fresh helper's first XCTest-backed snapshot reports its quality; the fixture's plain snapshots do not.
 const recoveredSnapshot = result => {
   const value = JSON.parse(result.stdout);
@@ -125,6 +127,7 @@ async function fixture(t, settings = {}) {
   const ids = Object.fromEntries(routes.map(item => [item.id, plan.surfaces.find(row => row.baseSurface.routeFile === item.routeFile).id]));
   const planPath = join(root, 'plan.json'); await writeFile(planPath, JSON.stringify(plan));
   const requests = [];
+  let busyRoute;
   let current = '/'; let snapshots = 0; let sessionName; let screenshotAttempts = 0; let splashLeft = 0; let recordingPath = ''; let alert = null; let appearance = 'light'; let alertReads = 0;
   let enteredName = false; let scrolledToContinue = false; let finishHidden = false; let wedgeCleared = false; let deviceLost = false; let relaunchedAfterForeign = false; let serverStarts = 0; let unreadableLeft = settings.unreadableAfterFold ?? 0;
   // startsErrored / startsUnnamed: how many session starts Expo Services fails, after naming the session (it ERRORS) or before.
@@ -358,7 +361,11 @@ async function fixture(t, settings = {}) {
         // unreadableAfterFold: Argent's reader stayed on the outer panel, so the first app opens find no readable app.
         if (unreadableLeft > 0 && !request.args[2]?.startsWith('sample://')) { unreadableLeft -= 1;
           return json({ success: false, error: { code: 'APP_NOT_READY', message: 'open: com.example.app did not come up with a readable accessibility tree after relaunching.' } }); }
-        if (request.args.includes('--relaunch')) { splashLeft = settings.splashFrames ?? 0; relaunchedAfterForeign = true; if (settings.wedgeAt === current) { wedgeCleared = !settings.wedgeRecurs; current = '/'; } }
+        if (request.args.includes('--relaunch')) {
+          splashLeft = settings.splashFrames ?? 0; relaunchedAfterForeign = true;
+          if (settings.wedgeAt === current) { wedgeCleared = !settings.wedgeRecurs; current = '/'; }
+          if (busyRoute === current) { busyRoute = undefined; current = '/'; }
+        }
         if (request.args[2]?.startsWith('sample://')) {
           const previous = current;
           current = '/' + request.args[2].slice('sample://'.length);
@@ -411,6 +418,10 @@ async function fixture(t, settings = {}) {
       }
       if (command === 'alert') {
         if (request.args[1] === 'get') {
+          if (settings.stallAfterAlertAt?.includes(current)) {
+            busyRoute = current;
+            return alertWatchdog();
+          }
           if (settings.alertProbeFailure) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'runner transport failed' } });
           if (settings.androidHelperOffline && alertReads++ < settings.androidHelperOffline) {
             return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'alert get: Android snapshot helper failed: Android snapshot helper failed before returning parseable output: adb: device offline' } });
@@ -428,13 +439,14 @@ async function fixture(t, settings = {}) {
         return ok({ message: 'accepted' });
       }
       if (command === 'snapshot') {
+        if (busyRoute === current) return busyRead();
         // wedgeAt: the runner wedges on this screen until the app is restarted, as agent-device's did on iPhone Duo's covered Done
         // (with wedgeRecurs, every time the screen is shown again).
         if (settings.wedgeAt === current && !wedgeCleared) return json({ success: false, error: { code: 'COMMAND_FAILED',
           message: 'The iOS runner is still finishing a previous command that exceeded its execution watchdog (usually an accessibility capture on a heavy or animating screen).' } });
         snapshots += 1;
         // markerMismatchAt: the observer reports another route only at one path (optionally in one appearance).
-        const mismatchHere = settings.markerMismatch || (settings.markerMismatchAt && settings.markerMismatchAt.path === current
+        const mismatchHere = settings.stallAfterAlertAt?.includes(current) || settings.markerMismatch || (settings.markerMismatchAt && settings.markerMismatchAt.path === current
           && (!settings.markerMismatchAt.scheme || settings.markerMismatchAt.scheme === appearance));
         const pathname = mismatchHere ? '/different' : current;
         const observer = { identifier: CAPTURE_OBSERVER_IDENTIFIER, type: 'StaticText',
@@ -1123,6 +1135,147 @@ test('a controller that wedges on one screen costs that route only: the app rest
   assert.ok(lines.some(line => /stopped answering on \/settings/.test(line)), lines.join('\n'));
   const recoveries = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics', 'controller-recoveries.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   assert.deepEqual(recoveries.map(entry => [entry.where, entry.recovered]), [['/settings', true]]);
+});
+
+test('when controller recovery runs out, earlier captures survive and later routes are reported as unattempted', async t => {
+  const stalled = ['stall-1', 'stall-2', 'stall-3', 'stall-4'];
+  const f = await fixture(t, { routes: ['home', ...stalled, 'zz-healthy', 'zz-other'].map(id => route(id)),
+    stallAfterAlertAt: stalled.map(id => `/${id}`), stableLabels: true });
+  const lines = [];
+  const result = await runCiMap({ ...f.options, progress: line => lines.push(line) });
+  assert.equal(result.runStatus, 'partial');
+  assert.equal(result.outcomes[f.ids.home].status, 'captured');
+  const recoveries = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics', 'controller-recoveries.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(recoveries.slice(0, 4).map(entry => [entry.where, entry.code, entry.recovered]),
+    stalled.map((id, index) => [`/${id}`, 'CONTROLLER_READ_BUSY', index < 3]));
+  assert.equal(result.outcomes[f.ids['zz-healthy']].attempts, 0, 'the first healthy route after the stall was never attempted');
+  assert.equal(result.outcomes[f.ids['zz-other']].attempts, 0);
+  assert.equal(result.outcomes[f.ids['zz-healthy']].error.code, 'CAPTURE_CONTROLLER_RECOVERY_FAILED');
+  assert.match(result.outcomes[f.ids['stall-4']].reason, /could not recover/);
+  assert.equal(recoveries.length, 4);
+  assert.equal(recoveries[3].failure, 'restart-limit');
+  const map = JSON.parse(await readFile(join(f.options.outputDirectory, 'screen-map.json'), 'utf8'));
+  assert.match(map.run.stopReason, /device controller could not recover/);
+  const firstStall = f.requests.findIndex(request => request.args[0] === 'open' && request.args[2] === 'sample://stall-1');
+  assert.ok(firstStall >= 0);
+  assert.equal(f.requests.slice(firstStall).filter(request => request.args[0] === 'alert' && request.args[1] === 'get').length, 4);
+  assert.equal(lines.filter(line => line.includes('stopping route capture')).length, 1);
+  assert.ok(!f.requests.some(request => request.args[0] === 'open' && request.args[2]?.startsWith('sample://zz-')));
+});
+
+test('a relaunch must confirm the app and device identities before capture can continue', async t => {
+  for (const wrongIdentity of ['app', 'device']) {
+    const settings = { routes: ['home', 'stall', 'zz-healthy'].map(id => route(id)), stallAfterAlertAt: ['/stall'], stableLabels: true };
+    const f = await fixture(t, settings);
+    const result = await runCiMap({ ...f.options, runner: request => {
+      const response = f.options.runner(request);
+      if (request.args[0] === 'open' && request.args.includes('--relaunch')) {
+        if (wrongIdentity === 'app') settings.wrongForeground = true;
+        else {
+          const { data } = JSON.parse(response.stdout);
+          return ok({ ...data, device: { ...data.device, id: 'other-device' }, identifiers: { ...data.identifiers, deviceId: 'other-device' } });
+        }
+      }
+      return response;
+    } });
+    assert.equal(result.outcomes[f.ids.home].status, 'captured');
+    assert.equal(result.outcomes[f.ids['zz-healthy']].attempts, 0, `wrong ${wrongIdentity} identity blocks the next route`);
+    const recovery = JSON.parse((await readFile(join(f.options.outputDirectory, 'capture-diagnostics/controller-recoveries.jsonl'), 'utf8')).trim());
+    assert.equal(recovery.failure, 'restart-failed');
+    assert.equal(recovery.restartError.code, 'CONTROLLER_IDENTITY_MISMATCH');
+    assert.ok(!f.requests.some(request => request.args[0] === 'open' && request.args[2] === 'sample://zz-healthy'));
+  }
+});
+
+test('a terminal helper verification failure is recovered before the next route opens', async t => {
+  const settings = { routes: ['home', 'stall', 'zz-healthy'].map(id => route(id)), stableLabels: true };
+  const f = await fixture(t, settings);
+  let onStall = false, reads = 0;
+  const result = await runCiMap({ ...f.options, runner: request => {
+    if (request.args[0] === 'open' && request.args[2] === 'sample://stall') onStall = true;
+    if (request.args[0] === 'open' && request.args.includes('--relaunch')) { onStall = false; settings.invalidObserver = false; }
+    if (onStall && request.args[0] === 'snapshot') {
+      if (++reads === 1) return busyRead();
+      if (reads === 2) return busyRead({ code: 'RUNNER_WEDGED' });
+      settings.invalidObserver = true;
+      return recoveredSnapshot(f.options.runner(request));
+    }
+    return f.options.runner(request);
+  } });
+  assert.equal(result.outcomes[f.ids.home].status, 'captured');
+  assert.equal(result.outcomes[f.ids.stall].error.code, 'CONTROLLER_RECOVERY_UNVERIFIED');
+  assert.equal(result.outcomes[f.ids['zz-healthy']].status, 'captured');
+  const opens = f.requests.filter(request => request.args[0] === 'open');
+  assert.ok(opens.findIndex(request => request.args.includes('--relaunch')) < opens.findIndex(request => request.args[2] === 'sample://zz-healthy'));
+});
+
+test('failed recovery during setup keeps earlier verified screens and leaves later routes unattempted', async t => {
+  const f = await fixture(t, { routes: ['home', 'zz-healthy'].map(id => route(id)), stallAfterAlertAt: ['/setup'], stableLabels: true });
+  const result = await runCiMap({ ...f.options, setup: [{ action: 'open', url: 'sample://home' }, { action: 'open', url: 'sample://setup' }],
+    runner: request => {
+      if (request.args[0] === 'open' && request.args.includes('--relaunch')) throw new Error('app could not restart');
+      return f.options.runner(request);
+    } });
+  assert.equal(result.outcomes[f.ids.home].status, 'captured');
+  assert.equal(result.outcomes[f.ids['zz-healthy']].attempts, 0);
+  assert.equal(result.outcomes[f.ids['zz-healthy']].error.code, 'CONTROLLER_READ_BUSY', 'preserves the original setup diagnostic');
+  assert.match(result.outcomes[f.ids['zz-healthy']].reason, /did not attempt/);
+});
+
+test('when the capture deadline cannot cover a restart, the controller is left alone', async t => {
+  const f = await fixture(t, { routes: ['home', 'stall', 'zz-healthy'].map(id => route(id)), stallAfterAlertAt: ['/stall'], stableLabels: true });
+  const result = await runCiMap({ ...f.options, maxDurationMinutes: 3 });
+  assert.equal(result.outcomes[f.ids.home].status, 'captured');
+  assert.equal(result.outcomes[f.ids['zz-healthy']].attempts, 0);
+  const recovery = JSON.parse((await readFile(join(f.options.outputDirectory, 'capture-diagnostics/controller-recoveries.jsonl'), 'utf8')).trim());
+  assert.equal(recovery.failure, 'time-budget');
+  assert.ok(!f.requests.some(request => request.args.includes('--relaunch')));
+});
+
+test('when the capture action budget is exhausted, recovery does not terminate the local app', async t => {
+  const f = await fixture(t, { local: true, repack: 'local', routes: ['home', 'stall', 'zz-healthy'].map(id => route(id)),
+    stallAfterAlertAt: ['/stall'], stableLabels: true });
+  const result = await runCiMap({ ...f.options, maxActions: 2 });
+  assert.equal(result.outcomes[f.ids.home].status, 'captured');
+  assert.equal(result.outcomes[f.ids['zz-healthy']].attempts, 0);
+  assert.ok(!f.requests.some(request => request.command === 'xcrun' && request.args[1] === 'terminate'));
+  const recovery = JSON.parse((await readFile(join(f.options.outputDirectory, 'capture-diagnostics/controller-recoveries.jsonl'), 'utf8')).trim());
+  assert.equal(recovery.failure, 'action-budget');
+});
+
+test('a terminal error taking an unattributed screenshot does not poison the next route', async t => {
+  const f = await fixture(t, { routes: ['home', 'miss', 'zz-healthy'].map(id => route(id)), markerMismatchAt: { path: '/miss' }, stableLabels: true });
+  let onMiss = false, failedScreenshot = false;
+  const result = await runCiMap({ ...f.options, runner: request => {
+    if (request.args[0] === 'open') onMiss = request.args[2] === 'sample://miss';
+    if (request.args[0] === 'screenshot' && onMiss) {
+      failedScreenshot = true;
+      return busyRead({ code: 'RUNNER_WEDGED' });
+    }
+    return f.options.runner(request);
+  } });
+  assert.equal(failedScreenshot, true);
+  assert.equal(result.outcomes[f.ids.miss].error.code, 'ROUTE_LANDING_MISMATCH');
+  assert.equal(result.outcomes[f.ids['zz-healthy']].status, 'captured');
+  const recovery = JSON.parse((await readFile(join(f.options.outputDirectory, 'capture-diagnostics/controller-recoveries.jsonl'), 'utf8')).trim());
+  assert.equal(recovery.where, '/miss');
+  assert.equal(recovery.recovered, true);
+});
+
+test('a stopped controller cannot start another appearance on the same simulator', async t => {
+  const f = await fixture(t, { routes: ['home', 'stall', 'zz-healthy'].map(id => route(id)),
+    userInterfaceStyle: 'automatic', stallAfterAlertAt: ['/stall'], stableLabels: true });
+  const result = await runCiMap({ ...f.options, runner: request => {
+    if (request.args[0] === 'open' && request.args.includes('--relaunch')) throw new Error('app could not restart');
+    return f.options.runner(request);
+  } });
+  assert.equal(result.runStatus, 'partial');
+  const bundle = JSON.parse(await readFile(join(f.options.outputDirectory, 'bundle.json'), 'utf8'));
+  assert.deepEqual(Object.keys(bundle.images), [f.ids.home]);
+  assert.deepEqual(bundle.sessionFailures.map(failure => [failure.scheme, failure.error.code]), [['dark', 'CAPTURE_CONTROLLER_RECOVERY_FAILED']]);
+  assert.equal(bundle.outcomes[`${f.ids.home}@dark`].attempts, 0);
+  assert.ok(!f.requests.some(request => request.args[0] === 'settings' && request.args[2] === 'dark'));
+  assert.equal(f.operations().filter(operation => operation === 'simulator:stop').length, 1);
 });
 
 test('a controller that wedges during setup does not fail every route: setup stops there and routes go on by app link', async t => {
@@ -3822,12 +3975,10 @@ test('sheet evidence requires a scene below the top without a navigation bar abo
 });
 
 test('a timed-out native alert query is unknown: the snapshot decides, and it is never retried', async t => {
-  const watchdog = () => json({ success: false, error: { code: 'COMMAND_FAILED', message: 'XCTest stalled on the current screen',
-    details: { runnerErrorCode: 'MAIN_THREAD_TIMEOUT' } } });
   const clear = await fixture(t, { routes: [route('home')] });
   let queries = 0;
   const result = await runCiMap({ ...clear.options, setup: [{ action: 'open', url: 'sample://home' }], runner: request => {
-    if (request.command === 'fake-controller' && request.args[0] === 'alert' && request.args[1] === 'get') { queries += 1; return watchdog(); }
+    if (request.command === 'fake-controller' && request.args[0] === 'alert' && request.args[1] === 'get') { queries += 1; return alertWatchdog(); }
     return clear.options.runner(request);
   } });
   assert.equal(result.outcomes[clear.ids.home].status, 'captured');
@@ -3841,7 +3992,7 @@ test('a timed-out native alert query is unknown: the snapshot decides, and it is
 
   const blocked = await fixture(t, { routes: [route('home')], deepLinkAlert: { message: 'Allow notifications?', items: ['Cancel', 'Allow'] } });
   const failed = await runCiMap({ ...blocked.options, runner: request => {
-    if (request.command === 'fake-controller' && request.args[0] === 'alert' && request.args[1] === 'get') return watchdog();
+    if (request.command === 'fake-controller' && request.args[0] === 'alert' && request.args[1] === 'get') return alertWatchdog();
     return blocked.options.runner(request);
   } });
   assert.equal(failed.outcomes[blocked.ids.home].status, 'failed');

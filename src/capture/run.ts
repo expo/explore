@@ -370,6 +370,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     + (routes.length - missingRoutes.length ? `, ${routes.length - missingRoutes.length} reused from the baseline` : "")
     + (missingRoutes.length ? `, ${missingRoutes.length} to capture` : ""));
   let captureFailure: unknown;
+  let controllerStop: CaptureBundle["outcomes"][string]["error"];
   // Later appearance passes that failed after the primary one captured (see the pass loop).
   const sessionFailures: NonNullable<CaptureBundle["sessionFailures"]> = [];
   const finish = async (): Promise<CiMapResult> => {
@@ -379,11 +380,12 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     const ownFrameIds = options.appearancePass && !options.appearancePass.capture.includes(colorSchemes[0]!)
       ? selectedIds.flatMap(id => options.appearancePass!.capture.filter(scheme => scheme !== colorSchemes[0]).map(scheme => schemeScreenId(id, scheme)))
       : selectedIds;
-    const incomplete = captureFailure !== undefined || ownFrameIds.some(id => outcomes[id]?.status !== "captured" || outcomes[id]?.landing !== "verified")
+    const incomplete = captureFailure !== undefined || controllerStop !== undefined || ownFrameIds.some(id => outcomes[id]?.status !== "captured" || outcomes[id]?.landing !== "verified")
       || map.gaps.some(gap => gap.status === "open") || sessionFailures.length > 0;
     map.run.status = incomplete || map.screens.length === 0 ? "partial" : "complete";
     if (routes.length === 0) map.run.stopReason = "No source targets require capture.";
     else if (captureFailure) map.run.stopReason = "Agent exploration did not finish; see capture diagnostics and bundle outcomes.";
+    else if (controllerStop) map.run.stopReason = controllerStop.message;
     else if (sessionFailures.length) map.run.stopReason = sessionFailures.map(failure => `The ${failure.scheme} pass failed (${failure.error.code}): ${failure.error.message.replace(/\.+$/, "")}.`).join(" ");
     else if (incomplete) map.run.stopReason = "Some source targets could not be captured; see bundle outcomes.";
     map.run.completedAt = new Date((options.now ?? Date.now)()).toISOString();
@@ -1032,6 +1034,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       // A pass another session makes leaves its slot empty, so the passes stay aligned with the appearances they merge by.
       if (!capturedSchemes.includes(colorScheme)) { passes.push({}); continue; }
       const passOutcomes: CaptureBundle["outcomes"] = index === 0 ? outcomes : {};
+      if (controllerStop) {
+        sessionFailures.push({ scheme: colorScheme, error: controllerStop });
+        passes.push(passOutcomes);
+        continue;
+      }
       // Each appearance's launch and routes are labelled with it, also when one session captures them in turn.
       const passTimings = colorSchemes.length > 1 ? timings.labelled({ pass: colorScheme }) : timings;
       const capturePass = async () => {
@@ -1065,9 +1072,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
           ...deviceArgs(activeRuntime), "--platform", options.platform, "--level", "full", "--json"], cwd: simulatorProject, environment: controllerEnvironment, timeoutMs: 60_000 });
         activeRuntime.colorScheme = colorScheme;
         if (colorSchemes.length > 1) say(`appearance ${colorScheme} (${index + 1}/${colorSchemes.length})`);
-        return await capturePlannedRoutes({ capture: { ...options, ...(argentBridge && !options.agent ? { runner: argentBridge.runner } : {}), agentDeviceCommand: controllerCommand, setup, progress: say }, routes: missingRoutes, inventory, scheme, appName: app.name, runtime: activeRuntime,
+        const result = await capturePlannedRoutes({ capture: { ...options, ...(argentBridge && !options.agent ? { runner: argentBridge.runner } : {}), agentDeviceCommand: controllerCommand, setup, progress: say }, routes: missingRoutes, inventory, scheme, appName: app.name, runtime: activeRuntime,
           connection, environment: controllerEnvironment, store, map, acceptedFrames, outcomes: passOutcomes, timings: passTimings,
           ...(colorSchemes.length > 1 ? { appearance: { scheme: colorScheme, primary: index === 0 } } : {}) });
+        controllerStop = result.controllerStop;
+        return result.outcomes;
       };
       // A later pass of a session whose primary pass captured fails only its own appearance, as a secondary session does
       // when the passes are split over sessions (captureSideInSessions): in brentvatne/euxy's main baseline run
