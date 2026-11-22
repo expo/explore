@@ -1085,7 +1085,7 @@ export async function capturePlannedRoutes(options: {
    */
   const appLeft = (error: unknown): boolean => toCiError(error).code === "CONTROLLER_IDENTITY_MISMATCH";
   let recoveries = 0;
-  type RestartFailure = "restart-limit" | "time-budget" | "restart-failed";
+  type RestartFailure = "restart-limit" | "time-budget" | "action-budget" | "restart-failed";
   /** `next` records what the capture did once the app restarted: `setup-rerun` or `setup-incomplete` after a setup step. */
   const recoverController = (where: string, error: unknown, next?: "setup-rerun" | "setup-incomplete"): boolean => {
     capture.signal?.throwIfAborted();
@@ -1108,6 +1108,7 @@ export async function capturePlannedRoutes(options: {
     };
     if (recoveries >= 3) return stop("restart-limit");
     if (deadline - clock() < 60_000) return stop("time-budget");
+    if (actions >= capture.maxActions) return stop("action-budget");
     const verifyDestination = readRecovery.needsVerification;
     recoveries += 1;
     say(`${appLeft(error) ? "the app was no longer in front" : "the device controller stopped answering"} on ${where} (${reported.code}); restarting the app before going on`);

@@ -1232,6 +1232,17 @@ test('when the capture deadline cannot cover a restart, the controller is left a
   assert.ok(!f.requests.some(request => request.args.includes('--relaunch')));
 });
 
+test('when the capture action budget is exhausted, recovery does not terminate the local app', async t => {
+  const f = await fixture(t, { local: true, repack: 'local', routes: ['home', 'stall', 'zz-healthy'].map(id => route(id)),
+    stallAfterAlertAt: ['/stall'], stableLabels: true });
+  const result = await runCiMap({ ...f.options, maxActions: 2 });
+  assert.equal(result.outcomes[f.ids.home].status, 'captured');
+  assert.equal(result.outcomes[f.ids['zz-healthy']].attempts, 0);
+  assert.ok(!f.requests.some(request => request.command === 'xcrun' && request.args[1] === 'terminate'));
+  const recovery = JSON.parse((await readFile(join(f.options.outputDirectory, 'capture-diagnostics/controller-recoveries.jsonl'), 'utf8')).trim());
+  assert.equal(recovery.failure, 'action-budget');
+});
+
 test('a terminal error taking an unattributed screenshot does not poison the next route', async t => {
   const f = await fixture(t, { routes: ['home', 'miss', 'zz-healthy'].map(id => route(id)), markerMismatchAt: { path: '/miss' }, stableLabels: true });
   let onMiss = false, failedScreenshot = false;
