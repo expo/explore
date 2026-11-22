@@ -94,6 +94,13 @@ function snapshotNodes(raw: string): Record<string, unknown>[] {
   return data.nodes;
 }
 
+function verifyRecoveryDestination(nodes: readonly Record<string, unknown>[]): void {
+  const markers = captureObserverMarkers(nodes);
+  if (markers.length !== 1 || !parseCaptureDestination(markers[0]!.label)) {
+    throw captureError("CONTROLLER_RECOVERY_UNVERIFIED", "The restarted controller could not verify the application's current route.");
+  }
+}
+
 /** Whether the controller says a keyboard shows: Argent does, and its Android tree has no input method window to show it. */
 function keyboardVisibility(data: Record<string, unknown>): { keyboardVisible?: boolean } {
   return typeof data.keyboardVisible === "boolean" ? { keyboardVisible: data.keyboardVisible } : {};
@@ -179,7 +186,7 @@ export async function capturePlannedRoutes(options: {
   appearance?: { scheme: ColorScheme; primary: boolean };
   /** Records each route's span, from its first open to its outcome. */
   timings?: Timings;
-}): Promise<NonNullable<CaptureBundle["outcomes"]>> {
+}): Promise<{ outcomes: CaptureBundle["outcomes"]; controllerStop: CaptureBundle["outcomes"][string]["error"] }> {
   const screenIdFor = (routeId: string) => schemeScreenId(routeId, options.appearance && !options.appearance.primary ? options.appearance.scheme : undefined);
   const colorScheme = options.appearance?.scheme;
   const { capture, runtime, store, map } = options;
@@ -193,7 +200,7 @@ export async function capturePlannedRoutes(options: {
   let actions = 0;
   /** The app's own root link, opened before each route link when `capture.reset` is `root-link` (the default). */
   const rootLink = (capture.reset ?? "root-link") === "root-link" && options.scheme ? `${appScheme(options.scheme)}://` : undefined;
-  const readRecovery: ControllerReadRecovery = { busyAttempts: 0 };
+  let readRecovery: ControllerReadRecovery = { busyAttempts: 0 };
   // Time the controller spent recovering itself (busy backoff, daemon or adb retries); the app is not charged for it.
   let recoveryWaitedMs = 0;
   const pause = (milliseconds: number) => { if (milliseconds > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); };
@@ -252,10 +259,7 @@ export async function capturePlannedRoutes(options: {
       try {
         controllerApp();
         const fresh = args[0] === "snapshot" ? snapshotNodes(result.stdout) : snapshot().nodes;
-        const markers = captureObserverMarkers(fresh);
-        if (markers.length !== 1 || !parseCaptureDestination(markers[0]!.label)) {
-          throw captureError("CONTROLLER_RECOVERY_UNVERIFIED", "The restarted controller could not verify the application's current route.");
-        }
+        verifyRecoveryDestination(fresh);
         // Helper disposal does not reset the target app in the pinned implementation, but
         // OS state is not guaranteed. Expected landing/readiness/context remain caller gates.
         readRecovery.needsVerification = false;
@@ -266,6 +270,14 @@ export async function capturePlannedRoutes(options: {
   };
   // On iOS this response describes the controller session, not independent OS foreground proof.
   const controllerApp = () => assertIdentity(controllerData(controller(["appstate", "--level", "full", "--json"]).stdout, "appstate"), capture.bundleId, runtime.controllerDeviceId);
+  const verifyOpenedDevice = (result: CommandResult) => {
+    const device = openedSimulatorDevice(result.stdout, capture.bundleId, "capture open", runtime.platform);
+    // A local simulator is named for Explore and recorded as the model it was created as; its UDID identifies it.
+    if (device.deviceId !== runtime.controllerDeviceId
+      || (runtime.provider !== "local-simulator" && device.deviceModel !== runtime.deviceModel)) {
+      throw captureError("CONTROLLER_IDENTITY_MISMATCH", "The controller changed the selected device.");
+    }
+  };
   const readAlert = (): { message: string; items: string[] } | null | "unknown" => {
     try {
       // The pinned iOS controller reports absence as an error, unlike its Android backend.
@@ -704,8 +716,7 @@ export async function capturePlannedRoutes(options: {
         try {
           await appIdentity(activeSignal);
           const fresh = args[0] === "snapshot" ? snapshotNodes(result.stdout) : (await readSnapshot(activeSignal)).snapshot.nodes;
-          const markers = captureObserverMarkers(fresh);
-          if (markers.length !== 1 || !parseCaptureDestination(markers[0]!.label)) throw captureError("CONTROLLER_RECOVERY_UNVERIFIED", "The restarted controller could not verify the application's current route.");
+          verifyRecoveryDestination(fresh);
           readRecovery.needsVerification = false;
         } catch (error) { readRecovery.terminalFailure = error; throw error; }
         finally { verifyingRecovery = false; }
@@ -1000,7 +1011,7 @@ export async function capturePlannedRoutes(options: {
         trace: async event => { await appendFile(tracePath, `${JSON.stringify(redactValue(event))}\n`, { mode: 0o600 }); },
         ...(setupFailure ? { setupFailure } : {}),
       });
-      return outcomes;
+      return { outcomes, controllerStop: undefined };
     } finally { clearTimeout(expiration); signalController.abort(); await discard(); }
   }
   // Targets a setup action reached. A bare app link cannot recreate the state that setup prepared.
@@ -1044,6 +1055,8 @@ export async function capturePlannedRoutes(options: {
   const setupActions = capture.setup ?? [];
   if (setupActions.length) say(`running ${setupActions.length} setup ${setupActions.length === 1 ? "step" : "steps"}`);
   let setupFailure: unknown;
+  let setupControllerError: CaptureBundle["outcomes"][string]["error"];
+  let controllerStop: CaptureBundle["outcomes"][string]["error"];
   /**
    * A setup step that died because the emulator's adb transport dropped or the controller daemon
    * was unreachable says nothing about the app or the configured steps. Once the device answers
@@ -1056,10 +1069,11 @@ export async function capturePlannedRoutes(options: {
    * control, or its reads stayed busy past their recovery window) fails every later read the same way. That costs the
    * step or route it happened on, not the capture: the app is stopped (from the host on a local device, which a wedged
    * runner cannot block) and started again, the read recovery starts over, and the controller must answer before the
-   * next route. Each recovery is recorded in capture-diagnostics/controller-recoveries.jsonl.
+   * next route. If recovery fails, this simulator session cannot do any more capture work.
+   * Each recovery is recorded in capture-diagnostics/controller-recoveries.jsonl.
    */
   const controllerWedged = (error: unknown): boolean => {
-    if (wedgedControllerReadFailure(error)) return true;
+    if (readRecovery.terminalFailure !== undefined || wedgedControllerReadFailure(error)) return true;
     const failure = toCiError(error);
     // An accessibility read that never completes (or never returns a whole tree) is the controller's failure, not the app's.
     return ["CONTROLLER_READ_BUSY", "RUNNER_WEDGED", "CONTROLLER_RUNNER_WEDGED", "INVALID_ACCESSIBILITY_EVIDENCE", "SETUP_SYSTEM_SURFACE_BLOCKING"].includes(failure.code)
@@ -1071,16 +1085,30 @@ export async function capturePlannedRoutes(options: {
    */
   const appLeft = (error: unknown): boolean => toCiError(error).code === "CONTROLLER_IDENTITY_MISMATCH";
   let recoveries = 0;
+  type RestartFailure = "restart-limit" | "time-budget" | "restart-failed";
   /** `next` records what the capture did once the app restarted: `setup-rerun` or `setup-incomplete` after a setup step. */
   const recoverController = (where: string, error: unknown, next?: "setup-rerun" | "setup-incomplete"): boolean => {
+    capture.signal?.throwIfAborted();
     const reported = serializeCiError(toCiError(error), { secrets });
-    const record = (recovered: boolean) => {
+    const record = (failure?: RestartFailure, restartError?: unknown) => {
       const diagnostics = join(store.root, "capture-diagnostics");
       mkdirSync(diagnostics, { recursive: true, mode: 0o700 });
-      appendFileSync(join(diagnostics, "controller-recoveries.jsonl"), `${JSON.stringify({ where, code: reported.code, message: reported.message, recovered,
-        ...(recovered && next ? { next } : {}), at: new Date(clock()).toISOString() })}\n`, { mode: 0o600 });
+      appendFileSync(join(diagnostics, "controller-recoveries.jsonl"), `${JSON.stringify({ where, code: reported.code, message: reported.message,
+        recovered: failure === undefined, ...(failure ? { failure } : next ? { next } : {}),
+        ...(restartError !== undefined ? { restartError: serializeCiError(restartError, { secrets }) } : {}),
+        at: new Date(clock()).toISOString() })}\n`, { mode: 0o600 });
     };
-    if (recoveries >= 3 || deadline - clock() < 60_000) { record(false); return false; }
+    const stop = (failure: RestartFailure, restartError?: unknown) => {
+      record(failure, restartError);
+      controllerStop = { code: "CAPTURE_CONTROLLER_RECOVERY_FAILED", stage: "capture",
+        message: "The device controller could not recover, so Explore stopped capturing on this simulator.",
+        nextAction: "Rerun capture on a fresh simulator.", retryable: false };
+      say(`stopping route capture after ${where}: the device controller could not recover (${failure})`);
+      return false;
+    };
+    if (recoveries >= 3) return stop("restart-limit");
+    if (deadline - clock() < 60_000) return stop("time-budget");
+    const verifyDestination = readRecovery.needsVerification;
     recoveries += 1;
     say(`${appLeft(error) ? "the app was no longer in front" : "the device controller stopped answering"} on ${where} (${reported.code}); restarting the app before going on`);
     try {
@@ -1088,13 +1116,17 @@ export async function capturePlannedRoutes(options: {
         ? { command: "xcrun", args: ["simctl", "terminate", runtime.controllerDeviceId, capture.bundleId], cwd: store.root, environment: options.environment, timeoutMs: 60_000, allowFailure: true }
         : { command: androidTools(options.environment).adb, args: ["-s", runtime.controllerDeviceId, "shell", "am", "force-stop", capture.bundleId],
           cwd: store.root, environment: options.environment, timeoutMs: 60_000, allowFailure: true });
-      for (const key of Object.keys(readRecovery)) delete (readRecovery as Record<string, unknown>)[key];
-      readRecovery.busyAttempts = 0;
-      controller(["open", capture.bundleId, "--relaunch", "--level", "full", "--json"]);
+      readRecovery = { busyAttempts: 0 };
+      verifyOpenedDevice(controller(["open", capture.bundleId, "--relaunch", "--level", "full", "--json"]));
       settle();
-      snapshot();
-    } catch { record(false); return false; }
-    record(true);
+      controllerApp();
+      const fresh = snapshot();
+      if (verifyDestination) verifyRecoveryDestination(fresh.nodes);
+    } catch (restartError) {
+      capture.signal?.throwIfAborted();
+      return stop("restart-failed", restartError);
+    }
+    record();
     return true;
   };
   const recoverFromControllerFault = (error: unknown): boolean => {
@@ -1156,7 +1188,11 @@ export async function capturePlannedRoutes(options: {
     if (setupAttempt === 0 && recoverFromControllerFault(error)) continue;
     // A wedged controller says nothing about the app's state: the routes the steps before it prepared are captured or
     // failed on their own. Once the controller answers again, setup runs again from the start, once.
-    if ((controllerWedged(error) || appLeft(error)) && recoverController("a setup step", error, setupRerunAfterRecovery ? "setup-incomplete" : "setup-rerun")) {
+    if (controllerWedged(error) || appLeft(error)) {
+      if (!recoverController("a setup step", error, setupRerunAfterRecovery ? "setup-incomplete" : "setup-rerun")) {
+        setupControllerError = serializeCiError(toCiError(error, { code: "SETUP_FAILED", stage: "setup" }), { secrets });
+        break;
+      }
       const reported = serializeCiError(toCiError(error), { secrets });
       if (!setupRerunAfterRecovery) {
         setupRerunAfterRecovery = true;
@@ -1256,6 +1292,11 @@ export async function capturePlannedRoutes(options: {
         error: serializeCiError(toCiError(setupFailure, { code: "SETUP_FAILED", stage: "setup", nextAction: "Correct the configured UI input and setup steps and rerun capture." }), { secrets }) };
       continue;
     }
+    if (controllerStop) {
+      outcomes[route.id] = { status: "failed", reason: "Explore did not attempt this route because the device controller could not recover.",
+        attempts: 0, landing: "unverified", error: setupControllerError ?? controllerStop };
+      continue;
+    }
     if ((!attempted.has(route.id) && attempted.size >= capture.maxScreens) || actions >= capture.maxActions || clock() >= deadline) {
       outcomes[route.id] = { status: "budget-exhausted", attempts: 0, landing: "unverified", reason: "The screen, action, or time budget was exhausted." };
       reportOutcome(route, "by app link");
@@ -1270,11 +1311,7 @@ export async function capturePlannedRoutes(options: {
         // Every route link starts from the app's home, not from what the previous link left on
         // screen; the app keeps running, since relaunching invalidates photo and translation prerequisites.
         if (rootLink && deepLink !== rootLink) resetToRoot(attempt > 1);
-        const opened = controller(["open", capture.bundleId, deepLink, "--level", "full", "--json"]);
-        const device = openedSimulatorDevice(opened.stdout, capture.bundleId, "capture open", runtime.platform);
-        // A local simulator is named for Explore and recorded as the model it was created as; its UDID identifies it.
-        if (device.deviceId !== runtime.controllerDeviceId
-          || (runtime.provider !== "local-simulator" && device.deviceModel !== runtime.deviceModel)) throw captureError("CONTROLLER_IDENTITY_MISMATCH", "The controller changed the selected device.");
+        verifyOpenedDevice(controller(["open", capture.bundleId, deepLink, "--level", "full", "--json"]));
         // The open response already proved the controller's device and app; the capture asserts the
         // session again after its screenshot, and resolves a link confirmation only if the snapshot calls for it.
         readiness = { startedAt: clock(), budgetMs: readinessBudgetMs(attempt), attempt };
@@ -1296,15 +1333,22 @@ export async function capturePlannedRoutes(options: {
           }
         }
         const failure = failedOutcome(error, attempt);
-        // A wedged controller costs this route only: once its retries are spent, the next route starts on a restarted app.
-        if (controllerWedged(error) && (attempt === 2 || !failure.error?.retryable)) {
-          outcomes[route.id] = { ...failure, reason: "The device controller stopped answering on this screen; Explore restarted the app and went on with the next route." };
-          recoverController(route.route, error);
+        // Only continue on this device if the restart confirmed that accessibility reads work again.
+        if (controllerWedged(error) && (readRecovery.terminalFailure !== undefined || attempt === 2 || !failure.error?.retryable)) {
+          if (recoverController(route.route, error)) {
+            outcomes[route.id] = { ...failure, reason: "The device controller stopped answering on this screen; Explore restarted the app and went on with the next route." };
+          } else {
+            outcomes[route.id] = { ...failure, reason: "The device controller stopped answering on this screen and Explore could not recover it." };
+          }
           break;
         }
         if (failure.status === "budget-exhausted" || !failure.error?.retryable || attempt === 2) {
           outcomes[route.id] = failure;
-          if (attempt === 2) await captureUnattributed(route, attempt, error);
+          if (attempt === 2) {
+            await captureUnattributed(route, attempt, error);
+            // A failed diagnostic must not carry a terminal controller error into the next route.
+            if (readRecovery.terminalFailure !== undefined) recoverController(route.route, readRecovery.terminalFailure);
+          }
           break;
         }
       }
@@ -1314,5 +1358,5 @@ export async function capturePlannedRoutes(options: {
     endRoute(outcome?.status === "captured" ? "ok" : "failed", { status: outcome?.status ?? "none" });
     reportOutcome(route, "by app link");
   }
-  return outcomes;
+  return { outcomes, controllerStop };
 }
