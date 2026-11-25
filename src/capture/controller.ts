@@ -77,9 +77,8 @@ export async function runAgentControllerCommand(request: CommandRequest, signal:
 
 // Native payloads are private classification evidence, never serialized into CI artifacts.
 const nativeControllerFailures = new WeakMap<CiError, Record<string, unknown>>();
-const RUNNER_BUSY_MESSAGE = "The iOS runner is still finishing a previous command that exceeded its execution watchdog (usually an accessibility capture on a heavy or animating screen).";
-// agent-device 0.21.15 (as 0.20.2) keeps abandoned XCTest work busy for up to
-// mainThreadWedgeThreshold (120 s). Work is not cancellable and need not drain in this window.
+// The runner keeps abandoned XCTest work busy until it passes its 120 s wedge threshold and reports
+// itself wedged. That work is not cancellable and need not drain inside this window.
 const CONTROLLER_BUSY_WINDOW_MS = 120_000;
 const CONTROLLER_BUSY_MAX_ATTEMPTS = 32;
 export type ControllerReadRecovery = {
@@ -138,26 +137,55 @@ export function loneBackDismissControl(error: unknown): { selector: string; labe
   return typeof identifier === "string" && identifier ? { selector, label, identifier } : { selector, label };
 }
 
+/**
+ * The runner refusing a command it never sent, because abandoned main-thread work still drains:
+ * `runnerErrorCode`/`reason` `runner_busy`, with `dispatched: "no"`. Nothing ran, so a caller may
+ * send the command again once the work drains.
+ */
+export function runnerBusyRefusal(error: unknown): boolean {
+  if (!(error instanceof CiError)) return false;
+  const native = nativeControllerFailures.get(error);
+  if (!native || native.code !== "COMMAND_FAILED" && native.code !== "RUNNER_BUSY") return false;
+  const details = isRecord(native.details) ? native.details : {};
+  return details.runnerErrorCode === "RUNNER_BUSY" || details.reason === "runner_busy";
+}
+
 function busyControllerReadFailure(error: unknown): boolean {
   if (!(error instanceof CiError)) return false;
   const native = nativeControllerFailures.get(error);
   if (!native || native.code !== "COMMAND_FAILED" && native.code !== "RUNNER_BUSY") return false;
   const details = isRecord(native.details) ? native.details : {};
+  // A wedged runner needs a restart, not a wait, so it is never a busy read.
   if (details.runnerErrorCode === "RUNNER_WEDGED" || details.runnerFailureReason === "runner_main_thread_wedged") return false;
-  if (native.code === "RUNNER_BUSY" || details.runnerErrorCode === "RUNNER_BUSY") return true;
-  // agent-device 0.21.x also types its watchdog expiry as MAIN_THREAD_TIMEOUT; 0.20.2 is identified by the derived reason.
-  if (details.runnerErrorCode === "MAIN_THREAD_TIMEOUT" || details.runnerFailureReason === "runner_main_thread_execution_timeout") return true;
-  // agent-device 0.20.2's lifecycle recovery can drop runnerErrorCode. Accept only its
-  // exact retained terminal-failure shape and pinned busy/watchdog messages, not arbitrary timeouts.
-  return details.recovery === "runner_reported_failure" && details.lifecycleState === "failed"
-    && (native.message === RUNNER_BUSY_MESSAGE || details.transportError === RUNNER_BUSY_MESSAGE
-      || native.message === "main thread execution timed out");
+  if (runnerBusyRefusal(error)) return true;
+  // The command that tripped the watchdog reports its own expiry as MAIN_THREAD_TIMEOUT, published as
+  // `runnerErrorCode` plus `reason`, and as the log-derived `runnerFailureReason`. Its work was
+  // abandoned, so the next read meets the busy refusal: treat both as the same occupied main thread.
+  return details.runnerErrorCode === "MAIN_THREAD_TIMEOUT" || controllerFailureReason(error) === "runner_main_thread_timeout"
+    || details.runnerFailureReason === "runner_main_thread_execution_timeout";
 }
 
 /**
- * agent-device sends iOS `alert get` to its runner with a fixed 10 s budget and abandons the
- * query when that watchdog expires. Another query on the same screen queues more abandoned work,
- * so a watchdog answer means "unknown", never "no alert".
+ * A system surface the runner could not present: the iOS snapshot engine refused the capture because
+ * its viewport evidence was missing or invalid, which is what happens while the runner defers its
+ * XCTest tiers and only com.apple.SafariViewService can read the surface over the app. agent-device
+ * publishes the refusal as `details.reason` (`toIosSnapshotEngineErrorDetails`), so it is never read
+ * off the message prose.
+ */
+export function unreadableSystemSurfaceFailure(error: unknown): boolean {
+  if (!(error instanceof CiError) || error.code !== "COMMAND_FAILED") return false;
+  const details = nativeControllerFailures.get(error)?.details;
+  if (!isRecord(details)) return false;
+  // A sparse capture of a system surface (Save Password in SafariViewService) is unreadable whatever
+  // engine reason it carries: agent-device attaches `systemSurface` and a `sparse` quality verdict.
+  const sparseSystemSurface = isRecord(details.systemSurface) && isRecord(details.snapshotQuality) && details.snapshotQuality.state === "sparse";
+  return details.reason === "missing-viewport" || details.reason === "invalid-viewport" || sparseSystemSurface;
+}
+
+/**
+ * agent-device sends iOS `alert get` to its runner with the caller's read budget (10 s by default)
+ * and abandons the query when that watchdog expires. Another query on the same screen queues more
+ * abandoned work, so a watchdog answer means "unknown", never "no alert".
  */
 export function alertWatchdogFailure(error: unknown): boolean {
   if (!(error instanceof CiError)) return false;
@@ -165,7 +193,8 @@ export function alertWatchdogFailure(error: unknown): boolean {
   if (!native) return false;
   const details = isRecord(native.details) ? native.details : {};
   return native.code === "MAIN_THREAD_TIMEOUT" || details.runnerErrorCode === "MAIN_THREAD_TIMEOUT"
-    || details.runnerFailureReason === "runner_main_thread_execution_timeout" || native.message === "main thread execution timed out";
+    || controllerFailureReason(error) === "runner_main_thread_timeout"
+    || details.runnerFailureReason === "runner_main_thread_execution_timeout";
 }
 
 function responsiveAccessibilityRead(args: readonly string[], result: CommandResult): boolean {
@@ -307,7 +336,7 @@ export function runControllerRead(options: {
     const busy = readOnly && busyControllerReadFailure(failure);
     if (recovery.recycleUsed && wedgedControllerReadFailure(failure)) return terminal(failure);
     if (accessibilityRead && recovery.busyDeadlineMs !== undefined && !recovery.recycleUsed && wedgedControllerReadFailure(failure)) {
-      // Pinned runner-session.ts awaits helper-only invalidation before returning WEDGED.
+      // agent-device awaits the runner's invalidation (runner-exchange.ts) before it returns WEDGED.
       // The next ordinary read starts a fresh helper; no app open/close or action is replayed.
       recovery.recycleUsed = true;
       recovery.needsVerification = true;
@@ -424,7 +453,7 @@ export async function runControllerReadAsync(options: {
     const busy = readOnly && busyControllerReadFailure(failure);
     if (recovery.recycleUsed && wedgedControllerReadFailure(failure)) return terminal(failure);
     if (accessibilityRead && recovery.busyDeadlineMs !== undefined && !recovery.recycleUsed && wedgedControllerReadFailure(failure)) {
-      // Pinned runner-session.ts awaits helper-only invalidation before returning WEDGED.
+      // agent-device awaits the runner's invalidation (runner-exchange.ts) before it returns WEDGED.
       // The next ordinary read starts a fresh helper; no app open/close or action is replayed.
       recovery.recycleUsed = true;
       recovery.needsVerification = true;

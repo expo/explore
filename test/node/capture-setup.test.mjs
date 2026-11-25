@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { credentialSavePromptDecline, executeCaptureSetup, isUnreadableSystemSurface } from '../../dist/capture/setup-actions.js';
+import { credentialSavePromptDecline, executeCaptureSetup } from '../../dist/capture/setup-actions.js';
+import { controllerCommandFailure, unreadableSystemSurfaceFailure } from '../../dist/capture/controller.js';
 import { CiError } from '../../dist/shared/ci-errors.js';
 import { CAPTURE_OBSERVER_IDENTIFIER } from '../../dist/capture/observer.js';
 
@@ -488,12 +489,38 @@ test('each emitted command shape passes the installed pinned controller parser w
 });
 
 test('a snapshot that cannot read the system surface over the app is recognized, and nothing else is', () => {
-  const failed = (message, nextAction) => new CiError({ code: 'COMMAND_FAILED', stage: 'controller', message, ...(nextAction ? { nextAction } : {}) });
-  assert.equal(isUnreadableSystemSurface(failed('snapshot: regular iOS snapshot presentation requires a valid viewport')), true);
-  assert.equal(isUnreadableSystemSurface(failed('snapshot failed', 'com.apple.SafariViewService hosts the surface presented over the app, and this capture targeted that surface.')), true);
-  assert.equal(isUnreadableSystemSurface(failed('snapshot failed', 'No snapshot backend could read this screen (XCTest-backed snapshot tiers were deferred after recent slow accessibility work on this screen).')), true);
-  assert.equal(isUnreadableSystemSurface(failed('Remote daemon is unavailable')), false);
-  assert.equal(isUnreadableSystemSurface(new CiError({ code: 'SETUP_FAILED', stage: 'setup', message: 'requires a valid viewport' })), false);
-  assert.equal(isUnreadableSystemSurface(new Error('requires a valid viewport')), false);
+  // agent-device 0.21.40 publishes the refusal's engine reason as typed details
+  // (capture-kit's toIosSnapshotEngineErrorDetails, through platform-apple's snapshot-presentation.ts),
+  // both for a missing viewport and for an invalid one. Explore keys on that field alone.
+  const refused = error => unreadableSystemSurfaceFailure(
+    controllerCommandFailure(JSON.stringify({ success: false, error }), 'snapshot'));
+  assert.equal(refused({ code: 'COMMAND_FAILED', message: 'regular iOS snapshot presentation requires a valid viewport',
+    details: { reason: 'missing-viewport', field: 'viewport' } }), true);
+  assert.equal(refused({ code: 'COMMAND_FAILED', message: 'regular iOS snapshot presentation requires a positive finite viewport',
+    details: { reason: 'invalid-viewport', field: 'viewport' } }), true);
+  // While the runner defers its XCTest tiers over the Save Password prompt, the same refusal carries the
+  // deferred verdict and the surface host beside the reason. Explore needs only the reason.
+  assert.equal(refused({ code: 'COMMAND_FAILED', message: 'regular iOS snapshot presentation requires a valid viewport',
+    hint: 'com.apple.SafariViewService hosts the surface presented over the app. No snapshot backend could read this screen.',
+    details: { reason: 'missing-viewport', field: 'viewport',
+      systemSurface: { bundleId: 'com.apple.SafariViewService', kind: 'web-auth' },
+      snapshotQuality: { state: 'sparse', backend: 'private-ax', reasonCode: 'deferred' } } }), true);
+  // The prose alone no longer marks a surface unreadable: only the typed reason does.
+  assert.equal(refused({ code: 'COMMAND_FAILED', message: 'regular iOS snapshot presentation requires a valid viewport',
+    hint: 'com.apple.SafariViewService hosts the surface presented over the app.' }), false);
+  assert.equal(refused({ code: 'COMMAND_FAILED', message: 'snapshot failed',
+    details: { snapshotQuality: { state: 'sparse', backend: 'private-ax', reasonCode: 'deferred' } } }), false);
+  assert.equal(refused({ code: 'COMMAND_FAILED', message: 'snapshot failed',
+    details: { reason: 'sparse-tree' } }), false);
+  // A sparse capture of a system surface is unreadable whatever engine reason it carries.
+  assert.equal(refused({ code: 'COMMAND_FAILED', message: 'iOS runner returned an invalid quality payload',
+    details: { reason: 'invalid-quality-payload', systemSurface: { bundleId: 'com.apple.SafariViewService', kind: 'web-auth' },
+      snapshotQuality: { state: 'sparse', backend: 'private-ax', reasonCode: 'deferred' } } }), true);
+  assert.equal(refused({ code: 'COMMAND_FAILED', message: 'Remote daemon is unavailable',
+    details: { reason: 'remote_daemon_unavailable', dispatched: 'no' } }), false);
+  // A failure Explore derived itself, rather than the controller's own envelope, is not this refusal.
+  assert.equal(unreadableSystemSurfaceFailure(new CiError({ code: 'SETUP_FAILED', stage: 'setup', message: 'requires a valid viewport',
+    nextAction: 'x', details: { reason: 'missing-viewport' } })), false);
+  assert.equal(unreadableSystemSurfaceFailure(new Error('requires a valid viewport')), false);
 });
 
