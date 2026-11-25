@@ -27,7 +27,7 @@ import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, endedOwnSimulatorS
 import { argentControllerInvocation } from "./controller-invocation.js";
 import { startArgentBridgeRunner, type ArgentBridgeRunner } from "./argent-bridge-host.js";
 import { sharedBuild } from "./shared-build.js";
-import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, agentDeviceClaims, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
+import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, agentDeviceRefuses, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
   deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, approveLinkScheme, localPoseShown,
   pngSize, setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
 import { ensureArgentToolServer } from "../shared/controller-cache.js";
@@ -546,7 +546,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       say(`starting a local ${options.device} emulator`);
       localEmulatorStart = await startLocalEmulator({ runner, device: options.device, name: `explore-${side}-${options.gitCommit.slice(0, 8)}`, directory: simulatorProject,
         cwd: simulatorProject, environment: restrictedEnvironment,
-        ...(controller === "agent-device" ? { claimed: (serial: string) => agentDeviceClaims({ runner, agentDevice: options.agentDeviceCommand, serial, cwd: simulatorProject, environment: restrictedEnvironment }) } : {}),
+        ...(controller === "agent-device" ? { claimed: (serial: string) => agentDeviceRefuses({ runner, agentDevice: options.agentDeviceCommand, serial, cwd: simulatorProject, environment: restrictedEnvironment }) } : {}),
         // Recorded as soon as it starts, so an interrupted review stops it too.
         started: async serial => {
           localEmulator = serial;
