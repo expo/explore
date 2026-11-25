@@ -143,3 +143,25 @@ test("a refused keyboard dismiss stays refused: the return key is never pressed,
   assert.match(outcome.content[0].text, /cannot dismiss this keyboard/);
   assert.match(outcome.content[0].text, /Hide Keyboard key or an app control/, "the model gets agent-device's hint");
 });
+
+test("a failed action adds a next step only when the controller sent one", async t => {
+  const root = await mkdtemp(join(tmpdir(), "explore-binary-nohint-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const field = { type: "TextField", label: "Password", rect: { x: 20, y: 100, width: 300, height: 44 } };
+  const { runner: base } = localRunner(undefined, { nodes: [field, { type: "Keyboard", rect: { x: 0, y: 600, width: 393, height: 250 } }], png: PNG });
+  const runner = request => request.args[0] === "keyboard" && request.args[1] === "dismiss"
+    ? commandOutcome(request, { status: 1, stderr: "", stdout: JSON.stringify({ success: false, error: { code: "UNSUPPORTED_OPERATION",
+      message: "The Apple runner cannot dismiss this keyboard automatically", details: { reason: "keyboard_dismiss_unavailable", dispatched: "no" } } }) })
+    : base(request);
+  let outcome;
+  const session = { provider: "anthropic", model: "test", async preflight() {}, async run(request) {
+    await request.callTool("observe", { includeImage: false }, request.signal);
+    outcome = await request.callTool("act", { action: "dismiss-keyboard" }, request.signal);
+    return { stopReason: "done" };
+  } };
+  await runBinaryExploration({ archive: await simulatorApp(root), output: join(root, "out"), simulator: "local", provider: "anthropic", runner,
+    createSession: () => session, environment: { PATH: process.env.PATH, HOME: root, ANTHROPIC_API_KEY: "key" } });
+
+  assert.match(outcome.content[0].text, /cannot dismiss this keyboard automatically/);
+  assert.doesNotMatch(outcome.content[0].text, /Next:/, "no generic next step stands in for a missing hint");
+});

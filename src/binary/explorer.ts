@@ -6,6 +6,7 @@ import { isWebp, webpSize } from "../capture/app-icon.js";
 import type { CaptureSetupAction } from "../config/explore-config.js";
 import { createExplorationInputs, explorationSecretNames } from "../config/exploration-inputs.js";
 import type { ExploreStore, PreparedArtifact } from "../map/store.js";
+import { controllerHint } from "../capture/controller.js";
 import { CiError } from "../shared/ci-errors.js";
 import { turnedClockwise } from "../shared/png-evidence.js";
 import type { ActionKind, ActionRisk, Artifact, Controller, ElementRole, ExploreMap, ObservedElement, Observation, Screen } from "../types.js";
@@ -923,12 +924,13 @@ function frameExtent(nodes: readonly Record<string, unknown>[]): { width: number
 }
 
 /**
- * What the model reads about a failed action: the message, then the controller's own next step. agent-device's hint
+ * What the model reads about a failed action: the message, then the controller's own next step when it sent one. agent-device's hint
  * says how to proceed (press a named dismiss control, an app control that ends editing), and the model has no other way
  * to learn it.
  */
 function actionFailure(caught: unknown): string {
   if (!(caught instanceof Error)) return String(caught).slice(0, 500);
-  const next = caught instanceof CiError && caught.nextAction ? ` Next: ${caught.nextAction.slice(0, 400)}` : "";
+  const hint = controllerHint(caught);
+  const next = hint ? ` Next: ${hint.slice(0, 400)}` : "";
   return `${caught.message.slice(0, 500)}${next}`;
 }

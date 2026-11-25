@@ -787,10 +787,15 @@ export async function capturePlannedRoutes(options: {
         if (control && controlName && riskOf(controlName, []) === "safe") {
           // A modal kept in a screen's own state closes without a route change, so the control leaving counts too,
           // unless an alert took its place (a "Discard changes?" confirmation): that screen is not dismissed.
-          // The control is matched the way agent-device named it: by identifier when it has one, else by label.
-          const controlShown = (nodes: readonly Record<string, unknown>[]) => nodes.some(node =>
-            (control.identifier ? node.identifier === control.identifier : node.label === control.label)
-            && /button/i.test(String(node.type ?? "")) && node.visible !== false);
+          // The control is tracked by its identifier when no other button on the screen has it, so a press that only
+          // relabels it ("Keep editing" in place of Close) is still the same control. Otherwise it is tracked by the
+          // attribute the press used, so another button sharing the identifier does not hold it on screen.
+          const isButton = (node: Record<string, unknown>) => /button/i.test(String(node.type ?? "")) && node.visible !== false;
+          const byIdentifier = control.identifier !== undefined
+            && before.filter(node => isButton(node) && node.identifier === control.identifier).length === 1;
+          const isControl = (node: Record<string, unknown>) => byIdentifier || control.pressedById
+            ? node.identifier === control.identifier : node.label === control.label;
+          const controlShown = (nodes: readonly Record<string, unknown>[]) => nodes.some(node => isButton(node) && isControl(node));
           const controlWasShown = controlShown(before);
           const alertShown = (nodes: readonly Record<string, unknown>[]) => nodes.some(node => node.type === "Alert");
           await command(["press", control.selector, "--level", "full", "--json"], signal);
