@@ -76,7 +76,7 @@ const failure = (code: string, message: string, details?: Record<string, unknown
  * agent-device's answer when its pre-flight health check fails, which Explore resends because the command was
  * provably never sent (controller.ts remoteDaemonUnavailable). The bridge gives it only on the same proof.
  */
-const remoteUnavailable = () => failure("COMMAND_FAILED", "Remote daemon is unavailable");
+const remoteUnavailable = () => failure("COMMAND_FAILED", "Remote daemon is unavailable", { reason: "remote_daemon_unavailable", dispatched: "no" });
 
 /** Flags agent-device takes after a command; the bridge needs the platform only from its own context. */
 const VALUE_FLAGS = new Set(["--session", "--device", "--platform", "--level", "--udid", "--scope", "--bundle-id", "--serial", "--timeout"]);
@@ -613,17 +613,17 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         await beforeAction();
         if (platform === "android") await call("button", { button: "back" });
         else {
-          // agent-device taps the keyboard's own dismiss control, and fails with this message when there is none, which
+          // agent-device taps the keyboard's own dismiss control, and refuses with this reason when there is none, which
           // callers answer with the return key. Only a key in the keyboard's area counts: an app's "Done" above it is not one.
           const key = flatten(current).find(node => KEYBOARD_DISMISS_LABELS.includes(node.label ?? "") && node.frame && node.frame.y >= KEYBOARD_TOP);
-          if (!key) return failure("COMMAND_FAILED", "Unable to dismiss the iOS keyboard: the keyboard exposes no dismiss control.");
+          if (!key) return failure("UNSUPPORTED_OPERATION", "Unable to dismiss the keyboard: it exposes no dismiss key.", { reason: "keyboard_dismiss_unavailable", dispatched: "no" });
           const size = current.screen ?? await screen();
           await tap(...Object.values(centre({ x: key.frame!.x * size.width, y: key.frame!.y * size.height,
             width: key.frame!.width * size.width, height: key.frame!.height * size.height }, size)) as [number, number]);
         }
         await context.sleep(500);
         const visible = (await tree()).keyboardVisible === true;
-        if (visible && platform === "ios") return failure("COMMAND_FAILED", "Unable to dismiss the iOS keyboard: it is still showing after its dismiss key was pressed.");
+        if (visible && platform === "ios") return failure("COMMAND_FAILED", "Unable to dismiss the keyboard: it is still showing after its dismiss key was pressed.", { reason: "keyboard_dismiss_unavailable" });
         return success({ platform, action: "dismiss", wasVisible: true, dismissed: !visible, visible });
       }
       case "scroll": {
@@ -666,7 +666,7 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
           await tap(button.frame.x + button.frame.width / 2, button.frame.y + button.frame.height / 2);
           return success({ action: "back", mode: "in-app" });
         }
-        if (flags["in-app"] === true || platform === "ios") return failure("COMMAND_FAILED", "in-app back control is not available");
+        if (flags["in-app"] === true || platform === "ios") return failure("COMMAND_FAILED", "in-app back control is not available", { reason: "back_swipe_not_dispatched", dispatched: "no" });
         await call("button", { button: "back" });
         return success({ action: "back", mode: "system" });
       }
@@ -776,7 +776,7 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
     if (error instanceof BridgeFailure) return failure(error.code, error.message);
     if (error instanceof ArgentCallError) {
       // Never "Remote daemon is unavailable" here: the request may have run, so Explore must not resend it.
-      return failure(error.sent ? "ARGENT_TOOL_FAILED" : "COMMAND_FAILED", error.sent ? error.message : "Remote daemon is unavailable");
+      return error.sent ? failure("ARGENT_TOOL_FAILED", error.message) : remoteUnavailable();
     }
     return failure("ARGENT_BRIDGE_FAILED", error instanceof Error ? error.message : String(error));
   }
