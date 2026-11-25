@@ -3817,7 +3817,7 @@ test('agent back reports a sheet that stays open, and never swipes without sheet
 });
 
 /** A full-screen modal whose only exit is a header control agent-device names when its back changes nothing. */
-function modalRunner(f, { label = 'Close', identifier, pressBy = identifier ? 'identifier' : 'label', shadow = false, sameRoute = false, closes = true, confirms = false, hidesObserver = false } = {}) {
+function modalRunner(f, { label = 'Close', identifier, pressBy = identifier ? 'identifier' : 'label', shadow = false, relabels = false, sameRoute = false, closes = true, confirms = false, hidesObserver = false } = {}) {
   let path = '/', modal = false, confirming = false;
   const presses = [], swipes = [];
   // agent-device names a control by identifier when it has one no other button shares; its label may then be empty.
@@ -3829,7 +3829,7 @@ function modalRunner(f, { label = 'Close', identifier, pressBy = identifier ? 'i
       if (command === 'open' && request.args[2]?.startsWith('sample://')) { path = '/' + request.args[2].slice('sample://'.length); modal = path === '/settings'; }
       if (command === 'back' && modal) return json({ success: false, error: { code: 'COMMAND_FAILED', message: 'The back swipe changed nothing.',
         details: { reason: 'back_swipe_no_change', runnerErrorCode: 'BACK_SWIPE_NO_CHANGE', dispatched: 'unknown', dismissControls: [named] } } });
-      if (command === 'press' && request.args[1] === selector) { presses.push(request.args[1]); if (confirms) confirming = true; else if (closes) { modal = false; if (!sameRoute) path = '/home'; } return ok({}); }
+      if (command === 'press' && request.args[1] === selector) { presses.push(request.args[1]); if (relabels) label = 'Keep editing'; else if (confirms) confirming = true; else if (closes) { modal = false; if (!sameRoute) path = '/home'; } return ok({}); }
       if (command === 'swipe') swipes.push(request.args.slice(1, 5));
     }
     const response = f.options.runner(request);
@@ -3934,6 +3934,16 @@ test('a dismiss control pressed by label is checked by label, not by an identifi
   assert.deepEqual(modal.presses, ['role=button label="Close"']);
   const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
   assert.equal(trace.find(event => event.action === 'back').result.via, 'dismiss-control');
+});
+
+test('a dismiss control that only changes its label is still on screen', async t => {
+  const f = await fixture(t);
+  const modal = modalRunner(f, { identifier: 'modal-exit', pressBy: 'label', relabels: true, sameRoute: true });
+  await runCiMap({ ...f.options, runner: modal.runner, agent: modalBackAgent(f), setup: [{ action: 'open', url: 'sample://home' }] });
+  assert.deepEqual(modal.presses, ['role=button label="Close"']);
+  assert.deepEqual(modal.swipes, []);
+  const trace = (await readFile(join(f.options.outputDirectory, 'capture-diagnostics/agent-navigation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(trace.find(event => event.action === 'back').result.error.code, 'AGENT_DISMISS_CONTROL_FAILED');
 });
 
 test('agent back never presses a named dismiss control that reads as destructive', async t => {

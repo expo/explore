@@ -133,17 +133,17 @@ export function backLeftScreenUnchanged(error: unknown): boolean {
 /**
  * The one dismiss control (Close, Cancel, Back) agent-device saw in the screen's top bar when its back changed
  * nothing (`details.dismissControls`). agent-device never presses it: on iOS back only pops the navigation stack.
- * Undefined when it listed none or several. `identifier` is set only when the selector presses the control by it
- * (`role=button id="…"`), so a check matches the attribute the press used; the label may then be empty.
+ * Undefined when it listed none or several. `pressedById` says whether the selector presses it by its identifier
+ * (`role=button id="…"`) rather than its label; the label may then be empty.
  */
-export function loneBackDismissControl(error: unknown): { selector: string; label: string; identifier?: string } | undefined {
+export function loneBackDismissControl(error: unknown): { selector: string; label: string; identifier?: string; pressedById: boolean } | undefined {
   if (controllerFailureReason(error) !== "back_swipe_no_change") return undefined;
   const controls = (nativeControllerFailures.get(error as CiError)?.details as Record<string, unknown> | undefined)?.dismissControls;
   if (!Array.isArray(controls) || controls.length !== 1 || !isRecord(controls[0])) return undefined;
   const { selector, label, identifier } = controls[0];
   if (typeof selector !== "string" || !selector.trim() || typeof label !== "string") return undefined;
-  const pressedById = typeof identifier === "string" && identifier && selector === `role=button id=${JSON.stringify(identifier)}`;
-  return pressedById ? { selector, label, identifier } : { selector, label };
+  if (typeof identifier !== "string" || !identifier) return { selector, label, pressedById: false };
+  return { selector, label, identifier, pressedById: selector === `role=button id=${JSON.stringify(identifier)}` };
 }
 
 /**
