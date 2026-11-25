@@ -787,7 +787,7 @@ export async function capturePlannedRoutes(options: {
         if (control && controlName && riskOf(controlName, []) === "safe") {
           // A modal kept in a screen's own state closes without a route change, so the control leaving counts too,
           // unless an alert took its place (a "Discard changes?" confirmation): that screen is not dismissed.
-          // The control is matched the way agent-device named it: by identifier when it has one, else by label.
+          // The control is matched by the attribute its selector pressed it by: identifier or label.
           const controlShown = (nodes: readonly Record<string, unknown>[]) => nodes.some(node =>
             (control.identifier ? node.identifier === control.identifier : node.label === control.label)
             && /button/i.test(String(node.type ?? "")) && node.visible !== false);

@@ -105,6 +105,14 @@ export function controllerCommandFailure(stdout: string, command: string): CiErr
   return failure;
 }
 
+/** agent-device's own next step for a failure (`error.details.hint` or `error.hint`), when it sent one. */
+export function controllerHint(error: unknown): string | undefined {
+  if (!(error instanceof CiError)) return undefined;
+  const native = nativeControllerFailures.get(error);
+  const hint = isRecord(native?.details) ? native.details.hint : undefined;
+  return typeof hint === "string" ? hint : typeof native?.hint === "string" ? native.hint : undefined;
+}
+
 /** agent-device's typed refusal reason (`error.details.reason`), when the failure carries one. */
 export function controllerFailureReason(error: unknown): string | undefined {
   if (!(error instanceof CiError)) return undefined;
@@ -125,8 +133,8 @@ export function backLeftScreenUnchanged(error: unknown): boolean {
 /**
  * The one dismiss control (Close, Cancel, Back) agent-device saw in the screen's top bar when its back changed
  * nothing (`details.dismissControls`). agent-device never presses it: on iOS back only pops the navigation stack.
- * Undefined when it listed none or several. `identifier` is set when agent-device names the control by it; the
- * label may then be empty.
+ * Undefined when it listed none or several. `identifier` is set only when the selector presses the control by it
+ * (`role=button id="…"`), so a check matches the attribute the press used; the label may then be empty.
  */
 export function loneBackDismissControl(error: unknown): { selector: string; label: string; identifier?: string } | undefined {
   if (controllerFailureReason(error) !== "back_swipe_no_change") return undefined;
@@ -134,7 +142,8 @@ export function loneBackDismissControl(error: unknown): { selector: string; labe
   if (!Array.isArray(controls) || controls.length !== 1 || !isRecord(controls[0])) return undefined;
   const { selector, label, identifier } = controls[0];
   if (typeof selector !== "string" || !selector.trim() || typeof label !== "string") return undefined;
-  return typeof identifier === "string" && identifier ? { selector, label, identifier } : { selector, label };
+  const pressedById = typeof identifier === "string" && identifier && selector === `role=button id=${JSON.stringify(identifier)}`;
+  return pressedById ? { selector, label, identifier } : { selector, label };
 }
 
 /**
