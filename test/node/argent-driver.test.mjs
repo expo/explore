@@ -222,11 +222,12 @@ test("keyboard dismiss matches agent-device: Android presses back; iOS taps a di
   assert.deepEqual(dismissed.json.data, { platform: "android", action: "dismiss", wasVisible: true, dismissed: true, visible: false });
   assert.deepEqual(android.calls.find(call => call.tool === "button").args, { udid: "emulator-5554", button: "back" });
 
-  // agent-device refuses with this reason when the keyboard has no dismiss key, and callers fall back to the return key.
+  // agent-device refuses with this reason when the keyboard has no dismiss key; its hint tells the model what to press.
   const noKey = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": { ...IOS_HOME, keyboardVisible: true } });
   const failed = await noKey.run(["keyboard", "dismiss", ...flags("ios")]);
   assert.equal(failed.exitCode, 1);
   assert.equal(failed.json.error.details.reason, "keyboard_dismiss_unavailable");
+  assert.match(failed.json.error.details.hint, /Hide Keyboard key or an app control/);
 
   const hidden = harness("ios", { "list-devices": IOS_DEVICES, "ui-tree": IOS_HOME });
   assert.equal((await hidden.run(["keyboard", "dismiss", ...flags("ios")])).json.data.wasVisible, false);

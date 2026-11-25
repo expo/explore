@@ -526,18 +526,9 @@ export async function exploreConnectedSession(ctx: ConnectedSessionExploration):
         else await executeCaptureSetup([action], setupOptions);
         if (action.action !== "wait") await settled();
       };
-      const dismissKeyboard = async () => {
-        try { controller(["keyboard", "dismiss", "--level", "full", "--json"], 120_000); return; }
-        catch (error) { if (controllerFailureReason(error) !== "keyboard_dismiss_unavailable") throw error; }
-        // The iOS keyboard has no dismiss key and agent-device never taps the background; its return key (next/done/go) closes it without touching the app.
-        const nodes = (await observe(false)).nodes;
-        // In a multi-line editor the return key inserts a newline instead of ending editing.
-        const multiline = nodes.some(node => /text-?view/i.test(String(node.type ?? "")));
-        const key = multiline ? undefined : nodes.find(node => /key$/i.test(String(node.type ?? "")) && KEYBOARD_RETURN_KEY.test(String(node.label ?? "")));
-        const rect = key?.rect as { x: number; y: number; width: number; height: number } | undefined;
-        if (!rect) throw binaryError("KEYBOARD_DISMISS_UNAVAILABLE", multiline ? "The keyboard cannot be dismissed from a multi-line editor: its return key inserts a newline." : "The keyboard cannot be dismissed: it has neither a dismiss nor a return key.", "Tap one of the app's own controls that is not behind the keyboard (Cancel, Done, Close), or go back.");
-        controller(["press", String(Math.round(rect.x + rect.width / 2)), String(Math.round(rect.y + rect.height / 2)), "--level", "full", "--json"], 120_000);
-      };
+      // A refusal reaches the model with agent-device's own hint. The return key is never a fallback: next moves focus to
+      // the following field, and done or go submits the form.
+      const dismissKeyboard = async () => { controller(["keyboard", "dismiss", "--level", "full", "--json"], 120_000); };
       try {
         try { await perform(); }
         catch (error) {
@@ -931,8 +922,6 @@ export function guardPositionals(args: readonly string[]): string[] {
   }
   return [positionals[0]!, ...flags, "--", ...positionals.slice(1)];
 }
-
-const KEYBOARD_RETURN_KEY = /^(return|next|done|go|continue|join)$/i;
 
 /**
  * How a frame's screenshot is stored. An opened (or half-open) iPhone Duo lights its inner panel, whose native axes are

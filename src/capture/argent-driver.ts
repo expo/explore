@@ -247,6 +247,8 @@ export function iosRuntimeVersion(runtime: unknown): string | undefined {
 
 const DEEP_LINK_PROMPT_CONFIRM = { dxPoints: 74, dyPoints: 37 };
 const KEYBOARD_DISMISS_LABELS = ["Hide keyboard", "Dismiss keyboard", "Done"];
+/** What the model reads when the keyboard cannot be dismissed: the same next step agent-device's refusal gives. */
+const KEYBOARD_DISMISS_HINT = "Press the visible Hide Keyboard key or an app control that ends editing.";
 // A keyboard covers the lower part of the screen; its keys start below this share of the height.
 const KEYBOARD_TOP = 0.4;
 const ALERT_PREFERRED_BUTTONS = ["Open", "OK", "Allow", "Allow While Using App", "Continue"];
@@ -613,17 +615,17 @@ export async function runBridgeCommand(argv: readonly string[], context: ArgentB
         await beforeAction();
         if (platform === "android") await call("button", { button: "back" });
         else {
-          // agent-device taps the keyboard's own dismiss control, and refuses with this reason when there is none, which
-          // callers answer with the return key. Only a key in the keyboard's area counts: an app's "Done" above it is not one.
+          // Refuses with agent-device's reason when the keyboard has no dismiss key, and with a hint like agent-device's, which
+          // the model reads. Only a key in the keyboard's area counts: an app's "Done" above it is not one.
           const key = flatten(current).find(node => KEYBOARD_DISMISS_LABELS.includes(node.label ?? "") && node.frame && node.frame.y >= KEYBOARD_TOP);
-          if (!key) return failure("UNSUPPORTED_OPERATION", "Unable to dismiss the keyboard: it exposes no dismiss key.", { reason: "keyboard_dismiss_unavailable", dispatched: "no" });
+          if (!key) return failure("UNSUPPORTED_OPERATION", "Unable to dismiss the keyboard: it exposes no dismiss key.", { reason: "keyboard_dismiss_unavailable", dispatched: "no", hint: KEYBOARD_DISMISS_HINT });
           const size = current.screen ?? await screen();
           await tap(...Object.values(centre({ x: key.frame!.x * size.width, y: key.frame!.y * size.height,
             width: key.frame!.width * size.width, height: key.frame!.height * size.height }, size)) as [number, number]);
         }
         await context.sleep(500);
         const visible = (await tree()).keyboardVisible === true;
-        if (visible && platform === "ios") return failure("COMMAND_FAILED", "Unable to dismiss the keyboard: it is still showing after its dismiss key was pressed.", { reason: "keyboard_dismiss_unavailable" });
+        if (visible && platform === "ios") return failure("COMMAND_FAILED", "Unable to dismiss the keyboard: it is still showing after its dismiss key was pressed.", { reason: "keyboard_dismiss_unavailable", hint: KEYBOARD_DISMISS_HINT });
         return success({ platform, action: "dismiss", wasVisible: true, dismissed: !visible, visible });
       }
       case "scroll": {
