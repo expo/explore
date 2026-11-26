@@ -55,7 +55,7 @@ set -a && . ./.env.explore && set +a && npx @expo/explore explore:binary ./app.a
   --hints "Sign in with {{secret:APP_TEST_EMAIL}} and {{secret:APP_TEST_PASSWORD}}, then explore the signed-in app"
 ```
 
-The model only ever sees the reference; Explore types the value into the field. The value is redacted from the map, the report and errors, and a frame that shows it (the filled-in form, or a profile screen that displays the email) is kept without a screenshot. So make only what is sensitive a secret: a dedicated test email can go in the hints as plain text, and then the account screen keeps its picture. A reference to a variable that is not set fails before a session starts (`EXPLORATION_SECRET_MISSING`); provider keys, `EXPO_TOKEN` and CI variables cannot be referenced.
+The model only ever sees the reference; Explore types the value into the field. The value is redacted from the map, the report and errors, and a frame that shows it (the filled-in form, or a profile screen that displays the email) is kept without a screenshot. Explore finds the value in the accessibility tree, so a value drawn without an accessible label (in a canvas or an image) is not recognised. So make only what is sensitive a secret: a dedicated test email can go in the hints as plain text, and then the account screen keeps its picture. A reference to a variable that is not set fails before a session starts (`EXPLORATION_SECRET_MISSING`); provider keys, `EXPO_TOKEN` and CI variables cannot be referenced.
 
 **When a sign-in cannot be typed** (a one-time code, an email link, Sign in with Apple or Google, a captcha): sign in by hand on a session and use `explore:session`. Sign out is never tapped, so the run stays signed in.
 
@@ -64,7 +64,7 @@ The model only ever sees the reference; Explore types the value into the field. 
 - Onboarding: `--launch-url` to a screen past it, or hints such as "skip the tour with Skip".
 - Screens that need data: a test account that already has it, and hints naming where it is ("open the first project").
 - Permission prompts are denied. To explore what is behind one, allow it by hand on a session first, then `explore:session`.
-- Purchases, deletes, sends and sign out are blocked. `--allow-destructive "Label"` allows one control by label; a paywall needs an account that already has the entitlement.
+- Purchases, deletes, sends and sign out are blocked, judged by a control's label and its identifier, including a control tapped by position. `--allow-destructive "Label"` allows one control by label; a paywall needs an account that already has the entitlement.
 - A large app: raise the budgets (`--max-duration-minutes`, `--max-screens`, `--max-actions`; see [What happens](#what-happens)) and use the hints to say what to cover first.
 
 ## Already have a session? `explore:session`
